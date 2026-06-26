@@ -1,0 +1,6 @@
+{
+  "name": "EcoleTrack",
+  "description": "Plateforme complète de suivi scolaire pour la communication en temps réel entre les établissements et les parents (Absences, Notes, Notifications).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

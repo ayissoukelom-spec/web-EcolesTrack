@@ -1,0 +1,10 @@
+--- server.ts
++++ server.ts
+@@ -1349,7 +1349,7 @@
+         })
+         .from(students)
+         .innerJoin(classes, eq(students.classId, classes.id))
+-        .innerJoin(academicYears, eq(classes.academicYearId, academicYears.id))
++        .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+         .leftJoin(parents, eq(students.parentId, parents.id))
+         .leftJoin(users, eq(parents.userId, users.id));

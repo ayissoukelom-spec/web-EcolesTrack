@@ -1,0 +1,8 @@
+name,email,phone,address,schoolId,studentIds,studentNames
+Marie Dubois,marie.dubois@example.com,060000001,12 Rue A,Enseignante,1,1,
+Paul Martin,marie.dubois@example.com,060000002,5 Ave B,Ingénieur,1,,
+NoEmail,,060000003,7 Rue C,Ouvrier,1,,
+Sophie Leroy,sophie.leroy@example.com,060000004,8 Rue D,Médecin,1,999,
+Jean Petit,jean.petit@example.com,060000005,9 Rue E,Commerçant,1,,Lucas Dubois
+Alice Durant,alice.durant@example.com,060000006,10 Rue F,Infirmière,1,2;3,
+Paul Dupont,paul.dupont@example.com,060000007,11 Rue G,Architecte,1,,

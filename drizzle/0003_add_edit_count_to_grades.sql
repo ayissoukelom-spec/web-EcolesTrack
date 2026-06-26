@@ -1,0 +1,2 @@
+ALTER TABLE "grades"
+ADD COLUMN IF NOT EXISTS "edit_count" integer NOT NULL DEFAULT 0;

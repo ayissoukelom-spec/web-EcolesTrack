@@ -1,0 +1,299 @@
+import { relations } from 'drizzle-orm';
+import { integer, pgTable, serial, text, timestamp, boolean } from 'drizzle-orm/pg-core';
+
+// 1. Schools
+export const schools = pgTable('schools', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(),
+  address: text('address'),
+  phone: text('phone'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 2. Academic Years
+export const academicYears = pgTable('academic_years', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
+  name: text('name').notNull(), // e.g. "2025-2026"
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 3. Users (Auth mapping)
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  uid: text('uid').notNull().unique(), // Firebase UID
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'teacher' | 'parent'
+  schoolId: integer('school_id').references(() => schools.id),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id),
+  gender: text('gender'),
+  isDeleted: boolean('is_deleted').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 3b. Local auth store for username/password (optional, dev-friendly)
+export const localAuths = pgTable('local_auths', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  salt: text('salt').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 4. Teachers
+export const teachers = pgTable('teachers', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  schoolId: integer('school_id').references(() => schools.id).notNull(),
+  phone: text('phone'),
+  specialization: text('specialization'),
+});
+
+// 5. Parents
+export const parents = pgTable('parents', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  phone: text('phone'),
+  address: text('address'),
+  studentId: integer('student_id'),
+  schoolId: integer('school_id').references(() => schools.id),
+});
+
+// 6. Classes
+export const classes = pgTable('classes', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id).notNull(),
+  name: text('name').notNull(), // e.g. "6ème A"
+  teacherId: integer('teacher_id').references(() => teachers.id), // Principal teacher
+});
+
+// 7. Class teacher assignments (many-to-many)
+export const classTeachers = pgTable('class_teachers', {
+  id: serial('id').primaryKey(),
+  classId: integer('class_id').references(() => classes.id).notNull(),
+  teacherId: integer('teacher_id').references(() => teachers.id).notNull(),
+});
+
+// 8. Students
+export const students = pgTable('students', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id).notNull(),
+  classId: integer('class_id').references(() => classes.id).notNull(),
+  firstName: text('first_name').notNull(),
+  lastName: text('last_name').notNull(),
+  birthDate: text('birth_date'), // YYYY-MM-DD
+  gender: text('gender'),
+  parentId: integer('parent_id').references(() => parents.id),
+  schoolAdminId: integer('school_admin_id').references(() => users.id),
+  enrolledAt: timestamp('enrolled_at').defaultNow().notNull(), // Date when student was enrolled in this class
+});
+
+// 8. Evaluations
+export const evaluations = pgTable('evaluations', {
+  id: serial('id').primaryKey(),
+  classId: integer('class_id').references(() => classes.id).notNull(),
+  teacherId: integer('teacher_id').references(() => teachers.id).notNull(),
+  subject: text('subject').notNull(), // e.g. "Mathématiques"
+  title: text('title').notNull(), // e.g. "Devoir surveillé 1"
+  coefficient: integer('coefficient').default(1).notNull(),
+  maxScore: integer('max_score').default(20).notNull(),
+  date: text('date').notNull(), // YYYY-MM-DD
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 9. Grades (Notes)
+export const grades = pgTable('grades', {
+  id: serial('id').primaryKey(),
+  evaluationId: integer('evaluation_id').references(() => evaluations.id).notNull(),
+  studentId: integer('student_id').references(() => students.id).notNull(),
+  score: text('score').notNull(), // text (allows "Abs", "15.5", "18.0")
+  remarks: text('remarks'),
+  editCount: integer('edit_count').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 10. Absences
+export const absences = pgTable('absences', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id).notNull(),
+  classId: integer('class_id').references(() => classes.id).notNull(),
+  date: text('date').notNull(), // YYYY-MM-DD
+  period: text('period').notNull(), // 'morning' | 'afternoon' | 'all_day'
+  isJustified: boolean('is_justified').default(false).notNull(),
+  justificationReason: text('justification_reason'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 11. Notifications
+export const notifications = pgTable('notifications', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(), // Recipient users.id
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  type: text('type').notNull(), // 'absence' | 'grade' | 'info'
+  isRead: boolean('is_read').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 12. Audit Events / Journal d'événements
+export const auditEvents = pgTable('audit_events', {
+  id: serial('id').primaryKey(),
+  actorUserId: integer('actor_user_id').references(() => users.id),
+  actorRole: text('actor_role').notNull(),
+  actorEmail: text('actor_email'),
+  actorName: text('actor_name'),
+  action: text('action').notNull(),
+  resourceType: text('resource_type').notNull(),
+  resourceId: integer('resource_id'),
+  schoolId: integer('school_id').references(() => schools.id),
+  description: text('description').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Define Relationships for Drizzle
+export const schoolsRelations = relations(schools, ({ many }) => ({
+  academicYears: many(academicYears),
+  users: many(users),
+  classes: many(classes),
+  students: many(students),
+}));
+
+export const academicYearsRelations = relations(academicYears, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [academicYears.schoolId],
+    references: [schools.id],
+  }),
+  classes: many(classes),
+}));
+
+export const usersRelations = relations(users, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [users.schoolId],
+    references: [schools.id],
+  }),
+  teacherProfile: one(teachers, {
+    fields: [users.id],
+    references: [teachers.userId],
+  }),
+  parentProfile: one(parents, {
+    fields: [users.id],
+    references: [parents.userId],
+  }),
+  notifications: many(notifications),
+}));
+
+export const teachersRelations = relations(teachers, ({ one, many }) => ({
+  user: one(users, {
+    fields: [teachers.userId],
+    references: [users.id],
+  }),
+  school: one(schools, {
+    fields: [teachers.schoolId],
+    references: [schools.id],
+  }),
+  classes: many(classes),
+  classAssignments: many(classTeachers),
+  evaluations: many(evaluations),
+}));
+
+export const classTeachersRelations = relations(classTeachers, ({ one }) => ({
+  class: one(classes, {
+    fields: [classTeachers.classId],
+    references: [classes.id],
+  }),
+  teacher: one(teachers, {
+    fields: [classTeachers.teacherId],
+    references: [teachers.id],
+  }),
+}));
+
+export const parentsRelations = relations(parents, ({ one, many }) => ({
+  user: one(users, {
+    fields: [parents.userId],
+    references: [users.id],
+  }),
+  students: many(students),
+  school: one(schools, {
+    fields: [parents.schoolId],
+    references: [schools.id],
+  }),
+}));
+
+export const classesRelations = relations(classes, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [classes.schoolId],
+    references: [schools.id],
+  }),
+  academicYear: one(academicYears, {
+    fields: [classes.academicYearId],
+    references: [academicYears.id],
+  }),
+  mainTeacher: one(teachers, {
+    fields: [classes.teacherId],
+    references: [teachers.id],
+  }),
+  students: many(students),
+  evaluations: many(evaluations),
+  absences: many(absences),
+}));
+
+export const studentsRelations = relations(students, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [students.schoolId],
+    references: [schools.id],
+  }),
+  class: one(classes, {
+    fields: [students.classId],
+    references: [classes.id],
+  }),
+  parent: one(parents, {
+    fields: [students.parentId],
+    references: [parents.id],
+  }),
+  grades: many(grades),
+  absences: many(absences),
+}));
+
+export const evaluationsRelations = relations(evaluations, ({ one, many }) => ({
+  class: one(classes, {
+    fields: [evaluations.classId],
+    references: [classes.id],
+  }),
+  teacher: one(teachers, {
+    fields: [evaluations.teacherId],
+    references: [teachers.id],
+  }),
+  grades: many(grades),
+}));
+
+export const gradesRelations = relations(grades, ({ one }) => ({
+  evaluation: one(evaluations, {
+    fields: [grades.evaluationId],
+    references: [evaluations.id],
+  }),
+  student: one(students, {
+    fields: [grades.studentId],
+    references: [students.id],
+  }),
+}));
+
+export const absencesRelations = relations(absences, ({ one }) => ({
+  student: one(students, {
+    fields: [absences.studentId],
+    references: [students.id],
+  }),
+  class: one(classes, {
+    fields: [absences.classId],
+    references: [classes.id],
+  }),
+}));
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  recipient: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
