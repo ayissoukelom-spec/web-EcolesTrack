@@ -18,6 +18,7 @@ export default function NotificationView({
   onMarkAllAsRead,
 }: NotificationViewProps) {
   const [isSending, setIsSending] = useState(false);
+  const [parentActiveTab, setParentActiveTab] = useState<'notes' | 'homework'>('notes');
   const [notifForm, setNotifForm] = useState({
     title: '',
     body: '',
@@ -44,6 +45,82 @@ export default function NotificationView({
     });
     
     setTimeout(() => setIsSending(false), 800);
+  };
+
+  const normalizeNotifText = (value?: string) => (value || '').toLowerCase();
+  const normalizeForMatch = (value?: string) =>
+    normalizeNotifText(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+  type ParentNotifCategory = 'notes' | 'homework' | 'other';
+
+  // Centralized classifier to keep parent tabs deterministic and avoid duplicates.
+  const classifyParentNotification = (notif: SystemNotification): ParentNotifCategory => {
+    const notifType = normalizeForMatch(notif.type);
+    const payload = `${normalizeForMatch(notif.title)} ${normalizeForMatch(notif.body)}`;
+
+    // Notes tab: strictly grade notifications only.
+    if (notifType === 'grade') return 'notes';
+
+    // Homework tab: explicit types or dedicated keywords in content.
+    const isHomeworkByType = notifType === 'assignment' || notifType === 'homework' || notifType === 'devoir';
+    const isHomeworkByKeyword = /\b(devoir|publie|assignment)\b/i.test(payload);
+    if (isHomeworkByType || isHomeworkByKeyword) return 'homework';
+
+    return 'other';
+  };
+
+  const parentNotificationsByCategory = notificationsList.reduce(
+    (acc, notif) => {
+      const category = classifyParentNotification(notif);
+      if (category === 'notes') acc.notes.push(notif);
+      if (category === 'homework') acc.homework.push(notif);
+      return acc;
+    },
+    { notes: [] as SystemNotification[], homework: [] as SystemNotification[] }
+  );
+
+  const parentNotesNotifications = parentNotificationsByCategory.notes;
+  const parentUpcomingHomeworkNotifications = parentNotificationsByCategory.homework;
+  const parentTabNotifications = parentActiveTab === 'notes' ? parentNotesNotifications : parentUpcomingHomeworkNotifications;
+
+  const renderNotificationCard = (notif: SystemNotification) => {
+    const themeColor =
+      notif.type === 'absence' ? { bg: 'bg-rose-50 border-rose-100 text-rose-700', bullet: 'bg-rose-500' } :
+      notif.type === 'grade' ? { bg: 'bg-amber-50 border-amber-100 text-amber-700', bullet: 'bg-amber-500' } :
+      { bg: 'bg-indigo-50 border-indigo-100 text-indigo-700', bullet: 'bg-indigo-500' };
+
+    return (
+      <div
+        key={notif.id}
+        className={`p-4 rounded-xl border flex gap-3 transition-colors ${
+          notif.isRead ? 'bg-white border-slate-100 text-slate-600' : 'bg-slate-50/70 border-indigo-100/50'
+        }`}
+      >
+        <div className="mt-1">
+          <span className={`inline-block h-2.5 w-2.5 rounded-full ${themeColor.bullet} ${!notif.isRead ? 'animate-pulse' : ''}`} />
+        </div>
+        <div className="space-y-1 flex-1">
+          <div className="flex justify-between items-start gap-2">
+            <h4 className="font-bold text-xs sm:text-sm text-slate-800 leading-tight">{notif.title}</h4>
+            <span className="text-[10px] text-slate-400 whitespace-nowrap">Instant</span>
+          </div>
+          <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{notif.body}</p>
+          <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400">
+            <span className={`capitalize font-bold px-2 py-0.5 rounded ${themeColor.bg}`} style={{ fontSize: '9px' }}>
+              Type : {notif.type}
+            </span>
+            {notif.isRead ? (
+              <span className="text-slate-400">Message déjà lu</span>
+            ) : (
+              <span className="text-indigo-600 font-bold">Nouveau Message</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -79,42 +156,65 @@ export default function NotificationView({
           </div>
 
           <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto pr-1 space-y-1">
-            {notificationsList.map((notif) => {
-              const themeColor =
-                notif.type === 'absence' ? { bg: 'bg-rose-50 border-rose-100 text-rose-700', bullet: 'bg-rose-500' } :
-                notif.type === 'grade' ? { bg: 'bg-amber-50 border-amber-100 text-amber-700', bullet: 'bg-amber-500' } :
-                { bg: 'bg-indigo-50 border-indigo-100 text-indigo-700', bullet: 'bg-indigo-500' };
-
-              return (
-                <div
-                  key={notif.id}
-                  className={`p-4 rounded-xl border flex gap-3 transition-colors ${
-                    notif.isRead ? 'bg-white border-slate-100 text-slate-600' : 'bg-slate-50/70 border-indigo-100/50'
-                  }`}
-                >
-                  <div className="mt-1">
-                    <span className={`inline-block h-2.5 w-2.5 rounded-full ${themeColor.bullet} ${!notif.isRead ? 'animate-pulse' : ''}`} />
-                  </div>
-                  <div className="space-y-1 flex-1">
-                    <div className="flex justify-between items-start gap-2">
-                      <h4 className="font-bold text-xs sm:text-sm text-slate-800 leading-tight">{notif.title}</h4>
-                      <span className="text-[10px] text-slate-400 whitespace-nowrap">Instant</span>
-                    </div>
-                    <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{notif.body}</p>
-                    <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400">
-                      <span className={`capitalize font-bold px-2 py-0.5 rounded ${themeColor.bg}`} style={{ fontSize: '9px' }}>
-                        Type : {notif.type}
-                      </span>
-                      {notif.isRead ? (
-                        <span className="text-slate-400">Message déjà lu</span>
-                      ) : (
-                        <span className="text-indigo-600 font-bold">Nouveau Message</span>
-                      )}
-                    </div>
-                  </div>
+            {userRole === 'parent' ? (
+              <div className="space-y-4">
+                <div className="rounded-xl bg-slate-100/80 p-1.5 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setParentActiveTab('notes')}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      parentActiveTab === 'notes'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-800 hover:bg-white/70'
+                    }`}
+                  >
+                    Notes
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'notes' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                      {parentNotesNotifications.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setParentActiveTab('homework')}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      parentActiveTab === 'homework'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-800 hover:bg-white/70'
+                    }`}
+                  >
+                    Devoirs à venir
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'homework' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                      {parentUpcomingHomeworkNotifications.length}
+                    </span>
+                  </button>
                 </div>
-              );
-            })}
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                      {parentActiveTab === 'notes' ? 'Notes' : 'Devoirs à venir'}
+                    </h4>
+                    <span className="text-[11px] text-slate-400">
+                      {parentTabNotifications.length} notification{parentTabNotifications.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+
+                  {parentTabNotifications.length > 0 ? (
+                    <div className="space-y-2">
+                      {parentTabNotifications.map(renderNotificationCard)}
+                    </div>
+                  ) : (
+                    <div className="py-6 px-4 rounded-lg bg-slate-50 text-slate-400 text-xs text-center">
+                      {parentActiveTab === 'notes'
+                        ? 'Aucune notification liée aux notes.'
+                        : 'Aucune notification de devoir à venir.'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              notificationsList.map(renderNotificationCard)
+            )}
 
             {notificationsList.length === 0 && (
               <div className="py-12 text-center text-slate-400 text-xs">

@@ -132,6 +132,10 @@ export default function App() {
 
       // 2. Load dashboard summary & role details
       const summary = await apiFetch('/api/dashboard/summary');
+      console.log('[TMP-GENDER-DEBUG][APP] /api/dashboard/summary response', {
+        stats: summary?.stats,
+        keys: summary?.stats ? Object.keys(summary.stats) : [],
+      });
       setStats(summary.stats);
       setSummaryRecentGrades(summary.recentGrades);
       setSummaryRecentAbsences(summary.recentAbsences);

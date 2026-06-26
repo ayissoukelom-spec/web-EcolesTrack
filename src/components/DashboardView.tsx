@@ -26,6 +26,15 @@ export default function DashboardView({
   recentGrades,
   userRole,
 }: DashboardViewProps) {
+  console.log('[TMP-GENDER-DEBUG][DASHBOARD] render stats', {
+    totalStudents: stats.totalStudents,
+    maleStudents: stats.maleStudents,
+    femaleStudents: stats.femaleStudents,
+    unknownGenderStudents: stats.unknownGenderStudents,
+    displayedMale: stats.maleStudents || 0,
+    displayedFemale: stats.femaleStudents || 0,
+    userRole,
+  });
   
   const attendanceData = [
     { name: 'Terminale S1', taux: 93.5 },
@@ -34,10 +43,6 @@ export default function DashboardView({
     { name: '3ème C', taux: 91.0 },
     { name: '4ème A', taux: 95.5 },
   ];
-
-  const genderTotal = (stats.maleStudents || 0) + (stats.femaleStudents || 0) + (stats.unknownGenderStudents || 0);
-  const malePercentage = genderTotal ? Math.round(((stats.maleStudents || 0) / genderTotal) * 100) : 0;
-  const femalePercentage = genderTotal ? Math.round(((stats.femaleStudents || 0) / genderTotal) * 100) : 0;
 
   // Pie chart data for justified vs unjustified absences
   const justifiedCount = recentAbsences.filter((a) => a.isJustified).length;
@@ -80,11 +85,11 @@ export default function DashboardView({
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-50 rounded-2xl p-4">
                   <p className="text-xs text-slate-500 uppercase tracking-wider">Garçons</p>
-                  <p className="text-2xl font-bold text-slate-800">{malePercentage}%</p>
+                  <p className="text-2xl font-bold text-slate-800">{stats.maleStudents || 0}</p>
                 </div>
                 <div className="bg-slate-50 rounded-2xl p-4">
                   <p className="text-xs text-slate-500 uppercase tracking-wider">Filles</p>
-                  <p className="text-2xl font-bold text-slate-800">{femalePercentage}%</p>
+                  <p className="text-2xl font-bold text-slate-800">{stats.femaleStudents || 0}</p>
                 </div>
               </div>
               {stats.unknownGenderStudents && stats.unknownGenderStudents > 0 && (

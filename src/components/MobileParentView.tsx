@@ -449,7 +449,7 @@ export default function MobileParentView({
                     {activeScreen === 'notifs' && (
                       <div className="space-y-3 animate-fade-in">
                         <h4 className="font-extrabold text-xs text-white">Notifications Push Recues</h4>
-                        
+
                         <div className="space-y-2">
                           {notificationsList.map((notif) => (
                             <div key={notif.id} className="p-3 bg-slate-900 border border-slate-850 rounded-lg text-[10px] space-y-1">

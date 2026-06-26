@@ -78,6 +78,28 @@ function normalizeSpecialization(value: any) {
   return '';
 }
 
+function normalizeStudentGender(value: any): 'male' | 'female' | 'unknown' {
+  if (typeof value !== 'string') return 'unknown';
+
+  const cleaned = value
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (!cleaned) return 'unknown';
+
+  if (['m', 'male', 'masculin', 'masculine', 'garcon', 'homme', 'boy'].includes(cleaned)) {
+    return 'male';
+  }
+
+  if (['f', 'female', 'feminin', 'feminine', 'fille', 'femme', 'girl'].includes(cleaned)) {
+    return 'female';
+  }
+
+  return 'unknown';
+}
+
 function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: string; role: string; schoolId?: any; phone?: string; specialization?: any }) {
   const changes: string[] = [];
   if (incoming.email !== targetUser.email) {
@@ -2775,7 +2797,19 @@ async function startServer() {
 
       if (user.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100 }, recentAbsences: [], recentGrades: [] });
+          return res.json({
+            stats: {
+              totalStudents: 0,
+              totalAbsences: 0,
+              totalClasses: 0,
+              attendanceRate: 100,
+              maleStudents: 0,
+              femaleStudents: 0,
+              unknownGenderStudents: 0,
+            },
+            recentAbsences: [],
+            recentGrades: [],
+          });
         }
 
         studentCountQuery = studentCountQuery.where(inArray(students.id, parentChildIds)) as any;
@@ -2806,6 +2840,28 @@ async function startServer() {
       const totalStudents = studentCountResult[0]?.count || 0;
       const totalAbsences = absenceCountResult[0]?.count || 0;
       const totalClasses = classCountResult[0]?.count || 0;
+
+      let genderQuery = db
+        .select({ gender: students.gender })
+        .from(students);
+
+      if (user.role === 'parent') {
+        genderQuery = genderQuery.where(inArray(students.id, parentChildIds || [])) as any;
+      } else if (schoolFilter) {
+        genderQuery = genderQuery.where(eq(students.schoolId, schoolFilter)) as any;
+      }
+
+      const genderRows = await genderQuery;
+      let maleStudents = 0;
+      let femaleStudents = 0;
+      let unknownGenderStudents = 0;
+
+      for (const row of genderRows) {
+        const normalizedGender = normalizeStudentGender(row.gender);
+        if (normalizedGender === 'male') maleStudents += 1;
+        else if (normalizedGender === 'female') femaleStudents += 1;
+        else unknownGenderStudents += 1;
+      }
 
       // Calculate attendance rate (simplified)
       const attendanceRate = totalStudents > 0 && totalAbsences > 0 ? 
@@ -2865,7 +2921,21 @@ async function startServer() {
         totalAbsences,
         totalClasses,
         attendanceRate: Math.round(attendanceRate * 100) / 100,
+        maleStudents,
+        femaleStudents,
+        unknownGenderStudents,
       };
+
+      console.log('[TMP-GENDER-DEBUG][BACKEND] dashboard summary stats', {
+        role: user.role,
+        userSchoolId: user.schoolId ?? null,
+        appliedSchoolFilter: schoolFilter ?? null,
+        totalStudents,
+        genderRowsCount: genderRows.length,
+        maleStudents,
+        femaleStudents,
+        unknownGenderStudents,
+      });
 
       res.json({
         stats,
