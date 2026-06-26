@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 
@@ -61,30 +61,64 @@ export default function NotificationView({
     const notifType = normalizeForMatch(notif.type);
     const payload = `${normalizeForMatch(notif.title)} ${normalizeForMatch(notif.body)}`;
 
-    // Notes tab: strictly grade notifications only.
-    if (notifType === 'grade') return 'notes';
-
-    // Homework tab: explicit types or dedicated keywords in content.
     const isHomeworkByType = notifType === 'assignment' || notifType === 'homework' || notifType === 'devoir';
     const isHomeworkByKeyword = /\b(devoir|publie|assignment)\b/i.test(payload);
+
+    // Priority rule: homework markers in type/message win over grade classification.
     if (isHomeworkByType || isHomeworkByKeyword) return 'homework';
+
+    // Notes tab: strictly grade notifications only.
+    if (notifType === 'grade') return 'notes';
 
     return 'other';
   };
 
-  const parentNotificationsByCategory = notificationsList.reduce(
-    (acc, notif) => {
+  const parentNotificationsByCategory = useMemo(() => {
+    const seenIds = new Set<number>();
+    const notes: SystemNotification[] = [];
+    const homework: SystemNotification[] = [];
+
+    for (const notif of notificationsList) {
+      if (seenIds.has(notif.id)) continue;
       const category = classifyParentNotification(notif);
-      if (category === 'notes') acc.notes.push(notif);
-      if (category === 'homework') acc.homework.push(notif);
-      return acc;
-    },
-    { notes: [] as SystemNotification[], homework: [] as SystemNotification[] }
-  );
+      if (category === 'notes') {
+        notes.push(notif);
+        seenIds.add(notif.id);
+      } else if (category === 'homework') {
+        homework.push(notif);
+        seenIds.add(notif.id);
+      }
+    }
+
+    return { notes, homework };
+  }, [notificationsList]);
 
   const parentNotesNotifications = parentNotificationsByCategory.notes;
   const parentUpcomingHomeworkNotifications = parentNotificationsByCategory.homework;
   const parentTabNotifications = parentActiveTab === 'notes' ? parentNotesNotifications : parentUpcomingHomeworkNotifications;
+
+  useEffect(() => {
+    if (userRole !== 'parent') return;
+
+    const debugRows = notificationsList.map((notif) => ({
+      id: notif.id,
+      type: notif.type,
+      title: notif.title,
+      classification: classifyParentNotification(notif),
+    }));
+
+    console.log('[TMP-NOTIF-DEBUG][PARENT] classification summary', {
+      total: notificationsList.length,
+      notes: parentNotesNotifications.length,
+      homework: parentUpcomingHomeworkNotifications.length,
+    });
+    console.table(debugRows);
+  }, [
+    userRole,
+    notificationsList,
+    parentNotesNotifications,
+    parentUpcomingHomeworkNotifications,
+  ]);
 
   const renderNotificationCard = (notif: SystemNotification) => {
     const themeColor =
