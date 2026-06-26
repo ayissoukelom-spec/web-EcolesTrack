@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 
@@ -96,29 +96,6 @@ export default function NotificationView({
   const parentNotesNotifications = parentNotificationsByCategory.notes;
   const parentUpcomingHomeworkNotifications = parentNotificationsByCategory.homework;
   const parentTabNotifications = parentActiveTab === 'notes' ? parentNotesNotifications : parentUpcomingHomeworkNotifications;
-
-  useEffect(() => {
-    if (userRole !== 'parent') return;
-
-    const debugRows = notificationsList.map((notif) => ({
-      id: notif.id,
-      type: notif.type,
-      title: notif.title,
-      classification: classifyParentNotification(notif),
-    }));
-
-    console.log('[TMP-NOTIF-DEBUG][PARENT] classification summary', {
-      total: notificationsList.length,
-      notes: parentNotesNotifications.length,
-      homework: parentUpcomingHomeworkNotifications.length,
-    });
-    console.table(debugRows);
-  }, [
-    userRole,
-    notificationsList,
-    parentNotesNotifications,
-    parentUpcomingHomeworkNotifications,
-  ]);
 
   const renderNotificationCard = (notif: SystemNotification) => {
     const themeColor =
