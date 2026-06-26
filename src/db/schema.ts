@@ -19,6 +19,19 @@ export const academicYears = pgTable('academic_years', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// 2b. School Terms / Trimesters
+export const schoolTerms = pgTable('school_terms', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id).notNull(),
+  name: text('name').notNull(), // e.g. "Trimestre 1"
+  startDate: text('start_date'), // YYYY-MM-DD
+  endDate: text('end_date'), // YYYY-MM-DD
+  orderIndex: integer('order_index').default(1).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // 3. Users (Auth mapping)
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -96,10 +109,12 @@ export const evaluations = pgTable('evaluations', {
   id: serial('id').primaryKey(),
   classId: integer('class_id').references(() => classes.id).notNull(),
   teacherId: integer('teacher_id').references(() => teachers.id).notNull(),
+  termId: integer('term_id').references(() => schoolTerms.id),
   subject: text('subject').notNull(), // e.g. "Mathématiques"
   title: text('title').notNull(), // e.g. "Devoir surveillé 1"
   coefficient: integer('coefficient').default(1).notNull(),
   maxScore: integer('max_score').default(20).notNull(),
+  countInBulletin: boolean('count_in_bulletin').default(true).notNull(),
   date: text('date').notNull(), // YYYY-MM-DD
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -166,7 +181,20 @@ export const academicYearsRelations = relations(academicYears, ({ one, many }) =
     fields: [academicYears.schoolId],
     references: [schools.id],
   }),
+  terms: many(schoolTerms),
   classes: many(classes),
+}));
+
+export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [schoolTerms.schoolId],
+    references: [schools.id],
+  }),
+  academicYear: one(academicYears, {
+    fields: [schoolTerms.academicYearId],
+    references: [academicYears.id],
+  }),
+  evaluations: many(evaluations),
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -265,6 +293,10 @@ export const evaluationsRelations = relations(evaluations, ({ one, many }) => ({
   teacher: one(teachers, {
     fields: [evaluations.teacherId],
     references: [teachers.id],
+  }),
+  term: one(schoolTerms, {
+    fields: [evaluations.termId],
+    references: [schoolTerms.id],
   }),
   grades: many(grades),
 }));

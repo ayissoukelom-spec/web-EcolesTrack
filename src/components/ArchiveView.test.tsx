@@ -9,8 +9,8 @@ const classes: Class[] = [
 ];
 
 const students: Student[] = [
-  { id: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
-  { id: 2, classId: 10, className: '3ème A', firstName: 'Bob', lastName: 'Martin', enrolledAt: '2026-06-25T10:00:00Z' },
+  { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
+  { id: 2, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Bob', lastName: 'Martin', enrolledAt: '2026-06-25T10:00:00Z' },
 ];
 
 const evaluations: Evaluation[] = [
@@ -74,7 +74,7 @@ describe('Archive UI regression', () => {
   it('permet à un administrateur de modifier une note déjà enregistrée', () => {
     const onAddGrade = vi.fn().mockResolvedValue({ id: 1 });
     const editableStudents: Student[] = [
-      { id: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
+      { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
     ];
     const editableEvaluations: Evaluation[] = [
       {
@@ -109,7 +109,7 @@ describe('Archive UI regression', () => {
     expect(screen.getByRole('option', { name: /Mathématiques/i })).toBeDefined();
     fireEvent.change(evaluationSelect, { target: { value: '1' } });
 
-    expect(screen.getByPlaceholderText('ex. 15.5 or Abs')).toBeDefined();
-    expect(screen.getByRole('button', { name: /bloquée|contact school admin/i })).toBeDefined();
+    expect(screen.getByPlaceholderText('ex. 12.5')).toBeDefined();
+    expect(screen.getByRole('button', { name: /modifier les notes/i })).toBeDefined();
   });
 });

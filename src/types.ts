@@ -16,6 +16,18 @@ export interface AcademicYear {
   createdAt?: string;
 }
 
+export interface SchoolTerm {
+  id: number;
+  schoolId?: number;
+  academicYearId: number;
+  name: string;
+  startDate?: string;
+  endDate?: string;
+  orderIndex: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
 export interface User {
   id: number;
   uid: string;
@@ -98,10 +110,13 @@ export interface Evaluation {
   className?: string;
   teacherId: number;
   teacherName?: string;
+  termId?: number | null;
+  termName?: string;
   subject: string;
   title: string;
   coefficient: number;
   maxScore: number;
+  countInBulletin?: boolean;
   date: string;
   createdAt?: string;
 }

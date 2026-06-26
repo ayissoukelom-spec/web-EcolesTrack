@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { ensureAuditEventsTableExists, ensureClassTeachersTableExists, ensureParentsTableSchema, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
+import { ensureAuditEventsTableExists, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import {
   schools,
@@ -13,6 +13,7 @@ import {
   parents,
   classes,
   classTeachers,
+  schoolTerms,
   students,
   evaluations,
   grades,
@@ -21,6 +22,7 @@ import {
   auditEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
+import { calculateStudentTermAverage } from './src/lib/bulletinService';
 import * as dotenv from 'dotenv';
 
 // Load env variables
@@ -195,6 +197,22 @@ async function startServer() {
     process.exit(1);
   }
 
+  console.log('Ensuring school terms table exists...');
+  try {
+    await ensureSchoolTermsTableExists();
+  } catch (error) {
+    console.error('Failed to ensure school_terms table exists, shutting down application.', error);
+    process.exit(1);
+  }
+
+  console.log('Ensuring evaluation bulletin columns exist...');
+  try {
+    await ensureEvaluationsBulletinColumns();
+  } catch (error) {
+    console.error('Failed to ensure evaluations bulletin columns, shutting down application.', error);
+    process.exit(1);
+  }
+
   console.log('Ensuring students table schema is up to date...');
   try {
     await ensureStudentsTableSchema();
@@ -216,6 +234,14 @@ async function startServer() {
     await seedDatabaseIfEmpty();
   } catch (error) {
     console.error('Database initialization failed, shutting down application.', error);
+    process.exit(1);
+  }
+
+  console.log('Ensuring default school terms exist...');
+  try {
+    await ensureDefaultSchoolTermsExist();
+  } catch (error) {
+    console.error('Failed to ensure default school terms, shutting down application.', error);
     process.exit(1);
   }
 
@@ -583,7 +609,7 @@ async function startServer() {
       const existingSameEmail = await db.select().from(users).where(sql`email = ${email} AND id != ${id}`);
       if (existingSameEmail.length > 0) return res.status(409).json({ error: 'Email already in use by another user' });
 
-      const updatedValues: any = { email, name, role, schoolId: schoolId ? parseInt(schoolId) : null, gender: gender ?? null };
+      const updatedValues: any = { email, name, role, schoolId: schoolId ? parseInt(schoolId, 10) : null, gender: gender ?? null };
       if (role === 'school_admin') {
         if (academicYearId == null) {
           return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -613,9 +639,13 @@ async function startServer() {
         let teacherProfileId: number | null = null;
         if (existingTeacher.length > 0) {
           teacherProfileId = existingTeacher[0].id;
-          await db.update(teachers).set({ schoolId: schoolId ? parseInt(schoolId) : null, phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
+          await db.update(teachers).set({ schoolId: schoolId ? parseInt(schoolId, 10) : existingTeacher[0].schoolId, phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
         } else {
-          const [inserted] = await db.insert(teachers).values({ userId: id, schoolId: schoolId ? parseInt(schoolId) : null, phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).returning();
+          const resolvedTeacherSchoolId = schoolId ? parseInt(schoolId, 10) : actor.schoolId;
+          if (resolvedTeacherSchoolId == null) {
+            return res.status(400).json({ error: 'Missing schoolId for teacher profile' });
+          }
+          const [inserted] = await db.insert(teachers).values({ userId: id, schoolId: resolvedTeacherSchoolId, phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).returning();
           teacherProfileId = inserted?.id ?? null;
         }
 
@@ -906,7 +936,7 @@ async function startServer() {
       const user = await resolveActor(req);
       if (!user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      let list;
+      let list: any[] = [];
       if (user.role === 'super_admin') {
         // Super admin can see all schools
         list = await db.select().from(schools);
@@ -951,7 +981,7 @@ async function startServer() {
           let yearId = globalActiveYear?.id;
 
           if (!yearId) {
-            const [globalYear] = await db.select().from(academicYears).where(eq(academicYears.schoolId, null)).orderBy(desc(academicYears.id)).limit(1);
+            const [globalYear] = await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`).orderBy(desc(academicYears.id)).limit(1);
             yearId = globalYear?.id;
           }
 
@@ -1029,7 +1059,7 @@ async function startServer() {
           let yearId = globalActiveYear?.id;
 
           if (!yearId) {
-            const [globalYear] = await db.select().from(academicYears).where(eq(academicYears.schoolId, null)).orderBy(desc(academicYears.id)).limit(1);
+            const [globalYear] = await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`).orderBy(desc(academicYears.id)).limit(1);
             yearId = globalYear?.id;
           }
 
@@ -1416,28 +1446,32 @@ async function startServer() {
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      let list;
       if (user.role === 'super_admin') {
-        list = await db.select().from(academicYears);
-      } else if (user.role === 'school_admin') {
-        // School admin sees ONLY their assigned academic year
-        if (user.academicYearId) {
-          list = await db.select().from(academicYears).where(eq(academicYears.id, user.academicYearId));
-        } else {
-          // If no assigned year, return empty list (admin must have an assigned year)
-          list = [];
-        }
-      } else {
-        // Teachers and parents see global academic years plus any legacy school-specific ones
-        list = await db.select().from(academicYears).where(
-          or(
-            eq(academicYears.schoolId, null),
-            eq(academicYears.schoolId, user.schoolId)
-          )
-        );
+        return res.json(await db.select().from(academicYears));
       }
 
-      res.json(list);
+      if (user.role === 'school_admin') {
+        // School admin sees ONLY their assigned academic year
+        if (user.academicYearId) {
+          return res.json(await db.select().from(academicYears).where(eq(academicYears.id, user.academicYearId)));
+        }
+        // If no assigned year, return empty list (admin must have an assigned year)
+        return res.json([]);
+      }
+
+      // Teachers and parents see global academic years plus any legacy school-specific ones
+      if (user.schoolId == null) {
+        return res.json(await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`));
+      }
+
+      return res.json(
+        await db.select().from(academicYears).where(
+          or(
+            sql`${academicYears.schoolId} IS NULL`,
+            eq(academicYears.schoolId, user.schoolId)
+          )
+        )
+      );
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch academic years' });
     }
@@ -1470,6 +1504,86 @@ async function startServer() {
       res.status(201).json(result[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to write academic year' });
+    }
+  });
+
+  // 2b. School Terms - Filtered by school / academic year
+  app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      let query = db
+        .select({
+          id: schoolTerms.id,
+          schoolId: schoolTerms.schoolId,
+          academicYearId: schoolTerms.academicYearId,
+          academicYearName: academicYears.name,
+          name: schoolTerms.name,
+          startDate: schoolTerms.startDate,
+          endDate: schoolTerms.endDate,
+          orderIndex: schoolTerms.orderIndex,
+          isActive: schoolTerms.isActive,
+          createdAt: schoolTerms.createdAt,
+        })
+        .from(schoolTerms)
+        .leftJoin(academicYears, eq(schoolTerms.academicYearId, academicYears.id));
+
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId) {
+          query = query.where(or(eq(schoolTerms.schoolId, actor.schoolId), sql`${schoolTerms.schoolId} IS NULL`)) as any;
+        } else {
+          return res.json([]);
+        }
+      }
+
+      const list = await query;
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch school terms' });
+    }
+  });
+
+  app.post('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const { schoolId, academicYearId, name, startDate, endDate, orderIndex, isActive } = req.body;
+      if (!academicYearId || !name) {
+        return res.status(400).json({ error: 'Missing mandatory term parameters' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      if (actor.role !== 'super_admin') {
+        if (!actor.schoolId || (schoolId && Number(schoolId) !== actor.schoolId)) {
+          return res.status(403).json({ error: 'Cannot create term for another school' });
+        }
+      }
+
+      const [yearRow] = await db.select().from(academicYears).where(eq(academicYears.id, parseInt(String(academicYearId), 10)));
+      if (!yearRow) return res.status(404).json({ error: 'Academic year not found' });
+
+      if (actor.role !== 'super_admin' && actor.schoolId && yearRow.schoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot create term for another school year' });
+      }
+
+      const result = await db.insert(schoolTerms).values({
+        schoolId: schoolId ? parseInt(String(schoolId), 10) : yearRow.schoolId ?? null,
+        academicYearId: parseInt(String(academicYearId), 10),
+        name,
+        startDate: startDate || null,
+        endDate: endDate || null,
+        orderIndex: orderIndex ? parseInt(String(orderIndex), 10) : 1,
+        isActive: isActive ?? true,
+      }).returning();
+
+      res.status(201).json(result[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to create school term' });
     }
   });
 
@@ -2303,14 +2417,17 @@ async function startServer() {
       }).returning();
 
       // Automatically create a simulated notification for the Parent of this student
-      const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
-      if (parentRecord) {
+      const parentId = student.parentId;
+      if (parentId != null) {
+        const [parentRecord] = await db.select().from(parents).where(eq(parents.id, parentId));
+        if (parentRecord) {
         await db.insert(notifications).values({
           userId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
           body: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
           type: 'absence',
         });
+        }
       }
 
       res.status(201).json(result[0]);
@@ -2382,10 +2499,13 @@ async function startServer() {
           className: classes.name,
           teacherId: evaluations.teacherId,
           teacherName: users.name,
+          termId: evaluations.termId,
+          termName: schoolTerms.name,
           subject: evaluations.subject,
           title: evaluations.title,
           coefficient: evaluations.coefficient,
           maxScore: evaluations.maxScore,
+          countInBulletin: evaluations.countInBulletin,
           date: evaluations.date,
           createdAt: evaluations.createdAt,
           schoolId: classes.schoolId,
@@ -2393,7 +2513,8 @@ async function startServer() {
         .from(evaluations)
         .innerJoin(classes, eq(evaluations.classId, classes.id))
         .innerJoin(teachers, eq(evaluations.teacherId, teachers.id))
-        .innerJoin(users, eq(teachers.userId, users.id));
+        .innerJoin(users, eq(teachers.userId, users.id))
+        .leftJoin(schoolTerms, eq(evaluations.termId, schoolTerms.id));
 
       if (actor.role !== 'super_admin') {
         // School admin, teacher, and others see only their school's evaluations
@@ -2426,7 +2547,7 @@ async function startServer() {
       if (requestingUser && requestingUser.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, subject, title, coefficient, maxScore, date } = req.body;
+      const { classId, teacherId, subject, title, coefficient, maxScore, date, termId, countInBulletin } = req.body;
       if (!classId || !subject || !title || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
@@ -2438,6 +2559,19 @@ async function startServer() {
       // Load the class to check its school
       const [classRecord] = await db.select().from(classes).where(eq(classes.id, parseInt(classId)));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+
+      let termRecord: any = null;
+      if (termId !== undefined && termId !== null && String(termId).trim() !== '') {
+        const [termRow] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, parseInt(String(termId), 10)));
+        if (!termRow) return res.status(404).json({ error: 'School term not found' });
+        if (termRow.academicYearId !== classRecord.academicYearId) {
+          return res.status(400).json({ error: 'The selected term does not belong to the class academic year' });
+        }
+        if (user.role !== 'super_admin' && user.schoolId && termRow.schoolId !== null && termRow.schoolId !== user.schoolId) {
+          return res.status(403).json({ error: 'Cannot assign term from another school' });
+        }
+        termRecord = termRow;
+      }
 
       // School admin can only create evaluations for classes in their own school
       if (user.role !== 'super_admin') {
@@ -2478,10 +2612,12 @@ async function startServer() {
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
+        termId: termRecord ? termRecord.id : null,
         subject,
         title,
         coefficient: coefficient ? parseInt(coefficient) : 1,
         maxScore: maxScore ? parseInt(maxScore) : 20,
+        countInBulletin: countInBulletin === undefined ? true : Boolean(countInBulletin),
         date,
       }).returning();
 
@@ -2550,12 +2686,15 @@ async function startServer() {
             return res.json([]);
           }
 
-          query = query.where(
-            or(
-              eq(students.parentId, parentProfile.id),
-              eq(students.id, parentProfile.studentId)
-            )
-          ) as any;
+          const parentStudentId = parentProfile.studentId;
+          query = parentStudentId != null
+            ? (query.where(
+                or(
+                  eq(students.parentId, parentProfile.id),
+                  eq(students.id, parentStudentId)
+                )
+              ) as any)
+            : (query.where(eq(students.parentId, parentProfile.id)) as any);
         } else {
           // School admin and other staff see only their school's grades
           if (user.schoolId) {
@@ -2570,6 +2709,72 @@ async function startServer() {
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch grades list' });
+    }
+  });
+
+  app.get('/api/bulletins/term-average', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const { termId, studentId } = req.query;
+      const parsedTermId = Number(termId);
+      const parsedStudentId = Number(studentId);
+
+      if (!Number.isInteger(parsedTermId) || !Number.isInteger(parsedStudentId)) {
+        return res.status(400).json({ error: 'termId and studentId are required' });
+      }
+
+      const [termRow] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, parsedTermId));
+      if (!termRow) return res.status(404).json({ error: 'School term not found' });
+
+      const [studentRow] = await db.select().from(students).where(eq(students.id, parsedStudentId));
+      if (!studentRow) return res.status(404).json({ error: 'Student not found' });
+
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId == null || studentRow.schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+      }
+
+      const [termEvaluations, studentGrades] = await Promise.all([
+        db.select().from(evaluations).where(eq(evaluations.termId, parsedTermId)),
+        db.select().from(grades).where(eq(grades.studentId, parsedStudentId)),
+      ]);
+
+      const result = calculateStudentTermAverage({
+        term: { id: termRow.id },
+        student: {
+          id: studentRow.id,
+          schoolId: studentRow.schoolId,
+          classId: studentRow.classId,
+          firstName: studentRow.firstName,
+          lastName: studentRow.lastName,
+        },
+        evaluations: termEvaluations.map((evaluation) => ({
+          id: evaluation.id,
+          classId: evaluation.classId,
+          termId: evaluation.termId,
+          subject: evaluation.subject,
+          title: evaluation.title,
+          coefficient: evaluation.coefficient,
+          maxScore: evaluation.maxScore,
+          countInBulletin: evaluation.countInBulletin,
+        })),
+        grades: studentGrades.map((grade) => ({
+          id: grade.id,
+          evaluationId: grade.evaluationId,
+          studentId: grade.studentId,
+          score: grade.score,
+        })),
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      console.error('Failed to compute bulletin term average:', err);
+      res.status(500).json({ error: 'Failed to compute bulletin term average' });
     }
   });
 
@@ -2688,14 +2893,17 @@ async function startServer() {
       // Create simulated push notification for parent of this student
       const [evaluationRecord] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
       if (evaluationRecord) {
-        const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
-        if (parentRecord) {
+        const parentId = student.parentId;
+        if (parentId != null) {
+          const [parentRecord] = await db.select().from(parents).where(eq(parents.id, parentId));
+          if (parentRecord) {
           await db.insert(notifications).values({
             userId: parentRecord.userId,
             title: `Nouvelle note pour ${student.firstName}`,
             body: `${student.firstName} a obtenu la note de ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`,
             type: 'grade',
           });
+          }
         }
       }
 

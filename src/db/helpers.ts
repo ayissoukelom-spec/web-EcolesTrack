@@ -2,6 +2,7 @@ import { db } from './index.ts';
 import {
   schools,
   academicYears,
+  schoolTerms,
   users,
   teachers,
   parents,
@@ -12,7 +13,7 @@ import {
   absences,
   notifications,
 } from './schema.ts';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 /**
  * Ensure the audit_events table exists and contains expected columns.
@@ -83,6 +84,72 @@ export async function ensureUsersTableSchema() {
   }
 }
 
+export async function ensureSchoolTermsTableExists() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS school_terms (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER REFERENCES schools(id),
+      academic_year_id INTEGER NOT NULL REFERENCES academic_years(id),
+      name TEXT NOT NULL,
+      start_date TEXT,
+      end_date TEXT,
+      order_index INTEGER NOT NULL DEFAULT 1,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP DEFAULT now()
+    );`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS school_id INTEGER REFERENCES schools(id);`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS name TEXT;`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS start_date TEXT;`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS end_date TEXT;`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS order_index INTEGER NOT NULL DEFAULT 1;`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;`);
+    await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();`);
+  } catch (err: any) {
+    console.error('Failed to ensure school_terms table exists:', err?.message || err);
+    throw err;
+  }
+}
+
+export async function ensureEvaluationsBulletinColumns() {
+  try {
+    await db.execute(sql`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES school_terms(id);`);
+    await db.execute(sql`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS count_in_bulletin BOOLEAN NOT NULL DEFAULT true;`);
+  } catch (err: any) {
+    console.error('Failed to ensure evaluations bulletin columns exist:', err?.message || err);
+    throw err;
+  }
+}
+
+export async function ensureDefaultSchoolTermsExist() {
+  try {
+    const existingTerms = await db.select({ count: sql<number>`count(*)::integer` }).from(schoolTerms);
+    if ((existingTerms[0]?.count || 0) > 0) return;
+
+    const years = await db.select().from(academicYears);
+    for (const year of years) {
+      const defaultTerms = [
+        { name: 'Trimestre 1', orderIndex: 1 },
+        { name: 'Trimestre 2', orderIndex: 2 },
+        { name: 'Trimestre 3', orderIndex: 3 },
+      ];
+
+      for (const term of defaultTerms) {
+        await db.insert(schoolTerms).values({
+          schoolId: year.schoolId ?? undefined,
+          academicYearId: year.id,
+          name: term.name,
+          orderIndex: term.orderIndex,
+          isActive: true,
+        });
+      }
+    }
+  } catch (err: any) {
+    console.error('Failed to ensure default school terms exist:', err?.message || err);
+    throw err;
+  }
+}
+
 /**
  * Seeding method to initialize the database with demo data if it's empty.
  */
@@ -114,6 +181,23 @@ export async function seedDatabaseIfEmpty() {
       isActive: true,
     }).returning();
     const activeYear = yearInsert[0];
+
+    // 2b. Insert default terms for the active academic year
+    const defaultTerms = [
+      { name: 'Trimestre 1', orderIndex: 1 },
+      { name: 'Trimestre 2', orderIndex: 2 },
+      { name: 'Trimestre 3', orderIndex: 3 },
+    ];
+
+    for (const term of defaultTerms) {
+      await db.insert(schoolTerms).values({
+        schoolId: mainSchool.id,
+        academicYearId: activeYear.id,
+        name: term.name,
+        orderIndex: term.orderIndex,
+        isActive: true,
+      });
+    }
 
     // 3. Insert Simulated Users
     // Super Admin

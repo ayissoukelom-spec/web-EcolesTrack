@@ -23,14 +23,14 @@ describe('evaluation eligibility and grading rules', () => {
   };
 
   const students: Student[] = [
-    { id: 1, classId: 10, firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
-    { id: 2, classId: 10, firstName: 'Bob', lastName: 'Martin', enrolledAt: '2026-06-25T10:00:00Z' },
-    { id: 3, classId: 10, firstName: 'Clara', lastName: 'Ndiaye', enrolledAt: '2026-06-25T09:30:00Z' },
+    { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
+    { id: 2, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Bob', lastName: 'Martin', enrolledAt: '2026-06-25T10:00:00Z' },
+    { id: 3, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Clara', lastName: 'Ndiaye', enrolledAt: '2026-06-25T09:30:00Z' },
   ];
 
   const grades: Grade[] = [
-    { id: 1, evaluationId: 1, studentId: 1, score: 15, remarks: 'Bien', createdAt: '2026-06-26T12:00:00Z' },
-    { id: 2, evaluationId: 1, studentId: 3, score: 14, remarks: 'OK', createdAt: '2026-06-26T12:05:00Z' },
+    { id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien' },
+    { id: 2, evaluationId: 1, studentId: 3, score: '14', remarks: 'OK' },
   ];
 
   it('autorise un élève inscrit avant la création de l évaluation', () => {
