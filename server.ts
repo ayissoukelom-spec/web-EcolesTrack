@@ -168,12 +168,10 @@ async function startServer() {
   const PORT = 3000;
 
   registerBulletinReadRoutes(app, {
-    requireAuthMiddleware: requireAuth as any,
     resolveActor,
   });
 
   registerBulletinPdfRoute(app, {
-    requireAuthMiddleware: requireAuth as any,
     resolveActor,
     template: {
       logoFilePath: process.env.BULLETIN_LOGO_PATH,

@@ -168,3 +168,60 @@ export interface AuditEvent {
   description: string;
   createdAt?: string;
 }
+
+export interface BulletinListItem {
+  id: number;
+  studentId: number;
+  studentName: string;
+  classId: number;
+  className: string;
+  schoolYearId: number;
+  schoolYearName: string;
+  termId: number;
+  termName: string;
+  average: number | null;
+  rank: number | null;
+  mention: string | null;
+  appreciation: string | null;
+  generatedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface BulletinLine {
+  id: number;
+  bulletinId: number;
+  subjectId: number | null;
+  subjectName: string;
+  coefficient: number;
+  average: number | null;
+  teacherComment: string | null;
+  rank: number | null;
+  createdAt: string | null;
+}
+
+export interface BulletinDetail extends BulletinListItem {
+  totalPoints: number;
+  totalCoefficients: number;
+  lines: BulletinLine[];
+}
+
+export interface BulletinListFilters {
+  classId?: number;
+  studentId?: number;
+  termId?: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface BulletinListResponse {
+  items: BulletinListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface BulletinTermOption {
+  id: number;
+  name: string;
+}
