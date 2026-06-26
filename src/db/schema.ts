@@ -153,7 +153,38 @@ export const notifications = pgTable('notifications', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 12. Audit Events / Journal d'événements
+// 12. Bulletins (persisted snapshots)
+export const bulletins = pgTable('bulletins', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id).notNull(),
+  classId: integer('class_id').references(() => classes.id).notNull(),
+  schoolYearId: integer('school_year_id').references(() => academicYears.id).notNull(),
+  termId: integer('term_id').references(() => schoolTerms.id).notNull(),
+  average: text('average'),
+  totalPoints: text('total_points').notNull(),
+  totalCoefficients: text('total_coefficients').notNull(),
+  rank: integer('rank'),
+  mention: text('mention'),
+  appreciation: text('appreciation'),
+  generatedAt: timestamp('generated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// 13. Bulletin lines (one line per subject)
+export const bulletinLines = pgTable('bulletin_lines', {
+  id: serial('id').primaryKey(),
+  bulletinId: integer('bulletin_id').references(() => bulletins.id, { onDelete: 'cascade' }).notNull(),
+  subjectId: integer('subject_id'),
+  subjectName: text('subject_name').notNull(),
+  coefficient: integer('coefficient').notNull(),
+  average: text('average'),
+  teacherComment: text('teacher_comment'),
+  rank: integer('rank'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 14. Audit Events / Journal d'événements
 export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
   actorUserId: integer('actor_user_id').references(() => users.id),
@@ -283,6 +314,34 @@ export const studentsRelations = relations(students, ({ one, many }) => ({
   }),
   grades: many(grades),
   absences: many(absences),
+  bulletins: many(bulletins),
+}));
+
+export const bulletinsRelations = relations(bulletins, ({ one, many }) => ({
+  student: one(students, {
+    fields: [bulletins.studentId],
+    references: [students.id],
+  }),
+  class: one(classes, {
+    fields: [bulletins.classId],
+    references: [classes.id],
+  }),
+  schoolYear: one(academicYears, {
+    fields: [bulletins.schoolYearId],
+    references: [academicYears.id],
+  }),
+  term: one(schoolTerms, {
+    fields: [bulletins.termId],
+    references: [schoolTerms.id],
+  }),
+  lines: many(bulletinLines),
+}));
+
+export const bulletinLinesRelations = relations(bulletinLines, ({ one }) => ({
+  bulletin: one(bulletins, {
+    fields: [bulletinLines.bulletinId],
+    references: [bulletins.id],
+  }),
 }));
 
 export const evaluationsRelations = relations(evaluations, ({ one, many }) => ({

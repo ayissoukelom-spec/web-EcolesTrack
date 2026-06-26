@@ -121,6 +121,42 @@ export async function ensureEvaluationsBulletinColumns() {
   }
 }
 
+export async function ensureBulletinSnapshotTablesExist() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS bulletins (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id),
+      class_id INTEGER NOT NULL REFERENCES classes(id),
+      school_year_id INTEGER NOT NULL REFERENCES academic_years(id),
+      term_id INTEGER NOT NULL REFERENCES school_terms(id),
+      average TEXT,
+      total_points TEXT NOT NULL,
+      total_coefficients TEXT NOT NULL,
+      rank INTEGER,
+      mention TEXT,
+      appreciation TEXT,
+      generated_at TIMESTAMP NOT NULL DEFAULT now(),
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now()
+    );`);
+
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS bulletin_lines (
+      id SERIAL PRIMARY KEY,
+      bulletin_id INTEGER NOT NULL REFERENCES bulletins(id) ON DELETE CASCADE,
+      subject_id INTEGER,
+      subject_name TEXT NOT NULL,
+      coefficient INTEGER NOT NULL,
+      average TEXT,
+      teacher_comment TEXT,
+      rank INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    );`);
+  } catch (err: any) {
+    console.error('Failed to ensure bulletin snapshot tables exist:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureDefaultSchoolTermsExist() {
   try {
     const existingTerms = await db.select({ count: sql<number>`count(*)::integer` }).from(schoolTerms);

@@ -15,6 +15,20 @@
       "when": 1782235497414,
       "tag": "0004_school_terms_phase1",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782477079000,
+      "tag": "0005_bulletin_snapshots_phase3",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782477081000,
+      "tag": "0006_bulletin_read_indexes",
+      "breakpoints": true
     }
   ]
 }

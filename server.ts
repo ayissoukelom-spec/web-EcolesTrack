@@ -2,8 +2,8 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { ensureAuditEventsTableExists, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
-import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import { ensureAuditEventsTableExists, ensureBulletinSnapshotTablesExist, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
+import { requireAuth, requireOwnership, requireRole, AuthRequest, mapToAppRole } from './src/middleware/auth.ts';
 import {
   schools,
   academicYears,
@@ -23,6 +23,9 @@ import {
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { calculateStudentTermAverage } from './src/lib/bulletinService';
+import { generateBulletinSnapshot } from './src/lib/bulletinSnapshotService.ts';
+import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
+import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import * as dotenv from 'dotenv';
 
 // Load env variables
@@ -65,7 +68,12 @@ async function resolveActor(req: AuthRequest) {
 
   // Otherwise, load from DB for real authenticated users.
   const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-  if (dbUser) return dbUser;
+  if (dbUser) {
+    return {
+      ...dbUser,
+      appRole: mapToAppRole(dbUser.role),
+    } as any;
+  }
 
   return null;
 }
@@ -159,6 +167,19 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  registerBulletinReadRoutes(app, {
+    requireAuthMiddleware: requireAuth as any,
+    resolveActor,
+  });
+
+  registerBulletinPdfRoute(app, {
+    requireAuthMiddleware: requireAuth as any,
+    resolveActor,
+    template: {
+      logoFilePath: process.env.BULLETIN_LOGO_PATH,
+    },
+  });
+
   // JSON parsing middleware
   app.use(express.json());
 
@@ -210,6 +231,14 @@ async function startServer() {
     await ensureEvaluationsBulletinColumns();
   } catch (error) {
     console.error('Failed to ensure evaluations bulletin columns, shutting down application.', error);
+    process.exit(1);
+  }
+
+  console.log('Ensuring bulletin snapshot tables exist...');
+  try {
+    await ensureBulletinSnapshotTablesExist();
+  } catch (error) {
+    console.error('Failed to ensure bulletin snapshot tables exist, shutting down application.', error);
     process.exit(1);
   }
 
@@ -2911,6 +2940,43 @@ async function startServer() {
     } catch (err: any) {
       console.error(err);
       res.status(500).json({ error: 'Failed to record student grade' });
+    }
+  });
+
+  app.post('/api/bulletins/generate', requireAuth, requireRole(['admin']), async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'parent') {
+        return res.status(403).json({ error: 'Parents are not allowed to generate bulletins' });
+      }
+
+      const studentId = Number(req.body?.studentId);
+      const termId = Number(req.body?.termId);
+      if (!Number.isInteger(studentId) || !Number.isInteger(termId)) {
+        return res.status(400).json({ error: 'studentId and termId are required' });
+      }
+
+      const [studentRow] = await db.select({
+        id: students.id,
+        schoolId: students.schoolId,
+      }).from(students).where(eq(students.id, studentId));
+      if (!studentRow) {
+        return res.status(404).json({ error: 'Student not found' });
+      }
+
+      if (actor.role !== 'super_admin' && actor.schoolId !== studentRow.schoolId) {
+        return res.status(403).json({ error: 'Forbidden: cannot generate bulletin outside your school' });
+      }
+
+      const snapshot = await generateBulletinSnapshot(studentId, termId);
+      res.status(201).json(snapshot);
+    } catch (err: any) {
+      const message = err?.message || 'Failed to generate bulletin snapshot';
+      console.error('Error generating bulletin snapshot:', err);
+      res.status(500).json({ error: message });
     }
   });
 
