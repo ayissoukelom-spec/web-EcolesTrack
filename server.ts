@@ -884,6 +884,10 @@ async function startServer() {
         return res.status(401).json({ error: 'Unauthenticated' });
       }
 
+      if (req.body && typeof req.body === 'object' && 'role' in req.body) {
+        return res.status(400).json({ error: 'Forbidden: role cannot be provided by client on this route' });
+      }
+
       const { uid, email, name, role } = req.user;
 
       // Find if user already exists
@@ -898,9 +902,14 @@ async function startServer() {
         return res.json(existing);
       }
 
-      // If user is simulated or we need to auto-create, preserve known roles, otherwise default to parent
-      const allowedRoles = ['super_admin', 'school_admin', 'teacher', 'parent'];
+      // This endpoint must never auto-provision administrative accounts.
+      const adminRoles = ['super_admin', 'school_admin', 'admin'];
       const normalizedRole = String(role || '').trim();
+      if (adminRoles.includes(normalizedRole)) {
+        return res.status(403).json({ error: 'Forbidden: admin accounts cannot be auto-provisioned via this route' });
+      }
+
+      const allowedRoles = ['teacher', 'parent'];
       const finalRole = allowedRoles.includes(normalizedRole) ? normalizedRole : 'parent';
 
       let resolvedSchoolId = req.user.schoolId ?? null;
