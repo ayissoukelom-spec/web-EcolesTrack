@@ -424,16 +424,6 @@ export default function NotesView({
     populateGradeInputsForEvaluation(selectedEvalId);
   }, [selectedEvalId, selectedEvalGradesSignature]);
 
-  const archivedEvaluations = evaluationsList.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
-    }
-    if (!selectedClassId) return false;
-    if (String(ev.classId) !== selectedClassId) return false;
-    return isEvaluationFullyGraded(ev);
-  });
-
   const gradesForSelectedEval = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
   const eligibleStudentsWithHistory = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
   const eligibleGradesForSelectedEval = getEligibleGradesForEvaluation(currentEvaluation, currentClassStudents, gradesList);
@@ -754,7 +744,7 @@ export default function NotesView({
             <option value="">-- Sélectionnez un devoir --</option>
             {selectableEvaluations.map((ev) => (
               <option key={ev.id} value={ev.id}>
-                {ev.subject} — {ev.title} ({ev.date}){userRole !== 'teacher' && isEvaluationFullyGraded(ev) ? ' — Archivée' : ''}
+                {ev.subject} — {ev.title} ({ev.date})
               </option>
             ))}
           </select>
@@ -764,58 +754,6 @@ export default function NotesView({
       {saveStatus && (
         <div className="p-3 bg-emerald-50 text-emerald-700 text-xs border border-emerald-100 rounded-xl font-semibold animate-bounce">
           {saveStatus}
-        </div>
-      )}
-
-      {selectedClassId && archivedEvaluations.length > 0 && (
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-4">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800">Archive des devoirs terminés</h3>
-              <p className="text-xs text-slate-500">Les devoirs dont toutes les notes ont été saisies ne sont plus affichés dans la sélection principale.</p>
-            </div>
-            <span className="px-3 py-1 rounded-full bg-slate-200 text-slate-700 text-[11px] font-semibold">
-              {archivedEvaluations.length} devoir{archivedEvaluations.length > 1 ? 's' : ''}
-            </span>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {archivedEvaluations.map((ev) => {
-              const gradesForEval = gradesList.filter((g) => g.evaluationId === ev.id);
-              return (
-                <div key={ev.id} className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold mb-1">{ev.subject}</div>
-                  <div className="font-semibold text-slate-800">{ev.title}</div>
-                  <div className="mt-2 text-[13px] text-slate-500">Date : {ev.date}</div>
-                  <div className="mt-2 text-[13px] text-slate-500">État : <span className="font-semibold text-emerald-700">Toutes notes enregistrées</span></div>
-
-                  <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-100 p-3">
-                    <div className="flex items-center justify-between gap-2 mb-3 text-[12px] text-slate-500 uppercase tracking-[0.14em] font-semibold">
-                      <span>Notes</span>
-                      <span>{gradesForEval.length} / {getEligibleStudentsForEvaluationUtil(ev, studentsList.filter((st) => st.classId === ev.classId)).length}</span>
-                    </div>
-                    {gradesForEval.length > 0 ? (
-                      <div className="space-y-2 text-[13px] text-slate-700">
-                        {gradesForEval.map((grade) => {
-                          const student = studentsList.find((st) => st.id === grade.studentId);
-                          return (
-                            <div key={grade.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                              <div className="font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
-                              <div className="flex flex-col gap-1 mt-1 text-slate-600">
-                                <span>Note : <span className="font-bold text-slate-900">{grade.score}</span></span>
-                                <span>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-[13px] text-slate-500 italic">Aucune note enregistrée.</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 
