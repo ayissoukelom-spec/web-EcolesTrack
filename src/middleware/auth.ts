@@ -28,6 +28,11 @@ export interface AuthRequest extends Request {
   };
 }
 
+const isSimulationExplicitlyEnabled = (): boolean => {
+  const raw = String(process.env.AUTH_SIMULATION_ENABLED || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+};
+
 export const verifyToken = async (
   req: AuthRequest,
   res: Response,
@@ -41,11 +46,27 @@ export const verifyToken = async (
   const simulatedName = req.headers['x-simulated-name'];
   const simulatedSchoolId = req.headers['x-simulated-school-id'];
 
-  if (process.env.NODE_ENV === 'production' && (simulatedRole || simulatedUid)) {
-    return res.status(400).json({ error: 'Simulation headers are not allowed in production' });
-  }
+  const hasAnySimulationHeader = Boolean(
+    simulatedRole ||
+    simulatedUid ||
+    simulatedEmail ||
+    simulatedName ||
+    simulatedSchoolId
+  );
 
-  if (simulatedRole && simulatedUid) {
+  if (hasAnySimulationHeader) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(400).json({ error: 'Simulation headers are not allowed in production' });
+    }
+
+    if (!isSimulationExplicitlyEnabled()) {
+      return res.status(400).json({ error: 'Simulation headers are disabled on this server' });
+    }
+
+    if (!simulatedRole || !simulatedUid) {
+      return res.status(400).json({ error: 'Invalid simulation headers: role and uid are required together' });
+    }
+
     try {
       const [dbUser] = await db.select().from(users).where(eq(users.uid, simulatedUid as string));
       if (dbUser) {
