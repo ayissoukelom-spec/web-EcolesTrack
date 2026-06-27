@@ -128,9 +128,20 @@ export const grades = pgTable('grades', {
   remarks: text('remarks'),
   editCount: integer('edit_count').default(0).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// 10. Absences
+// 10. Grade history / audit trail
+export const gradeHistory = pgTable('grade_history', {
+  id: serial('id').primaryKey(),
+  gradeId: integer('grade_id').references(() => grades.id, { onDelete: 'cascade' }).notNull(),
+  oldValue: text('old_value'),
+  newValue: text('new_value'),
+  changedBy: integer('changed_by').references(() => users.id),
+  changedAt: timestamp('changed_at').defaultNow().notNull(),
+});
+
+// 11. Absences
 export const absences = pgTable('absences', {
   id: serial('id').primaryKey(),
   studentId: integer('student_id').references(() => students.id).notNull(),
@@ -142,7 +153,7 @@ export const absences = pgTable('absences', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 11. Notifications
+// 12. Notifications
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id).notNull(), // Recipient users.id
@@ -153,7 +164,7 @@ export const notifications = pgTable('notifications', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 12. Bulletins (persisted snapshots)
+// 13. Bulletins (persisted snapshots)
 export const bulletins = pgTable('bulletins', {
   id: serial('id').primaryKey(),
   studentId: integer('student_id').references(() => students.id).notNull(),
@@ -171,7 +182,7 @@ export const bulletins = pgTable('bulletins', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// 13. Bulletin lines (one line per subject)
+// 14. Bulletin lines (one line per subject)
 export const bulletinLines = pgTable('bulletin_lines', {
   id: serial('id').primaryKey(),
   bulletinId: integer('bulletin_id').references(() => bulletins.id, { onDelete: 'cascade' }).notNull(),
@@ -184,7 +195,7 @@ export const bulletinLines = pgTable('bulletin_lines', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// 14. Audit Events / Journal d'événements
+// 15. Audit Events / Journal d'événements
 export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
   actorUserId: integer('actor_user_id').references(() => users.id),

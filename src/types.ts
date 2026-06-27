@@ -131,6 +131,9 @@ export interface Grade {
   score: string; // "14.5", "Abs" etc
   remarks?: string;
   editCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  isModified?: boolean;
 }
 
 export interface Absence {

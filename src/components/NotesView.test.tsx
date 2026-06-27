@@ -89,6 +89,123 @@ describe('NotesView school admin editing', () => {
 });
 
 describe('NotesView grade input regression guards', () => {
+  it('shows a modified-grade badge for grades marked as modified', async () => {
+    const student: Student = {
+      id: 6,
+      firstName: 'Margaret',
+      lastName: 'Hamilton',
+      classId: 14,
+      schoolId: 1,
+      enrolledAt: '2024-01-01',
+    } as Student;
+
+    const schoolClass: Class = {
+      id: 14,
+      name: '4e A',
+      schoolId: 1,
+      academicYearId: 1,
+    } as Class;
+
+    const evaluation: Evaluation = {
+      id: 60,
+      classId: 14,
+      subject: 'Mathématiques',
+      title: 'Devoir 3',
+      coefficient: 1,
+      maxScore: 20,
+      date: '2024-02-20',
+      teacherId: 42,
+      createdAt: '2024-02-20',
+    } as Evaluation;
+
+    render(
+      <NotesView
+        userRole="teacher"
+        teacherId={42}
+        teacherClassIds={[14]}
+        evaluationsList={[evaluation]}
+        gradesList={[
+          {
+            id: 101,
+            evaluationId: 60,
+            studentId: 6,
+            score: '12',
+            remarks: 'Initial',
+            editCount: 1,
+            createdAt: '2024-02-20T10:00:00.000Z',
+            updatedAt: '2024-02-20T11:30:00.000Z',
+          } as Grade,
+        ]}
+        studentsList={[student]}
+        classesList={[schoolClass]}
+        schoolsList={[]}
+        onAddEvaluation={() => undefined}
+        onAddGrade={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText(/note modifiée/i)).toBeTruthy();
+  });
+
+  it('shows a new-grade badge for grades not marked as modified', async () => {
+    const student: Student = {
+      id: 7,
+      firstName: 'Katherine',
+      lastName: 'Johnson',
+      classId: 15,
+      schoolId: 1,
+      enrolledAt: '2024-01-01',
+    } as Student;
+
+    const schoolClass: Class = {
+      id: 15,
+      name: '3e B',
+      schoolId: 1,
+      academicYearId: 1,
+    } as Class;
+
+    const evaluation: Evaluation = {
+      id: 61,
+      classId: 15,
+      subject: 'Mathématiques',
+      title: 'Devoir 4',
+      coefficient: 1,
+      maxScore: 20,
+      date: '2024-02-25',
+      teacherId: 42,
+      createdAt: '2024-02-25',
+    } as Evaluation;
+
+    render(
+      <NotesView
+        userRole="teacher"
+        teacherId={42}
+        teacherClassIds={[15]}
+        evaluationsList={[evaluation]}
+        gradesList={[
+          {
+            id: 102,
+            evaluationId: 61,
+            studentId: 7,
+            score: '13',
+            remarks: 'Initial',
+            editCount: 0,
+            createdAt: '2024-02-25T10:00:00.000Z',
+            updatedAt: '2024-02-25T10:00:00.000Z',
+            isModified: false,
+          } as Grade,
+        ]}
+        studentsList={[student]}
+        classesList={[schoolClass]}
+        schoolsList={[]}
+        onAddEvaluation={() => undefined}
+        onAddGrade={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText(/nouvelle note/i)).toBeTruthy();
+  });
+
   it('allows the teacher to type a new grade and save it for own evaluation', async () => {
     const student: Student = {
       id: 2,

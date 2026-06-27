@@ -329,6 +329,9 @@ export default function AppShell() {
       score: data.score,
       remarks: data.remarks,
       editCount: createdOrUpdatedGrade.editCount ?? 0,
+      createdAt: createdOrUpdatedGrade.createdAt,
+      updatedAt: createdOrUpdatedGrade.updatedAt,
+      isModified: createdOrUpdatedGrade.isModified ?? ((createdOrUpdatedGrade.editCount ?? 0) > 0),
       evaluationTitle: createdOrUpdatedGrade.evaluationTitle ?? '',
       subject: createdOrUpdatedGrade.subject ?? '',
     }));

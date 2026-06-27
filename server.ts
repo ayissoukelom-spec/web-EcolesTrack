@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { ensureAuditEventsTableExists, ensureBulletinSnapshotTablesExist, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
+import { ensureAuditEventsTableExists, ensureBulletinSnapshotTablesExist, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureGradesTableSchema, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
 import { requireAuth, requireOwnership, requireRole, AuthRequest, mapToAppRole } from './src/middleware/auth.ts';
 import {
   schools,
@@ -22,6 +22,7 @@ import {
   absences,
   notifications,
   auditEvents,
+  gradeHistory,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { calculateStudentTermAverage } from './src/lib/bulletinService';
@@ -143,6 +144,18 @@ function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: 
   }
 
   return changes.length > 0 ? `Champs modifiés: ${changes.join('; ')}` : 'Aucun champ modifié détecté.';
+}
+
+function deriveGradeModificationState(grade: any) {
+  const createdAt = grade?.createdAt ? new Date(grade.createdAt) : null;
+  const updatedAt = grade?.updatedAt ? new Date(grade.updatedAt) : null;
+
+  const hasLaterUpdate = createdAt && updatedAt
+    && !Number.isNaN(createdAt.getTime())
+    && !Number.isNaN(updatedAt.getTime())
+    && updatedAt.getTime() > createdAt.getTime();
+
+  return hasLaterUpdate || (grade?.editCount ?? 0) > 0;
 }
 
 async function logAuditEvent(actor: any, action: string, resourceType: string, resourceId: number | null, schoolId: number | null, description: string) {
@@ -2727,6 +2740,8 @@ async function startServer() {
           score: grades.score,
           remarks: grades.remarks,
           editCount: grades.editCount,
+          createdAt: grades.createdAt,
+          updatedAt: grades.updatedAt,
           parentId: students.parentId,
           schoolId: students.schoolId,
         })
@@ -2761,7 +2776,10 @@ async function startServer() {
       }
 
       const list = await query;
-      res.json(list);
+      res.json(list.map((grade) => ({
+        ...grade,
+        isModified: deriveGradeModificationState(grade),
+      })));
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch grades list' });
     }
@@ -2924,16 +2942,26 @@ async function startServer() {
 
       let savedGrade;
       if (existing.length > 0) {
+        const previousValue = existing[0].score;
         const updated = await db
           .update(grades)
           .set({
             score: String(score),
             remarks,
             editCount: (existing[0].editCount ?? 0) + 1,
+            updatedAt: new Date(),
           })
           .where(eq(grades.id, existing[0].id))
           .returning();
         savedGrade = updated[0];
+
+        await db.insert(gradeHistory).values({
+          gradeId: savedGrade.id,
+          oldValue: String(previousValue),
+          newValue: String(score),
+          changedBy: user.id,
+          changedAt: new Date(),
+        });
       } else {
         const inserted = await db.insert(grades).values({
           evaluationId: parseInt(evaluationId),
@@ -2941,6 +2969,8 @@ async function startServer() {
           score: String(score),
           remarks,
           editCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         }).returning();
         savedGrade = inserted[0];
       }
@@ -2962,7 +2992,10 @@ async function startServer() {
         }
       }
 
-      res.status(200).json(savedGrade);
+      res.status(200).json({
+        ...savedGrade,
+        isModified: deriveGradeModificationState(savedGrade),
+      });
     } catch (err: any) {
       console.error(err);
       res.status(500).json({ error: 'Failed to record student grade' });

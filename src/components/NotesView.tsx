@@ -832,6 +832,9 @@ export default function NotesView({
                                   <div className="text-xs space-y-1">
                                     <div className="font-mono font-bold text-indigo-700">{existingGrade.score} / 20</div>
                                     <div className="text-slate-400 text-[10px]">Note déjà enregistrée</div>
+                                    <div className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${existingGrade.isModified || (existingGrade.editCount ?? 0) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                      {existingGrade.isModified || (existingGrade.editCount ?? 0) > 0 ? 'Note modifiée' : 'Nouvelle note'}
+                                    </div>
                                   </div>
                                 ) : isEligible ? (
                                     <div className="space-y-1">

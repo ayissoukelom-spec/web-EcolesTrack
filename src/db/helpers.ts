@@ -10,6 +10,7 @@ import {
   students,
   evaluations,
   grades,
+  gradeHistory,
   absences,
   notifications,
 } from './schema.ts';
@@ -117,6 +118,25 @@ export async function ensureEvaluationsBulletinColumns() {
     await db.execute(sql`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS count_in_bulletin BOOLEAN NOT NULL DEFAULT true;`);
   } catch (err: any) {
     console.error('Failed to ensure evaluations bulletin columns exist:', err?.message || err);
+    throw err;
+  }
+}
+
+export async function ensureGradesTableSchema() {
+  try {
+    await db.execute(sql`ALTER TABLE grades ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();`);
+    await db.execute(sql`ALTER TABLE grades ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now();`);
+    await db.execute(sql`UPDATE grades SET updated_at = COALESCE(updated_at, created_at, now()) WHERE updated_at IS NULL;`);
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS grade_history (
+      id SERIAL PRIMARY KEY,
+      grade_id INTEGER NOT NULL REFERENCES grades(id) ON DELETE CASCADE,
+      old_value TEXT,
+      new_value TEXT,
+      changed_by INTEGER REFERENCES users(id),
+      changed_at TIMESTAMP NOT NULL DEFAULT now()
+    );`);
+  } catch (err: any) {
+    console.error('Failed to ensure grades table schema exists:', err?.message || err);
     throw err;
   }
 }
