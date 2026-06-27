@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -167,6 +168,15 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  app.use(helmet({
+    contentSecurityPolicy: false,
+  }));
+
+  const isProductionProxyEnvironment = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+  if (isProductionProxyEnvironment) {
+    app.set('trust proxy', 1);
+  }
 
   registerBulletinReadRoutes(app, {
     resolveActor,
