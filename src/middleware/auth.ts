@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { adminAuth } from '../lib/firebase-admin.ts';
+import jwt from 'jsonwebtoken';
 import { db } from '../db/index.ts';
 import { users } from '../db/schema.ts';
 import { eq } from 'drizzle-orm';
@@ -24,110 +24,44 @@ export interface AuthRequest extends Request {
     role?: string;
     appRole?: AppRole;
     schoolId?: number | null;
-    simulated?: boolean;
   };
 }
-
-const isSimulationExplicitlyEnabled = (): boolean => {
-  const raw = String(process.env.AUTH_SIMULATION_ENABLED || '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
-};
 
 export const verifyToken = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
-  // 1. Support dev session mockup / simulated mode via headers for flexible testing
-  //    Block simulation headers in production to prevent test artifacts leaking.
-  const simulatedRole = req.headers['x-simulated-role'];
-  const simulatedUid = req.headers['x-simulated-uid'];
-  const simulatedEmail = req.headers['x-simulated-email'];
-  const simulatedName = req.headers['x-simulated-name'];
-  const simulatedSchoolId = req.headers['x-simulated-school-id'];
-
-  const hasAnySimulationHeader = Boolean(
-    simulatedRole ||
-    simulatedUid ||
-    simulatedEmail ||
-    simulatedName ||
-    simulatedSchoolId
-  );
-
-  if (hasAnySimulationHeader) {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(400).json({ error: 'Simulation headers are not allowed in production' });
-    }
-
-    if (!isSimulationExplicitlyEnabled()) {
-      return res.status(400).json({ error: 'Simulation headers are disabled on this server' });
-    }
-
-    if (!simulatedRole || !simulatedUid) {
-      return res.status(400).json({ error: 'Invalid simulation headers: role and uid are required together' });
-    }
-
-    try {
-      const [dbUser] = await db.select().from(users).where(eq(users.uid, simulatedUid as string));
-      if (dbUser) {
-        req.user = {
-          id: dbUser.id,
-          uid: dbUser.uid,
-          email: dbUser.email || (simulatedEmail as string | undefined),
-          name: dbUser.name || (simulatedName as string | undefined),
-          role: dbUser.role,
-          appRole: mapToAppRole(dbUser.role),
-          schoolId: dbUser.schoolId,
-          simulated: true,
-        };
-      } else {
-        req.user = {
-          uid: simulatedUid as string,
-          email: (simulatedEmail || 'simulated@schooltrack.com') as string,
-          name: (simulatedName || 'User Simulé') as string,
-          role: simulatedRole as string,
-          appRole: mapToAppRole(simulatedRole as string),
-          schoolId: simulatedSchoolId ? parseInt(simulatedSchoolId as string) : null,
-          simulated: true,
-        };
-      }
-    } catch (error) {
-      console.error('Failed to resolve simulated auth user from DB', error);
-      req.user = {
-        uid: simulatedUid as string,
-        email: (simulatedEmail || 'simulated@schooltrack.com') as string,
-        name: (simulatedName || 'User Simulé') as string,
-        role: simulatedRole as string,
-        appRole: mapToAppRole(simulatedRole as string),
-        schoolId: simulatedSchoolId ? parseInt(simulatedSchoolId as string) : null,
-        simulated: true,
-      };
-    }
-    return next();
-  }
-
-  // 2. Standard Firebase ID Token auth
+  // Only server-signed JWT is accepted: no simulation headers, no Firebase fallback.
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing token and no simulated profile' });
+    return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    const [dbUser] = await db.select().from(users).where(eq(users.uid, decodedToken.uid));
+    const secret = process.env.JWT_SECRET || 'dev-jwt-secret';
+    const decoded: any = jwt.verify(token, secret);
+    const uid = decoded?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+    const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
+    if (!dbUser) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
     req.user = {
-      id: dbUser?.id,
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      name: decodedToken.name || decodedToken.email || 'Utilisateur',
-      role: dbUser?.role,
-      appRole: mapToAppRole(dbUser?.role),
-      schoolId: dbUser?.schoolId ?? null,
+      id: dbUser.id,
+      uid: dbUser.uid,
+      email: dbUser.email,
+      name: dbUser.name || dbUser.email || 'Utilisateur',
+      role: dbUser.role,
+      appRole: mapToAppRole(dbUser.role),
+      schoolId: dbUser.schoolId ?? null,
     };
     return next();
   } catch (error) {
-    console.error('Error verifying Firebase ID token:', error);
+    console.error('Error verifying JWT:', error);
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 };

@@ -1,0 +1,21 @@
+[33md38c93b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m HEAD@{0}: reset: moving to d38c93b
+[33m825ec33[m HEAD@{1}: reset: moving to 825ec33
+[33meeb7b58[m HEAD@{2}: reset: moving to eeb7b58
+[33m5aa050e[m[33m ([m[1;31morigin/main[m[33m)[m HEAD@{3}: reset: moving to HEAD
+[33m5aa050e[m[33m ([m[1;31morigin/main[m[33m)[m HEAD@{4}: reset: moving to HEAD
+[33m5aa050e[m[33m ([m[1;31morigin/main[m[33m)[m HEAD@{5}: commit: update
+[33meeb7b58[m HEAD@{6}: commit: update
+[33m825ec33[m HEAD@{7}: commit: update
+[33m18e864a[m HEAD@{8}: commit: update
+[33md38c93b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m HEAD@{9}: commit: Sécurité : verrouillage du mode simulation des rôles
+[33m4a64d7a[m HEAD@{10}: commit: update
+[33mc920020[m HEAD@{11}: commit: update
+[33m9155603[m HEAD@{12}: commit: update
+[33m9c2d7a7[m HEAD@{13}: commit: update
+[33m5d644ab[m HEAD@{14}: commit: update
+[33m666f421[m HEAD@{15}: commit: update
+[33mfa1b571[m HEAD@{16}: commit: update
+[33mc331bf9[m HEAD@{17}: Branch: renamed refs/heads/main to refs/heads/main
+[33mc331bf9[m HEAD@{19}: Branch: renamed refs/heads/main to refs/heads/main
+[33mc331bf9[m HEAD@{21}: Branch: renamed refs/heads/master to refs/heads/main
+[33mc331bf9[m HEAD@{23}: commit (initial): initial commit
