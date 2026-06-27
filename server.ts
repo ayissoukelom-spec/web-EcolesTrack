@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
@@ -835,8 +836,16 @@ async function startServer() {
     }
   });
 
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attempts, please try again later' },
+  });
+
   // Local login with email + password
-  app.post('/api/auth/local-login', async (req, res) => {
+  app.post('/api/auth/local-login', authLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) return res.status(400).json({ error: 'Missing email or password' });
@@ -878,7 +887,7 @@ async function startServer() {
   // ==========================================
 
   // Sync logged in user or simulation context
-  app.post('/api/auth/register-or-login', requireAuth, async (req: AuthRequest, res) => {
+  app.post('/api/auth/register-or-login', authLimiter, requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) {
         return res.status(401).json({ error: 'Unauthenticated' });
