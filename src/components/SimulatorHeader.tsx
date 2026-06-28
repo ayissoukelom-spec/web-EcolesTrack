@@ -39,7 +39,6 @@ export default function SimulatorHeader({
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [profileFirstName, setProfileFirstName] = useState(simUser?.firstName || '');
   const [profileLastName, setProfileLastName] = useState(simUser?.lastName || '');
-  const [profileEmail, setProfileEmail] = useState(simUser?.email || '');
   const [profilePhone, setProfilePhone] = useState(simUser?.phone || '');
   const [profilePhotoPreview, setProfilePhotoPreview] = useState<string | null>(simUser?.avatarUrl || null);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
@@ -71,7 +70,6 @@ export default function SimulatorHeader({
 
     setProfileFirstName(firstName);
     setProfileLastName(lastName);
-    setProfileEmail(simUser?.email || '');
     setProfilePhone(simUser?.phone || '');
     setProfilePhotoPreview(simUser?.avatarUrl || null);
     setProfilePhotoFile(null);
@@ -102,7 +100,6 @@ export default function SimulatorHeader({
       firstName,
       lastName,
       name: displayName,
-      email: profileEmail.trim() || simUser.email,
       phone: profilePhone.trim() || simUser.phone,
       avatarUrl: profilePhotoPreview || undefined,
     };
@@ -1165,7 +1162,7 @@ export default function SimulatorHeader({
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Modifier le profil</h2>
-                <p className="text-sm text-slate-500">Mettez à jour votre nom, email et photo de profil.</p>
+                <p className="text-sm text-slate-500">Mettez à jour votre nom, téléphone et photo de profil.</p>
               </div>
               <button type="button" className="text-slate-500 hover:text-slate-800" onClick={() => setProfileEditOpen(false)} aria-label="Fermer le formulaire de profil">✕</button>
             </div>
@@ -1213,15 +1210,6 @@ export default function SimulatorHeader({
                   />
                 </label>
               </div>
-
-              <label className="block text-sm">
-                <div className="text-slate-700 font-medium">Email</div>
-                <input
-                  value={profileEmail}
-                  onChange={(event) => setProfileEmail(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                />
-              </label>
 
               <label className="block text-sm">
                 <div className="text-slate-700 font-medium">Téléphone</div>
