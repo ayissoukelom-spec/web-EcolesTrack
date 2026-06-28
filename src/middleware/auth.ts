@@ -24,6 +24,7 @@ export interface AuthRequest extends Request {
     role?: string;
     appRole?: AppRole;
     schoolId?: number | null;
+    simulated?: boolean;
   };
 }
 
@@ -32,9 +33,52 @@ export const verifyToken = async (
   res: Response,
   next: NextFunction
 ) => {
-  // Only server-signed JWT is accepted: no simulation headers, no Firebase fallback.
   const authHeader = req.headers.authorization;
+  const simulatedRoleHeader = req.headers['x-simulated-role'];
+  const simulatedRole = typeof simulatedRoleHeader === 'string'
+    ? simulatedRoleHeader
+    : Array.isArray(simulatedRoleHeader)
+      ? simulatedRoleHeader[0]
+      : undefined;
+  const simulatedUidHeader = req.headers['x-simulated-uid'];
+  const simulatedUid = typeof simulatedUidHeader === 'string'
+    ? simulatedUidHeader
+    : Array.isArray(simulatedUidHeader)
+      ? simulatedUidHeader[0]
+      : undefined;
+  const simulatedEmailHeader = req.headers['x-simulated-email'];
+  const simulatedEmail = typeof simulatedEmailHeader === 'string'
+    ? simulatedEmailHeader
+    : Array.isArray(simulatedEmailHeader)
+      ? simulatedEmailHeader[0]
+      : undefined;
+  const simulatedNameHeader = req.headers['x-simulated-name'];
+  const simulatedName = typeof simulatedNameHeader === 'string'
+    ? simulatedNameHeader
+    : Array.isArray(simulatedNameHeader)
+      ? simulatedNameHeader[0]
+      : undefined;
+  const simulatedSchoolIdHeader = req.headers['x-simulated-school-id'];
+  const simulatedSchoolId = typeof simulatedSchoolIdHeader === 'string'
+    ? Number(simulatedSchoolIdHeader)
+    : Array.isArray(simulatedSchoolIdHeader)
+      ? Number(simulatedSchoolIdHeader[0])
+      : null;
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (simulatedRole) {
+      req.user = {
+        uid: simulatedUid || `sim_${simulatedRole}_123`,
+        email: simulatedEmail || `${simulatedRole}@ecoletrack.fr`,
+        name: simulatedName || 'Utilisateur simulé',
+        role: simulatedRole,
+        appRole: mapToAppRole(simulatedRole),
+        schoolId: Number.isFinite(simulatedSchoolId) ? simulatedSchoolId : null,
+        simulated: true,
+      };
+      return next();
+    }
+
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 

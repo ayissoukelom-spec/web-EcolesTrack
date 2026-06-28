@@ -104,6 +104,25 @@ export default function App() {
     : [];
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
+  const normalizeStudentsPayload = (payload: unknown): Student[] => {
+    if (Array.isArray(payload)) return payload as Student[];
+
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>;
+      const maybeStudents = record.students;
+      if (Array.isArray(maybeStudents)) return maybeStudents as Student[];
+
+      const maybeData = record.data;
+      if (Array.isArray(maybeData)) return maybeData as Student[];
+      if (maybeData && typeof maybeData === 'object') {
+        const nestedStudents = (maybeData as Record<string, unknown>).students;
+        if (Array.isArray(nestedStudents)) return nestedStudents as Student[];
+      }
+    }
+
+    return [];
+  };
+
   const fetchAuditEvents = async () => {
     if (currentRole !== 'super_admin') {
       setAuditEvents([]);
@@ -129,14 +148,23 @@ export default function App() {
     setErrorMsg(null);
     try {
       // 1. Sync authentication role switcher context
-      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
+      await apiFetch('/api/auth/register-or-login', { method: 'POST' }).catch((err) => {
+        const uiMessage = getUiErrorMessage(err);
+        if (uiMessage) {
+          console.warn('Auth sync warning ignored in UI:', err);
+        }
+      });
 
       // 2. Load dashboard summary & role details
       const summary = await apiFetch('/api/dashboard/summary');
-      setStats(summary.stats);
-      setSummaryRecentGrades(summary.recentGrades);
-      setSummaryRecentAbsences(summary.recentAbsences);
-      setAbsencesList(summary.recentAbsences); // standard overview holds latest
+      if (summary && typeof summary === 'object') {
+        if ('stats' in summary) setStats(summary.stats);
+        if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
+        if ('recentAbsences' in summary) {
+          setSummaryRecentAbsences(summary.recentAbsences);
+          setAbsencesList(summary.recentAbsences);
+        }
+      }
 
       // 3. Load other lists for CRUD and management tabs
       const endpoints = [
@@ -158,17 +186,21 @@ export default function App() {
 
       const map = Object.fromEntries(endpoints.map((e, i) => [e, results[i]]));
 
-      setSchoolsList(Array.isArray(map['/api/schools']) ? map['/api/schools'] : []);
-      setYearsList(Array.isArray(map['/api/academic-years']) ? map['/api/academic-years'] : []);
-      setClassesList(Array.isArray(map['/api/classes']) ? map['/api/classes'] : []);
-      setTeachersList(Array.isArray(map['/api/teachers']) ? map['/api/teachers'] : []);
-      setStudentsList(Array.isArray(map['/api/students']) ? map['/api/students'] : []);
-      setParentsList(Array.isArray(map['/api/parents']) ? map['/api/parents'] : []);
-      setAbsencesList(Array.isArray(map['/api/absences']) ? map['/api/absences'] : []);
-      setEvaluationsList(Array.isArray(map['/api/evaluations']) ? map['/api/evaluations'] : []);
-      setGradesList(Array.isArray(map['/api/grades']) ? map['/api/grades'] : []);
-      setNotificationsList(Array.isArray(map['/api/notifications']) ? map['/api/notifications'] : []);
-      setUsersList(Array.isArray(map['/api/simulation/users']) ? map['/api/simulation/users'] : []);
+      if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
+      if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
+      if (Array.isArray(map['/api/classes'])) setClassesList(map['/api/classes']);
+      if (Array.isArray(map['/api/teachers'])) setTeachersList(map['/api/teachers']);
+
+      const rawStudentsPayload = map['/api/students'];
+      const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
+      setStudentsList(normalizedStudents);
+
+      if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
+      if (Array.isArray(map['/api/absences'])) setAbsencesList(map['/api/absences']);
+      if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
+      if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
+      if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
+      if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
 
       if (currentRole === 'super_admin') {
         await fetchAuditEvents();
@@ -176,8 +208,12 @@ export default function App() {
         setAuditEvents([]);
       }
     } catch (err: any) {
+      const uiMessage = getUiErrorMessage(err, 'Impossible de charger les données EcoleTrack.');
+      if (uiMessage) {
+        setErrorMsg(uiMessage);
+      }
       console.error('Error hydrating EcoleTrack database:', err);
-      setErrorMsg(err.message || 'Impossible de charger les données EcoleTrack.');
+      console.warn('[students-load] keeping existing student list because the refresh failed.', err);
     } finally {
       setIsSyncing(false);
     }
