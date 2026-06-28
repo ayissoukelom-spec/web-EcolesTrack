@@ -29,6 +29,13 @@
       "when": 1782477081000,
       "tag": "0006_bulletin_read_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782657941683,
+      "tag": "0004_add_subjects_table",
+      "breakpoints": true
     }
   ]
 }

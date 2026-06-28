@@ -4,6 +4,39 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 
 import { UserRole } from '../types.ts';
 
+export function normalizeDashboardChartData(rawData: unknown): Array<{ name: string; taux: number }> {
+  if (!Array.isArray(rawData)) return [];
+
+  return rawData.reduce<Array<{ name: string; taux: number }>>((acc, item) => {
+    if (!item || typeof item !== 'object') return acc;
+
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === 'string' && record.name.trim()
+      ? record.name.trim()
+      : typeof record.label === 'string' && record.label.trim()
+        ? record.label.trim()
+        : typeof record.className === 'string' && record.className.trim()
+          ? record.className.trim()
+          : null;
+
+    const rawValue = typeof record.taux === 'number'
+      ? record.taux
+      : typeof record.value === 'number'
+        ? record.value
+        : typeof record.attendanceRate === 'number'
+          ? record.attendanceRate
+          : typeof record.percent === 'number'
+            ? record.percent
+            : null;
+
+    if (!name || rawValue == null) return acc;
+
+    const clampedValue = Math.max(0, Math.min(100, Number(rawValue)));
+    acc.push({ name, taux: Number.isFinite(clampedValue) ? clampedValue : 0 });
+    return acc;
+  }, []);
+}
+
 interface DashboardViewProps {
   stats: {
     totalStudents: number;
@@ -18,6 +51,7 @@ interface DashboardViewProps {
   recentAbsences: any[];
   recentGrades: any[];
   userRole?: UserRole;
+  chartData?: Array<{ name: string; taux: number }>;
 }
 
 export default function DashboardView({
@@ -25,15 +59,15 @@ export default function DashboardView({
   recentAbsences,
   recentGrades,
   userRole,
+  chartData = [],
 }: DashboardViewProps) {
   console.log('Statistiques reçues par DashboardView :', stats);
-  const attendanceData = [
-    { name: 'Terminale S1', taux: 93.5 },
-    { name: 'Seconde A', taux: 96.2 },
-    { name: 'Première B', taux: 94.8 },
-    { name: '3ème C', taux: 91.0 },
-    { name: '4ème A', taux: 95.5 },
-  ];
+  console.log('Graphique reçu :', chartData);
+  console.log('TYPE chartData:', typeof chartData);
+  console.log('IS ARRAY:', Array.isArray(chartData));
+  console.log('CONTENT SAMPLE:', chartData?.slice?.(0, 5));
+
+  const attendanceData = normalizeDashboardChartData(chartData);
 
   // Pie chart data for justified vs unjustified absences
   const justifiedCount = recentAbsences.filter((a) => a.isJustified).length;
@@ -140,7 +174,7 @@ export default function DashboardView({
                 <BarChart data={attendanceData} margin={{ top: 20, right: 10, left: -20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis domain={[80, 100]} tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 11 }} />
                   <Tooltip cursor={{ fill: '#f8fafc' }} />
                   <Bar dataKey="taux" fill="#4f46e5" radius={[6, 6, 0, 0]}>
                     <LabelList dataKey="taux" position="top" style={{ fontSize: 11, fill: '#64748b', fontWeight: 'bold' }} />

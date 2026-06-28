@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import AdminModal from './AdminModal';
+import SubjectsView from './SubjectsView';
 import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
 import {
   Building2,
@@ -16,7 +17,8 @@ import {
   HeartHandshake,
   UserPlus,
   Settings,
-  Eye
+  Eye,
+  BookOpen
 } from 'lucide-react';
 import { getSimulatedSchoolId, getSimulatedUser } from '../lib/api.ts';
 import { sortClasses } from '../lib/classOrdering';
@@ -368,6 +370,7 @@ interface AdminViewProps {
   studentsList: Student[];
   parentsList: Parent[];
   usersList: User[];
+  subjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
@@ -385,7 +388,12 @@ interface AdminViewProps {
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number) => void;
-  currentSchoolId?: number;
+  onAddSubject?: (data: { name: string; code?: string; schoolId?: number }) => Promise<any>;
+  onUpdateSubject?: (id: number, data: { name: string; code?: string }) => Promise<any>;
+  onDeleteSubject?: (id: number) => Promise<void>;
+  onApproveSubject?: (id: number) => Promise<any>;
+  onRejectSubject?: (id: number) => Promise<any>;
+  currentSchoolId?: number | null;
 }
 
 export default function AdminView({
@@ -396,6 +404,7 @@ export default function AdminView({
   teachersList,
   studentsList,
   parentsList,
+  subjectsList = [],
   onAddSchool,
   onUpdateSchool,
   onUpdateStudent,
@@ -414,6 +423,11 @@ export default function AdminView({
   onUpdateUser,
   onSetPassword,
   onDeleteUser,
+  onAddSubject,
+  onUpdateSubject,
+  onDeleteSubject,
+  onApproveSubject,
+  onRejectSubject,
   currentSchoolId,
 }: AdminViewProps) {
   const getDefaultTab = () => {
@@ -434,7 +448,7 @@ export default function AdminView({
     return userRole === 'super_admin' ? 'schools' : 'years';
   };
 
-  const [activeTab, setActiveTab] = useState<'schools' | 'years' | 'classes' | 'teachers' | 'students' | 'parents' | 'accounts'>(getDefaultTab);
+  const [activeTab, setActiveTab] = useState<'schools' | 'years' | 'classes' | 'teachers' | 'students' | 'parents' | 'accounts' | 'matieres'>(getDefaultTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
@@ -475,8 +489,8 @@ export default function AdminView({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const validTabs = userRole === 'super_admin'
-      ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts']
-      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts'];
+      ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres']
+      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres'];
     if (!validTabs.includes(activeTab)) {
       setActiveTab(validTabs[0] as typeof activeTab);
       return;
@@ -2365,6 +2379,19 @@ export default function AdminView({
             Comptes
           </button>
         )}
+
+        {['super_admin', 'school_admin'].includes(userRole) && (
+          <button
+            onClick={() => { setActiveTab('matieres'); setSearchQuery(''); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+              activeTab === 'matieres' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+            id="tab-admin-matieres"
+          >
+            <BookOpen className="h-4 w-4" />
+            Matières
+          </button>
+        )}
       </div>
 
       {/* Create User Modal */}
@@ -3521,6 +3548,21 @@ export default function AdminView({
             </table>
           </div>
         </div>
+      )}
+
+      {/* TAB 8: SUBJECTS/MATIÈRES */}
+      {activeTab === 'matieres' && (
+        <SubjectsView
+          subjectsList={subjectsList}
+          userRole={userRole}
+          schoolId={currentSchoolId}
+          schoolsList={schoolsList}
+          onAddSubject={onAddSubject || (() => {})}
+          onUpdateSubject={onUpdateSubject || (() => {})}
+          onDeleteSubject={onDeleteSubject || (() => {})}
+          onApproveSubject={onApproveSubject || (() => {})}
+          onRejectSubject={onRejectSubject || (() => {})}
+        />
       )}
       </div>
 

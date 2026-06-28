@@ -104,6 +104,25 @@ export const students = pgTable('students', {
   enrolledAt: timestamp('enrolled_at').defaultNow().notNull(), // Date when student was enrolled in this class
 });
 
+// 7b. Subjects (Matières)
+export const subjects = pgTable('subjects', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
+  name: text('name').notNull(), // e.g. "Mathématiques"
+  code: text('code'), // optional abbreviation e.g. "MATH"
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const schoolSubjects = pgTable('school_subjects', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id).notNull(),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'cascade' }).notNull(),
+  status: text('status').default('pending').notNull(), // pending | approved | rejected
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // 8. Evaluations
 export const evaluations = pgTable('evaluations', {
   id: serial('id').primaryKey(),
@@ -216,6 +235,7 @@ export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
   classes: many(classes),
   students: many(students),
+  schoolSubjects: many(schoolSubjects),
 }));
 
 export const academicYearsRelations = relations(academicYears, ({ one, many }) => ({
@@ -237,6 +257,25 @@ export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
     references: [academicYears.id],
   }),
   evaluations: many(evaluations),
+}));
+
+export const subjectsRelations = relations(subjects, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [subjects.schoolId],
+    references: [schools.id],
+  }),
+  schoolSubjects: many(schoolSubjects),
+}));
+
+export const schoolSubjectsRelations = relations(schoolSubjects, ({ one }) => ({
+  school: one(schools, {
+    fields: [schoolSubjects.schoolId],
+    references: [schools.id],
+  }),
+  subject: one(subjects, {
+    fields: [schoolSubjects.subjectId],
+    references: [subjects.id],
+  }),
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({

@@ -66,6 +66,7 @@ export default function App() {
     totalTeachers: 0,
     attendanceRate: 94.5,
   });
+  const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
   const [schoolsList, setSchoolsList] = useState<School[]>([]);
   const [yearsList, setYearsList] = useState<AcademicYear[]>([]);
   const [classesList, setClassesList] = useState<Class[]>([]);
@@ -80,6 +81,7 @@ export default function App() {
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
+  const [subjectsList, setSubjectsList] = useState<any[]>([]);
 
   const simulatedUser = getSimulatedUser();
   const currentUser = simulatedUser
@@ -157,12 +159,19 @@ export default function App() {
 
       // 2. Load dashboard summary & role details
       const summary = await apiFetch('/api/dashboard/summary');
+      console.log('RAW API RESPONSE DASHBOARD:', summary);
+      console.log('chartData reçu:', (summary as any)?.chartData);
       if (summary && typeof summary === 'object') {
         if ('stats' in summary) setStats(summary.stats);
         if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
         if ('recentAbsences' in summary) {
           setSummaryRecentAbsences(summary.recentAbsences);
           setAbsencesList(summary.recentAbsences);
+        }
+        if (Array.isArray((summary as any).chartData)) {
+          setChartData((summary as any).chartData);
+        } else {
+          setChartData([]);
         }
       }
 
@@ -178,6 +187,7 @@ export default function App() {
         '/api/evaluations',
         '/api/grades',
         '/api/notifications',
+        '/api/subjects',
         '/api/simulation/users',
       ];
 
@@ -200,6 +210,7 @@ export default function App() {
       if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
       if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
       if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
+      if (Array.isArray(map['/api/subjects'])) setSubjectsList(map['/api/subjects']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
 
       if (currentRole === 'super_admin') {
@@ -580,6 +591,70 @@ export default function App() {
     }
   };
 
+  const handleAddSubject = async (data: { name: string; code?: string; schoolId?: number }) => {
+    try {
+      const createdSubject = await apiFetch('/api/subjects', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      setSubjectsList((prev) => [...prev, createdSubject]);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      throw err;
+    }
+  };
+
+  const handleUpdateSubject = async (id: number, data: { name: string; code?: string }) => {
+    try {
+      const updatedSubject = await apiFetch(`/api/subjects/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+      setSubjectsList((prev) =>
+        prev.map((s) => (s.id === id ? updatedSubject : s))
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      throw err;
+    }
+  };
+
+  const handleDeleteSubject = async (id: number) => {
+    try {
+      await apiFetch(`/api/subjects/${id}`, {
+        method: 'DELETE',
+      });
+      setSubjectsList((prev) => prev.filter((s) => s.id !== id));
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      throw err;
+    }
+  };
+
+  const handleApproveSubject = async (id: number) => {
+    try {
+      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      if (!schoolId) throw new Error('Aucun établissement sélectionné');
+      await apiFetch(`/api/schools/${schoolId}/subjects/${id}/approve`, { method: 'POST' });
+      setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'approved' } : s)));
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      throw err;
+    }
+  };
+
+  const handleRejectSubject = async (id: number) => {
+    try {
+      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      if (!schoolId) throw new Error('Aucun établissement sélectionné');
+      await apiFetch(`/api/schools/${schoolId}/subjects/${id}/reject`, { method: 'POST' });
+      setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'rejected' } : s)));
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      throw err;
+    }
+  };
+
   const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number }) => {
     try {
       await apiFetch('/api/notifications/send', {
@@ -807,6 +882,7 @@ export default function App() {
                   recentAbsences={summaryRecentAbsences}
                   recentGrades={summaryRecentGrades}
                   userRole={currentRole}
+                  chartData={chartData}
                 />
               )}
 
@@ -821,6 +897,7 @@ export default function App() {
                   studentsList={studentsList}
                   parentsList={parentsList}
                   usersList={usersList}
+                  subjectsList={subjectsList}
                   onAddSchool={handleAddSchool}
                   onUpdateSchool={handleUpdateSchool}
                   onUpdateStudent={handleUpdateStudent}
@@ -838,6 +915,11 @@ export default function App() {
                   onDeleteUser={handleDeleteUser}
                   onDeleteClass={handleDeleteClass}
                   onDeleteSchool={handleDeleteSchool}
+                  onAddSubject={handleAddSubject}
+                  onUpdateSubject={handleUpdateSubject}
+                  onDeleteSubject={handleDeleteSubject}
+                  onApproveSubject={handleApproveSubject}
+                  onRejectSubject={handleRejectSubject}
                   currentSchoolId={currentSchoolId}
                   />
                 </ErrorBoundary>

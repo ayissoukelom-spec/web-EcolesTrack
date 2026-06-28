@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { ensureAuditEventsTableExists, ensureClassTeachersTableExists, ensureParentsTableSchema, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import {
   schools,
@@ -14,6 +14,8 @@ import {
   classes,
   classTeachers,
   students,
+  subjects,
+  schoolSubjects,
   evaluations,
   grades,
   absences,
@@ -147,47 +149,6 @@ async function startServer() {
     }
     next();
   });
-
-  // 1. Ensure audit table exists and initialise database seed if empty on startup
-  console.log('Ensuring audit_events table exists...');
-  try {
-    await ensureAuditEventsTableExists();
-  } catch (error) {
-    console.error('Failed to ensure audit_events table exists, shutting down application.', error);
-    process.exit(1);
-  }
-
-  console.log('Ensuring parents table schema is up to date...');
-  try {
-    await ensureParentsTableSchema();
-  } catch (error) {
-    console.error('Failed to ensure parents table schema, shutting down application.', error);
-    process.exit(1);
-  }
-
-  console.log('Ensuring class teacher assignments table exists...');
-  try {
-    await ensureClassTeachersTableExists();
-  } catch (error) {
-    console.error('Failed to ensure class_teachers table exists, shutting down application.', error);
-    process.exit(1);
-  }
-
-  console.log('Ensuring students table schema is up to date...');
-  try {
-    await ensureStudentsTableSchema();
-  } catch (error) {
-    console.error('Failed to ensure students table schema, shutting down application.', error);
-    process.exit(1);
-  }
-
-  console.log('Ensuring users table schema is up to date...');
-  try {
-    await ensureUsersTableSchema();
-  } catch (error) {
-    console.error('Failed to ensure users table schema, shutting down application.', error);
-    process.exit(1);
-  }
 
   console.log('Verifying if database needs seeding...');
   try {
@@ -2342,6 +2303,262 @@ async function startServer() {
   });
 
   // ==========================================
+  // MODULE SUBJECTS (MATIÈRES) API
+  // ==========================================
+
+  // Get subjects for current school - restricted to super_admin & school_admin
+  app.get('/api/subjects', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const allSubjects = await db.select().from(subjects);
+      if (user.role === 'school_admin' && user.schoolId) {
+        const statusRows = await db.select().from(schoolSubjects).where(eq(schoolSubjects.schoolId, user.schoolId));
+        const statusMap = new Map(statusRows.map((row) => [row.subjectId, row.status]));
+        res.json(allSubjects.map((subject) => ({
+          ...subject,
+          schoolId: subject.schoolId ?? null,
+          status: statusMap.get(subject.id) ?? 'pending',
+        })));
+        return;
+      }
+
+      const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+      if (user.role === 'super_admin' && schoolIdParam) {
+        const statusRows = await db.select().from(schoolSubjects).where(eq(schoolSubjects.schoolId, schoolIdParam));
+        const statusMap = new Map(statusRows.map((row) => [row.subjectId, row.status]));
+        res.json(allSubjects.map((subject) => ({
+          ...subject,
+          schoolId: subject.schoolId ?? null,
+          status: statusMap.get(subject.id) ?? undefined,
+        })));
+        return;
+      }
+
+      res.json(allSubjects.map((subject) => ({
+        ...subject,
+        schoolId: subject.schoolId ?? null,
+      })));
+    } catch (err: any) {
+      console.error('Error fetching subjects:', err);
+      res.status(500).json({ error: 'Failed to fetch subjects' });
+    }
+  });
+
+  // Create subject - restricted to super_admin & school_admin
+  app.post('/api/subjects', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // Only super_admin and school_admin can create subjects
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const { name, code, schoolId: bodySchoolId } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: 'Subject name is required' });
+      }
+
+      const finalSchoolId = user.role === 'super_admin' && bodySchoolId ? Number(bodySchoolId) : null;
+
+      const [newSubject] = await db
+        .insert(subjects)
+        .values({
+          schoolId: finalSchoolId,
+          name: name.trim(),
+          code: code ? code.trim() : undefined,
+        })
+        .returning();
+
+      if (user.role === 'school_admin' && user.schoolId) {
+        await db.insert(schoolSubjects).values({
+          schoolId: user.schoolId,
+          subjectId: newSubject.id,
+          status: 'pending',
+        });
+      } else if (user.role === 'super_admin' && finalSchoolId) {
+        await db.insert(schoolSubjects).values({
+          schoolId: finalSchoolId,
+          subjectId: newSubject.id,
+          status: 'pending',
+        });
+      }
+
+      res.status(201).json({
+        ...newSubject,
+        schoolId: newSubject.schoolId ?? null,
+        status: user.role === 'school_admin' && user.schoolId ? 'pending' : undefined,
+      });
+    } catch (err: any) {
+      console.error('Error creating subject:', err);
+      res.status(500).json({ error: 'Failed to create subject' });
+    }
+  });
+
+  // Update subject - restricted to super_admin & school_admin
+  app.put('/api/subjects/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // Only super_admin and school_admin can update subjects
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const subjectId = Number(req.params.id);
+      if (!subjectId) return res.status(400).json({ error: 'Invalid subject ID' });
+
+      const [subject] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
+      if (!subject) return res.status(404).json({ error: 'Subject not found' });
+
+      // Check access: school_admin can only update subjects in their school
+      if (user.role === 'school_admin' && subject.schoolId !== user.schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const { name, code } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: 'Subject name is required' });
+      }
+
+      const [updatedSubject] = await db
+        .update(subjects)
+        .set({
+          name: name.trim(),
+          code: code ? code.trim() : undefined,
+          updatedAt: new Date(),
+        })
+        .where(eq(subjects.id, subjectId))
+        .returning();
+
+      res.json(updatedSubject);
+    } catch (err: any) {
+      console.error('Error updating subject:', err);
+      res.status(500).json({ error: 'Failed to update subject' });
+    }
+  });
+
+  // Delete subject - restricted to super_admin & school_admin
+  app.delete('/api/subjects/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // Only super_admin and school_admin can delete subjects
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const subjectId = Number(req.params.id);
+      if (!subjectId) return res.status(400).json({ error: 'Invalid subject ID' });
+
+      const [subject] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
+      if (!subject) return res.status(404).json({ error: 'Subject not found' });
+
+      // Check access: school_admin can only delete subjects in their school
+      if (user.role === 'school_admin' && subject.schoolId !== user.schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      await db.delete(schoolSubjects).where(eq(schoolSubjects.subjectId, subjectId));
+      await db.delete(subjects).where(eq(subjects.id, subjectId));
+
+      res.json({ success: true, message: 'Subject deleted' });
+    } catch (err: any) {
+      console.error('Error deleting subject:', err);
+      res.status(500).json({ error: 'Failed to delete subject' });
+    }
+  });
+
+  app.post('/api/schools/:schoolId/subjects/:subjectId/approve', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const schoolId = Number(req.params.schoolId);
+      const subjectId = Number(req.params.subjectId);
+      if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
+
+      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));
+      if (existing[0]) {
+        const [updated] = await db.update(schoolSubjects)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)))
+          .returning();
+        return res.json(updated);
+      }
+
+      const [created] = await db.insert(schoolSubjects).values({ schoolId, subjectId, status: 'approved' }).returning();
+      res.status(201).json(created);
+    } catch (err: any) {
+      console.error('Error approving subject:', err);
+      res.status(500).json({ error: 'Failed to approve subject' });
+    }
+  });
+
+  app.post('/api/schools/:schoolId/subjects/:subjectId/reject', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const schoolId = Number(req.params.schoolId);
+      const subjectId = Number(req.params.subjectId);
+      if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
+
+      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));
+      if (existing[0]) {
+        const [updated] = await db.update(schoolSubjects)
+          .set({ status: 'rejected', updatedAt: new Date() })
+          .where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)))
+          .returning();
+        return res.json(updated);
+      }
+
+      const [created] = await db.insert(schoolSubjects).values({ schoolId, subjectId, status: 'rejected' }).returning();
+      res.status(201).json(created);
+    } catch (err: any) {
+      console.error('Error rejecting subject:', err);
+      res.status(500).json({ error: 'Failed to reject subject' });
+    }
+  });
+
+  // ==========================================
   // MODULE NOTES (EVALUATIONS & GRADES) API
   // ==========================================
 
@@ -2768,6 +2985,9 @@ async function startServer() {
       let studentGenderQuery = db.select({ gender: students.gender }).from(students);
       let absenceCountQuery = db.select({ count: sql<number>`count(*)::integer` }).from(absences);
       let classCountQuery = db.select({ count: sql<number>`count(distinct ${classes.id})::integer` }).from(classes);
+      let chartClassesQuery = db.select({ id: classes.id, name: classes.name }).from(classes);
+      let chartStudentsQuery = db.select({ classId: students.classId }).from(students);
+      let chartAbsencesQuery = db.select({ classId: absences.classId }).from(absences);
 
       if (user.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
@@ -2776,6 +2996,8 @@ async function startServer() {
 
         studentCountQuery = studentCountQuery.where(inArray(students.id, parentChildIds)) as any;
         studentGenderQuery = studentGenderQuery.where(inArray(students.id, parentChildIds)) as any;
+        chartStudentsQuery = chartStudentsQuery.where(inArray(students.id, parentChildIds)) as any;
+        chartAbsencesQuery = chartAbsencesQuery.where(inArray(absences.studentId, parentChildIds)) as any;
         classCountQuery = db
           .select({ count: sql<number>`count(distinct ${classes.id})::integer` })
           .from(classes)
@@ -2788,10 +3010,17 @@ async function startServer() {
       } else if (schoolFilter) {
         studentCountQuery = studentCountQuery.where(eq(students.schoolId, schoolFilter)) as any;
         studentGenderQuery = studentGenderQuery.where(eq(students.schoolId, schoolFilter)) as any;
+        chartClassesQuery = chartClassesQuery.where(eq(classes.schoolId, schoolFilter)) as any;
+        chartStudentsQuery = chartStudentsQuery.where(eq(students.schoolId, schoolFilter)) as any;
         classCountQuery = classCountQuery.where(eq(classes.schoolId, schoolFilter)) as any;
         // For absences, filter through students
         absenceCountQuery = db
           .select({ count: sql<number>`count(*)::integer` })
+          .from(absences)
+          .innerJoin(students, eq(absences.studentId, students.id))
+          .where(eq(students.schoolId, schoolFilter)) as any;
+        chartAbsencesQuery = db
+          .select({ classId: absences.classId })
           .from(absences)
           .innerJoin(students, eq(absences.studentId, students.id))
           .where(eq(students.schoolId, schoolFilter)) as any;
@@ -2801,6 +3030,9 @@ async function startServer() {
       const studentGenderRows = await studentGenderQuery;
       const absenceCountResult = await absenceCountQuery;
       const classCountResult = await classCountQuery;
+      const chartClassesRows = await chartClassesQuery;
+      const chartStudentsRows = await chartStudentsQuery;
+      const chartAbsencesRows = await chartAbsencesQuery;
 
       console.log('Nombre d\'élèves :', studentCountResult[0]?.count || 0);
       console.log('Premier élève :', studentGenderRows[0]);
@@ -2816,6 +3048,31 @@ async function startServer() {
       }, { maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 });
       const totalAbsences = absenceCountResult[0]?.count || 0;
       const totalClasses = classCountResult[0]?.count || 0;
+
+      const studentsByClass = chartStudentsRows.reduce((acc: Map<number, number>, row: any) => {
+        if (row.classId != null) {
+          acc.set(row.classId, (acc.get(row.classId) || 0) + 1);
+        }
+        return acc;
+      }, new Map<number, number>());
+
+      const absencesByClass = chartAbsencesRows.reduce((acc: Map<number, number>, row: any) => {
+        if (row.classId != null) {
+          acc.set(row.classId, (acc.get(row.classId) || 0) + 1);
+        }
+        return acc;
+      }, new Map<number, number>());
+
+      const chartData = (chartClassesRows || []).map((classRow: any) => {
+        const studentCount = studentsByClass.get(classRow.id) || 0;
+        const absenceCount = absencesByClass.get(classRow.id) || 0;
+        const taux = studentCount > 0 ? Math.max(0, 100 - (absenceCount / (studentCount * 20) * 100)) : 100;
+        return { name: classRow.name, taux: Number((Math.round(taux * 100) / 100).toFixed(2)) };
+      });
+
+      console.log('Classes retournées :', chartClassesRows);
+      console.log('Élèves par classe :', Array.from(studentsByClass.entries()));
+      console.log('Données envoyées au graphique :', chartData);
 
       // Calculate attendance rate (simplified)
       const attendanceRate = totalStudents > 0 && totalAbsences > 0 ? 
@@ -2886,6 +3143,7 @@ async function startServer() {
         stats,
         recentAbsences,
         recentGrades,
+        chartData,
       });
     } catch (err: any) {
       console.error('Error loading dashboard summary:', err);

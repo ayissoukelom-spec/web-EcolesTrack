@@ -28,6 +28,16 @@ export interface SchoolTerm {
   createdAt?: string;
 }
 
+export interface Subject {
+  id: number;
+  schoolId?: number | null;
+  name: string;
+  code?: string;
+  status?: 'pending' | 'approved' | 'rejected' | string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface User {
   id: number;
   uid: string;

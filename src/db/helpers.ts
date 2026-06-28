@@ -13,6 +13,8 @@ import {
   gradeHistory,
   absences,
   notifications,
+  subjects,
+  schoolSubjects,
 } from './schema.ts';
 import { sql } from 'drizzle-orm';
 
