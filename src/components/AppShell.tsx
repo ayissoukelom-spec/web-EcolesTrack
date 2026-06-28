@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
-import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, setSimulatedRole, setSimulatedUser } from '../lib/api.ts';
+import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
@@ -69,6 +69,7 @@ export default function AppShell() {
       ? currentTeacherProfile.specialization
       : String(currentTeacherProfile.specialization).split(',').map((item) => item.trim()).filter(Boolean)
     : [];
+  const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
   const fetchAuditEvents = async () => {
     if (currentRole !== 'super_admin') {
@@ -463,7 +464,7 @@ export default function AppShell() {
       notificationsList={notificationsList}
       activeTab={activeTab}
       isSyncing={isSyncing}
-      errorMsg={errorMsg}
+      errorMsg={visibleErrorMsg}
       onRoleChange={handleRoleChange}
       onLogout={handleLogout}
       onRefreshData={fetchAllData}
