@@ -1,18 +1,19 @@
-import type { Grade } from '../types';
+export function upsertGradeInList<T extends { id?: number; evaluationId?: number; studentId?: number }>(
+  grades: T[],
+  incomingGrade: T,
+): T[] {
+  const existingIndex = grades.findIndex((grade) => {
+    if (incomingGrade.id != null && grade.id != null) {
+      return Number(grade.id) === Number(incomingGrade.id);
+    }
+    return grade.evaluationId === incomingGrade.evaluationId && grade.studentId === incomingGrade.studentId;
+  });
 
-export function upsertGradeInList(grades: Grade[], incomingGrade: Grade): Grade[] {
-  const existingIndex = grades.findIndex(
-    (grade) => grade.evaluationId === incomingGrade.evaluationId && grade.studentId === incomingGrade.studentId
-  );
-
-  if (existingIndex === -1) {
-    return [...grades, incomingGrade];
+  if (existingIndex >= 0) {
+    const nextGrades = [...grades];
+    nextGrades[existingIndex] = { ...nextGrades[existingIndex], ...incomingGrade };
+    return nextGrades;
   }
 
-  const next = [...grades];
-  next[existingIndex] = {
-    ...next[existingIndex],
-    ...incomingGrade,
-  };
-  return next;
+  return [...grades, incomingGrade];
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import {
@@ -21,9 +21,6 @@ import {
   isStudentEligibleForEvaluation,
   parseDateValue,
 } from '../lib/evaluationUtils';
-import { getGradeEditPermission } from '../lib/gradePermissions';
-import { resolveSelectedEvaluationId } from '../lib/evaluationSelection';
-import RequiredLabel from './RequiredLabel';
 
 interface NotesViewProps {
   userRole: UserRole;
@@ -56,25 +53,17 @@ export default function NotesView({
   onAddEvaluation,
   onAddGrade,
 }: NotesViewProps) {
-  const sortedClasses = useMemo(() => sortClasses(classesList || []), [classesList]);
-  const availableClasses = useMemo(
-    () => (userRole === 'teacher'
-      ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
-      : sortedClasses),
-    [userRole, sortedClasses, teacherClassIds]
-  );
-  const filteredClasses = useMemo(
-    () => (schoolFilterId
-      ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
-      : availableClasses),
-    [schoolFilterId, availableClasses]
-  );
+  const sortedClasses = sortClasses(classesList || []);
+  const availableClasses = userRole === 'teacher'
+    ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
+    : sortedClasses;
+  const filteredClasses = schoolFilterId
+    ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
+    : availableClasses;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
   const [gradeInputValues, setGradeInputValues] = useState<{ [studentId: number]: { score: string; remarks: string } }>({});
-  const [gradeScoreErrors, setGradeScoreErrors] = useState<Record<number, string>>({});
-  const [isEditingGrades, setIsEditingGrades] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   // New Eval form states
@@ -91,80 +80,6 @@ export default function NotesView({
   const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
-
-  const sanitizeScoreInput = (raw: string): string | null => {
-    const compact = String(raw || '').replace(/\s+/g, '');
-    if (compact === '') return '';
-    if (!/^[0-9.,]+$/.test(compact)) return null;
-    const separators = compact.match(/[.,]/g) || [];
-    if (separators.length > 1) return null;
-    if (compact.includes('.') && compact.includes(',')) return null;
-    return compact;
-  };
-
-  const validateAndNormalizeScore = (value: string, maxScore: number): { isValid: boolean; normalized?: string; message?: string } => {
-    const compact = String(value || '').trim();
-    if (!compact) {
-      return { isValid: false, message: 'La note est requise.' };
-    }
-
-    if (!/^\d+(?:[.,]\d+)?$/.test(compact)) {
-      return { isValid: false, message: 'La note doit contenir uniquement des chiffres, avec un seul séparateur décimal (. ou ,).' };
-    }
-
-    const normalized = compact.replace(',', '.');
-    const parsed = Number(normalized);
-    if (!Number.isFinite(parsed)) {
-      return { isValid: false, message: 'Format de note invalide.' };
-    }
-
-    if (parsed < 0 || parsed > maxScore) {
-      return { isValid: false, message: `Cette note doit être comprise entre 0 et ${maxScore}.` };
-    }
-
-    return { isValid: true, normalized };
-  };
-
-  const handleScorePaste = (studentId: number, event: React.ClipboardEvent<HTMLInputElement>) => {
-    event.preventDefault();
-    const pasted = event.clipboardData.getData('text') || '';
-    const sanitized = sanitizeScoreInput(pasted);
-    if (sanitized == null) {
-      setGradeScoreErrors((prev) => ({
-        ...prev,
-        [studentId]: 'Seuls les chiffres et un seul séparateur decimal (. ou ,) sont autorises.',
-      }));
-      return;
-    }
-
-    const check = validateAndNormalizeScore(sanitized, effectiveMaxScore);
-    if (sanitized !== '' && !check.isValid) {
-      setGradeScoreErrors((prev) => ({ ...prev, [studentId]: check.message || 'Note invalide.' }));
-    } else {
-      setGradeScoreErrors((prev) => {
-        const next = { ...prev };
-        delete next[studentId];
-        return next;
-      });
-    }
-
-    updateGradeInput(studentId, { score: sanitized });
-  };
-
-  // Invariant: input typing must always update local state.
-  // Do not add permission checks in this updater. Permissions are enforced by readOnly/save flow/backend.
-  const updateGradeInput = (studentId: number, patch: Partial<{ score: string; remarks: string }>) => {
-    setGradeInputValues((prev) => {
-      const current = prev[studentId] || { score: '', remarks: '' };
-      return {
-        ...prev,
-        [studentId]: {
-          score: patch.score ?? current.score,
-          remarks: patch.remarks ?? current.remarks,
-        },
-      };
-    });
-  };
 
   const populateGradeInputsForEvaluation = (evaluationId: string | null) => {
     if (!evaluationId) {
@@ -229,6 +144,38 @@ export default function NotesView({
     setNewEvalDate(formatLocalDatetime());
   };
 
+  const handleSaveStudentGrade = async (studentId: number) => {
+    if (!selectedEvalId) return;
+    const existingGrade = gradesList.find(
+      (g) => String(g.evaluationId) === selectedEvalId && g.studentId === studentId
+    );
+    if (existingGrade) {
+      const message = userRole === 'teacher'
+        ? 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.'
+        : 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le super admin.';
+      setSaveStatus(message);
+      setTimeout(() => setSaveStatus(null), 4000);
+      return;
+    }
+
+    const input = gradeInputValues[studentId];
+    if (!input || input.score === undefined) return;
+
+    try {
+      await onAddGrade({
+        evaluationId: parseInt(selectedEvalId),
+        studentId,
+        score: input.score,
+        remarks: input.remarks || '',
+      });
+      setSaveStatus(`Note sauvegardée pour l’élève !`);
+    } catch (err: any) {
+      setSaveStatus(err?.message || 'Erreur lors de l’enregistrement de la note');
+      console.error('Failed to save grade:', err);
+    }
+    setTimeout(() => setSaveStatus(null), 3000);
+  };
+
   const normalizeDateToISODate = (value: string | Date | undefined | null): string | null => {
     const date = parseDateValue(value);
     if (!date) return null;
@@ -237,46 +184,23 @@ export default function NotesView({
 
   const handleSaveAllGrades = async () => {
     if (!selectedEvalId) return;
-    if (canRoleModifyExistingGrades && !isEditingGrades) {
-      setSaveStatus('Cliquez sur "Modifier les notes" pour activer le mode édition.');
-      setTimeout(() => setSaveStatus(null), 3000);
-      return;
-    }
-
-    let hasValidationError = false;
-    const collectedErrors: Record<number, string> = {};
 
     const saveableGrades = currentClassStudents
       .map((student) => {
         const existingGrade = gradesList.find(
           (g) => String(g.evaluationId) === selectedEvalId && g.studentId === student.id
         );
-        const gradePermission = getGradeEditPermission(userRole, existingGrade);
         const input = gradeInputValues[student.id];
         if (!input || input.score === undefined || input.score === '') return null;
-        if (!existingGrade && !gradePermission.canCreate) return null;
-        if (existingGrade && !gradePermission.canEditExisting) return null;
-        const scoreCheck = validateAndNormalizeScore(input.score, effectiveMaxScore);
-        if (!scoreCheck.isValid) {
-          hasValidationError = true;
-          collectedErrors[student.id] = scoreCheck.message || 'Note invalide.';
-          return null;
-        }
+        if (existingGrade) return null;
         return {
           evaluationId: parseInt(selectedEvalId),
           studentId: student.id,
-          score: scoreCheck.normalized || input.score,
+          score: input.score,
           remarks: input.remarks || '',
         };
       })
       .filter(Boolean) as Array<{ evaluationId: number; studentId: number; score: string; remarks: string }>;
-
-    if (hasValidationError) {
-      setGradeScoreErrors((prev) => ({ ...prev, ...collectedErrors }));
-      return;
-    }
-
-    setGradeScoreErrors({});
 
     if (saveableGrades.length === 0) {
       setSaveStatus('Aucune nouvelle note à enregistrer.');
@@ -287,9 +211,8 @@ export default function NotesView({
     try {
       await Promise.all(saveableGrades.map((grade) => onAddGrade(grade)));
       setSaveStatus(`Toutes les notes ont été enregistrées.`);
-      setIsEditingGrades(false);
     } catch (err: any) {
-      setSaveStatus(err?.message || 'Erreur lors de l’enregistrement de certaines notes.');
+      setSaveStatus('Erreur lors de l’enregistrement de certaines notes.');
       console.error('Failed to save all grades:', err);
     }
 
@@ -310,18 +233,6 @@ export default function NotesView({
     getEligibleStudentsWithHistoryForEvaluationUtil(evaluation, currentClassStudents, gradesList);
 
   const currentEvaluation = evaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
-  const selectedEvaluationMaxScore = Number(currentEvaluation?.maxScore);
-  const effectiveMaxScore = Number.isFinite(selectedEvaluationMaxScore) && selectedEvaluationMaxScore > 0
-    ? selectedEvaluationMaxScore
-    : 20;
-  const canRoleModifyExistingGrades = getGradeEditPermission(userRole, {
-    id: -1,
-    evaluationId: -1,
-    studentId: -1,
-    score: '0',
-    remarks: '',
-    editCount: 0,
-  } as Grade).canEditExisting;
   const eligibleStudentsForSelectedEval = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
   const selectedEvalGrades = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
   const ineligibleStudentsForSelectedEval = currentClassStudents.filter(
@@ -353,14 +264,10 @@ export default function NotesView({
     return userRole !== 'teacher' || !isEvaluationFullyGraded(ev);
   });
 
-  // Keep class/evaluation selection consistent when filters or available evaluations change.
-  // Do not re-populate grade inputs from here to avoid wiping local typing on unrelated rerenders.
   useEffect(() => {
     if (!filteredClasses.length) {
       setSelectedClassId('');
       setSelectedEvalId('');
-      setIsEditingGrades(false);
-      setGradeScoreErrors({});
       setGradeInputValues({});
       return;
     }
@@ -371,71 +278,44 @@ export default function NotesView({
       const firstEvalForClass = evaluationsList.find((ev) => String(ev.classId) === firstClassId);
       if (firstEvalForClass) {
         setSelectedEvalId(String(firstEvalForClass.id));
-        setIsEditingGrades(false);
-        setGradeScoreErrors({});
+        populateGradeInputsForEvaluation(String(firstEvalForClass.id));
       } else {
         setSelectedEvalId('');
-        setIsEditingGrades(false);
-        setGradeScoreErrors({});
         setGradeInputValues({});
       }
       return;
     }
 
-    const classEvaluations = evaluationsList.filter((ev) => String(ev.classId) === selectedClassId);
-    if (classEvaluations.length === 0) {
+    const firstEvalForClass = evaluationsList.find((ev) => String(ev.classId) === selectedClassId);
+    if (!firstEvalForClass) {
       setSelectedEvalId('');
-      setIsEditingGrades(false);
-      setGradeScoreErrors({});
       setGradeInputValues({});
       return;
     }
 
-    const nextEvalId = resolveSelectedEvaluationId({
-      selectedClassId,
-      selectedEvalId,
-      classEvaluations,
-    });
-
-    if (selectedEvalId !== nextEvalId) {
-      setSelectedEvalId(nextEvalId);
-      setIsEditingGrades(false);
-      setGradeScoreErrors({});
+    if (!selectedEvalId || String(firstEvalForClass.id) !== selectedEvalId) {
+      setSelectedEvalId(String(firstEvalForClass.id));
+      populateGradeInputsForEvaluation(String(firstEvalForClass.id));
     }
   }, [filteredClasses, evaluationsList, selectedClassId, selectedEvalId]);
 
-  const selectedEvalGradesSignature = useMemo(() => {
-    if (!selectedEvalId) return '';
-    return gradesList
-      .filter((g) => String(g.evaluationId) === selectedEvalId)
-      .map((g) => `${g.studentId}|${g.score}|${g.remarks || ''}|${g.editCount ?? 0}`)
-      .sort()
-      .join('::');
-  }, [gradesList, selectedEvalId]);
-
-  // Source-of-truth sync: refresh local inputs when selected eval changes
-  // or when selected-eval grade content changes (not merely array reference).
-  useEffect(() => {
-    if (!selectedEvalId) {
-      setGradeScoreErrors({});
-      setGradeInputValues({});
-      return;
+  const archivedEvaluations = evaluationsList.filter((ev) => {
+    if (userRole === 'teacher') {
+      if (teacherId == null) return false;
+      if (ev.teacherId !== teacherId) return false;
     }
-    setGradeScoreErrors({});
-    populateGradeInputsForEvaluation(selectedEvalId);
-  }, [selectedEvalId, selectedEvalGradesSignature]);
+    if (!selectedClassId) return false;
+    if (String(ev.classId) !== selectedClassId) return false;
+    return isEvaluationFullyGraded(ev);
+  });
 
   const gradesForSelectedEval = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
   const eligibleStudentsWithHistory = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
   const eligibleGradesForSelectedEval = getEligibleGradesForEvaluation(currentEvaluation, currentClassStudents, gradesList);
   const saveableStudentCount = eligibleStudentsWithHistory.filter((student) => {
     const existingGrade = gradesForSelectedEval.find((g) => g.studentId === student.id);
-    const gradePermission = getGradeEditPermission(userRole, existingGrade);
-    return existingGrade ? gradePermission.canEditExisting : gradePermission.canCreate;
+    return !(userRole === 'teacher' && existingGrade);
   }).length;
-  const canShowEditGradesToggle = canRoleModifyExistingGrades && !!selectedEvalId;
-  const canEnterEditMode = canShowEditGradesToggle && saveableStudentCount > 0;
-  const canShowSaveAllButton = !!selectedEvalId && (canShowEditGradesToggle ? isEditingGrades : userRole === 'teacher');
 
   const today = new Date();
   const overdueThresholdMs = 7 * 24 * 60 * 60 * 1000;
@@ -514,50 +394,29 @@ export default function NotesView({
           <p className="text-sm text-slate-500">Planifiez les devoirs, saisissez les résultats et consultez les bulletins scolaires</p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          {canShowEditGradesToggle && (
-            <button
-              type="button"
-              onClick={() => {
-                if (isEditingGrades) {
-                  setIsEditingGrades(false);
-                  populateGradeInputsForEvaluation(selectedEvalId || null);
-                  return;
-                }
-                setIsEditingGrades(true);
-              }}
-              disabled={!isEditingGrades && !canEnterEditMode}
-              className={`flex items-center gap-2 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md transition-colors w-full sm:w-auto justify-center ${isEditingGrades ? 'bg-slate-600 hover:bg-slate-700' : 'bg-emerald-600 hover:bg-emerald-700'} ${!isEditingGrades && !canEnterEditMode ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              id="btn-toggle-edit-grades"
-            >
-              {isEditingGrades ? 'Annuler' : 'Modifier les notes'}
-            </button>
-          )}
-
-          {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
-            <button
-              type="button"
-              onClick={() => {
-                const initialClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
-                if (initialClasses.length > 0) {
-                  setNewEvalClassId(String(initialClasses[0].id));
-                }
-                setNewEvalSubject('');
-                setNewEvalTitle('');
-                setNewEvalCoefficient(1);
-                setNewEvalMaxScore(20);
-                setNewEvalDate(formatLocalDatetime());
-                setIsNewEvalFormOpen(!isNewEvalFormOpen);
-              }}
-              disabled={userRole === 'teacher' && availableClasses.length === 0}
-              className={`flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md transition-colors w-full sm:w-auto justify-center ${userRole === 'teacher' && availableClasses.length === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              id="btn-new-eval-trigger"
-            >
-              <Plus className="h-4.5 w-4.5" />
-              Créer un Devoir / Évaluation
-            </button>
-          )}
-        </div>
+        {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+          <button
+            type="button"
+            onClick={() => {
+              const initialClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
+              if (initialClasses.length > 0) {
+                setNewEvalClassId(String(initialClasses[0].id));
+              }
+              setNewEvalSubject('');
+              setNewEvalTitle('');
+              setNewEvalCoefficient(1);
+              setNewEvalMaxScore(20);
+              setNewEvalDate(formatLocalDatetime());
+              setIsNewEvalFormOpen(!isNewEvalFormOpen);
+            }}
+            disabled={userRole === 'teacher' && availableClasses.length === 0}
+            className={`flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md transition-colors w-full sm:w-auto justify-center ${userRole === 'teacher' && availableClasses.length === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            id="btn-new-eval-trigger"
+          >
+            <Plus className="h-4.5 w-4.5" />
+            Créer un Devoir / Évaluation
+          </button>
+        )}
       </div>
 
       {overdueCount > 0 && (
@@ -586,9 +445,7 @@ export default function NotesView({
           </h3>
           <form onSubmit={handleCreateEvaluation} className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Classe concernée" required />
-              </label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classe concernée</label>
               <select
                 required
                 value={newEvalClassId}
@@ -602,9 +459,7 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Matière" required />
-              </label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matière</label>
               <select
                 required
                 value={newEvalSubject}
@@ -621,9 +476,7 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Intitulé du devoir (ex: &quot;DS n°3&quot;)" required />
-              </label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Intitulé du devoir (ex: "DS n°3")</label>
               <input
                 required
                 type="text"
@@ -710,7 +563,6 @@ export default function NotesView({
             onChange={(e) => {
               const nextClassId = e.target.value;
               setSelectedClassId(nextClassId);
-              setIsEditingGrades(false);
               const firstEvalForClass = evaluationsList.find((ev) => String(ev.classId) === nextClassId);
               if (firstEvalForClass) {
                 setSelectedEvalId(String(firstEvalForClass.id));
@@ -742,7 +594,6 @@ export default function NotesView({
             onChange={(e) => {
               const evId = e.target.value;
               setSelectedEvalId(evId);
-              setIsEditingGrades(false);
               populateGradeInputsForEvaluation(evId);
             }}
             disabled={!selectedClassId}
@@ -751,7 +602,7 @@ export default function NotesView({
             <option value="">-- Sélectionnez un devoir --</option>
             {selectableEvaluations.map((ev) => (
               <option key={ev.id} value={ev.id}>
-                {ev.subject} — {ev.title} ({ev.date})
+                {ev.subject} — {ev.title} ({ev.date}){userRole !== 'teacher' && isEvaluationFullyGraded(ev) ? ' — Archivée' : ''}
               </option>
             ))}
           </select>
@@ -761,6 +612,58 @@ export default function NotesView({
       {saveStatus && (
         <div className="p-3 bg-emerald-50 text-emerald-700 text-xs border border-emerald-100 rounded-xl font-semibold animate-bounce">
           {saveStatus}
+        </div>
+      )}
+
+      {selectedClassId && archivedEvaluations.length > 0 && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Archive des devoirs terminés</h3>
+              <p className="text-xs text-slate-500">Les devoirs dont toutes les notes ont été saisies ne sont plus affichés dans la sélection principale.</p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-slate-200 text-slate-700 text-[11px] font-semibold">
+              {archivedEvaluations.length} devoir{archivedEvaluations.length > 1 ? 's' : ''}
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {archivedEvaluations.map((ev) => {
+              const gradesForEval = gradesList.filter((g) => g.evaluationId === ev.id);
+              return (
+                <div key={ev.id} className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold mb-1">{ev.subject}</div>
+                  <div className="font-semibold text-slate-800">{ev.title}</div>
+                  <div className="mt-2 text-[13px] text-slate-500">Date : {ev.date}</div>
+                  <div className="mt-2 text-[13px] text-slate-500">État : <span className="font-semibold text-emerald-700">Toutes notes enregistrées</span></div>
+
+                  <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-100 p-3">
+                    <div className="flex items-center justify-between gap-2 mb-3 text-[12px] text-slate-500 uppercase tracking-[0.14em] font-semibold">
+                      <span>Notes</span>
+                      <span>{gradesForEval.length} / {getEligibleStudentsForEvaluationUtil(ev, studentsList.filter((st) => st.classId === ev.classId)).length}</span>
+                    </div>
+                    {gradesForEval.length > 0 ? (
+                      <div className="space-y-2 text-[13px] text-slate-700">
+                        {gradesForEval.map((grade) => {
+                          const student = studentsList.find((st) => st.id === grade.studentId);
+                          return (
+                            <div key={grade.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                              <div className="font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                              <div className="flex flex-col gap-1 mt-1 text-slate-600">
+                                <span>Note : <span className="font-bold text-slate-900">{grade.score}</span></span>
+                                <span>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[13px] text-slate-500 italic">Aucune note enregistrée.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -780,16 +683,14 @@ export default function NotesView({
                 </div>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 text-xs text-indigo-100">
                   <div>Total copies saisies : {eligibleGradesForSelectedEval.length} / {eligibleStudentsForSelectedEval.length}</div>
-                  {canShowSaveAllButton && (
-                    <button
-                      type="button"
-                      onClick={handleSaveAllGrades}
-                      disabled={saveableStudentCount === 0}
-                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-400 disabled:cursor-not-allowed rounded-xl text-white text-xs font-semibold transition-colors"
-                    >
-                      Enregistrer tout
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveAllGrades}
+                    disabled={userRole === 'teacher' ? saveableStudentCount === 0 : eligibleStudentsForSelectedEval.length === 0}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-400 disabled:cursor-not-allowed rounded-xl text-white text-xs font-semibold transition-colors"
+                  >
+                    Enregistrer tout
+                  </button>
                 </div>
               </div>
             )}
@@ -802,8 +703,11 @@ export default function NotesView({
                     <th className="px-6 py-4">Moyenne Générale du Trimestre</th>
                     {selectedEvalId && (
                       <>
-                        <th className="px-6 py-4">Note au devoir ( / {effectiveMaxScore} )</th>
+                        <th className="px-6 py-4">Note au devoir ( / 20)</th>
                         <th className="px-6 py-4">Appréciation / Remarques</th>
+                        {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+                          <th className="px-6 py-4 text-right">Actions</th>
+                        )}
                       </>
                     )}
                   </tr>
@@ -816,10 +720,12 @@ export default function NotesView({
                       const existingGrade = gradesList.find(
                         (g) => String(g.evaluationId) === selectedEvalId && g.studentId === st.id
                       );
-                      const gradePermission = getGradeEditPermission(userRole, existingGrade);
-                      const canEditGrade = existingGrade ? gradePermission.canEditExisting : gradePermission.canCreate;
+                      const canEditGrade = userRole === 'super_admin'
+                        ? true
+                        : false;
+                      const isLockedBySchoolAdmin = !!existingGrade;
                       const isEligible = eligibleStudentsForSelectedEval.some((s) => s.id === st.id);
-                      const scoreError = gradeScoreErrors[st.id];
+                      const isIneligibleWithGrade = !isEligible && existingGrade;
 
                     return (
                       <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
@@ -839,58 +745,25 @@ export default function NotesView({
                                   <div className="text-xs space-y-1">
                                     <div className="font-mono font-bold text-indigo-700">{existingGrade.score} / 20</div>
                                     <div className="text-slate-400 text-[10px]">Note déjà enregistrée</div>
-                                    <div className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${existingGrade.isModified || (existingGrade.editCount ?? 0) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                                      {existingGrade.isModified || (existingGrade.editCount ?? 0) > 0 ? 'Note modifiée' : 'Nouvelle note'}
-                                    </div>
                                   </div>
                                 ) : isEligible ? (
-                                    <div className="space-y-1">
-                                      <input
-                                        type="text"
-                                        value={gradeInputValues[st.id]?.score || ''}
-                                        onChange={(e) => {
-                                          const sanitized = sanitizeScoreInput(e.target.value);
-                                          if (sanitized == null) {
-                                            setGradeScoreErrors((prev) => ({
-                                              ...prev,
-                                              [st.id]: 'Seuls les chiffres et un seul séparateur decimal (. ou ,) sont autorises.',
-                                            }));
-                                            return;
-                                          }
-
-                                          const check = validateAndNormalizeScore(sanitized, effectiveMaxScore);
-                                          if (sanitized !== '' && !check.isValid) {
-                                            setGradeScoreErrors((prev) => ({
-                                              ...prev,
-                                              [st.id]: check.message || 'Note invalide.',
-                                            }));
-                                          } else {
-                                            setGradeScoreErrors((prev) => {
-                                              const next = { ...prev };
-                                              delete next[st.id];
-                                              return next;
-                                            });
-                                          }
-
-                                          updateGradeInput(st.id, { score: sanitized });
-                                        }}
-                                        onPaste={(e) => handleScorePaste(st.id, e)}
-                                        readOnly={(canShowEditGradesToggle && !isEditingGrades) || !canEditGrade}
-                                        inputMode="decimal"
-                                        placeholder="ex. 12.5"
-                                        className={`w-24 px-2.5 py-1.5 bg-slate-50 border text-xs sm:text-sm rounded-lg text-center font-bold text-slate-800 read-only:bg-slate-200 read-only:text-slate-500 read-only:cursor-not-allowed ${scoreError ? 'border-rose-400 focus:outline-rose-500' : 'border-slate-200 focus:outline-indigo-500'}`}
-                                      />
-                                      {scoreError && (
-                                        <div className="text-[10px] text-rose-600 max-w-[11rem] leading-tight">
-                                          {scoreError}
-                                        </div>
-                                      )}
-                                      {((canShowEditGradesToggle ? isEditingGrades : true) && canEditGrade) && (
-                                        <div className="text-[10px] text-slate-400">
-                                          Valeur attendue : 0 a {effectiveMaxScore} (decimales autorisees, ex. 12.5 ou 12,5)
-                                        </div>
-                                      )}
-                                    </div>
+                                    <input
+                                      type="text"
+                                      value={gradeInputValues[st.id]?.score || ''}
+                                      onChange={(e) => {
+                                        if (!canEditGrade) return;
+                                        const val = e.target.value;
+                                        setGradeInputValues({
+                                          ...gradeInputValues,
+                                          [st.id]: {
+                                            score: val,
+                                            remarks: gradeInputValues[st.id]?.remarks || '',
+                                          },
+                                        });
+                                      }}
+                                      placeholder="ex. 15.5 or Abs"
+                                      className="w-24 px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-lg focus:outline-indigo-500 text-center font-bold text-slate-800"
+                                    />
                                   ) : (
                                     <div className="text-left text-xs text-amber-800 font-semibold">
                                       Non éligible<br />(inscrit après le devoir)
@@ -912,11 +785,18 @@ export default function NotesView({
                                     type="text"
                                     value={gradeInputValues[st.id]?.remarks || ''}
                                     onChange={(e) => {
-                                      updateGradeInput(st.id, { remarks: e.target.value });
+                                      if (!canEditGrade) return;
+                                      const val = e.target.value;
+                                      setGradeInputValues({
+                                        ...gradeInputValues,
+                                        [st.id]: {
+                                          score: gradeInputValues[st.id]?.score || '',
+                                          remarks: val,
+                                        },
+                                      });
                                     }}
-                                    readOnly={(canShowEditGradesToggle && !isEditingGrades) || !canEditGrade}
                                     placeholder="Entrez vos remarques..."
-                                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-indigo-500 text-slate-700 read-only:bg-slate-200 read-only:text-slate-500 read-only:cursor-not-allowed"
+                                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-indigo-500 text-slate-700"
                                   />
                                 ) : (
                                   <span className="text-xs text-slate-500 italic">Aucune saisie requise</span>
@@ -928,6 +808,49 @@ export default function NotesView({
                               )}
                             </td>
 
+                            {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+                              <td className="px-6 py-4 text-right">
+                                {existingGrade ? (
+                                  userRole === 'teacher' ? (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="px-3 py-1.5 bg-slate-400 cursor-not-allowed text-white font-bold text-xs rounded-lg shadow-sm"
+                                    >
+                                      Enregistrée
+                                    </button>
+                                  ) : isLockedBySchoolAdmin ? (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="px-3 py-1.5 bg-slate-400 cursor-not-allowed text-white font-bold text-xs rounded-lg shadow-sm"
+                                    >
+                                      {userRole === 'teacher' ? 'Contact school admin' : 'Bloquée'}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveStudentGrade(st.id)}
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm transition-colors"
+                                      id={`btn-save-grade-${st.id}`}
+                                    >
+                                      {userRole === 'super_admin' ? 'Mettre à jour' : 'Mettre à jour'}
+                                    </button>
+                                  )
+                                ) : isEligible ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveStudentGrade(st.id)}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm transition-colors"
+                                    id={`btn-save-grade-${st.id}`}
+                                  >
+                                    Enregistrer
+                                  </button>
+                                ) : (
+                                  <span className="text-xs text-amber-700 font-semibold">Aucune action</span>
+                                )}
+                              </td>
+                            )}
                           </>
                         )}
                       </tr>
@@ -935,7 +858,7 @@ export default function NotesView({
                   })
                 ) : (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-slate-400 text-sm">
+                    <td colSpan={5} className="px-6 py-8 text-center text-slate-400 text-sm">
                       Sélectionnez un devoir pour afficher les notes
                     </td>
                   </tr>

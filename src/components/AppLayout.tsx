@@ -1,5 +1,6 @@
 import React, { type ReactNode } from 'react';
 import type { AcademicYear, Class, Parent, School, Student, SystemNotification, Teacher, UserRole } from '../types.ts';
+import { getUiErrorMessage } from '../lib/api.ts';
 import SimulatorHeader from './SimulatorHeader.tsx';
 import {
   LayoutDashboard,
@@ -57,6 +58,7 @@ export default function AppLayout({
   children,
 }: AppLayoutProps) {
   const unreadNotifications = notificationsList.filter((notification) => !notification.isRead).length;
+  const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -230,12 +232,12 @@ export default function AppLayout({
         </aside>
 
         <main className="flex-1 min-w-0" id="main-viewport">
-          {errorMsg && (
+          {visibleErrorMsg && (
             <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-fade-in text-xs sm:text-sm">
               <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
               <div className="space-y-1 leading-relaxed">
                 <p className="font-bold text-rose-800">Alerte Système</p>
-                <p className="text-rose-700">{errorMsg}</p>
+                <p className="text-rose-700">{visibleErrorMsg}</p>
               </div>
               <button onClick={onClearError} className="ml-auto text-rose-400 font-bold hover:text-rose-600 cursor-pointer">✕</button>
             </div>

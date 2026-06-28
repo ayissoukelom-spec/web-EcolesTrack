@@ -35,6 +35,34 @@ export function validateClientNames(payload: any) {
 const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
 
+function isSuppressedSystemError(message: string): boolean {
+  return /Unauthorized:\s*Missing token/i.test(message);
+}
+
+export function getUiErrorMessage(error: unknown, fallback?: string): string | null {
+  if (error == null) return fallback ?? null;
+
+  if (typeof error === 'string') {
+    const message = error.trim();
+    if (!message) return fallback ?? null;
+    return isSuppressedSystemError(message) ? null : message;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message?.trim();
+    if (!message) return fallback ?? null;
+    return isSuppressedSystemError(message) ? null : message;
+  }
+
+  if (typeof error === 'object' && 'message' in error) {
+    const message = String((error as { message?: unknown }).message ?? '').trim();
+    if (!message) return fallback ?? null;
+    return isSuppressedSystemError(message) ? null : message;
+  }
+
+  return fallback ?? null;
+}
+
 export function getSimulatedRole(): string | null {
   return localStorage.getItem(LOCAL_STORAGE_ROLE_KEY) || null;
 }
