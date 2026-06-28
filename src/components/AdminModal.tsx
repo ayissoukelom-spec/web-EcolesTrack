@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getSimulatedSchoolId, apiFetch } from '../lib/api.ts';
+import RequiredLabel from './RequiredLabel';
 
 export default function AdminModal(props: any) {
   const {
@@ -172,7 +173,7 @@ export default function AdminModal(props: any) {
   useEffect(() => {
     if (!newParentMode) return;
     if (!newParentForm.schoolId && autoSelectedSchoolId) {
-      setNewParentForm((prev) => ({
+      setNewParentForm((prev: Record<string, any>) => ({
         ...prev,
         schoolId: String(autoSelectedSchoolId),
       }));
@@ -273,7 +274,9 @@ export default function AdminModal(props: any) {
           {activeTab === 'schools' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom de l’établissement</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Nom de l’établissement" required />
+                </label>
                 <input required type="text" value={schoolForm.name} onChange={e => setSchoolForm({...schoolForm, name: e.target.value})} placeholder="Lycée de Lomé" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div>
@@ -281,7 +284,9 @@ export default function AdminModal(props: any) {
                 <input type="text" value={schoolForm.address} onChange={e => setSchoolForm({...schoolForm, address: e.target.value})} placeholder="Adresse complète" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Téléphone</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Téléphone" required />
+                </label>
                 <div className="flex gap-2">
                   <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
                   <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
@@ -299,7 +304,7 @@ export default function AdminModal(props: any) {
                           const current = schoolForm.selectedClassNames || [];
                           const next = e.target.checked
                             ? [...current, name]
-                            : current.filter((n) => n !== name);
+                            : current.filter((n: string) => n !== name);
                           setSchoolForm({ ...schoolForm, selectedClassNames: next });
                         }}
                         className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -324,7 +329,9 @@ export default function AdminModal(props: any) {
           {activeTab === 'years' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Label Année Scolaire</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Label Année Scolaire" required />
+                </label>
                 <input required type="text" value={yearForm.name} onChange={e => setYearForm({...yearForm, name: e.target.value})} placeholder="2026-2027" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 text-sm">
@@ -399,12 +406,16 @@ export default function AdminModal(props: any) {
           {activeTab === 'teachers' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom complet</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Nom complet" required />
+                </label>
                 <input required type="text" value={teacherForm.name} onChange={e => { setTeacherForm({...teacherForm, name: e.target.value}); clearFieldError('name'); }} placeholder="M. Koffi" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                 {fieldErrors?.name && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.name}</p>}
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Email</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Email" required />
+                </label>
                 <input required type="email" value={teacherForm.email} onChange={e => setTeacherForm({...teacherForm, email: e.target.value})} placeholder="prof@ecoletrack.fr" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
                   <div>
@@ -432,7 +443,7 @@ export default function AdminModal(props: any) {
                         checked={teacherForm.specializations.includes(subject)}
                         onChange={() => {
                           if (teacherForm.specializations.includes(subject)) {
-                            setTeacherForm({ ...teacherForm, specializations: teacherForm.specializations.filter((item) => item !== subject) });
+                            setTeacherForm({ ...teacherForm, specializations: teacherForm.specializations.filter((item: string) => item !== subject) });
                           } else {
                             setTeacherForm({ ...teacherForm, specializations: [...teacherForm.specializations, subject] });
                           }
@@ -457,7 +468,9 @@ export default function AdminModal(props: any) {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sexe</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Sexe" required />
+                </label>
                 <select required value={teacherForm.gender} onChange={e => setTeacherForm({...teacherForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                   <option value="">-- Choisissez le sexe --</option>
                   <option value="M">Masculin</option>
@@ -488,12 +501,16 @@ export default function AdminModal(props: any) {
               {newParentMode ? (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom du parent d’élève</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Nom du parent d’élève" required />
+                    </label>
                     <input required type="text" value={newParentForm.name} onChange={e => { setNewParentForm({...newParentForm, name: e.target.value}); clearFieldError('name'); }} placeholder="M. Koffi" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                     {fieldErrors?.name && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.name}</p>}
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Email de communication</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Email de communication" required />
+                    </label>
                     <input required type="email" value={newParentForm.email} onChange={e => setNewParentForm({...newParentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -515,7 +532,9 @@ export default function AdminModal(props: any) {
                     <input type="text" value={newParentForm.address} onChange={e => setNewParentForm({...newParentForm, address: e.target.value})} placeholder="Paris..." className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sexe</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Sexe" required />
+                    </label>
                     <select required value={newParentForm.gender} onChange={e => setNewParentForm({...newParentForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                       <option value="">-- Choisissez le sexe --</option>
                       <option value="M">Masculin</option>
@@ -548,18 +567,24 @@ export default function AdminModal(props: any) {
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom de l'enseignant</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        <RequiredLabel label="Nom de l'enseignant" required />
+                      </label>
                       <input required type="text" value={newTeacherForm.name} onChange={e => { setNewTeacherForm({...newTeacherForm, name: e.target.value}); clearFieldError('name'); }} placeholder="M. Koffi" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                       {fieldErrors?.name && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.name}</p>}
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Email</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        <RequiredLabel label="Email" required />
+                      </label>
                       <input required type="email" value={newTeacherForm.email} onChange={e => setNewTeacherForm({...newTeacherForm, email: e.target.value})} placeholder="prof@exemple.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Téléphone</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        <RequiredLabel label="Téléphone" required />
+                      </label>
                       <div className="flex gap-2">
                         <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
                         <input required type="text" value={newTeacherForm.phone} onChange={e => setNewTeacherForm({...newTeacherForm, phone: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" maxLength={8} />
@@ -575,7 +600,7 @@ export default function AdminModal(props: any) {
                               checked={newTeacherForm.specializations.includes(subject)}
                               onChange={() => {
                                 if (newTeacherForm.specializations.includes(subject)) {
-                                  setNewTeacherForm({ ...newTeacherForm, specializations: newTeacherForm.specializations.filter((item) => item !== subject) });
+                                  setNewTeacherForm({ ...newTeacherForm, specializations: newTeacherForm.specializations.filter((item: string) => item !== subject) });
                                 } else {
                                   setNewTeacherForm({ ...newTeacherForm, specializations: [...newTeacherForm.specializations, subject] });
                                 }
@@ -639,12 +664,16 @@ export default function AdminModal(props: any) {
                 <>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom de famille</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        <RequiredLabel label="Nom de famille" required />
+                      </label>
                       <input required type="text" value={studentForm.lastName} onChange={e => { setStudentForm({...studentForm, lastName: e.target.value}); clearFieldError('lastName'); }} placeholder="ABALO" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                       {fieldErrors?.lastName && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.lastName}</p>}
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Prénoms</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        <RequiredLabel label="Prénoms" required />
+                      </label>
                       <input required type="text" value={studentForm.firstName} onChange={e => { setStudentForm({...studentForm, firstName: e.target.value}); clearFieldError('firstName'); }} placeholder="Koffi" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                       {fieldErrors?.firstName && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.firstName}</p>}
                     </div>
@@ -682,7 +711,9 @@ export default function AdminModal(props: any) {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École de l’élève</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="École de l’élève" required />
+                    </label>
                     <select
                       required
                       disabled={disableStudentSchoolSelection}
@@ -700,7 +731,9 @@ export default function AdminModal(props: any) {
                     )}
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classe d’affectation</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Classe d’affectation" required />
+                    </label>
                     <select
                       required
                       value={studentForm.classId}
@@ -762,7 +795,9 @@ export default function AdminModal(props: any) {
                     </button>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Année scolaire</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Année scolaire" required />
+                    </label>
                     {yearsList.length === 1 ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">{yearsList[0]?.name}</div>
                     ) : (
@@ -775,7 +810,9 @@ export default function AdminModal(props: any) {
                     )}
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sexe de l'élève</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Sexe de l'élève" required />
+                    </label>
                     <select required value={studentForm.gender} onChange={e => setStudentForm({...studentForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                       <option value="">-- Choisissez le sexe --</option>
                       <option value="M">Masculin</option>
@@ -824,12 +861,16 @@ export default function AdminModal(props: any) {
           {activeTab === 'parents' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nom du parent d’élève</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Nom du parent d’élève" required />
+                </label>
                 <input required type="text" value={parentForm.name} onChange={e => { setParentForm({...parentForm, name: e.target.value}); clearFieldError('name'); }} placeholder="M. Koffi" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                 {fieldErrors?.name && <p className="mt-1 text-rose-600 text-sm">{fieldErrors.name}</p>}
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Email de communication</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Email de communication" required />
+                </label>
                 <input required type="email" value={parentForm.email} onChange={e => setParentForm({...parentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

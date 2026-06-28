@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
+import RequiredLabel from './RequiredLabel';
 
 interface NotificationViewProps {
   userRole: UserRole;
@@ -287,7 +288,9 @@ export default function NotificationView({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sujet de la notification</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Sujet de la notification" required />
+                  </label>
                   <input
                     required
                     type="text"
@@ -299,7 +302,9 @@ export default function NotificationView({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contenu / Message</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Contenu / Message" required />
+                  </label>
                   <textarea
                     required
                     rows={4}

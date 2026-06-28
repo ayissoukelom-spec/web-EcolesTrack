@@ -3,6 +3,7 @@ import { Absence, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag } from 'lucide-react';
 import CustomDropdown from './CustomDropdown';
+import RequiredLabel from './RequiredLabel';
 
 interface AbsenceViewProps {
   userRole: UserRole;
@@ -155,7 +156,9 @@ export default function AbsenceView({
           </h3>
           <form onSubmit={handleCreateAbsence} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sélectionner la Classe</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Sélectionner la Classe" required />
+              </label>
               <CustomDropdown
                 options={[{ value: '', label: '-- Choisissez une classe --' }, ...sortedClasses.map((cl) => ({ value: String(cl.id), label: cl.name }))]}
                 value={newAbsenceForm.classId}
@@ -166,7 +169,9 @@ export default function AbsenceView({
               />
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sélectionner le Nom</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Sélectionner le Nom" required />
+              </label>
               <select
                 required
                 disabled={!newAbsenceForm.classId}
@@ -189,7 +194,9 @@ export default function AbsenceView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sélectionner le Prénom</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Sélectionner le Prénom" required />
+              </label>
               <select
                 required
                 disabled={!newAbsenceForm.lastName}
@@ -212,7 +219,9 @@ export default function AbsenceView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sélectionner l'Élève</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Sélectionner l'Élève" required />
+              </label>
               <select
                 required
                 disabled={!newAbsenceForm.firstName}
@@ -235,7 +244,9 @@ export default function AbsenceView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Date d'Absence</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Date d'Absence" required />
+              </label>
               <input
                 required
                 type="date"
@@ -397,7 +408,9 @@ export default function AbsenceView({
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Motif de l'absence</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Motif de l'absence" required />
+                </label>
                 <textarea
                   required
                   rows={3}

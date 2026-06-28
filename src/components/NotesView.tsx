@@ -23,6 +23,7 @@ import {
 } from '../lib/evaluationUtils';
 import { getGradeEditPermission } from '../lib/gradePermissions';
 import { resolveSelectedEvaluationId } from '../lib/evaluationSelection';
+import RequiredLabel from './RequiredLabel';
 
 interface NotesViewProps {
   userRole: UserRole;
@@ -585,7 +586,9 @@ export default function NotesView({
           </h3>
           <form onSubmit={handleCreateEvaluation} className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classe concernée</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Classe concernée" required />
+              </label>
               <select
                 required
                 value={newEvalClassId}
@@ -599,7 +602,9 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matière</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Matière" required />
+              </label>
               <select
                 required
                 value={newEvalSubject}
@@ -616,7 +621,9 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Intitulé du devoir (ex: "DS n°3")</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Intitulé du devoir (ex: &quot;DS n°3&quot;)" required />
+              </label>
               <input
                 required
                 type="text"

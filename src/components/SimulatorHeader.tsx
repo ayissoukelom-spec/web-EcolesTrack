@@ -3,6 +3,7 @@ import { Shield, Settings, BookOpen, Users, Bell, Smartphone, RefreshCw } from '
 import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch } from '../lib/api';
 import { School, AcademicYear, Class, Teacher, Student, Parent } from '../types';
 import CustomDropdown from './CustomDropdown';
+import RequiredLabel from './RequiredLabel';
 
 interface SimulatorHeaderProps {
   currentRole: string;
@@ -427,7 +428,9 @@ export default function SimulatorHeader({
             <h3 className="font-bold mb-3">Se connecter (simulation)</h3>
             <div className="space-y-4 text-sm">
               <div>
-                <label className="block text-xs">Rôle</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Rôle" required />
+                </label>
                 <select
                   className="w-full p-2 border rounded"
                   value={loginRole}
@@ -447,7 +450,9 @@ export default function SimulatorHeader({
               </div>
 
               <div>
-                <label className="block text-xs">Email</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Email" required />
+                </label>
                 <input
                   className="w-full p-2 border rounded"
                   value={loginEmail}
@@ -457,7 +462,9 @@ export default function SimulatorHeader({
               </div>
 
               <div>
-                <label className="block text-xs">Nom</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Nom" required />
+                </label>
                 <input
                   className="w-full p-2 border rounded"
                   value={loginName}
@@ -468,7 +475,9 @@ export default function SimulatorHeader({
 
               {loginRole !== 'super_admin' && (
                 <div>
-                  <label className="block text-xs">École</label>
+                  <label className="block text-xs">
+                    <RequiredLabel label="École" required />
+                  </label>
                   <select
                     className="w-full p-2 border rounded"
                     value={loginSchoolId}
@@ -542,7 +551,9 @@ export default function SimulatorHeader({
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
-                <label className="block text-xs">Rôle</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Rôle" required />
+                </label>
                 <select
                   className="w-full p-2 border rounded"
                   value={createRole}
@@ -585,7 +596,9 @@ export default function SimulatorHeader({
               {createRole === 'school_admin' && (
                 <>
                   <div>
-                    <label className="block text-xs">École</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="École" required />
+                    </label>
                     <select className="w-full p-2 border rounded" value={createSchoolId} onChange={(e) => {
                       setCreateSchoolId(e.target.value);
                       setCreateAcademicYearId('');
@@ -601,7 +614,9 @@ export default function SimulatorHeader({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs">Année scolaire</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Année scolaire" required />
+                    </label>
                     <select className="w-full p-2 border rounded" value={createAcademicYearId} onChange={(e) => setCreateAcademicYearId(e.target.value)}>
                       <option value="">-- Choisir une année --</option>
                       {yearsList.length > 0 ? (
@@ -621,7 +636,9 @@ export default function SimulatorHeader({
               {createRole === 'parent' && (
                 <>
                   <div>
-                    <label className="block text-xs">École</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="École" required />
+                    </label>
                     {currentRole === 'school_admin' ? (
                       <div className="w-full p-2 border rounded bg-slate-50 text-slate-600">
                         {schoolsList.find((s) => s.id === simUser?.schoolId)?.name || 'École assignée automatiquement'}
@@ -643,7 +660,9 @@ export default function SimulatorHeader({
                     )}
                   </div>
                   <div>
-                    <label className="block text-xs">Classe</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Classe" required />
+                    </label>
                     <select className="w-full p-2 border rounded" value={createParentClassId} onChange={(e) => {
                       setCreateParentClassId(e.target.value);
                     }}>
@@ -663,22 +682,30 @@ export default function SimulatorHeader({
               )}
 
               <div>
-                <label className="block text-xs">Email</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Email" required />
+                </label>
                 <input className="w-full p-2 border rounded" value={createEmail} onChange={(e) => setCreateEmail(e.target.value)} placeholder="email@exemple.fr" />
               </div>
 
               <div>
-                <label className="block text-xs">Nom</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Nom" required />
+                </label>
                 <input className="w-full p-2 border rounded" value={createLastName} onChange={(e) => setCreateLastName(e.target.value)} placeholder="Dupont" />
               </div>
 
               <div>
-                <label className="block text-xs">Prénom(s)</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Prénom(s)" required />
+                </label>
                 <input className="w-full p-2 border rounded" value={createFirstName} onChange={(e) => setCreateFirstName(e.target.value)} placeholder="Jean" />
               </div>
 
               <div>
-                <label className="block text-xs">Numéro de téléphone</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Numéro de téléphone" required />
+                </label>
                 <div className="flex items-stretch border rounded overflow-hidden">
                   <CustomDropdown
                     options={countryOptions.map((c) => ({
@@ -706,7 +733,9 @@ export default function SimulatorHeader({
 
               {(createRole === 'teacher' || createRole === 'parent') && (
                 <div>
-                  <label className="block text-xs">Sexe</label>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Sexe" required />
+                  </label>
                   <select className="w-full p-2 border rounded" value={createGender} onChange={(e) => setCreateGender(e.target.value)}>
                     <option value="">-- Choisir le sexe --</option>
                     <option value="M">Masculin</option>
@@ -719,7 +748,9 @@ export default function SimulatorHeader({
               {createRole === 'teacher' && (
                 <>
                   <div>
-                    <label className="block text-xs">École</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="École" required />
+                    </label>
                     {currentRole === 'school_admin' ? (
                       <div className="w-full p-2 border rounded bg-slate-50 text-slate-600">
                         {schoolsList.find((s) => s.id === simUser?.schoolId)?.name || 'École assignée automatiquement'}
@@ -742,7 +773,9 @@ export default function SimulatorHeader({
                   </div>
 
                   <div>
-                    <label className="block text-xs">Spécialisation</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Spécialisation" required />
+                    </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border border-slate-200 rounded p-2 bg-slate-50 max-h-56 overflow-auto">
                       {teacherSpecializations.map((subject) => (
                         <label key={subject} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 cursor-pointer">
@@ -765,7 +798,9 @@ export default function SimulatorHeader({
                   </div>
 
                   <div>
-                    <label className="block text-xs">Classes assignées</label>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Classes assignées" required />
+                    </label>
                     {showClassSelection ? (
                       <>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
@@ -828,12 +863,16 @@ export default function SimulatorHeader({
               )}
 
               <div>
-                <label className="block text-xs">Mot de passe</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Mot de passe" required />
+                </label>
                 <input className="w-full p-2 border rounded" type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
               </div>
 
               <div>
-                <label className="block text-xs">Confirmer le mot de passe</label>
+                <label className="block text-xs">
+                  <RequiredLabel label="Confirmer le mot de passe" required />
+                </label>
                 <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
               </div>
             </div>

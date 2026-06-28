@@ -1,6 +1,7 @@
 import React from 'react';
 import { FileText, Search } from 'lucide-react';
 import type { BulletinTermOption, Student } from '../../types.ts';
+import RequiredLabel from '../RequiredLabel';
 
 interface BulletinActionsProps {
   canGenerate: boolean;
@@ -49,29 +50,39 @@ export default function BulletinActions({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <select
-              value={generateStudentId}
-              onChange={(e) => onGenerateStudentChange(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
-              required
-            >
-              <option value="">Eleve cible</option>
-              {studentsList.map((s) => (
-                <option key={s.id} value={s.id}>{s.firstName} {s.lastName} - {s.className}</option>
-              ))}
-            </select>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <RequiredLabel label="Élève cible" required />
+              </label>
+              <select
+                value={generateStudentId}
+                onChange={(e) => onGenerateStudentChange(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+                required
+              >
+                <option value="">Eleve cible</option>
+                {studentsList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.firstName} {s.lastName} - {s.className}</option>
+                ))}
+              </select>
+            </div>
 
-            <select
-              value={generateTermId}
-              onChange={(e) => onGenerateTermChange(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
-              required
-            >
-              <option value="">Trimestre</option>
-              {termOptions.map((term) => (
-                <option key={term.id} value={term.id}>{term.name}</option>
-              ))}
-            </select>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <RequiredLabel label="Trimestre" required />
+              </label>
+              <select
+                value={generateTermId}
+                onChange={(e) => onGenerateTermChange(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+                required
+              >
+                <option value="">Trimestre</option>
+                {termOptions.map((term) => (
+                  <option key={term.id} value={term.id}>{term.name}</option>
+                ))}
+              </select>
+            </div>
 
             <button
               type="submit"

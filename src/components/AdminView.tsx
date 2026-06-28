@@ -21,6 +21,7 @@ import {
 import { getSimulatedSchoolId, getSimulatedUser } from '../lib/api.ts';
 import { sortClasses } from '../lib/classOrdering';
 import * as XLSX from 'xlsx';
+import RequiredLabel from './RequiredLabel';
 
 const teacherSpecializations = [
   'Anglais',
@@ -1513,7 +1514,9 @@ export default function AdminView({
               <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'école</h3>
               <div className="space-y-3 text-sm">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nom de l'établissement *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    <RequiredLabel label="Nom de l'établissement" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
                     placeholder="C.S LE SAVOIR"
@@ -1645,7 +1648,9 @@ export default function AdminView({
                 <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'élève</h3>
                 <div className={`space-y-3 text-sm max-h-[70vh] ${allowSelectOverflow ? 'overflow-visible' : 'overflow-auto'} pr-2`}>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Prénom *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    <RequiredLabel label="Prénom" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
                     placeholder="ex. Koffi"
@@ -1654,7 +1659,9 @@ export default function AdminView({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nom *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    <RequiredLabel label="Nom" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
                     placeholder="ex. ABALO"
@@ -1769,7 +1776,9 @@ export default function AdminView({
                     })()}
                   </div>
 
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classe *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    <RequiredLabel label="Classe" required />
+                  </label>
                   <select
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
                     value={editStudentForm.classId}
@@ -1782,7 +1791,9 @@ export default function AdminView({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Parent / Tuteur *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    <RequiredLabel label="Parent / Tuteur" required />
+                  </label>
                   <select
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
                     value={editStudentForm.parentId}
@@ -2376,7 +2387,9 @@ export default function AdminView({
               <div className="p-1">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Email *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                    <RequiredLabel label="Email" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500 focus:border-indigo-500"
                     type="email"
@@ -2387,7 +2400,9 @@ export default function AdminView({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nom complet *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                    <RequiredLabel label="Nom complet" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                     type="text"
@@ -2398,7 +2413,9 @@ export default function AdminView({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Rôle *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                    <RequiredLabel label="Rôle" required />
+                  </label>
                   <select
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                     value={newUserForm.role}
@@ -2429,7 +2446,9 @@ export default function AdminView({
 
                 {newUserForm.role === 'teacher' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">École *</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                      <RequiredLabel label="École" required />
+                    </label>
                     {userRole === 'school_admin' ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                         {autoAssignedSchoolName}
@@ -2451,7 +2470,9 @@ export default function AdminView({
                     )}
 
                     <div className="mt-3">
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Classes assignées *</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                        <RequiredLabel label="Classes assignées" required />
+                      </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
                         {(classesList || [])
                           .filter((cls) => !newUserForm.schoolId || cls.schoolId === Number(newUserForm.schoolId) || (userRole === 'school_admin' && cls.schoolId === currentSchoolId))
@@ -2492,7 +2513,9 @@ export default function AdminView({
 
                 {newUserForm.role === 'parent' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">École *</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                      <RequiredLabel label="École" required />
+                    </label>
                     {userRole === 'school_admin' ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                         {autoAssignedSchoolName}
@@ -2515,7 +2538,9 @@ export default function AdminView({
                 {newUserForm.role === 'school_admin' && (
                   <>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">École *</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                        <RequiredLabel label="École" required />
+                      </label>
                       <select
                         className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                         value={newUserForm.schoolId}
@@ -2528,7 +2553,9 @@ export default function AdminView({
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Année scolaire *</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                        <RequiredLabel label="Année scolaire" required />
+                      </label>
                       <select
                         className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                         value={newUserForm.academicYearId}
@@ -2618,7 +2645,9 @@ export default function AdminView({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Mot de passe *</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                    <RequiredLabel label="Mot de passe" required />
+                  </label>
                   <input
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                     type="password"
@@ -2630,7 +2659,9 @@ export default function AdminView({
               </div>
 
               <div className="sm:col-span-2 mt-4">
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Confirmer mot de passe *</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                  <RequiredLabel label="Confirmer mot de passe" required />
+                </label>
                 <input
                   className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
                   type="password"
