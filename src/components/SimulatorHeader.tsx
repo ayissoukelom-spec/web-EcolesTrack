@@ -133,6 +133,64 @@ export default function SimulatorHeader({
 
   const activeRoleDetails = roles.find((r) => r.id === currentRole) || roles[0];
 
+  const countryOptions = [
+    { code: '+228', name: 'Togo', flag: '🇹🇬' },
+    { code: '+33', name: 'France', flag: '🇫🇷' },
+    { code: '+229', name: 'Bénin', flag: '🇧🇯' },
+    { code: '+221', name: 'Sénégal', flag: '🇸🇳' },
+    { code: '+225', name: 'Côte d’Ivoire', flag: '🇨🇮' },
+    { code: '+228', name: 'Togo', flag: '🇹🇬' },
+    { code: '+224', name: 'Guinée', flag: '🇬🇳' },
+    { code: '+226', name: 'Burkina Faso', flag: '🇧🇫' },
+    { code: '+233', name: 'Ghana', flag: '🇬🇭' },
+    { code: '+234', name: 'Nigéria', flag: '🇳🇬' },
+    { code: '+243', name: 'RDC', flag: '🇨🇩' },
+    { code: '+237', name: 'Cameroun', flag: '🇨🇲' },
+    { code: '+212', name: 'Maroc', flag: '🇲🇦' },
+    { code: '+216', name: 'Tunisie', flag: '🇹🇳' },
+    { code: '+27', name: 'Afrique du Sud', flag: '🇿🇦' },
+    { code: '+90', name: 'Turquie', flag: '🇹🇷' },
+    { code: '+49', name: 'Allemagne', flag: '🇩🇪' },
+    { code: '+44', name: 'Royaume-Uni', flag: '🇬🇧' },
+    { code: '+39', name: 'Italie', flag: '🇮🇹' },
+    { code: '+34', name: 'Espagne', flag: '🇪🇸' },
+    { code: '+1', name: 'USA/Canada', flag: '🇺🇸' },
+    { code: '+52', name: 'Mexique', flag: '🇲🇽' },
+    { code: '+55', name: 'Brésil', flag: '🇧🇷' },
+    { code: '+52', name: 'Mexique', flag: '🇲🇽' },
+    { code: '+91', name: 'Inde', flag: '🇮🇳' },
+    { code: '+86', name: 'Chine', flag: '🇨🇳' },
+    { code: '+81', name: 'Japon', flag: '🇯🇵' },
+    { code: '+61', name: 'Australie', flag: '🇦🇺' },
+    { code: '+64', name: 'Nouvelle-Zélande', flag: '🇳🇿' },
+    { code: '+358', name: 'Finlande', flag: '🇫🇮' },
+    { code: '+46', name: 'Suède', flag: '🇸🇪' },
+    { code: '+47', name: 'Norvège', flag: '🇳🇴' },
+    { code: '+420', name: 'République tchèque', flag: '🇨🇿' },
+    { code: '+48', name: 'Pologne', flag: '🇵🇱' },
+    { code: '+971', name: 'Émirats arabes unis', flag: '🇦🇪' },
+    { code: '+20', name: 'Égypte', flag: '🇪🇬' },
+    { code: '+211', name: 'Soudan du Sud', flag: '🇸🇸' },
+    { code: '+880', name: 'Bangladesh', flag: '🇧🇩' },
+    { code: '+880', name: 'Bangladesh', flag: '🇧🇩' },
+    { code: '+353', name: 'Irlande', flag: '🇮🇪' },
+    { code: '+358', name: 'Finlande', flag: '🇫🇮' },
+    { code: '+30', name: 'Grèce', flag: '🇬🇷' },
+    { code: '+36', name: 'Hongrie', flag: '🇭🇺' },
+    { code: '+31', name: 'Pays-Bas', flag: '🇳🇱' },
+    { code: '+32', name: 'Belgique', flag: '🇧🇪' },
+    { code: '+41', name: 'Suisse', flag: '🇨🇭' },
+    { code: '+52', name: 'Mexique', flag: '🇲🇽' },
+    { code: '+66', name: 'Thaïlande', flag: '🇹🇭' },
+    { code: '+65', name: 'Singapour', flag: '🇸🇬' },
+    // Fallback entries for broader coverage
+    { code: '+7', name: 'Russie', flag: '🇷🇺' },
+    { code: '+880', name: 'Bangladesh', flag: '🇧🇩' },
+    { code: '+254', name: 'Kenya', flag: '🇰🇪' },
+    { code: '+252', name: 'Somalie', flag: '🇸🇴' },
+    { code: '+211', name: 'Soudan du Sud', flag: '🇸🇸' },
+  ];
+
   // resolve teacher profile from teachersList when role is teacher
   const teacherProfile = (teachersList || []).find((t) => t.email && simUser?.email && t.email.toLowerCase() === simUser.email.toLowerCase());
   const teacherClassIds = teacherProfile ? (teacherProfile.classIds || []) : [];
@@ -478,16 +536,9 @@ export default function SimulatorHeader({
                 <label className="block text-xs">Numéro de téléphone</label>
                 <div className="flex items-center border rounded overflow-hidden">
                   <select value={createPhonePrefix} onChange={(e) => setCreatePhonePrefix(e.target.value)} className="px-2 py-2 bg-slate-100 text-slate-700 text-sm font-medium">
-                    {/* Minimal country list for parent signup. Add more entries if needed. */}
-                    <option value="+228">🇹🇬 Togo +228</option>
-                    <option value="+33">🇫🇷 France +33</option>
-                    <option value="+229">🇧🇯 Bénin +229</option>
-                    <option value="+221">🇸🇳 Sénégal +221</option>
-                    <option value="+229">🇧🇯 +229</option>
-                    <option value="+1">🇺🇸 USA/Canada +1</option>
-                    <option value="+237">🇨🇲 Cameroun +237</option>
-                    <option value="+243">🇨🇩 RDC +243</option>
-                    <option value="+228">🇹🇬 Togo +228</option>
+                    {countryOptions.map((c) => (
+                      <option key={`${c.code}-${c.name}`} value={c.code}>{c.flag} {c.name} {c.code}</option>
+                    ))}
                   </select>
                   <input className="flex-1 p-2 border-0 outline-none" type="tel" value={createPhone} onChange={(e) => setCreatePhone(e.target.value.replace(/\D/g, '').slice(0, createPhonePrefix === '+228' ? 8 : 20))} placeholder="90000000" maxLength={createPhonePrefix === '+228' ? 8 : 20} />
                 </div>
