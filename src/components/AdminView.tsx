@@ -459,6 +459,7 @@ export default function AdminView({
   const [newTeacherMode, setNewTeacherMode] = useState(false);
   const [newTeacherForm, setNewTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const autoAssignedSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : undefined;
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
 
@@ -628,6 +629,7 @@ export default function AdminView({
 
   const handleSaveNewParent = async () => {
     setStudentError(null);
+    setFieldErrors({});
     if (!newParentForm.name.trim() || !newParentForm.email.trim() || !newParentForm.phone.trim()) {
       setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
       return;
@@ -647,14 +649,24 @@ export default function AdminView({
         setStudentError('L’école du parent doit être sélectionnée.');
         return;
       }
-      const createdParent = await onAddParent({
-        name: newParentForm.name,
-        email: newParentForm.email,
-        phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
-        address: newParentForm.address,
-        schoolId: targetSchoolId,
-        gender: newParentForm.gender,
-      });
+      let createdParent;
+      try {
+        createdParent = await onAddParent({
+          name: newParentForm.name,
+          email: newParentForm.email,
+          phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
+          address: newParentForm.address,
+          schoolId: targetSchoolId,
+          gender: newParentForm.gender,
+        });
+      } catch (err: any) {
+        if (err?.field) {
+          const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+          setFieldErrors({ [err.field]: msg });
+          return;
+        }
+        throw err;
+      }
       const resolvedParentId = createdParent?.parentId || createdParent?.id;
       if (!resolvedParentId) {
         setStudentError('Impossible de créer le parent rattaché.');
@@ -672,6 +684,7 @@ export default function AdminView({
 
   const handleSaveNewTeacher = async () => {
     setStudentError(null);
+    setFieldErrors({});
     const simSchoolId = getSimulatedSchoolId();
     const targetSchoolId = userRole === 'school_admin'
       ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
@@ -702,15 +715,25 @@ export default function AdminView({
     }
 
     try {
-      const createdTeacher = await onAddTeacher({
-        name: newTeacherForm.name,
-        email: newTeacherForm.email,
-        phone: `+228 ${phoneDigits}`,
-        specialization: newTeacherForm.specializations,
-        schoolId: targetSchoolId,
-        classIds: newTeacherForm.assignedClassIds,
-        gender: newTeacherForm.gender,
-      });
+      let createdTeacher;
+      try {
+        createdTeacher = await onAddTeacher({
+          name: newTeacherForm.name,
+          email: newTeacherForm.email,
+          phone: `+228 ${phoneDigits}`,
+          specialization: newTeacherForm.specializations,
+          schoolId: targetSchoolId,
+          classIds: newTeacherForm.assignedClassIds,
+          gender: newTeacherForm.gender,
+        });
+      } catch (err: any) {
+        if (err?.field) {
+          const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+          setFieldErrors({ [err.field]: msg });
+          return;
+        }
+        throw err;
+      }
       const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
       if (!resolvedTeacherId) {
         setStudentError('Impossible de créer l’enseignant.');
@@ -728,6 +751,7 @@ export default function AdminView({
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFieldErrors({});
     if (activeTab === 'schools') {
       // Validate school phone has exactly 8 digits
       const phoneDigits = schoolForm.phoneDigits.trim();
@@ -819,7 +843,8 @@ export default function AdminView({
         setStudentError("L'enseignant doit être affecté à au moins une classe.");
         return;
       }
-      await onAddTeacher({
+      try {
+        await onAddTeacher({
         name: teacherForm.name,
         email: teacherForm.email,
         phone: `+228 ${phoneDigits}`,
@@ -827,7 +852,15 @@ export default function AdminView({
         schoolId: teacherSchoolId,
         classIds: teacherForm.assignedClassIds,
         gender: teacherForm.gender,
-      });
+        });
+      } catch (err: any) {
+        if (err?.field) {
+          const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+          setFieldErrors({ [err.field]: msg });
+          return;
+        }
+        throw err;
+      }
       setTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
     } else if (activeTab === 'parents') {
       if (!parentForm.schoolId) {
@@ -843,7 +876,8 @@ export default function AdminView({
         setStudentError('Le numéro de téléphone du parent doit contenir exactement 8 chiffres pour +228.');
         return;
       }
-      await onAddParent({
+      try {
+        await onAddParent({
         name: parentForm.name,
         email: parentForm.email,
         phone: `${parentForm.phonePrefix} ${parentPhoneDigits}`,
@@ -851,7 +885,15 @@ export default function AdminView({
         schoolId: parseInt(parentForm.schoolId),
         studentId: parseInt(parentForm.studentId),
         gender: parentForm.gender,
-      });
+        });
+      } catch (err: any) {
+        if (err?.field) {
+          const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+          setFieldErrors({ [err.field]: msg });
+          return;
+        }
+        throw err;
+      }
       setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '' });
     } else if (activeTab === 'students') {
       const simSchoolId = getSimulatedSchoolId();
@@ -863,13 +905,22 @@ export default function AdminView({
           setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
           return;
         }
-        const createdParent = await onAddParent({
+        try {
+          const createdParent = await onAddParent({
           name: newParentForm.name,
           email: newParentForm.email,
           phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
           address: newParentForm.address,
           schoolId: targetSchoolId,
-        });
+          });
+        } catch (err: any) {
+          if (err?.field) {
+            const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+            setFieldErrors({ [err.field]: msg });
+            return;
+          }
+          throw err;
+        }
         const resolvedParentId = createdParent?.parentId || createdParent?.id;
         if (!resolvedParentId) {
           setStudentError('Impossible de créer le parent rattaché.');
@@ -887,10 +938,19 @@ export default function AdminView({
           setStudentError('L’enseignant doit contenir un nom, un email et un téléphone.');
           return;
         }
-        const createdTeacher = await onAddTeacher({
-          ...newTeacherForm,
-          schoolId: targetSchoolId,
-        });
+        try {
+          const createdTeacher = await onAddTeacher({
+            ...newTeacherForm,
+            schoolId: targetSchoolId,
+          });
+        } catch (err: any) {
+          if (err?.field) {
+            const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+            setFieldErrors({ [err.field]: msg });
+            return;
+          }
+          throw err;
+        }
         const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
         if (!resolvedTeacherId) {
           setStudentError('Impossible de créer l’enseignant.');
@@ -912,7 +972,8 @@ export default function AdminView({
       const resolvedTeacherIds = studentForm.teacherIds && studentForm.teacherIds.length > 0 ? studentForm.teacherIds : undefined;
 
       setStudentError(null);
-      await onAddStudent({
+      try {
+        await onAddStudent({
         firstName: studentForm.firstName,
         lastName: studentForm.lastName,
         birthDate: studentForm.birthDate,
@@ -923,7 +984,15 @@ export default function AdminView({
         teacherIds: resolvedTeacherIds,
         schoolAdminId: selectedSchoolAdminId,
         gender: studentForm.gender,
-      });
+        });
+      } catch (err: any) {
+        if (err?.field) {
+          const msg = err?.foundDigits ? `Le champ contient des chiffres: ${err.foundDigits}` : (err?.message || 'Valeur invalide');
+          setFieldErrors({ [err.field]: msg });
+          return;
+        }
+        throw err;
+      }
       setStudentForm({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [], schoolAdminId: '', gender: '' });
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
@@ -3512,6 +3581,8 @@ export default function AdminView({
         studentForm={studentForm}
         setStudentForm={setStudentForm}
         studentError={studentError}
+        fieldErrors={fieldErrors}
+        setFieldErrors={setFieldErrors}
         newParentMode={newParentMode}
         setNewParentMode={setNewParentMode}
         newParentForm={newParentForm}

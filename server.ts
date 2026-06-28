@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
 import { ensureAuditEventsTableExists, ensureBulletinSnapshotTablesExist, ensureClassTeachersTableExists, ensureDefaultSchoolTermsExist, ensureEvaluationsBulletinColumns, ensureGradesTableSchema, ensureParentsTableSchema, ensureSchoolTermsTableExists, ensureStudentsTableSchema, ensureUsersTableSchema, seedDatabaseIfEmpty } from './src/db/helpers.ts';
 import { requireAuth, requireOwnership, requireRole, AuthRequest, mapToAppRole } from './src/middleware/auth.ts';
+import validateNames from './src/middleware/validateNames.ts';
 import {
   schools,
   academicYears,
@@ -204,6 +205,9 @@ async function startServer() {
 
   // JSON parsing middleware
   app.use(express.json());
+
+  // Validate name / firstName fields to prevent digits
+  app.use(validateNames);
 
   // Simple request logger to help debug routing issues
   app.use((req, res, next) => {

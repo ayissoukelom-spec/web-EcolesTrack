@@ -1,5 +1,36 @@
 import type { BulletinDetail, BulletinListFilters, BulletinListResponse } from '../types.ts';
 
+// Client-side name validation utils
+const LETTERS_AND_SPACES_REGEX = /^[\p{L} ]+$/u;
+const DIGITS_REGEX = /\d+/g;
+
+export function validateClientNames(payload: any) {
+  if (!payload || typeof payload !== 'object') return null;
+  const fields = ['name', 'firstName', 'lastName'];
+  for (const field of fields) {
+    if (!(field in payload)) continue;
+    const v = payload[field];
+    if (v == null) continue;
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (trimmed.length === 0) continue;
+    const digits = trimmed.match(DIGITS_REGEX);
+    if (digits && digits.length > 0) {
+      const unique = Array.from(new Set(digits.join('').split(''))).slice(0, 10).join('');
+      const err: any = new Error(`Le champ '${field}' contient des chiffres (${unique}). Seules les lettres et espaces sont autorisés.`);
+      err.field = field;
+      err.foundDigits = unique;
+      throw err;
+    }
+    if (!LETTERS_AND_SPACES_REGEX.test(trimmed)) {
+      const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres et les espaces sont autorisés.`);
+      err.field = field;
+      throw err;
+    }
+  }
+  return null;
+}
+
 // helper to communicate with the full-stack backend
 const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
@@ -89,6 +120,23 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
       ...(options.headers || {}),
     },
   };
+
+  // Client-side validation: if sending JSON body for create/update, ensure name fields don't contain digits.
+  try {
+    const method = (mergedOptions.method || 'GET').toString().toUpperCase();
+    const contentType = (mergedOptions.headers as any)?.['Content-Type'] || (mergedOptions.headers as any)?.['content-type'] || '';
+    if (['POST', 'PUT', 'PATCH'].includes(method) && contentType.includes('application/json') && mergedOptions.body && typeof mergedOptions.body === 'string') {
+      try {
+        const parsed = JSON.parse(mergedOptions.body as string);
+        validateClientNames(parsed);
+      } catch (e) {
+        if ((e as any).message && (e as any).field) throw e;
+        // if JSON parse failed, let the request proceed (server will validate)
+      }
+    }
+  } catch (e) {
+    throw e;
+  }
 
   const response = await fetch(normalizedEndpoint, mergedOptions);
   
