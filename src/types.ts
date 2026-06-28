@@ -38,6 +38,9 @@ export interface User {
   academicYearId?: number;
   gender?: string;
   phone?: string;
+  firstName?: string;
+  lastName?: string;
+  avatarUrl?: string;
   specialization?: string | string[];
   isDeleted?: boolean;
   createdAt?: string;

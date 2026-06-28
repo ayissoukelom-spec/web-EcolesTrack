@@ -36,6 +36,13 @@ export default function SimulatorHeader({
 }: SimulatorHeaderProps) {
   const [simUser, setSimUser] = useState<any | null>(getSimulatedUser());
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileEditOpen, setProfileEditOpen] = useState(false);
+  const [profileFirstName, setProfileFirstName] = useState(simUser?.firstName || '');
+  const [profileLastName, setProfileLastName] = useState(simUser?.lastName || '');
+  const [profileEmail, setProfileEmail] = useState(simUser?.email || '');
+  const [profilePhone, setProfilePhone] = useState(simUser?.phone || '');
+  const [profilePhotoPreview, setProfilePhotoPreview] = useState<string | null>(simUser?.avatarUrl || null);
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -55,6 +62,58 @@ export default function SimulatorHeader({
       document.removeEventListener('keydown', onKey);
     };
   }, []);
+
+  useEffect(() => {
+    if (!profileEditOpen) return;
+
+    const firstName = simUser?.firstName ?? (simUser?.name ? String(simUser.name).split(' ')[0] : '');
+    const lastName = simUser?.lastName ?? (simUser?.name ? String(simUser.name).split(' ').slice(1).join(' ') : '');
+
+    setProfileFirstName(firstName);
+    setProfileLastName(lastName);
+    setProfileEmail(simUser?.email || '');
+    setProfilePhone(simUser?.phone || '');
+    setProfilePhotoPreview(simUser?.avatarUrl || null);
+    setProfilePhotoFile(null);
+  }, [profileEditOpen, simUser]);
+
+  const handleProfilePhotoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    if (!file) {
+      setProfilePhotoFile(null);
+      setProfilePhotoPreview(simUser?.avatarUrl || null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setProfilePhotoFile(file);
+      setProfilePhotoPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveProfileChanges = () => {
+    if (!simUser) return;
+    const firstName = profileFirstName.trim() || simUser.firstName || '';
+    const lastName = profileLastName.trim() || simUser.lastName || '';
+    const displayName = [firstName, lastName].filter(Boolean).join(' ') || simUser.name;
+    const updatedUser = {
+      ...simUser,
+      firstName,
+      lastName,
+      name: displayName,
+      email: profileEmail.trim() || simUser.email,
+      phone: profilePhone.trim() || simUser.phone,
+      avatarUrl: profilePhotoPreview || undefined,
+    };
+    setSimUser(updatedUser);
+    setSimulatedUser(updatedUser);
+    setProfileEditOpen(false);
+    setProfileMenuOpen(false);
+  };
+
+  const profileAvatar = simUser?.avatarUrl || null;
+  const profileDisplayName = simUser ? ((simUser.firstName || simUser.lastName) ? `${simUser.firstName || ''} ${simUser.lastName || ''}`.trim() : simUser.name) : 'Profil';
   const defaultSchoolId = schoolsList.length > 0 ? String(schoolsList[0].id) : '';
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -122,6 +181,7 @@ export default function SimulatorHeader({
       label: 'Enseignant',
       color: 'bg-indigo-500/10 text-indigo-700 border-indigo-200 hover:bg-indigo-500/20',
       activeColor: 'bg-indigo-600 text-white border-indigo-600 focus:ring-indigo-500',
+      headerBg: 'from-indigo-950/90 via-indigo-900/85 to-slate-950/80',
       description: 'Saisie des notes, appel des absences, évaluations'
     },
     {
@@ -129,6 +189,7 @@ export default function SimulatorHeader({
       label: 'Parent',
       color: 'bg-emerald-500/10 text-emerald-700 border-emerald-200 hover:bg-emerald-500/20',
       activeColor: 'bg-emerald-600 text-white border-emerald-600 focus:ring-emerald-500',
+      headerBg: 'from-emerald-950/90 via-emerald-900/85 to-slate-950/80',
       description: 'Suivi des notes, justifications, notifications push'
     },
   ];
@@ -387,7 +448,7 @@ export default function SimulatorHeader({
   return (
     <div className="bg-slate-900 text-white border-b border-slate-800" id="simulator-header">
       {/* Simulation Sandbox indicator */}
-      <div className="px-4 py-2 bg-gradient-to-r from-indigo-900 via-purple-950 to-indigo-900 flex flex-wrap justify-between items-center text-xs gap-2">
+      <div className={`px-4 py-2 bg-gradient-to-r ${activeRoleDetails.headerBg ?? 'from-indigo-900 via-purple-950 to-indigo-900'} flex flex-wrap justify-between items-center text-xs gap-2`}>
         <div className="flex items-center gap-2">
           <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
         </div>
@@ -1033,7 +1094,7 @@ export default function SimulatorHeader({
           <button
             onClick={onRefreshData}
             disabled={isSyncing}
-            className="flex items-center justify-center gap-2 px-3 py-1.5 md:py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700/80 rounded-xl transition-colors border border-slate-700/60 disabled:opacity-50"
+            className={`flex items-center justify-center gap-2 px-3 py-1.5 md:py-2 text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'} disabled:opacity-50`}
             title="Rafraîchir les données"
             id="btn-sim-refresh"
           >
@@ -1045,12 +1106,16 @@ export default function SimulatorHeader({
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className="ml-2 px-3 py-1.5 flex items-center gap-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700/80 rounded-xl transition-colors border border-slate-700/60"
+              className={`ml-2 px-3 py-1.5 flex items-center gap-2 text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'}`}
               title="Profil"
               id="btn-sim-profile"
             >
-              <Users className="h-4 w-4" />
-              <span className="hidden sm:inline">{simUser ? simUser.name : 'Profil'}</span>
+              {profileAvatar ? (
+                <img src={profileAvatar} alt="Avatar" className="h-7 w-7 rounded-full border border-white/20 object-cover" />
+              ) : (
+                <Users className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">{profileDisplayName}</span>
             </button>
 
             {profileMenuOpen && (
@@ -1072,6 +1137,7 @@ export default function SimulatorHeader({
                       ➕ Créer un compte
                     </button>
                   )}
+                  <button type="button" className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded text-indigo-600 font-medium" onClick={() => { setProfileEditOpen(true); setProfileMenuOpen(false); }}>✏️ Modifier mon profil</button>
                   <button type="button" className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded text-indigo-600 font-medium" onClick={() => { if (onManageAccounts) onManageAccounts(); setProfileMenuOpen(false); }}>⚙️ Gestion des comptes</button>
                   <button type="button" className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded" onClick={async () => {
                     setProfileMenuOpen(false);
@@ -1093,6 +1159,90 @@ export default function SimulatorHeader({
           </span>
         </div>
       </div>
+      {profileEditOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70">
+          <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Modifier le profil</h2>
+                <p className="text-sm text-slate-500">Mettez à jour votre nom, email et photo de profil.</p>
+              </div>
+              <button type="button" className="text-slate-500 hover:text-slate-800" onClick={() => setProfileEditOpen(false)} aria-label="Fermer le formulaire de profil">✕</button>
+            </div>
+            <div className="space-y-4 p-6">
+              <div className="flex items-center gap-4">
+                <label htmlFor="profile-photo-input" className="flex cursor-pointer items-center gap-4 rounded-full border border-slate-200 bg-slate-100 p-1 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50">
+                  <div className="h-16 w-16 overflow-hidden rounded-full bg-slate-100 border border-slate-200">
+                    {profilePhotoPreview ? (
+                      <img src={profilePhotoPreview} alt="Aperçu" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-slate-400">
+                        <Users className="h-8 w-8" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-sm">
+                    <div className="font-medium">Photo de profil</div>
+                    <div className="text-slate-500 text-xs">Cliquer pour modifier</div>
+                  </div>
+                </label>
+                <input
+                  id="profile-photo-input"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleProfilePhotoChange}
+                  className="hidden"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm">
+                  <div className="text-slate-700 font-medium">Nom</div>
+                  <input
+                    value={profileLastName}
+                    onChange={(event) => setProfileLastName(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <div className="text-slate-700 font-medium">Prénom</div>
+                  <input
+                    value={profileFirstName}
+                    onChange={(event) => setProfileFirstName(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+              </div>
+
+              <label className="block text-sm">
+                <div className="text-slate-700 font-medium">Email</div>
+                <input
+                  value={profileEmail}
+                  onChange={(event) => setProfileEmail(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <div className="text-slate-700 font-medium">Téléphone</div>
+                <input
+                  value={profilePhone}
+                  onChange={(event) => setProfilePhone(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+              <button type="button" className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setProfileEditOpen(false)}>
+                Annuler
+              </button>
+              <button type="button" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" onClick={saveProfileChanges}>
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
