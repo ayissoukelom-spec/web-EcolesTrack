@@ -400,12 +400,28 @@ export default function SimulatorHeader({
                 <>
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                      <span>{displayName}</span>
-                      {schoolName ? <span className="ml-2 text-slate-400">— {schoolName}</span> : null}
+                      {currentRole === 'teacher' ? (
+                        <>
+                          <span>
+                            {teacherProfile
+                              ? Array.isArray(teacherProfile.specialization)
+                                ? teacherProfile.specialization.join(', ')
+                                : teacherProfile.specialization || 'Enseignant'
+                              : 'Enseignant'
+                            }
+                          </span>
+                          {schoolName ? <span className="ml-2 text-slate-400">— {schoolName}</span> : null}
+                        </>
+                      ) : (
+                        <>
+                          <span>{displayName}</span>
+                          {schoolName ? <span className="ml-2 text-slate-400">— {schoolName}</span> : null}
+                        </>
+                      )}
                     </div>
                     {currentRole === 'teacher' ? (
                       <div className="text-xs text-slate-400 mt-1">
-                        Profil enseignant: {teacherProfile ? `ID ${teacherProfile.id}` : 'non trouvé'} · Classes: {teacherClassCount} · Élèves: {teacherStudents.length}
+                        Classes: {teacherClasses.map((cls) => cls.name).filter(Boolean).join(', ') || `${teacherClassCount} classe(s)`}
                       </div>
                     ) : null}
                   </div>
@@ -1044,7 +1060,7 @@ export default function SimulatorHeader({
                   <div className="text-xs text-slate-500">{simUser ? simUser.email : ''}</div>
                 </div>
                 <div className="p-2 flex flex-col gap-1">
-                  {currentRole !== 'parent' && (
+                  {currentRole !== 'parent' && currentRole !== 'teacher' && (
                     <button
                       type="button"
                       className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded text-indigo-600 font-medium"
