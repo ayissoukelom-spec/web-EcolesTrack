@@ -774,9 +774,49 @@ export default function SimulatorHeader({
 
                   <div>
                     <label className="block text-xs">
+                      <RequiredLabel label="Classes assignées" required />
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 text-sm">
+                      {(classesList || [])
+                        .filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId)
+                        .map((cls) => (
+                          <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
+                            <input
+                              type="checkbox"
+                              checked={createAssignedClassIds.includes(cls.id)}
+                              onChange={() => {
+                                if (createAssignedClassIds.includes(cls.id)) {
+                                  setCreateAssignedClassIds(createAssignedClassIds.filter((id) => id !== cls.id));
+                                } else {
+                                  setCreateAssignedClassIds([...createAssignedClassIds, cls.id]);
+                                }
+                              }}
+                              className="h-4 w-4 accent-indigo-600"
+                            />
+                            <span className="truncate">{cls.name}</span>
+                          </label>
+                        ))}
+                      {(classesList || []).filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId).length === 0 && (
+                        <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Les classes sont prises en compte immédiatement à chaque sélection.</p>
+                    {createAssignedClassIds.length > 0 && (
+                      <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded-lg border border-slate-200">
+                        <strong>Classes sélectionnées :</strong>{' '}
+                        {(classesList || [])
+                          .filter((cls) => createAssignedClassIds.includes(cls.id))
+                          .map((cls) => cls.name)
+                          .join(', ')}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs">
                       <RequiredLabel label="Spécialisation" required />
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border border-slate-200 rounded p-2 bg-slate-50 max-h-56 overflow-auto">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border border-slate-200 rounded-lg p-2 bg-slate-50 max-h-56 overflow-auto">
                       {teacherSpecializations.map((subject) => (
                         <label key={subject} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 cursor-pointer">
                           <input
@@ -796,84 +836,23 @@ export default function SimulatorHeader({
                       ))}
                     </div>
                   </div>
-
-                  <div>
-                    <label className="block text-xs">
-                      <RequiredLabel label="Classes assignées" required />
-                    </label>
-                    {showClassSelection ? (
-                      <>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
-                          {(classesList || [])
-                            .filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId)
-                            .map((cls) => (
-                              <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
-                                <input
-                                  type="checkbox"
-                                  checked={createAssignedClassIds.includes(cls.id)}
-                                  onChange={() => {
-                                    if (createAssignedClassIds.includes(cls.id)) {
-                                      setCreateAssignedClassIds(createAssignedClassIds.filter((id) => id !== cls.id));
-                                    } else {
-                                      setCreateAssignedClassIds([...createAssignedClassIds, cls.id]);
-                                    }
-                                  }}
-                                  className="h-4 w-4 accent-indigo-600"
-                                />
-                                <span className="truncate">{cls.name}</span>
-                              </label>
-                            ))}
-                          {(classesList || []).filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId).length === 0 && (
-                            <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2 items-center mt-2">
-                          <button
-                            type="button"
-                            className="px-3 py-1.5 rounded bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700"
-                            onClick={() => setShowClassSelection(false)}
-                            disabled={createAssignedClassIds.length === 0}
-                          >
-                            Valider la sélection
-                          </button>
-                          <span className="text-xs text-slate-500">Vous pouvez sélectionner plusieurs classes avant de valider.</span>
-                        </div>
-                      </>
-                    ) : null}
-                    {createAssignedClassIds.length > 0 && (
-                      <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded border border-slate-200">
-                        <strong>Classes sélectionnées :</strong>{' '}
-                        {(classesList || [])
-                          .filter((cls) => createAssignedClassIds.includes(cls.id))
-                          .map((cls) => cls.name)
-                          .join(', ')}
-                      </div>
-                    )}
-                    {!showClassSelection && (
-                      <button
-                        type="button"
-                        className="mt-2 text-xs text-indigo-600 hover:underline"
-                        onClick={() => setShowClassSelection(true)}
-                      >
-                        Modifier la sélection des classes
-                      </button>
-                    )}
-                  </div>
                 </>
               )}
 
-              <div>
-                <label className="block text-xs">
-                  <RequiredLabel label="Mot de passe" required />
-                </label>
-                <input className="w-full p-2 border rounded" type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
-              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Mot de passe" required />
+                  </label>
+                  <input className="w-full p-2 border rounded" type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
+                </div>
 
-              <div>
-                <label className="block text-xs">
-                  <RequiredLabel label="Confirmer le mot de passe" required />
-                </label>
-                <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Confirmer le mot de passe" required />
+                  </label>
+                  <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
+                </div>
               </div>
             </div>
 
