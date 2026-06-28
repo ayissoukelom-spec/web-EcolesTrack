@@ -390,12 +390,6 @@ export default function SimulatorHeader({
       <div className="px-4 py-2 bg-gradient-to-r from-indigo-900 via-purple-950 to-indigo-900 flex flex-wrap justify-between items-center text-xs gap-2">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="font-medium tracking-wide uppercase text-slate-200">
-            Console de Simulation Architecture EdTech - EcoleTrack
-          </span>
-        </div>
-        <div className="text-slate-300">
-          Mode bac à sable : basculez d'un rôle à l'autre pour tester instantanément
         </div>
         <div className="text-slate-200 text-sm">
           {simUser ? (
