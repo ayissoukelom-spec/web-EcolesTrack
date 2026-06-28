@@ -2755,17 +2755,27 @@ async function startServer() {
         }
       }
 
+      const normalizeGenderValue = (value: unknown): 'male' | 'female' | 'unknown' => {
+        if (value == null) return 'unknown';
+        const normalized = String(value).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (['m', 'male', 'masculin', 'homme', 'garcon', 'garcons', 'boy', 'boys'].includes(normalized)) return 'male';
+        if (['f', 'female', 'feminin', 'feminine', 'femme', 'fille', 'filles', 'girl', 'girls'].includes(normalized)) return 'female';
+        return 'unknown';
+      };
+
       // Get stats
       let studentCountQuery = db.select({ count: sql<number>`count(*)::integer` }).from(students);
+      let studentGenderQuery = db.select({ gender: students.gender }).from(students);
       let absenceCountQuery = db.select({ count: sql<number>`count(*)::integer` }).from(absences);
       let classCountQuery = db.select({ count: sql<number>`count(distinct ${classes.id})::integer` }).from(classes);
 
       if (user.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100 }, recentAbsences: [], recentGrades: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
 
         studentCountQuery = studentCountQuery.where(inArray(students.id, parentChildIds)) as any;
+        studentGenderQuery = studentGenderQuery.where(inArray(students.id, parentChildIds)) as any;
         classCountQuery = db
           .select({ count: sql<number>`count(distinct ${classes.id})::integer` })
           .from(classes)
@@ -2777,6 +2787,7 @@ async function startServer() {
           .where(inArray(absences.studentId, parentChildIds)) as any;
       } else if (schoolFilter) {
         studentCountQuery = studentCountQuery.where(eq(students.schoolId, schoolFilter)) as any;
+        studentGenderQuery = studentGenderQuery.where(eq(students.schoolId, schoolFilter)) as any;
         classCountQuery = classCountQuery.where(eq(classes.schoolId, schoolFilter)) as any;
         // For absences, filter through students
         absenceCountQuery = db
@@ -2787,10 +2798,22 @@ async function startServer() {
       }
 
       const studentCountResult = await studentCountQuery;
+      const studentGenderRows = await studentGenderQuery;
       const absenceCountResult = await absenceCountQuery;
       const classCountResult = await classCountQuery;
 
+      console.log('Nombre d\'élèves :', studentCountResult[0]?.count || 0);
+      console.log('Premier élève :', studentGenderRows[0]);
+      console.log('Valeurs de genre observées :', studentGenderRows.slice(0, 10).map((row) => row.gender));
+
       const totalStudents = studentCountResult[0]?.count || 0;
+      const genderCounts = studentGenderRows.reduce((acc, row) => {
+        const normalized = normalizeGenderValue(row.gender);
+        if (normalized === 'male') acc.maleStudents += 1;
+        else if (normalized === 'female') acc.femaleStudents += 1;
+        else acc.unknownGenderStudents += 1;
+        return acc;
+      }, { maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 });
       const totalAbsences = absenceCountResult[0]?.count || 0;
       const totalClasses = classCountResult[0]?.count || 0;
 
@@ -2852,7 +2875,12 @@ async function startServer() {
         totalAbsences,
         totalClasses,
         attendanceRate: Math.round(attendanceRate * 100) / 100,
+        maleStudents: genderCounts.maleStudents,
+        femaleStudents: genderCounts.femaleStudents,
+        unknownGenderStudents: genderCounts.unknownGenderStudents,
       };
+
+      console.log('Statistiques envoyées :', stats);
 
       res.json({
         stats,

@@ -30,6 +30,8 @@ export function useAdminDashboard() {
     setError(null);
     try {
       const summary = await apiFetch('/api/dashboard/summary');
+      console.log('Réponse API Dashboard :', summary);
+      console.log('Statistiques reçues :', summary?.stats);
       setStats(summary?.stats || {
         totalStudents: 0,
         totalAbsences: 0,

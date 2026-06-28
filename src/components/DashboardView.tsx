@@ -26,16 +26,7 @@ export default function DashboardView({
   recentGrades,
   userRole,
 }: DashboardViewProps) {
-  console.log('[TMP-GENDER-DEBUG][DASHBOARD] render stats', {
-    totalStudents: stats.totalStudents,
-    maleStudents: stats.maleStudents,
-    femaleStudents: stats.femaleStudents,
-    unknownGenderStudents: stats.unknownGenderStudents,
-    displayedMale: stats.maleStudents || 0,
-    displayedFemale: stats.femaleStudents || 0,
-    userRole,
-  });
-  
+  console.log('Statistiques reçues par DashboardView :', stats);
   const attendanceData = [
     { name: 'Terminale S1', taux: 93.5 },
     { name: 'Seconde A', taux: 96.2 },
