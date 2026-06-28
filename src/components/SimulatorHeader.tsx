@@ -71,6 +71,7 @@ export default function SimulatorHeader({
   const [createEmail, setCreateEmail] = useState('');
   const [createFirstName, setCreateFirstName] = useState('');
   const [createLastName, setCreateLastName] = useState('');
+  const [createPhonePrefix, setCreatePhonePrefix] = useState('+228');
   const [createPhone, setCreatePhone] = useState('');
   const [createPassword, setCreatePassword] = useState('');
   const [createPasswordConfirm, setCreatePasswordConfirm] = useState('');
@@ -476,8 +477,19 @@ export default function SimulatorHeader({
               <div>
                 <label className="block text-xs">Numéro de téléphone</label>
                 <div className="flex items-center border rounded overflow-hidden">
-                  <span className="px-2 py-2 bg-slate-100 text-slate-500 text-sm font-medium">+228</span>
-                  <input className="flex-1 p-2 border-0 outline-none" type="tel" value={createPhone} onChange={(e) => setCreatePhone(e.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="90000000" maxLength={8} />
+                  <select value={createPhonePrefix} onChange={(e) => setCreatePhonePrefix(e.target.value)} className="px-2 py-2 bg-slate-100 text-slate-700 text-sm font-medium">
+                    {/* Minimal country list for parent signup. Add more entries if needed. */}
+                    <option value="+228">🇹🇬 Togo +228</option>
+                    <option value="+33">🇫🇷 France +33</option>
+                    <option value="+229">🇧🇯 Bénin +229</option>
+                    <option value="+221">🇸🇳 Sénégal +221</option>
+                    <option value="+229">🇧🇯 +229</option>
+                    <option value="+1">🇺🇸 USA/Canada +1</option>
+                    <option value="+237">🇨🇲 Cameroun +237</option>
+                    <option value="+243">🇨🇩 RDC +243</option>
+                    <option value="+228">🇹🇬 Togo +228</option>
+                  </select>
+                  <input className="flex-1 p-2 border-0 outline-none" type="tel" value={createPhone} onChange={(e) => setCreatePhone(e.target.value.replace(/\D/g, '').slice(0, createPhonePrefix === '+228' ? 8 : 20))} placeholder="90000000" maxLength={createPhonePrefix === '+228' ? 8 : 20} />
                 </div>
               </div>
 
@@ -624,9 +636,16 @@ export default function SimulatorHeader({
               <button className="px-3 py-2 rounded bg-emerald-600 text-white" onClick={async () => {
                 try {
                   setCreateError(null);
-                  if (createPhone.length !== 8) {
-                    setCreateError('Le numéro de téléphone doit contenir 8 chiffres');
-                    return;
+                  if (createPhonePrefix === '+228') {
+                    if (createPhone.length !== 8) {
+                      setCreateError('Le numéro de téléphone doit contenir 8 chiffres pour +228');
+                      return;
+                    }
+                  } else {
+                    if (createPhone.length < 4) {
+                      setCreateError('Le numéro de téléphone est trop court');
+                      return;
+                    }
                   }
                   if (!createEmail) {
                     setCreateError('L’email est requis');
@@ -678,7 +697,7 @@ export default function SimulatorHeader({
                     email: createEmail,
                     name,
                     role: createRole,
-                    phone: `+228${createPhone}`,
+                    phone: `${createPhonePrefix}${createPhone}`,
                     specialization: createRole === 'teacher' ? createSpecializations : undefined,
                   };
                   if (createRole === 'school_admin') {
@@ -707,6 +726,7 @@ export default function SimulatorHeader({
                   setCreateFirstName('');
                   setCreateLastName('');
                   setCreatePhone('');
+                  setCreatePhonePrefix('+228');
                   setCreatePassword('');
                   setCreatePasswordConfirm('');
                   setCreateRole('teacher');
