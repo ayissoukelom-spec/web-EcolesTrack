@@ -33,6 +33,7 @@ interface NotesViewProps {
   onSchoolFilterChange?: (schoolId: number | null) => void;
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
+  approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
   onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
@@ -49,6 +50,7 @@ export default function NotesView({
   onSchoolFilterChange,
   teacherClassIds = [],
   teacherSpecializations = [],
+  approvedSubjectsList = [],
   teacherId,
   onAddEvaluation,
   onAddGrade,
@@ -81,6 +83,17 @@ export default function NotesView({
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
 
+  const approvedSubjectNames = approvedSubjectsList && approvedSubjectsList.length > 0
+    ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
+    : [];
+
+  const availableSubjects = userRole === 'teacher'
+    ? approvedSubjectNames.filter((subjectName) => {
+      const assigned = teacherSpecializations.map((value) => String(value || '').trim());
+      return assigned.includes(subjectName);
+    })
+    : approvedSubjectNames;
+
   const populateGradeInputsForEvaluation = (evaluationId: string | null) => {
     if (!evaluationId) {
       setGradeInputValues({});
@@ -94,22 +107,6 @@ export default function NotesView({
     });
     setGradeInputValues(initialGrades);
   };
-
-  const allSubjects = [
-    'Anglais',
-    'Français',
-    'Histoire-Géographie',
-    'Physique-Chimie',
-    'SVT',
-    'Mathématiques',
-    'Philosophie',
-    'Espagnol',
-    'Allemand',
-  ];
-
-  const availableSubjects = userRole === 'teacher' && teacherSpecializations.length > 0
-    ? allSubjects.filter((subject) => teacherSpecializations.map((s) => s.toLowerCase()).includes(subject.toLowerCase()))
-    : allSubjects;
 
   const handleCreateEvaluation = (e: React.FormEvent) => {
     e.preventDefault();
@@ -470,9 +467,13 @@ export default function NotesView({
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
               >
                 <option value="">-- Choisir une matière --</option>
-                {availableSubjects.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
+                {availableSubjects.length > 0 ? (
+                  availableSubjects.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))
+                ) : (
+                  <option value="" disabled>Aucune matière approuvée disponible</option>
+                )}
               </select>
             </div>
             <div>
@@ -825,7 +826,7 @@ export default function NotesView({
                                       disabled
                                       className="px-3 py-1.5 bg-slate-400 cursor-not-allowed text-white font-bold text-xs rounded-lg shadow-sm"
                                     >
-                                      {userRole === 'teacher' ? 'Contact school admin' : 'Bloquée'}
+                                      Bloquée
                                     </button>
                                   ) : (
                                     <button

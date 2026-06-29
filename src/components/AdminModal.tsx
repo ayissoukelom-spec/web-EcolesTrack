@@ -391,12 +391,15 @@ export default function AdminModal(props: any) {
                     {schoolsList.find((s: any) => s.id === (currentSchoolId ?? Number(classForm.schoolId)))?.name || 'Votre école sera assignée automatiquement'}
                   </div>
                 ) : (
-                  <select required value={classForm.schoolId} onChange={e => setClassForm({...classForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
-                    <option value="">-- Choisissez une école --</option>
-                    {schoolsList.map((s: any) => (
-                      <option key={s.id} value={String(s.id)}>{s.name}</option>
-                    ))}
-                  </select>
+                  <>
+                    <select value={classForm.schoolId} onChange={e => setClassForm({...classForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                      <option value="">-- Global (catalogue) --</option>
+                      {schoolsList.map((s: any) => (
+                        <option key={s.id} value={String(s.id)}>{s.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">Laisser vide pour créer une classe globale visible de tous.</p>
+                  </>
                 )}
               </div>
             </div>

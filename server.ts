@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import {
   schools,
@@ -16,6 +16,7 @@ import {
   students,
   subjects,
   schoolSubjects,
+  schoolClasses,
   evaluations,
   grades,
   absences,
@@ -24,6 +25,36 @@ import {
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import * as dotenv from 'dotenv';
+
+console.log('FILE EXECUTED = server.ts');
+
+// Backend business rules documentation
+// =====================================
+// Official rules:
+// - Parent / Student relation is unique and direct.
+//   The canonical relation is `students.parentId -> parents.id`.
+//   The `parents.studentId` field may exist for compatibility, but
+//   access control and visibility are enforced only through `students.parentId`.
+// - No OR(...) logic is allowed in critical access checks.
+//   Critical routes must use explicit equality filters only.
+// - schoolId rules are strict.
+//   A user or entity can only access data for its own `schoolId`.
+//   No fallback on related entity schoolId is permitted for parent or grade access.
+// - GET /api/grades access rules:
+//   * Parents may only see grades for students where `students.parentId = parents.id`.
+//   * School staff may only see grades for students in their own school.
+//   * No implicit access via `parents.studentId` or other indirect relation is allowed.
+// - resolveActor rules:
+//   * In simulated mode, a DB user is resolved by uid or email.
+//   * If a matching DB user exists, the DB record is never modified to inject `schoolId`.
+//   * The effective actor may include `schoolId` from the auth token only in-memory.
+//   * Real authenticated users are loaded from the DB and returned as-is.
+// - Class / Teacher rules:
+//   * Class teacher joins are strict: the teacher must belong to the same school as the class.
+//   * Teacher assignment lookups are filtered by class schoolId.
+// - Forbidden architecture patterns:
+//   * No indirect parent/child access through `parents.studentId` when resolving parent-owned students.
+//   * No `OR` joins or allowed school checks in protected lists like `/api/parents`, `/api/grades`, `/api/classes`, `/api/teachers`.
 
 // Load env variables
 dotenv.config();
@@ -48,8 +79,8 @@ async function resolveActor(req: AuthRequest) {
 
     if (dbUser) {
       if (dbUser.schoolId == null && req.user.schoolId != null) {
-        await db.update(users).set({ schoolId: req.user.schoolId }).where(eq(users.id, dbUser.id));
-        dbUser.schoolId = req.user.schoolId;
+        // Keep the DB record untouched; do not inject schoolId into persisted data.
+        return { ...dbUser, schoolId: req.user.schoolId };
       }
       return dbUser;
     }
@@ -140,19 +171,42 @@ async function startServer() {
   // JSON parsing middleware
   app.use(express.json());
 
-  // Simple request logger to help debug routing issues
+  // Global debug middleware for request/response tracing
   app.use((req, res, next) => {
     try {
-      console.log(`[REQ] ${req.method} ${req.path} headers=${JSON.stringify({ 'x-simulated-role': req.headers['x-simulated-role'], 'content-type': req.headers['content-type'] })}`);
-    } catch (e) {
-      // ignore logging errors
+      console.log('📡 REQUEST:', req.method, req.url);
+      console.log('📦 BODY:', req.body);
+    } catch (err) {
+      console.error('Failed to log request debug data:', err);
     }
+
+    const originalJson = res.json.bind(res);
+    const originalSend = res.send.bind(res);
+
+    (res as any).json = function (data: any) {
+      try {
+        console.log('📤 RESPONSE:', res.statusCode, data);
+      } catch (err) {
+        console.error('Failed to log response JSON debug data:', err);
+      }
+      return originalJson(data);
+    };
+
+    res.on('finish', () => {
+      try {
+        console.log('📥 RESPONSE STATUS:', res.statusCode, req.method, req.url);
+      } catch (err) {
+        console.error('Failed to log response status:', err);
+      }
+    });
+
     next();
   });
 
   console.log('Verifying if database needs seeding...');
   try {
     await seedDatabaseIfEmpty();
+    await ensureSchoolClassesTableExists();
   } catch (error) {
     console.error('Database initialization failed, shutting down application.', error);
     process.exit(1);
@@ -1246,97 +1300,100 @@ async function startServer() {
         return res.status(404).json({ error: 'École introuvable.' });
       }
 
-      const schoolUserIds = (await db.select({ id: users.id }).from(users).where(eq(users.schoolId, id))).map((u) => u.id);
-      const classIds = (await db.select({ id: classes.id }).from(classes).where(eq(classes.schoolId, id))).map((c) => c.id);
-      const studentIds = (await db.select({ id: students.id }).from(students).where(eq(students.schoolId, id))).map((s) => s.id);
-      const academicYearIds = (await db.select({ id: academicYears.id }).from(academicYears).where(eq(academicYears.schoolId, id))).map((a) => a.id);
-      const evaluationIds = classIds.length > 0
-        ? (await db.select({ id: evaluations.id }).from(evaluations).where(sql`${evaluations.classId} IN ${classIds}`)).map((e) => e.id)
-        : [];
+      await db.transaction(async (tx) => {
+        const schoolUserIds = (await tx.select({ id: users.id }).from(users).where(eq(users.schoolId, id))).map((u) => u.id);
+        const classIds = (await tx.select({ id: classes.id }).from(classes).where(eq(classes.schoolId, id))).map((c) => c.id);
+        const studentIds = (await tx.select({ id: students.id }).from(students).where(eq(students.schoolId, id))).map((s) => s.id);
+        const academicYearIds = (await tx.select({ id: academicYears.id }).from(academicYears).where(eq(academicYears.schoolId, id))).map((a) => a.id);
+        const evaluationIds = classIds.length > 0
+          ? (await tx.select({ id: evaluations.id }).from(evaluations).where(sql`${evaluations.classId} IN ${classIds}`)).map((e) => e.id)
+          : [];
 
-      console.log(`School deletion order for school=${id}: users=${schoolUserIds.length}, classes=${classIds.length}, students=${studentIds.length}, academicYears=${academicYearIds.length}, evaluations=${evaluationIds.length}`);
+        console.log(`School deletion order for school=${id}: users=${schoolUserIds.length}, classes=${classIds.length}, students=${studentIds.length}, academicYears=${academicYearIds.length}, evaluations=${evaluationIds.length}`);
 
-      if (schoolUserIds.length > 0) {
-        console.log(`Step 1/10: delete notifications for users [${schoolUserIds.join(', ')}]`);
-        await db.delete(notifications).where(sql`${notifications.userId} IN ${schoolUserIds}`);
-      }
+        if (schoolUserIds.length > 0) {
+          console.log(`Step 1/10: delete notifications for users [${schoolUserIds.join(', ')}]`);
+          await tx.delete(notifications).where(sql`${notifications.userId} IN ${schoolUserIds}`);
+        }
 
-      if (studentIds.length > 0) {
-        console.log(`Step 2/10: delete absences for students [${studentIds.join(', ')}]`);
-        await db.delete(absences).where(sql`${absences.studentId} IN ${studentIds}`);
-      }
-      if (classIds.length > 0) {
-        console.log(`Step 3/10: delete absences for classes [${classIds.join(', ')}]`);
-        await db.delete(absences).where(sql`${absences.classId} IN ${classIds}`);
-      }
+        if (studentIds.length > 0) {
+          console.log(`Step 2/10: delete absences for students [${studentIds.join(', ')}]`);
+          await tx.delete(absences).where(sql`${absences.studentId} IN ${studentIds}`);
+        }
+        if (classIds.length > 0) {
+          console.log(`Step 3/10: delete absences for classes [${classIds.join(', ')}]`);
+          await tx.delete(absences).where(sql`${absences.classId} IN ${classIds}`);
+        }
 
-      if (studentIds.length > 0) {
-        console.log(`Step 4/10: delete grades for students [${studentIds.join(', ')}]`);
-        await db.delete(grades).where(sql`${grades.studentId} IN ${studentIds}`);
-      }
-      if (evaluationIds.length > 0) {
-        console.log(`Step 5/10: delete grades for evaluations [${evaluationIds.join(', ')}]`);
-        await db.delete(grades).where(sql`${grades.evaluationId} IN ${evaluationIds}`);
-      }
+        if (studentIds.length > 0) {
+          console.log(`Step 4/10: delete grades for students [${studentIds.join(', ')}]`);
+          await tx.delete(grades).where(sql`${grades.studentId} IN ${studentIds}`);
+        }
+        if (evaluationIds.length > 0) {
+          console.log(`Step 5/10: delete grades for evaluations [${evaluationIds.join(', ')}]`);
+          await tx.delete(grades).where(sql`${grades.evaluationId} IN ${evaluationIds}`);
+        }
 
-      if (evaluationIds.length > 0) {
-        console.log(`Step 6/10: delete evaluations [${evaluationIds.join(', ')}]`);
-        await db.delete(evaluations).where(sql`${evaluations.id} IN ${evaluationIds}`);
-      }
+        if (evaluationIds.length > 0) {
+          console.log(`Step 6/10: delete evaluations [${evaluationIds.join(', ')}]`);
+          await tx.delete(evaluations).where(sql`${evaluations.id} IN ${evaluationIds}`);
+        }
 
-      if (studentIds.length > 0) {
-        console.log(`Step 7/10: delete students [${studentIds.join(', ')}]`);
-        await db.delete(students).where(sql`${students.id} IN ${studentIds}`);
-      }
+        if (studentIds.length > 0) {
+          console.log(`Step 7/10: delete students [${studentIds.join(', ')}]`);
+          await tx.delete(students).where(sql`${students.id} IN ${studentIds}`);
+        }
 
-      if (schoolUserIds.length > 0) {
-        console.log(`Step 8/10: delete parent profiles for users [${schoolUserIds.join(', ')}]`);
-        await db.delete(parents).where(sql`${parents.userId} IN ${schoolUserIds}`);
-      }
+        if (schoolUserIds.length > 0) {
+          console.log(`Step 8/10: delete parent profiles for users [${schoolUserIds.join(', ')}]`);
+          await tx.delete(parents).where(sql`${parents.userId} IN ${schoolUserIds}`);
+        }
 
-      if (classIds.length > 0) {
-        console.log(`Step 9/10: unset teacher assignments for classes [${classIds.join(', ')}]`);
-        await db.update(classes).set({ teacherId: null }).where(sql`${classes.id} IN ${classIds}`);
-      }
+        if (classIds.length > 0) {
+          console.log(`Step 9/10: unset teacher assignments for classes [${classIds.join(', ')}]`);
+          await tx.update(classes).set({ teacherId: null }).where(sql`${classes.id} IN ${classIds}`);
+        }
 
-      if (schoolUserIds.length > 0) {
-        console.log(`Step 10/11: disconnect schoolAdminId and delete audit events for users [${schoolUserIds.join(', ')}]`);
-        await db.update(students).set({ schoolAdminId: null }).where(sql`${students.schoolAdminId} IN ${schoolUserIds}`);
-        await db.delete(auditEvents).where(sql`${auditEvents.actorUserId} IN ${schoolUserIds}`);
-      }
+        if (schoolUserIds.length > 0) {
+          console.log(`Step 10/11: disconnect schoolAdminId and delete audit events for users [${schoolUserIds.join(', ')}]`);
+          await tx.update(students).set({ schoolAdminId: null }).where(sql`${students.schoolAdminId} IN ${schoolUserIds}`);
+          await tx.delete(auditEvents).where(sql`${auditEvents.actorUserId} IN ${schoolUserIds}`);
+        }
 
-      if (schoolUserIds.length > 0) {
-        console.log(`Step 11/11: delete local auth entries for users [${schoolUserIds.join(', ')}]`);
-        await db.delete(localAuths).where(sql`${localAuths.userId} IN ${schoolUserIds}`);
-      }
+        if (schoolUserIds.length > 0) {
+          console.log(`Step 11/11: delete local auth entries for users [${schoolUserIds.join(', ')}]`);
+          await tx.delete(localAuths).where(sql`${localAuths.userId} IN ${schoolUserIds}`);
+        }
 
-      console.log('Step 12/12: delete audit events linked directly to school');
-      await db.delete(auditEvents).where(eq(auditEvents.schoolId, id));
+        console.log('Step 12/12: delete audit events linked directly to school');
+        await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
-      console.log(`Deleting remaining teachers, classes, academic years and users for school=${id}`);
-      await db.delete(teachers).where(eq(teachers.schoolId, id));
+        console.log(`Deleting remaining teachers, classes, academic years and users for school=${id}`);
+        await tx.delete(teachers).where(eq(teachers.schoolId, id));
 
-      if (classIds.length > 0) {
-        await db.delete(classes).where(sql`${classes.id} IN ${classIds}`);
-      }
+        if (classIds.length > 0) {
+          await tx.delete(classes).where(sql`${classes.id} IN ${classIds}`);
+        }
 
-      if (academicYearIds.length > 0) {
-        await db.delete(academicYears).where(sql`${academicYears.id} IN ${academicYearIds}`);
-      }
+        if (academicYearIds.length > 0) {
+          await tx.delete(academicYears).where(sql`${academicYears.id} IN ${academicYearIds}`);
+        }
 
-      if (schoolUserIds.length > 0) {
-        await db.delete(users).where(sql`${users.id} IN ${schoolUserIds}`);
-      }
+        if (schoolUserIds.length > 0) {
+          await tx.delete(users).where(sql`${users.id} IN ${schoolUserIds}`);
+        }
 
-      console.log('Final cleanup pass: delete any remaining school-linked entities by schoolId');
-      await db.delete(students).where(eq(students.schoolId, id));
-      await db.delete(classes).where(eq(classes.schoolId, id));
-      await db.delete(teachers).where(eq(teachers.schoolId, id));
-      await db.delete(academicYears).where(eq(academicYears.schoolId, id));
-      await db.delete(users).where(eq(users.schoolId, id));
-      await db.delete(auditEvents).where(eq(auditEvents.schoolId, id));
+        console.log('Final cleanup pass: delete any remaining school-linked entities by schoolId');
+        await tx.delete(students).where(eq(students.schoolId, id));
+        await tx.delete(classes).where(eq(classes.schoolId, id));
+        await tx.delete(teachers).where(eq(teachers.schoolId, id));
+        await tx.delete(academicYears).where(eq(academicYears.schoolId, id));
+        await tx.delete(users).where(eq(users.schoolId, id));
+        await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
-      await db.delete(schools).where(eq(schools.id, id));
+        await tx.delete(schools).where(eq(schools.id, id));
+      });
+
       res.json({ message: 'School deleted successfully' });
     } catch (err: any) {
       console.error('Error deleting school:', err);
@@ -1416,36 +1473,125 @@ async function startServer() {
   app.get('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      
+
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
+      const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+      const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
+      const targetSchoolId = actor.role === 'school_admin'
+        ? actor.schoolId
+        : actor.role === 'teacher'
+          ? actor.schoolId
+          : schoolIdParam;
+
+      const baseSelect = {
+        id: classes.id,
+        name: classes.name,
+        schoolId: classes.schoolId,
+        academicYearId: classes.academicYearId,
+        yearName: academicYears.name,
+        teacherId: classes.teacherId,
+        teacherName: users.name,
+      };
+
+      if (actor.role === 'teacher') {
+        if (!targetSchoolId) {
+          return res.status(403).json({ error: 'Teacher school context is required' });
+        }
+
+        const localClasses = await db
+          .select(baseSelect)
+          .from(classes)
+          .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+          .leftJoin(users, eq(teachers.userId, users.id))
+          .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+          .where(eq(classes.schoolId, targetSchoolId));
+
+        const approvedGlobalClasses = await db
+          .select(baseSelect)
+          .from(classes)
+          .innerJoin(
+            schoolClasses,
+            and(
+              eq(classes.id, schoolClasses.classId),
+              eq(schoolClasses.schoolId, targetSchoolId),
+              eq(schoolClasses.status, 'approved')
+            )
+          )
+          .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+          .leftJoin(users, eq(teachers.userId, users.id))
+          .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+          .where(sql`${classes.schoolId} IS NULL`);
+
+        const combined = [...localClasses, ...approvedGlobalClasses];
+        const uniqueMap = new Map<number, typeof combined[number]>();
+        combined.forEach((row) => uniqueMap.set(row.id, row));
+
+        res.json(Array.from(uniqueMap.values()));
+        return;
+      }
+
+      if (approvedOnly && !targetSchoolId) {
+        if (actor.role === 'super_admin') {
+          const approvedRows = await db
+            .select(baseSelect)
+            .from(classes)
+            .innerJoin(
+              schoolClasses,
+              and(
+                eq(classes.id, schoolClasses.classId),
+                eq(schoolClasses.status, 'approved')
+              )
+            )
+            .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+            .leftJoin(users, eq(teachers.userId, users.id))
+            .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
+
+          res.json(approvedRows);
+          return;
+        }
+
+        return res.status(403).json({ error: 'School context is required' });
+      }
+
       let query = db
-        .select({
-          id: classes.id,
-          name: classes.name,
-          schoolId: classes.schoolId,
-          academicYearId: classes.academicYearId,
-          yearName: academicYears.name,
-          teacherId: classes.teacherId,
-          teacherName: users.name,
-        })
+        .select(baseSelect)
         .from(classes)
-        .leftJoin(teachers, eq(classes.teacherId, teachers.id))
+        .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
         .leftJoin(users, eq(teachers.userId, users.id))
         .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
 
       if (actor.role !== 'super_admin') {
-        // School admin, teacher, and parent see only their school's classes
-        if (actor.schoolId) {
-          query = query.where(eq(classes.schoolId, actor.schoolId)) as any;
+        if (actor.schoolId != null) {
+          query = query.where(or(eq(classes.schoolId, actor.schoolId), sql`${classes.schoolId} IS NULL`)) as any;
         } else {
           return res.json([]);
         }
       }
 
-      const list = await query;
-      res.json(list);
+      const allClasses = await query;
+
+      if (targetSchoolId) {
+        const statusRows = await db.select().from(schoolClasses).where(eq(schoolClasses.schoolId, targetSchoolId));
+        const statusMap = new Map(statusRows.map((row) => [row.classId, row.status]));
+
+        let result = allClasses.map((klass) => ({
+          ...klass,
+          status: statusMap.get(klass.id) ?? (klass.schoolId === targetSchoolId ? 'approved' : 'pending'),
+        }));
+
+        if (approvedOnly) {
+          result = result.filter((klass) => klass.status === 'approved');
+        }
+
+        console.log('✅ GET /api/classes RESPONSE', result);
+        res.json(result);
+        return;
+      }
+
+      console.log('✅ GET /api/classes RESPONSE', allClasses);
+      res.json(allClasses);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to retrieve classes' });
     }
@@ -1453,38 +1599,66 @@ async function startServer() {
 
   app.post('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
+      console.log('POST /api/classes exécuté');
+      console.log('🔥 RAW BODY RECEIVED =', req.body);
+      console.log('BODY FULL =', JSON.stringify(req.body));
+      console.log('name raw =', req.body?.name);
+      console.log('academicYearId raw =', req.body?.academicYearId);
+      console.log('type =', typeof req.body?.academicYearId);
+      console.log('schoolId raw =', req.body?.schoolId);
+      console.log('schoolId type =', typeof req.body?.schoolId);
+      console.log('🔥 FULL KEYS =', Object.keys(req.body || {}));
+      console.log('🔥 HIT POST /api/classes - NEW CODE');
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { name, schoolId, academicYearId, teacherId } = req.body;
+      const { name, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, teacherId } = req.body;
       const trimmedName = typeof name === 'string' ? name.trim() : '';
+      const academicYearId = rawAcademicYearId != null && rawAcademicYearId !== '' ? Number(rawAcademicYearId) : null;
+      console.log('academicYearId parsed =', academicYearId, typeof academicYearId);
+      if (rawAcademicYearId != null && rawAcademicYearId !== '' && Number.isNaN(academicYearId)) {
+        return res.status(400).json({ error: 'Invalid academicYearId' });
+      }
 
       // Load user and validate school permission
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      const effectiveSchoolId = user.role === 'school_admin'
-        ? user.schoolId
-        : schoolId != null
-          ? Number(schoolId)
-          : undefined;
-
-      if (!trimmedName || !effectiveSchoolId || !academicYearId) {
-        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, schoolId=${effectiveSchoolId}, academicYearId=${academicYearId}` });
+      const parsedSchoolId = rawSchoolId != null && rawSchoolId !== '' && rawSchoolId !== 'undefined' && rawSchoolId !== 'null'
+        ? Number(rawSchoolId)
+        : null;
+      console.log('🔥 parsedSchoolId =', parsedSchoolId);
+      if (rawSchoolId != null && rawSchoolId !== '' && rawSchoolId !== 'undefined' && rawSchoolId !== 'null' && Number.isNaN(parsedSchoolId)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
       }
 
-      // Only super_admin can create classes
       if (user.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Only super admin can create classes' });
+        return res.status(403).json({ error: 'Only super_admin can create classes' });
       }
 
-      console.log('Attempting to create class', { name: trimmedName, schoolId: effectiveSchoolId, academicYearId, teacherId });
+      const resolvedSchoolId = null; // super_admin creates global classes only, schoolId in payload is accepted for compatibility but ignored
+      const pendingSchoolId = null;
+
+      // schoolId may be null for global classes; only name and academicYearId are required
+      if (!trimmedName || academicYearId == null) {
+        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}` });
+      }
+
+      console.log('Attempting to create global class', { name: trimmedName, academicYearId, teacherId });
 
       // Defensive duplicate check to avoid DB unique constraint errors
       try {
-        const existing = await db.select().from(classes).where(and(
-          eq(classes.name, trimmedName),
-          eq(classes.schoolId, Number(effectiveSchoolId)),
-          eq(classes.academicYearId, Number(academicYearId))
-        ));
+        const duplicateCondition = resolvedSchoolId != null
+          ? and(
+            eq(classes.name, trimmedName),
+            eq(classes.schoolId, Number(resolvedSchoolId)),
+            eq(classes.academicYearId, Number(academicYearId))
+          )
+          : and(
+            eq(classes.name, trimmedName),
+            sql`${classes.schoolId} IS NULL`,
+            eq(classes.academicYearId, Number(academicYearId))
+          );
+
+        const existing = await db.select().from(classes).where(duplicateCondition);
         if (existing && existing.length > 0) {
           return res.status(400).json({ error: `Classe déjà existante: ${trimmedName}` });
         }
@@ -1494,24 +1668,129 @@ async function startServer() {
       }
 
       try {
-        const result = await db.insert(classes).values({
+        const [newClass] = await db.insert(classes).values({
           name: trimmedName,
-          schoolId: Number(effectiveSchoolId),
+          schoolId: resolvedSchoolId,
           academicYearId: Number(academicYearId),
           teacherId: teacherId ? Number(teacherId) : null,
         }).returning();
-        res.status(201).json(result[0]);
+
+        if (pendingSchoolId) {
+          await db.insert(schoolClasses).values({
+            schoolId: pendingSchoolId,
+            classId: newClass.id,
+            status: 'pending',
+          });
+        }
+
+        console.log('✅ CLASS CREATED:', newClass);
+        console.log('✅ CREATED CLASS ID:', newClass.id);
+        console.log('✅ CLASS CREATED SUCCESSFULLY');
+
+        res.status(201).json({
+          ...newClass,
+          schoolId: newClass.schoolId ?? null,
+          status: pendingSchoolId ? 'pending' : undefined,
+        });
       } catch (insertErr: any) {
-        console.error('DB insert error for classes:', insertErr?.message || insertErr, insertErr);
+        console.error('ERROR OBJECT:', insertErr);
+        if (insertErr instanceof Error) {
+          console.error('MESSAGE:', insertErr.message);
+          console.error('STACK:', insertErr.stack);
+        }
+        console.dir(insertErr, { depth: null });
+        console.error('code:', insertErr?.code);
+        console.error('detail:', insertErr?.detail);
+        console.error('constraint:', insertErr?.constraint);
+        console.error('table:', insertErr?.table);
+        console.error('column:', insertErr?.column);
+
         // Postgres unique violation
         if (insertErr && insertErr.code === '23505') {
           return res.status(400).json({ error: `Classe déjà existante: ${trimmedName}` });
         }
         return res.status(500).json({ error: `Failed to create class: ${insertErr?.message || insertErr}` });
       }
+    } catch (error: any) {
+      console.error('POST /api/classes STACK:', error);
+      console.error(error instanceof Error ? error.stack : error);
+
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+  });
+
+  app.post('/api/schools/:schoolId/classes/:classId/approve', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const schoolId = Number(req.params.schoolId);
+      const classId = Number(req.params.classId);
+      if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
+
+      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
+      if (existing[0]) {
+        const [updated] = await db.update(schoolClasses)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)))
+          .returning();
+        return res.json(updated);
+      }
+
+      const [created] = await db.insert(schoolClasses).values({ schoolId, classId, status: 'approved' }).returning();
+      res.status(201).json(created);
     } catch (err: any) {
-      console.error('Error in classes POST:', err);
-      res.status(500).json({ error: `Failed to create class: ${err.message}` });
+      console.error('Error approving class:', err);
+      res.status(500).json({ error: 'Failed to approve class' });
+    }
+  });
+
+  app.post('/api/schools/:schoolId/classes/:classId/reject', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const schoolId = Number(req.params.schoolId);
+      const classId = Number(req.params.classId);
+      if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
+
+      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
+      if (existing[0]) {
+        const [updated] = await db.update(schoolClasses)
+          .set({ status: 'rejected', updatedAt: new Date() })
+          .where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)))
+          .returning();
+        return res.json(updated);
+      }
+
+      const [created] = await db.insert(schoolClasses).values({ schoolId, classId, status: 'rejected' }).returning();
+      res.status(201).json(created);
+    } catch (err: any) {
+      console.error('Error rejecting class:', err);
+      res.status(500).json({ error: 'Failed to reject class' });
     }
   });
 
@@ -1574,7 +1853,17 @@ async function startServer() {
       }
 
       const teachersList = await query;
-      const assignments = await db.select({ teacherId: classTeachers.teacherId, classId: classTeachers.classId }).from(classTeachers);
+      let assignmentsQuery = db
+        .select({ teacherId: classTeachers.teacherId, classId: classTeachers.classId })
+        .from(classTeachers)
+        .innerJoin(classes, eq(classTeachers.classId, classes.id))
+        .innerJoin(teachers, eq(classTeachers.teacherId, teachers.id));
+
+      if (user.role !== 'super_admin' && user.schoolId) {
+        assignmentsQuery = assignmentsQuery.where(eq(classes.schoolId, user.schoolId)) as any;
+      }
+
+      const assignments = await assignmentsQuery;
       console.log('GET /api/teachers - assignments count:', assignments.length);
       const assignmentMap = new Map<number, number[]>();
       assignments.forEach((item) => {
@@ -1697,14 +1986,14 @@ async function startServer() {
         })
         .from(parents)
         .innerJoin(users, eq(parents.userId, users.id))
-        .leftJoin(students, or(eq(parents.studentId, students.id), eq(students.parentId, parents.id)))
+        .leftJoin(students, and(eq(students.parentId, parents.id), eq(students.schoolId, parents.schoolId)))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(parents.schoolId, schools.id));
 
-      // apply query filters if provided (filter on student class/school when no parent class exists)
+      // apply query filters if provided
       console.debug('[api/parents] incoming filters:', { filterSchoolId, filterClassId, actor: actor?.role });
       if (filterSchoolId) {
-        query = query.where(or(eq(parents.schoolId, filterSchoolId), eq(students.schoolId, filterSchoolId))) as any;
+        query = query.where(eq(parents.schoolId, filterSchoolId)) as any;
       }
       if (filterClassId) {
         query = query.where(eq(students.classId, filterClassId)) as any;
@@ -1712,7 +2001,7 @@ async function startServer() {
 
       if (actor.role !== 'super_admin') {
         if (actor.schoolId) {
-          query = query.where(or(eq(parents.schoolId, actor.schoolId), eq(students.schoolId, actor.schoolId))) as any;
+          query = query.where(eq(parents.schoolId, actor.schoolId)) as any;
         } else {
           return res.json([]);
         }
@@ -1742,12 +2031,21 @@ async function startServer() {
           let resolvedSchoolId = schoolId != null && schoolId !== '' ? parseInt(String(schoolId), 10) : null;
           if (Number.isNaN(resolvedSchoolId as number)) resolvedSchoolId = null;
 
-          if (parsedStudentId && resolvedSchoolId == null) {
+          if (parsedStudentId) {
             const [studentRow] = await db
-              .select({ schoolId: students.schoolId })
+              .select({ parentId: students.parentId, schoolId: students.schoolId })
               .from(students)
               .where(eq(students.id, parsedStudentId));
-            if (studentRow && studentRow.schoolId != null) {
+
+            if (!studentRow) {
+              return res.status(400).json({ error: 'Student not found for provided studentId' });
+            }
+
+            if (studentRow.parentId != null) {
+              return res.status(400).json({ error: 'Student is already linked to another parent' });
+            }
+
+            if (resolvedSchoolId == null && studentRow.schoolId != null) {
               resolvedSchoolId = studentRow.schoolId;
             }
           }
@@ -1776,14 +2074,19 @@ async function startServer() {
             schoolId: effectiveSchoolId ?? null,
           }).returning();
 
-          console.debug('[api/parents POST] parent inserted:', parentResult[0]);
+          const createdParent = parentResult[0];
+          if (parsedStudentId) {
+            await db.update(students).set({ parentId: createdParent.id }).where(eq(students.id, parsedStudentId));
+          }
+
+          console.debug('[api/parents POST] parent inserted:', createdParent);
           res.status(201).json({
             ...createdUser,
-            parentId: parentResult[0].id,
+            parentId: createdParent.id,
             phone,
             address,
-            studentId: parentResult[0].studentId,
-            schoolId: parentResult[0].schoolId ?? null,
+            studentId: createdParent.studentId,
+            schoolId: createdParent.schoolId ?? null,
           });
         } catch (err: any) {
           console.error('Error recording parent info:', err);
@@ -1816,7 +2119,7 @@ async function startServer() {
         })
         .from(parents)
         .leftJoin(users, eq(parents.userId, users.id))
-        .leftJoin(students, eq(parents.studentId, students.id))
+        .leftJoin(students, and(eq(students.parentId, parents.id), eq(students.schoolId, parents.schoolId)))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(parents.schoolId, schools.id))
         .where(eq(parents.id, id));
@@ -2172,23 +2475,14 @@ async function startServer() {
             return res.json([]);
           }
 
-          const childStudentIds = new Set<number>();
-          if (parentProfile.studentId) {
-            childStudentIds.add(parentProfile.studentId);
-          }
-
           const ownedStudents = await db.select({ id: students.id }).from(students).where(eq(students.parentId, parentProfile.id));
-          ownedStudents.forEach((s) => {
-            if (s.id != null) {
-              childStudentIds.add(s.id);
-            }
-          });
+          const childStudentIds = ownedStudents.map((s) => s.id).filter((id): id is number => id != null);
 
-          if (childStudentIds.size === 0) {
+          if (childStudentIds.length === 0) {
             return res.json([]);
           }
 
-          query = query.where(inArray(absences.studentId, Array.from(childStudentIds))) as any;
+          query = query.where(inArray(absences.studentId, childStudentIds)) as any;
         } else {
           // School admin and teacher see only their school's absences
           if (actor.schoolId) {
@@ -2311,34 +2605,95 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      const user = await resolveActor(req);
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
+      const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+      const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
+      const targetSchoolId = user.role === 'school_admin'
+        ? user.schoolId
+        : user.role === 'teacher'
+          ? user.schoolId
+          : schoolIdParam;
 
-      const allSubjects = await db.select().from(subjects);
-      if (user.role === 'school_admin' && user.schoolId) {
-        const statusRows = await db.select().from(schoolSubjects).where(eq(schoolSubjects.schoolId, user.schoolId));
-        const statusMap = new Map(statusRows.map((row) => [row.subjectId, row.status]));
-        res.json(allSubjects.map((subject) => ({
+      if (user.role === 'teacher') {
+        if (!targetSchoolId) {
+          return res.status(403).json({ error: 'Teacher school context is required' });
+        }
+
+        const approvedRows = await db
+          .select({
+            id: subjects.id,
+            schoolId: subjects.schoolId,
+            name: subjects.name,
+            code: subjects.code,
+            status: schoolSubjects.status,
+            createdAt: subjects.createdAt,
+            updatedAt: subjects.updatedAt,
+          })
+          .from(subjects)
+          .innerJoin(
+            schoolSubjects,
+            and(
+              eq(subjects.id, schoolSubjects.subjectId),
+              eq(schoolSubjects.schoolId, targetSchoolId),
+              eq(schoolSubjects.status, 'approved')
+            )
+          );
+
+        res.json(approvedRows.map((subject) => ({
           ...subject,
           schoolId: subject.schoolId ?? null,
-          status: statusMap.get(subject.id) ?? 'pending',
         })));
         return;
       }
 
-      const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
-      if (user.role === 'super_admin' && schoolIdParam) {
-        const statusRows = await db.select().from(schoolSubjects).where(eq(schoolSubjects.schoolId, schoolIdParam));
+      if (approvedOnly && !targetSchoolId) {
+        if (user.role === 'super_admin') {
+          const approvedRows = await db
+            .select({
+              id: subjects.id,
+              schoolId: subjects.schoolId,
+              name: subjects.name,
+              code: subjects.code,
+              status: schoolSubjects.status,
+              createdAt: subjects.createdAt,
+              updatedAt: subjects.updatedAt,
+            })
+            .from(subjects)
+            .innerJoin(
+              schoolSubjects,
+              and(
+                eq(subjects.id, schoolSubjects.subjectId),
+                eq(schoolSubjects.status, 'approved')
+              )
+            );
+
+          res.json(approvedRows.map((subject) => ({
+            ...subject,
+            schoolId: subject.schoolId ?? null,
+          })));
+          return;
+        }
+
+        return res.status(403).json({ error: 'School context is required' });
+      }
+
+      const allSubjects = await db.select().from(subjects);
+      if (targetSchoolId) {
+        const statusRows = await db.select().from(schoolSubjects).where(eq(schoolSubjects.schoolId, targetSchoolId));
         const statusMap = new Map(statusRows.map((row) => [row.subjectId, row.status]));
-        res.json(allSubjects.map((subject) => ({
+        let result = allSubjects.map((subject) => ({
           ...subject,
           schoolId: subject.schoolId ?? null,
-          status: statusMap.get(subject.id) ?? undefined,
-        })));
+          status: statusMap.get(subject.id) ?? 'pending',
+        }));
+
+        if (approvedOnly) {
+          result = result.filter((subject) => subject.status === 'approved');
+        }
+
+        res.json(result);
         return;
       }
 
@@ -2670,10 +3025,28 @@ async function startServer() {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
       }
 
+      const normalizedSubject = String(subject).trim();
+      const [approvedSubject] = await db
+        .select({ id: subjects.id })
+        .from(subjects)
+        .innerJoin(
+          schoolSubjects,
+          and(
+            eq(subjects.id, schoolSubjects.subjectId),
+            eq(schoolSubjects.schoolId, classRecord.schoolId),
+            eq(schoolSubjects.status, 'approved')
+          )
+        )
+        .where(eq(subjects.name, normalizedSubject));
+
+      if (!approvedSubject) {
+        return res.status(400).json({ error: 'La matière n’est pas approuvée pour cette école' });
+      }
+
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
-        subject,
+        subject: normalizedSubject,
         title,
         coefficient: coefficient ? parseInt(coefficient) : 1,
         maxScore: maxScore ? parseInt(maxScore) : 20,
@@ -2745,12 +3118,7 @@ async function startServer() {
             return res.json([]);
           }
 
-          query = query.where(
-            or(
-              eq(students.parentId, parentProfile.id),
-              eq(students.id, parentProfile.studentId)
-            )
-          ) as any;
+          query = query.where(eq(students.parentId, parentProfile.id)) as any;
         } else {
           // School admin and other staff see only their school's grades
           if (user.schoolId) {
@@ -2944,29 +3312,18 @@ async function startServer() {
       let parentProfile: { id: number; studentId?: number | null } | null = null;
       if (user.role === 'parent') {
         const parentRows = await db
-          .select({ id: parents.id, studentId: parents.studentId })
+          .select({ id: parents.id })
           .from(parents)
           .where(eq(parents.userId, user.id));
 
         if (parentRows.length > 0) {
-          parentProfile = parentRows[0];
-          const studentIds = new Set<number>();
-          if (parentProfile.studentId) {
-            studentIds.add(parentProfile.studentId);
-          }
-
+          const parentProfileId = parentRows[0].id;
           const ownedStudents = await db
             .select({ id: students.id })
             .from(students)
-            .where(eq(students.parentId, parentProfile.id));
+            .where(eq(students.parentId, parentProfileId));
 
-          ownedStudents.forEach((studentRow) => {
-            if (studentRow.id != null) {
-              studentIds.add(studentRow.id);
-            }
-          });
-
-          parentChildIds = Array.from(studentIds);
+          parentChildIds = ownedStudents.map((studentRow) => studentRow.id).filter((id): id is number => id != null);
         } else {
           parentChildIds = [];
         }

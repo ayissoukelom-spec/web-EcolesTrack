@@ -217,7 +217,7 @@ export default function AppShell() {
     await fetchAllData(false);
   };
 
-  const handleAddClass = async (data: { name: string; schoolId: number; academicYearId: number; teacherId?: number }) => {
+  const handleAddClass = async (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => {
     await apiFetch('/api/classes', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData(false);
   };

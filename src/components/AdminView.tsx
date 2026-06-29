@@ -25,20 +25,6 @@ import { sortClasses } from '../lib/classOrdering';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 
-const teacherSpecializations = [
-  'Anglais',
-  'Français',
-  'Histoire-Géographie',
-  'Physique-Chimie',
-  'SVT',
-  'ECM',
-  'Couture',
-  'Philosophie',
-  'Allemand',
-  'Espagnol',
-  'Mathématiques',
-] as const;
-
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
     for (let i = 0; i < records.length; i++) {
@@ -371,11 +357,12 @@ interface AdminViewProps {
   parentsList: Parent[];
   usersList: User[];
   subjectsList?: any[];
+  approvedSubjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
-  onAddClass: (data: { name: string; schoolId: number; academicYearId: number; teacherId?: number }) => Promise<void>;
+  onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
   onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string }) => void;
@@ -405,6 +392,7 @@ export default function AdminView({
   studentsList,
   parentsList,
   subjectsList = [],
+  approvedSubjectsList = [],
   onAddSchool,
   onUpdateSchool,
   onUpdateStudent,
@@ -430,6 +418,16 @@ export default function AdminView({
   onRejectSubject,
   currentSchoolId,
 }: AdminViewProps) {
+  const teacherSpecializations = Array.from(new Set(
+    subjectsList
+      .map((subject: any) => String(subject.name || '').trim())
+      .filter(Boolean)
+  ));
+
+  const approvedTeacherSpecializations = (approvedSubjectsList || [])
+    .map((subject: any) => ({ id: String(subject.id), name: String(subject.name || '').trim() }))
+    .filter((subject) => subject.name);
+
   const getDefaultTab = () => {
     if (typeof window === 'undefined') return userRole === 'super_admin' ? 'schools' : 'years';
     const savedTab = window.localStorage.getItem('ecoletrack-admin-active-tab') as
@@ -732,7 +730,7 @@ export default function AdminView({
         return;
       }
 
-      setStudentForm({ ...studentForm, teacherId: String(resolvedTeacherId) });
+      setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
       setNewTeacherMode(false);
       setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
     } catch (err: any) {
@@ -774,32 +772,28 @@ export default function AdminView({
       setYearForm({ name: '2026-2027', isActive: true, schoolId: '' });
     } else if (activeTab === 'classes') {
       const className = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
-      if (!classForm.schoolId) {
-        setStudentError('Veuillez sélectionner une école pour la classe.');
-        return;
-      }
       if (!className.trim()) {
         setStudentError('Veuillez sélectionner au moins un champ pour créer une classe.');
         return;
       }
-      const schoolId = parseInt(classForm.schoolId);
-      // Check for duplicate class name in the same school and academic year
-      const isDuplicate = classesList.some(c => 
-        c.name.trim() === className.trim() && 
-        c.schoolId === schoolId && 
-        c.academicYearId === defaultAcademicYearId
+      const schoolId = classForm.schoolId ? parseInt(classForm.schoolId) : null;
+      const isDuplicate = classesList.some(c =>
+        c.name.trim() === className.trim() &&
+        c.academicYearId === defaultAcademicYearId &&
+        ((schoolId == null && (c.schoolId == null)) || c.schoolId === schoolId)
       );
       if (isDuplicate) {
-        setStudentError(`Une classe nommée "${className}" existe déjà dans cette école pour cette année académique.`);
+        setStudentError(`Une classe nommée "${className}" existe déjà ${schoolId != null ? 'dans cette école' : 'dans le catalogue global'} pour cette année académique.`);
         return;
       }
       try {
-        await onAddClass({
+        const payload: any = {
           name: className,
-          schoolId,
-          academicYearId: defaultAcademicYearId,
+          academicYearId: Number(defaultAcademicYearId),
           teacherId: undefined,
-        });
+          schoolId,
+        };
+        await onAddClass(payload);
         setClassForm({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
         setStudentError(null);
         setActiveTab('classes');
@@ -884,6 +878,7 @@ export default function AdminView({
           phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
           address: newParentForm.address,
           schoolId: targetSchoolId,
+          gender: newParentForm.gender,
         });
         const resolvedParentId = createdParent?.parentId || createdParent?.id;
         if (!resolvedParentId) {
@@ -892,7 +887,7 @@ export default function AdminView({
         }
         setStudentForm({ ...studentForm, parentId: String(resolvedParentId) });
         setNewParentMode(false);
-        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '' });
+        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
         setStudentError(null);
         return;
       }
@@ -903,17 +898,22 @@ export default function AdminView({
           return;
         }
         const createdTeacher = await onAddTeacher({
-          ...newTeacherForm,
+          name: newTeacherForm.name,
+          email: newTeacherForm.email,
+          phone: newTeacherForm.phone,
+          specialization: newTeacherForm.specializations,
           schoolId: targetSchoolId,
+          classIds: newTeacherForm.assignedClassIds,
+          gender: newTeacherForm.gender,
         });
         const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
         if (!resolvedTeacherId) {
           setStudentError('Impossible de créer l’enseignant.');
           return;
         }
-        setStudentForm({ ...studentForm, teacherId: String(resolvedTeacherId) });
+        setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
         setNewTeacherMode(false);
-        setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], gender: '' });
+        setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
         setStudentError(null);
         return;
       }
@@ -943,7 +943,7 @@ export default function AdminView({
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
       setNewTeacherMode(false);
-      setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], gender: '' });
+      setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
     }
     setIsModalOpen(false);
   };
@@ -2640,17 +2640,15 @@ export default function AdminView({
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Spécialisation(s) (enseignant)</label>
                   <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3">
-                    {teacherSpecializations.map((subject) => {
+                    {approvedTeacherSpecializations.map((subject) => {
                       const selectedValues = Array.isArray(newUserForm.specialization)
                         ? newUserForm.specialization
-                        : typeof newUserForm.specialization === 'string' && newUserForm.specialization
-                          ? [newUserForm.specialization]
-                          : [];
-                      const isSelected = selectedValues.includes(subject);
+                        : [];
+                      const isSelected = selectedValues.includes(subject.id);
 
                       return (
                         <label
-                          key={subject}
+                          key={subject.id}
                           className="flex items-center gap-2 rounded-xl border px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer"
                         >
                           <input
@@ -2658,13 +2656,13 @@ export default function AdminView({
                             checked={isSelected}
                             onChange={(e) => {
                               const nextValues = e.target.checked
-                                ? [...selectedValues, subject]
-                                : selectedValues.filter((value) => value !== subject);
+                                ? [...selectedValues, subject.id]
+                                : selectedValues.filter((value) => value !== subject.id);
                               setNewUserForm({ ...newUserForm, specialization: nextValues });
                             }}
                             className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                           />
-                          <span className="text-sm">{subject}</span>
+                          <span className="text-sm">{subject.name}</span>
                         </label>
                       );
                     })}
@@ -2768,8 +2766,14 @@ export default function AdminView({
                         const resolvedSchoolId = newUserForm.schoolId
                           ? parseInt(newUserForm.schoolId)
                           : newUserForm.role === 'teacher' && userRole === 'school_admin'
-                            ? (currentSchoolId ?? getSimulatedSchoolId())
+                            ? (currentSchoolId ?? getSimulatedSchoolId() ?? undefined)
                             : undefined;
+                        const resolvedSpecialization = newUserForm.role === 'teacher'
+                          ? approvedTeacherSpecializations
+                              .filter((subject) => Array.isArray(newUserForm.specialization) && newUserForm.specialization.includes(subject.id))
+                              .map((subject) => subject.name)
+                          : newUserForm.specialization;
+
                         const created = await onCreateUser({
                           uid: newUserForm.uid || undefined,
                           email: newUserForm.email.trim(),
@@ -2778,7 +2782,7 @@ export default function AdminView({
                           schoolId: resolvedSchoolId,
                           academicYearId: newUserForm.role === 'school_admin' ? parseInt(newUserForm.academicYearId) : undefined,
                           phone: newUserForm.role !== 'parent' ? `+228${phoneDigits}` : newUserForm.phone,
-                          specialization: newUserForm.specialization,
+                          specialization: resolvedSpecialization,
                           gender: newUserForm.gender || undefined,
                           password: newUserPassword,
                           classIds: newUserForm.role === 'teacher' ? newUserAssignedClassIds : undefined,
@@ -3089,7 +3093,7 @@ export default function AdminView({
                 {userRole === 'super_admin' && (
                   <button
                     onClick={() => {
-                      setClassForm({ cycle: '', stream: '', section: '', group: '', schoolId: String(currentSchoolId || schoolsList[0]?.id || '') });
+                      setClassForm({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
                       setActiveTab('classes');
                       setStudentError(null);
                       setIsModalOpen(true);
@@ -3220,6 +3224,7 @@ export default function AdminView({
                                 academicYearId: '',
                                 phone: (user as any).phone || '',
                                 specialization: (user as any).specialization || '',
+                                gender: (user as any).gender || '',
                                 assignedClassIds,
                               });
                               setEditUserOpen(true);
@@ -3296,8 +3301,9 @@ export default function AdminView({
                         classId: '',
                         parentId: '',
                         academicYearId: String(yearsList.length === 1 ? yearsList[0]?.id : (defaultAcademicYearId || '')),
-                        teacherId: '',
+                        teacherIds: [],
                         schoolAdminId: userRole === 'school_admin' ? String(currentUserId || '') : '',
+                        gender: '',
                       });
                       setStudentError(null);
                       setActiveTab('students');
@@ -3514,6 +3520,7 @@ export default function AdminView({
                             academicYearId: (user as any).academicYearId ? String((user as any).academicYearId) : '',
                             phone: normalizedPhone,
                             specialization: (user as any).specialization || '',
+                            gender: (user as any).gender || '',
                             assignedClassIds,
                           });
                           setEditUserOpen(true);
@@ -3555,7 +3562,7 @@ export default function AdminView({
         <SubjectsView
           subjectsList={subjectsList}
           userRole={userRole}
-          schoolId={currentSchoolId}
+          schoolId={currentSchoolId != null ? currentSchoolId : undefined}
           schoolsList={schoolsList}
           onAddSubject={onAddSubject || (() => {})}
           onUpdateSubject={onUpdateSubject || (() => {})}

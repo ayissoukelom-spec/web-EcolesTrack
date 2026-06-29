@@ -77,6 +77,23 @@ export async function ensureClassTeachersTableExists() {
   }
 }
 
+export async function ensureSchoolClassesTableExists() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS school_classes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL REFERENCES schools(id),
+      class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
+    );`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS school_classes_school_id_class_id_idx ON school_classes (school_id, class_id);`);
+  } catch (err: any) {
+    console.error('Failed to ensure school_classes table exists:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureUsersTableSchema() {
   try {
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);

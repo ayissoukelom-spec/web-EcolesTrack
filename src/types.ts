@@ -92,12 +92,13 @@ export interface Parent {
 
 export interface Class {
   id: number;
-  schoolId: number;
+  schoolId?: number | null;
   academicYearId: number;
   name: string;
   teacherId?: number;
   teacherName?: string;
   yearName?: string;
+  status?: 'pending' | 'approved' | 'rejected' | string;
 }
 
 export interface Student {

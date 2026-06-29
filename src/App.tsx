@@ -82,6 +82,7 @@ export default function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
+  const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
 
   const simulatedUser = getSimulatedUser();
   const currentUser = simulatedUser
@@ -188,6 +189,7 @@ export default function App() {
         '/api/grades',
         '/api/notifications',
         '/api/subjects',
+        '/api/subjects?approvedOnly=true',
         '/api/simulation/users',
       ];
 
@@ -211,6 +213,7 @@ export default function App() {
       if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
       if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
       if (Array.isArray(map['/api/subjects'])) setSubjectsList(map['/api/subjects']);
+      if (Array.isArray(map['/api/subjects?approvedOnly=true'])) setApprovedSubjectsList(map['/api/subjects?approvedOnly=true']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
 
       if (currentRole === 'super_admin') {
@@ -335,11 +338,15 @@ export default function App() {
     }
   };
 
-  const handleAddClass = async (data: { name: string; schoolId: number; academicYearId: number; teacherId?: number }) => {
+  const handleAddClass = async (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => {
     try {
+      const payload = {
+        ...data,
+        schoolId: data.schoolId ?? null,
+      };
       await apiFetch('/api/classes', {
         method: 'POST',
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       await fetchAllData(false);
     } catch (err: any) {
@@ -464,7 +471,7 @@ export default function App() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => {
     try {
       const created = await apiFetch('/api/admin/users', {
         method: 'POST',
@@ -558,6 +565,15 @@ export default function App() {
     }
   };
 
+  const refreshApprovedSubjects = async () => {
+    try {
+      const approved = await apiFetch('/api/subjects?approvedOnly=true');
+      if (Array.isArray(approved)) setApprovedSubjectsList(approved);
+    } catch (err: any) {
+      console.warn('Unable to refresh approved subject list:', err);
+    }
+  };
+
   const handleAddGrade = async (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => {
     try {
       const createdOrUpdatedGrade = await apiFetch('/api/grades', {
@@ -613,6 +629,7 @@ export default function App() {
       setSubjectsList((prev) =>
         prev.map((s) => (s.id === id ? updatedSubject : s))
       );
+      await refreshApprovedSubjects();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
@@ -625,6 +642,7 @@ export default function App() {
         method: 'DELETE',
       });
       setSubjectsList((prev) => prev.filter((s) => s.id !== id));
+      await refreshApprovedSubjects();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
@@ -637,6 +655,7 @@ export default function App() {
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/approve`, { method: 'POST' });
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'approved' } : s)));
+      await refreshApprovedSubjects();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
@@ -649,6 +668,7 @@ export default function App() {
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/reject`, { method: 'POST' });
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'rejected' } : s)));
+      await refreshApprovedSubjects();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
@@ -692,6 +712,7 @@ export default function App() {
         teachersList={teachersList}
         studentsList={studentsList}
         yearsList={yearsList}
+        approvedSubjectsList={approvedSubjectsList}
         onRoleChange={handleRoleChange}
         onLogout={handleLogout}
         onRefreshData={fetchAllData}
@@ -888,7 +909,7 @@ export default function App() {
 
               {activeTab === 'administration' && (
                 <ErrorBoundary>
-                  <AdminView
+                          <AdminView
                   userRole={currentRole}
                   schoolsList={schoolsList}
                   yearsList={yearsList}
@@ -898,6 +919,7 @@ export default function App() {
                   parentsList={parentsList}
                   usersList={usersList}
                   subjectsList={subjectsList}
+                  approvedSubjectsList={approvedSubjectsList}
                   onAddSchool={handleAddSchool}
                   onUpdateSchool={handleUpdateSchool}
                   onUpdateStudent={handleUpdateStudent}
@@ -949,6 +971,7 @@ export default function App() {
                   onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                   teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
+                  approvedSubjectsList={approvedSubjectsList}
                   teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
                   onAddEvaluation={handleAddEvaluation}
                   onAddGrade={handleAddGrade}

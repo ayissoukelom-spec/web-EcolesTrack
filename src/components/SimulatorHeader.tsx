@@ -13,11 +13,12 @@ interface SimulatorHeaderProps {
   studentsList?: Student[];
   parentsList?: Parent[];
   yearsList: AcademicYear[];
+  approvedSubjectsList?: { id: number; name: string; status?: string }[];
   onRoleChange: (newRole: string) => void;
   onRefreshData: () => void;
   isSyncing: boolean;
   onManageAccounts?: () => void;
-  onLogout?: () => Promise<void>;
+  onLogout?: () => void;
 }
 
 export default function SimulatorHeader({
@@ -28,6 +29,7 @@ export default function SimulatorHeader({
   studentsList = [],
   parentsList = [],
   yearsList = [],
+  approvedSubjectsList = [],
   onRoleChange,
   onRefreshData,
   isSyncing,
@@ -147,17 +149,9 @@ export default function SimulatorHeader({
   const createTeacherSchoolId = createRole === 'teacher'
     ? (currentRole === 'school_admin' ? Number(simUser?.schoolId) : (Number(createSchoolId) || undefined))
     : undefined;
-  const teacherSpecializations = [
-    'Anglais',
-    'Français',
-    'Histoire-Géographie',
-    'Physique-Chimie',
-    'SVT',
-    'Mathématiques',
-    'Philosophie',
-    'Espagnol',
-    'Allemand',
-  ];
+  const teacherSpecializations = approvedSubjectsList && approvedSubjectsList.length > 0
+    ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
+    : [];
   const roles = [
     {
       id: 'super_admin',

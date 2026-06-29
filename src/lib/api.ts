@@ -149,14 +149,25 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     },
   };
 
-  // Client-side validation: if sending JSON body for create/update, ensure name fields don't contain digits.
+  // Client-side validation: if sending JSON body for create/update, validate name fields.
   try {
     const method = (mergedOptions.method || 'GET').toString().toUpperCase();
     const contentType = (mergedOptions.headers as any)?.['Content-Type'] || (mergedOptions.headers as any)?.['content-type'] || '';
-    if (['POST', 'PUT', 'PATCH'].includes(method) && contentType.includes('application/json') && mergedOptions.body && typeof mergedOptions.body === 'string') {
+    const isClassEndpoint = normalizedEndpoint === '/api/classes' || normalizedEndpoint.startsWith('/api/classes/');
+
+    const isJsonBody = ['POST', 'PUT', 'PATCH'].includes(method) && contentType.includes('application/json') && mergedOptions.body && typeof mergedOptions.body === 'string';
+    if (isJsonBody) {
       try {
         const parsed = JSON.parse(mergedOptions.body as string);
-        validateClientNames(parsed);
+        if (!isClassEndpoint) {
+          validateClientNames(parsed);
+        }
+
+        if (isClassEndpoint && method === 'POST' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          parsed.schoolId = parsed.schoolId ?? null;
+          mergedOptions.body = JSON.stringify(parsed);
+          console.log('🚀 FINAL REQUEST SENT =', parsed);
+        }
       } catch (e) {
         if ((e as any).message && (e as any).field) throw e;
         // if JSON parse failed, let the request proceed (server will validate)
