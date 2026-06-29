@@ -382,8 +382,6 @@ interface AdminViewProps {
   onDeleteSubject?: (id: number) => Promise<void>;
   onApproveSubject?: (id: number) => Promise<any>;
   onRejectSubject?: (id: number) => Promise<any>;
-  onApproveClass?: (id: number) => Promise<any>;
-  onRejectClass?: (id: number) => Promise<any>;
   currentSchoolId?: number | null;
 }
 
@@ -627,6 +625,15 @@ export default function AdminView({
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
+
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
+    if (schoolId == null) {
+      if (cls.status != null) return cls.status === 'approved';
+      return true;
+    }
+    if (cls.schoolId === schoolId) return true;
+    return cls.schoolId == null && cls.status === 'approved';
+  };
 
   const currentYear = new Date().getFullYear();
   const birthYearRangeStart = currentYear - 60;
@@ -2508,7 +2515,10 @@ export default function AdminView({
                       </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
                         {(classesList || [])
-                          .filter((cls) => !newUserForm.schoolId || cls.schoolId === Number(newUserForm.schoolId) || (userRole === 'school_admin' && cls.schoolId === currentSchoolId))
+                          .filter((cls) => {
+                            const selectedSchoolId = newUserForm.schoolId ? Number(newUserForm.schoolId) : (userRole === 'school_admin' ? currentSchoolId : undefined);
+                            return !selectedSchoolId || isApprovedForSchool(cls, selectedSchoolId);
+                          })
                           .map((cls) => (
                             <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
                               <input
@@ -2526,7 +2536,10 @@ export default function AdminView({
                               <span className="truncate">{cls.name}</span>
                             </label>
                           ))}
-                        {(classesList || []).filter((cls) => !newUserForm.schoolId || cls.schoolId === Number(newUserForm.schoolId)).length === 0 && (
+                        {(classesList || []).filter((cls) => {
+                          const selectedSchoolId = newUserForm.schoolId ? Number(newUserForm.schoolId) : (userRole === 'school_admin' ? currentSchoolId : undefined);
+                          return !selectedSchoolId || isApprovedForSchool(cls, selectedSchoolId);
+                        }).length === 0 && (
                           <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
                         )}
                       </div>

@@ -149,6 +149,15 @@ export default function SimulatorHeader({
   const createTeacherSchoolId = createRole === 'teacher'
     ? (currentRole === 'school_admin' ? Number(simUser?.schoolId) : (Number(createSchoolId) || undefined))
     : undefined;
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
+    if (schoolId == null) {
+      if (cls.status != null) return cls.status === 'approved';
+      return true;
+    }
+    if (cls.schoolId === schoolId) return true;
+    return cls.schoolId == null && cls.status === 'approved';
+  };
+
   const teacherSpecializations = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
     : [];
@@ -731,7 +740,7 @@ export default function SimulatorHeader({
                       <option value="">-- Choisir une classe --</option>
                       {createParentSchoolId ? (
                         (classesList || [])
-                          .filter((cls) => String(cls.schoolId) === createParentSchoolId)
+                          .filter((cls) => String(cls.schoolId) === createParentSchoolId && isApprovedForSchool(cls, Number(createParentSchoolId)))
                           .map((cls) => (
                             <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
                           ))
@@ -840,7 +849,7 @@ export default function SimulatorHeader({
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 text-sm">
                       {(classesList || [])
-                        .filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId)
+                        .filter((cls) => !createTeacherSchoolId || isApprovedForSchool(cls, createTeacherSchoolId))
                         .map((cls) => (
                           <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
                             <input
@@ -858,7 +867,7 @@ export default function SimulatorHeader({
                             <span className="truncate">{cls.name}</span>
                           </label>
                         ))}
-                      {(classesList || []).filter((cls) => !createTeacherSchoolId || cls.schoolId === createTeacherSchoolId).length === 0 && (
+                      {(classesList || []).filter((cls) => !createTeacherSchoolId || isApprovedForSchool(cls, createTeacherSchoolId)).length === 0 && (
                         <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
                       )}
                     </div>

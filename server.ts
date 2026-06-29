@@ -1630,12 +1630,16 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid schoolId' });
       }
 
-      if (user.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Only super_admin can create classes' });
+      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const resolvedSchoolId = null; // super_admin creates global classes only, schoolId in payload is accepted for compatibility but ignored
-      const pendingSchoolId = null;
+      if (user.role === 'school_admin' && !user.schoolId) {
+        return res.status(403).json({ error: 'School admin must belong to a school' });
+      }
+
+      const resolvedSchoolId = user.role === 'super_admin' ? parsedSchoolId : null;
+      const pendingSchoolId = user.role === 'school_admin' ? user.schoolId : null;
 
       // schoolId may be null for global classes; only name and academicYearId are required
       if (!trimmedName || academicYearId == null) {
