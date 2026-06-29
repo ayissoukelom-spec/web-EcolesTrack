@@ -20,7 +20,7 @@ import {
   Eye,
   BookOpen
 } from 'lucide-react';
-import { getSimulatedSchoolId, getSimulatedUser } from '../lib/api.ts';
+import { getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { sortClasses } from '../lib/classOrdering';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
@@ -372,7 +372,7 @@ interface AdminViewProps {
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
   onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
-  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string; classIds?: number[] }) => Promise<any>;
+  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; classIds?: number[] }) => Promise<any>;
   onSetPassword?: (userId: number, password: string) => Promise<any>;
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
@@ -559,30 +559,10 @@ export default function AdminView({
   );
 
   const simulatedUser = getSimulatedUser();
-  const currentTeacherUserId = simulatedUser?.uid || null;
-  
-  // Get current user for school_admin to pre-fill schoolAdminId
-  const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid) || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
+  const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid)
+    || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
   const currentUserId = currentUser?.id;
-  
-  // Robust resolution of the current teacher profile:
-  // 1) try teachersList by email
-  // 2) try to find corresponding user in usersList by uid/email and then find teacher by userId
-  const currentTeacher = (() => {
-    if (userRole !== 'teacher') return undefined;
-    const simEmail = simulatedUser?.email?.toLowerCase?.() ?? null;
-    // 1) match by teacher email
-    const byEmail = teachersList.find((t) => t.email && simEmail && t.email.toLowerCase() === simEmail);
-    if (byEmail) return byEmail;
-    // 2) match by simulated uid or email to a User, then find teacher by userId
-    const matchedUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid) || (u.email && simEmail && u.email.toLowerCase() === simEmail));
-    if (matchedUser) {
-      const byUserId = teachersList.find((t) => t.userId === matchedUser.id);
-      if (byUserId) return byUserId;
-    }
-    return undefined;
-  })();
-
+  const currentTeacher = findTeacherProfileFromSimulatedUser(userRole, simulatedUser, teachersList, usersList);
   const currentTeacherClassIds = currentTeacher ? (currentTeacher.classIds || []) : [];
 
   const currentParent = (() => {
@@ -1342,7 +1322,7 @@ export default function AdminView({
   const [parentDetail, setParentDetail] = useState<Parent | null>(null);
   const [editUserOpen, setEditUserOpen] = useState(false);
   const [userToEdit, setUserToEdit] = useState<User | null>(null);
-  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '', gender: '', assignedClassIds: [] as number[] });
+  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', assignedClassIds: [] as number[] });
   const [editUserPassword, setEditUserPassword] = useState('');
   const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
   const [editUserError, setEditUserError] = useState<string | null>(null);
@@ -1417,6 +1397,11 @@ export default function AdminView({
   };
 
   const openTeacherDetail = (teacher: Teacher) => {
+    console.log('DEBUG_TEACHER_DETAIL teacher =', teacher);
+    console.log('DEBUG_TEACHER_DETAIL classIds =', teacher.classIds);
+    console.log('DEBUG_TEACHER_DETAIL classesList =', classesList);
+    const resolvedClasses = (teacher.classIds || []).map((id) => ({ id, className: classesList.find((c) => c.id === id)?.name }));
+    console.log('DEBUG_TEACHER_DETAIL resolvedClasses =', resolvedClasses);
     setTeacherDetail(teacher);
     setTeacherDetailOpen(true);
   };
@@ -1921,28 +1906,38 @@ export default function AdminView({
               <div className="space-y-3 text-sm">
                 <input className="w-full p-2 border rounded" placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
                 <input className="w-full p-2 border rounded" placeholder="M. Koffi" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                <select className="w-full p-2 border rounded" value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}>
-                  {userRole === 'super_admin' && (
-                    <>
-                      <option value="super_admin">Super Admin</option>
-                      <option value="school_admin">Admin École</option>
-                    </>
-                  )}
-                  <option value="teacher">Enseignant</option>
-                  <option value="parent">Parent</option>
-                </select>
-                <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds })}>
-                  <option value="">-- Sélectionner une école (optionnel) --</option>
-                  {schoolsList.map((s) => (<option key={s.id} value={String(s.id)}>{s.name}</option>))}
-                </select>
+                {userToEdit.role === 'teacher' ? (
+                  <div className="w-full p-2 border rounded bg-slate-50 text-slate-700">Enseignant</div>
+                ) : (
+                  <select className="w-full p-2 border rounded" value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}>
+                    {userRole === 'super_admin' && (
+                      <>
+                        <option value="super_admin">Super Admin</option>
+                        <option value="school_admin">Admin École</option>
+                      </>
+                    )}
+                    <option value="teacher">Enseignant</option>
+                    <option value="parent">Parent</option>
+                  </select>
+                )}
+                {userToEdit.role === 'teacher' && userRole === 'school_admin' ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                    {autoAssignedSchoolName}
+                  </div>
+                ) : (
+                  <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds })}>
+                    <option value="">-- Sélectionner une école (optionnel) --</option>
+                    {schoolsList.map((s) => (<option key={s.id} value={String(s.id)}>{s.name}</option>))}
+                  </select>
+                )}
                 {userForm.role === 'teacher' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Classes attribuées</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
                       {(classesList || [])
                         .filter((c) => {
-                          if (!userForm.schoolId) return true;
-                          return c.schoolId === parseInt(userForm.schoolId, 10);
+                          const selectedSchoolId = userForm.schoolId ? Number(userForm.schoolId) : undefined;
+                          return !selectedSchoolId || isApprovedForSchool(c, selectedSchoolId);
                         })
                         .map((cls) => (
                           <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
@@ -1962,8 +1957,8 @@ export default function AdminView({
                           </label>
                         ))}
                       {(classesList || []).filter((c) => {
-                        if (!userForm.schoolId) return true;
-                        return c.schoolId === parseInt(userForm.schoolId, 10);
+                        const selectedSchoolId = userForm.schoolId ? Number(userForm.schoolId) : undefined;
+                        return !selectedSchoolId || isApprovedForSchool(c, selectedSchoolId);
                       }).length === 0 && (
                         <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
                       )}
@@ -2016,12 +2011,34 @@ export default function AdminView({
                     maxLength={8}
                   />
                 )}
-                <select className="w-full p-2 border rounded" value={userForm.specialization} onChange={(e) => setUserForm({ ...userForm, specialization: e.target.value })}>
-                  <option value="">-- Choisissez une matière --</option>
-                  {teacherSpecializations.map((subject) => (
-                    <option key={subject} value={subject}>{subject}</option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">Matière(s) enseignée(s)</div>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                    {teacherSpecializations.map((subject) => {
+                      const selectedValues = Array.isArray(userForm.specialization)
+                        ? userForm.specialization
+                        : String(userForm.specialization || '').split(',').map((s) => s.trim()).filter(Boolean);
+                      const isSelected = selectedValues.includes(subject);
+
+                      return (
+                        <label key={subject} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const nextValues = e.target.checked
+                                ? [...selectedValues, subject]
+                                : selectedValues.filter((value) => value !== subject);
+                              setUserForm({ ...userForm, specialization: nextValues });
+                            }}
+                            className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                          />
+                          <span className="text-sm">{subject}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Mot de passe (laissez vide pour ne pas modifier)</label>
                   <input
@@ -2073,15 +2090,16 @@ export default function AdminView({
                         setEditUserError('Les mots de passe ne correspondent pas');
                         return;
                       }
+                      const updatedRole = userToEdit.role === 'teacher' ? 'teacher' : userForm.role;
                       await onUpdateUser(userToEdit.id, {
                         email: userForm.email.trim(),
                         name: userForm.name.trim(),
-                        role: userForm.role,
+                        role: updatedRole,
                         schoolId: userForm.schoolId ? parseInt(userForm.schoolId) : undefined,
-                        academicYearId: userForm.role === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
-                        phone: userForm.phone ? (userForm.role !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
+                        academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
+                        phone: userForm.phone ? (updatedRole !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
                         specialization: userForm.specialization,
-                        classIds: userForm.role === 'teacher' ? userForm.assignedClassIds : undefined,
+                        classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
                       });
                       if (editUserPassword && onSetPassword) {
                         await onSetPassword(userToEdit.id, editUserPassword);
@@ -2122,6 +2140,11 @@ export default function AdminView({
                   </div>
                 )}
                 {createdUserPreview.specialization && <div><strong>Spécialisation:</strong> {createdUserPreview.specialization}</div>}
+                {Array.isArray(createdUserPreview.classIds) && createdUserPreview.classIds.length > 0 && (
+                  <div>
+                    <strong>Classes assignées:</strong> {createdUserPreview.classIds.map((id: number) => classesList.find((c) => c.id === id)?.name || id).filter(Boolean).join(', ')}
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-2 mt-4">
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setShowCreatedUserPreview(false); setCreatedUserPreview(null); }}>Fermer</button>
@@ -3269,7 +3292,12 @@ export default function AdminView({
                                 schoolId: user.schoolId ? String(user.schoolId) : '',
                                 academicYearId: '',
                                 phone: (user as any).phone || '',
-                                specialization: (user as any).specialization || '',
+                                specialization: Array.isArray((user as any).specialization)
+                                  ? (user as any).specialization
+                                  : String((user as any).specialization || '')
+                                      .split(',')
+                                      .map((s) => s.trim())
+                                      .filter(Boolean),
                                 gender: (user as any).gender || '',
                                 assignedClassIds,
                               });

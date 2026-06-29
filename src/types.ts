@@ -59,6 +59,7 @@ export interface User {
 export interface Teacher {
   id: number;
   userId: number;
+  uid?: string;
   name: string;
   email: string;
   phone?: string;

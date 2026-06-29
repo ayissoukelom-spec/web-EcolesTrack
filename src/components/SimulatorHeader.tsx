@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Shield, Settings, BookOpen, Users, Bell, Smartphone, RefreshCw } from 'lucide-react';
-import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch } from '../lib/api';
-import { School, AcademicYear, Class, Teacher, Student, Parent } from '../types';
+import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { School, AcademicYear, Class, Teacher, Student, Parent, User } from '../types';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 
@@ -10,6 +10,7 @@ interface SimulatorHeaderProps {
   schoolsList: School[];
   classesList?: Class[];
   teachersList?: Teacher[];
+  usersList?: User[];
   studentsList?: Student[];
   parentsList?: Parent[];
   yearsList: AcademicYear[];
@@ -26,6 +27,7 @@ export default function SimulatorHeader({
   schoolsList,
   classesList = [],
   teachersList = [],
+  usersList = [],
   studentsList = [],
   parentsList = [],
   yearsList = [],
@@ -399,7 +401,7 @@ export default function SimulatorHeader({
   ].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }));
 
   // resolve teacher profile from teachersList when role is teacher
-  const teacherProfile = (teachersList || []).find((t) => t.email && simUser?.email && t.email.toLowerCase() === simUser.email.toLowerCase());
+  const teacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simUser, teachersList || [], usersList || []);
   const teacherClassIds = teacherProfile ? (teacherProfile.classIds || []) : [];
   const teacherClassCount = teacherClassIds.length;
   const teacherClasses = (classesList || []).filter((c) => teacherClassIds.includes(c.id));

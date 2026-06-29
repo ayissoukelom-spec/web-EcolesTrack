@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
-import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser } from '../lib/api.ts';
+import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
@@ -49,19 +49,7 @@ export default function AppShell() {
   const { absences: absencesList, refresh: refreshAbsences, addAbsence: addAbsenceApi, justifyAbsence } = useAbsences();
 
   const simulatedUser = getSimulatedUser();
-  const currentUser = simulatedUser
-    ? usersList.find((user) => String(user.uid) === String(simulatedUser.uid)
-      || (user.email && simulatedUser.email && user.email.toLowerCase() === simulatedUser.email.toLowerCase()))
-    : undefined;
-
-  const currentTeacherProfile = currentRole === 'teacher'
-    ? teachersList.find((teacher) => {
-      const emailMatch = simulatedUser?.email && teacher.email?.toLowerCase() === simulatedUser.email.toLowerCase();
-      const userIdFromUid = simulatedUser?.uid?.startsWith('teacher_') ? Number(simulatedUser.uid.split('_')[1]) : NaN;
-      const userIdMatch = !Number.isNaN(userIdFromUid) && String(teacher.userId) === String(userIdFromUid);
-      return (currentUser && teacher.userId === currentUser.id) || emailMatch || userIdMatch;
-    })
-    : undefined;
+  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
 
   const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
@@ -285,13 +273,13 @@ export default function AppShell() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => {
     const created = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
     return created;
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string; gender?: string; classIds?: number[] }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; classIds?: number[] }) => {
     await apiFetch(`/api/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
     await fetchAllData();
   };

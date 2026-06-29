@@ -92,6 +92,54 @@ export function clearSimulatedUser() {
   localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
 }
 
+export function findTeacherProfileFromSimulatedUser(
+  currentRole: string,
+  simulatedUser: any,
+  teachersList: any[],
+  usersList: any[] = [],
+) {
+  if (currentRole !== 'teacher' || !simulatedUser || !teachersList?.length) {
+    return undefined;
+  }
+
+  const simEmail = typeof simulatedUser.email === 'string'
+    ? simulatedUser.email.toLowerCase()
+    : null;
+  const simUid = simulatedUser.uid ? String(simulatedUser.uid) : null;
+
+  if (simUid) {
+    const byUid = teachersList.find((teacher) => teacher.uid && String(teacher.uid) === simUid);
+    if (byUid) return byUid;
+  }
+
+  if (simEmail) {
+    const byEmail = teachersList.find((teacher) => teacher.email && teacher.email.toLowerCase() === simEmail);
+    if (byEmail) return byEmail;
+  }
+
+  const userIdFromUid = simUid?.startsWith('teacher_')
+    ? Number(simUid.split('_')[1])
+    : NaN;
+  if (!Number.isNaN(userIdFromUid)) {
+    const byUserId = teachersList.find((teacher) => String(teacher.userId) === String(userIdFromUid));
+    if (byUserId) return byUserId;
+  }
+
+  if (usersList?.length) {
+    const matchedUser = usersList.find((user) => {
+      const matchUid = simUid && String(user.uid) === simUid;
+      const matchEmail = simEmail && user.email && user.email.toLowerCase() === simEmail;
+      return Boolean(matchUid || matchEmail);
+    });
+    if (matchedUser) {
+      const byUserId = teachersList.find((teacher) => teacher.userId === matchedUser.id);
+      if (byUserId) return byUserId;
+    }
+  }
+
+  return undefined;
+}
+
 function getSimulationHeaders(): Record<string, string> {
   const role = getSimulatedRole();
 

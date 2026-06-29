@@ -21,6 +21,7 @@ import {
   getSimulatedSchoolId,
   getSimulatedUser,
   setSimulatedUser,
+  findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
@@ -73,6 +74,22 @@ export default function App() {
   const [teachersList, setTeachersList] = useState<Teacher[]>([]);
   const [studentsList, setStudentsList] = useState<Student[]>([]);
   const [parentsList, setParentsList] = useState<Parent[]>([]);
+
+  const logTeachersPayload = (prefix: string, payload: unknown) => {
+    if (!Array.isArray(payload)) {
+      console.log(`${prefix} payload is not an array:`, payload);
+      return;
+    }
+    console.log(`${prefix} length=${payload.length}`);
+    payload.forEach((teacher: any, index: number) => {
+      console.log(`${prefix} [${index}]`, {
+        id: teacher?.id,
+        uid: teacher?.uid,
+        email: teacher?.email,
+        classIds: teacher?.classIds,
+      });
+    });
+  };
   const [absencesList, setAbsencesList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
@@ -85,19 +102,7 @@ export default function App() {
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
 
   const simulatedUser = getSimulatedUser();
-  const currentUser = simulatedUser
-    ? usersList.find((u) => String(u.uid) === String(simulatedUser.uid)
-      || (u.email && simulatedUser.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()))
-    : undefined;
-
-  const currentTeacherProfile = currentRole === 'teacher'
-    ? teachersList.find((t) => {
-      const emailMatch = simulatedUser?.email && t.email?.toLowerCase() === simulatedUser.email.toLowerCase();
-      const userIdFromUid = simulatedUser?.uid?.startsWith('teacher_') ? Number(simulatedUser.uid.split('_')[1]) : NaN;
-      const userIdMatch = !Number.isNaN(userIdFromUid) && String(t.userId) === String(userIdFromUid);
-      return (currentUser && t.userId === currentUser.id) || emailMatch || userIdMatch;
-    })
-    : undefined;
+  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
 
   const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
@@ -197,11 +202,15 @@ export default function App() {
       const results = await Promise.all(promises);
 
       const map = Object.fromEntries(endpoints.map((e, i) => [e, results[i]]));
-
+      logTeachersPayload('RAW_API_RESPONSE_/api/teachers', results[endpoints.indexOf('/api/teachers')]);
+      logTeachersPayload('MAP_/api/teachers', map['/api/teachers']);
+      if (Array.isArray(map['/api/teachers'])) {
+        logTeachersPayload('BEFORE_SET_TEACHERSLIST', map['/api/teachers']);
+        setTeachersList(map['/api/teachers']);
+      }
       if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
       if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
       if (Array.isArray(map['/api/classes'])) setClassesList(map['/api/classes']);
-      if (Array.isArray(map['/api/teachers'])) setTeachersList(map['/api/teachers']);
 
       const rawStudentsPayload = map['/api/students'];
       const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
@@ -246,6 +255,10 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    logTeachersPayload('AFTER_SET_TEACHERSLIST', teachersList);
+  }, [teachersList]);
 
   useEffect(() => {
     if (currentRole !== 'super_admin') {
@@ -515,7 +528,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string; gender?: string; classIds?: number[] }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; classIds?: number[] }) => {
     try {
       await apiFetch(`/api/admin/users/${id}`, {
         method: 'PUT',
@@ -737,6 +750,7 @@ export default function App() {
         classesList={classesList}
         teachersList={teachersList}
         studentsList={studentsList}
+        usersList={usersList}
         yearsList={yearsList}
         approvedSubjectsList={approvedSubjectsList}
         onRoleChange={handleRoleChange}
