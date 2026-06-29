@@ -725,9 +725,7 @@ export default function NotesView({
                       const existingGrade = gradesList.find(
                         (g) => String(g.evaluationId) === selectedEvalId && g.studentId === st.id
                       );
-                      const canEditGrade = userRole === 'super_admin'
-                        ? true
-                        : false;
+                      const canEditGrade = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
                       const isLockedBySchoolAdmin = !!existingGrade;
                       const isEligible = eligibleStudentsForSelectedEval.some((s) => s.id === st.id);
                       const isIneligibleWithGrade = !isEligible && existingGrade;

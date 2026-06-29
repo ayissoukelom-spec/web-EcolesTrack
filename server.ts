@@ -97,6 +97,7 @@ async function logIfTeacherUserMismatch(userId: number | null | undefined, teach
 
 // Helper to resolve actor with fallback to simulated profile in dev
 async function resolveActor(req: AuthRequest) {
+  console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
 
   // In simulated mode, resolve a matching DB user first. If none exists yet,
@@ -106,16 +107,19 @@ async function resolveActor(req: AuthRequest) {
     // simulated uid differs from the DB uid for pre-existing seeded accounts).
     let dbUser: any = null;
     const rowsByUid = await db.select().from(users).where(eq(users.uid, req.user.uid));
+    console.log('TRACE resolveActor lookup by uid', { uid: req.user.uid, rowsByUidLength: rowsByUid.length });
     if (rowsByUid.length > 0) dbUser = rowsByUid[0];
 
     if (!dbUser && req.user.email) {
       const rowsByEmail = await db.select().from(users).where(eq(users.email, req.user.email));
+      console.log('TRACE resolveActor lookup by email', { email: req.user.email, rowsByEmailLength: rowsByEmail.length });
       if (rowsByEmail.length > 0) dbUser = rowsByEmail[0];
     }
 
+    console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
+
     if (dbUser) {
       if (dbUser.schoolId == null && req.user.schoolId != null) {
-        // Keep the DB record untouched; do not inject schoolId into persisted data.
         return { ...dbUser, schoolId: req.user.schoolId };
       }
       return dbUser;
@@ -161,6 +165,104 @@ async function isApprovedClassForSchool(classId: number, targetSchoolId: number 
     )
   );
   return !!schoolClass;
+}
+
+async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null) {
+  const normalizedSubject = String(subjectName || '').trim();
+  console.log('DEBUG isApprovedSubjectForSchool enter', {
+    subjectName,
+    normalizedSubject,
+    normalizedLength: normalizedSubject.length,
+    targetSchoolId,
+  });
+
+  if (!normalizedSubject) {
+    console.log('DEBUG isApprovedSubjectForSchool fail empty subject', { subjectName });
+    return false;
+  }
+
+  const normalizedSubjectMatch = sql`LOWER(TRIM(${subjects.name})) = LOWER(TRIM(${normalizedSubject}))`;
+
+  if (targetSchoolId != null) {
+    const [sameSchoolSubject] = await db
+      .select()
+      .from(subjects)
+      .where(
+        and(
+          eq(subjects.schoolId, targetSchoolId),
+          normalizedSubjectMatch
+        )
+      );
+
+    console.log('DEBUG isApprovedSubjectForSchool sameSchoolSubject query', {
+      targetSchoolId,
+      normalizedSubject,
+      sameSchoolSubject,
+    });
+
+    if (sameSchoolSubject) {
+      console.log('DEBUG isApprovedSubjectForSchool pass sameSchoolSubject', { targetSchoolId, normalizedSubject });
+      return true;
+    }
+
+    const approvedSubjectRows = await db
+      .select({
+        subjectId: subjects.id,
+        subjectName: subjects.name,
+        subjectSchoolId: subjects.schoolId,
+        schoolSubjectId: schoolSubjects.id,
+        schoolSubjectSchoolId: schoolSubjects.schoolId,
+        schoolSubjectStatus: schoolSubjects.status,
+      })
+      .from(subjects)
+      .innerJoin(
+        schoolSubjects,
+        and(
+          eq(subjects.id, schoolSubjects.subjectId),
+          eq(schoolSubjects.schoolId, targetSchoolId),
+          eq(schoolSubjects.status, 'approved')
+        )
+      )
+      .where(normalizedSubjectMatch);
+
+    console.log('DEBUG isApprovedSubjectForSchool approvedSubjectRows', {
+      targetSchoolId,
+      normalizedSubject,
+      approvedSubjectRows,
+    });
+
+    const result = approvedSubjectRows.length > 0;
+    console.log('DEBUG isApprovedSubjectForSchool result', {
+      targetSchoolId,
+      normalizedSubject,
+      result,
+      reason: result ? 'approvedSubjectRows match' : 'no approved subject match',
+    });
+    return result;
+  }
+
+  const globalSubjectRows = await db
+    .select()
+    .from(subjects)
+    .where(
+      and(
+        sql`${subjects.schoolId} IS NULL`,
+        normalizedSubjectMatch
+      )
+    );
+
+  console.log('DEBUG isApprovedSubjectForSchool globalSubjectRows', {
+    normalizedSubject,
+    globalSubjectRows,
+  });
+
+  const result = globalSubjectRows.length > 0;
+  console.log('DEBUG isApprovedSubjectForSchool result', {
+    normalizedSubject,
+    result,
+    reason: result ? 'globalSubjectRows match' : 'no global subject match',
+  });
+  return result;
 }
 
 function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: string; role: string; schoolId?: any; phone?: string; specialization?: any }) {
@@ -1143,7 +1245,10 @@ async function startServer() {
 
       // Load user and validate permission
       const user = await resolveActor(req);
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (!user) {
+        console.log('TRACE /api/evaluations about to return 404 after resolveActor', { reqUser: req.user });
+        return res.status(404).json({ error: 'User not found' });
+      }
 
       // Only super_admin can create schools
       if (user.role !== 'super_admin') {
@@ -3239,6 +3344,17 @@ async function startServer() {
   });
 
   app.post('/api/evaluations', requireAuth, async (req: AuthRequest, res) => {
+    console.log('TRACE /api/evaluations handler ENTRY', {
+      path: req.path,
+      method: req.method,
+      headers: {
+        'x-simulated-role': req.headers['x-simulated-role'],
+        'x-simulated-uid': req.headers['x-simulated-uid'],
+        'x-simulated-school-id': req.headers['x-simulated-school-id'],
+        'content-type': req.headers['content-type'],
+      },
+    });
+
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       // Prevent parents from creating evaluations
@@ -3251,8 +3367,8 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      // Load effective user context (including simulated header schoolId fallback when needed)
+      const user = await resolveActor(req);
       if (!user) return res.status(404).json({ error: 'User not found' });
 
       // Load the class to check its school
@@ -3261,15 +3377,24 @@ async function startServer() {
 
       // School admin can only create evaluations for classes in their own school
       if (user.role !== 'super_admin') {
-        if (user.schoolId && classRecord.schoolId !== user.schoolId) {
-          return res.status(403).json({ error: 'Cannot create evaluation for class in another school' });
+        if (user.schoolId) {
+          // Allow when class belongs to the same school, or when the class is a global class
+          // that has been approved for this school (see isApprovedClassForSchool helper).
+          const allowedForSchool = classRecord.schoolId === user.schoolId || await isApprovedClassForSchool(parseInt(classId), user.schoolId);
+          if (!allowedForSchool) {
+            return res.status(403).json({ error: 'Cannot create evaluation for class in another school' });
+          }
         }
       }
 
       // Automatically determine teacher Id if not explicitly provided
       let resolvedTeacherId = teacherId ? parseInt(teacherId) : null;
       const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!dbUser) return res.status(404).json({ error: 'User not found' });
+      console.log('TRACE /api/evaluations dbUser lookup result', { reqUser: req.user, dbUser });
+      if (!dbUser) {
+        console.log('TRACE /api/evaluations returning 404 at dbUser check', { reqUser: req.user });
+        return res.status(404).json({ error: 'User not found' });
+      }
 
       if (user.role === 'teacher') {
         const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, dbUser.id));
@@ -3296,18 +3421,71 @@ async function startServer() {
       }
 
       const normalizedSubject = String(subject).trim();
-      const [approvedSubject] = await db
-        .select({ id: subjects.id })
-        .from(subjects)
-        .innerJoin(
-          schoolSubjects,
-          and(
-            eq(subjects.id, schoolSubjects.subjectId),
-            eq(schoolSubjects.schoolId, classRecord.schoolId),
-            eq(schoolSubjects.status, 'approved')
-          )
-        )
-        .where(eq(subjects.name, normalizedSubject));
+      let approvalSchoolId = classRecord.schoolId;
+      let resolvedSchoolClassId: number | null = null;
+      let resolvedSchoolClassSchoolId: number | null = null;
+      let approvalSource = 'class';
+
+      if (approvalSchoolId == null) {
+        approvalSource = 'request';
+        if (user.schoolId != null) {
+          const [approvedClass] = await db.select().from(schoolClasses).where(
+            and(
+              eq(schoolClasses.classId, parseInt(classId)),
+              eq(schoolClasses.schoolId, user.schoolId),
+              eq(schoolClasses.status, 'approved')
+            )
+          );
+          if (!approvedClass) {
+            console.error('ERROR /api/evaluations invalid school context for class', {
+              classId: parseInt(classId),
+              userSchoolId: user.schoolId,
+              note: 'No approved school_classes entry found for the current user school',
+            });
+            return res.status(403).json({ error: 'Invalid school context for this class' });
+          }
+          approvalSchoolId = user.schoolId;
+          resolvedSchoolClassId = approvedClass.id;
+          resolvedSchoolClassSchoolId = approvedClass.schoolId;
+        } else {
+          const approvedClasses = await db.select().from(schoolClasses).where(
+            and(
+              eq(schoolClasses.classId, parseInt(classId)),
+              eq(schoolClasses.status, 'approved')
+            )
+          );
+          if (approvedClasses.length === 0) {
+            console.error('ERROR /api/evaluations missing approved school context for global class', {
+              classId: parseInt(classId),
+            });
+            return res.status(403).json({ error: 'Cannot determine school context for this class' });
+          }
+          if (approvedClasses.length > 1) {
+            console.error('ERROR /api/evaluations ambiguous school context for global class', {
+              classId: parseInt(classId),
+              approvedSchoolIds: approvedClasses.map((row) => row.schoolId),
+            });
+            return res.status(400).json({ error: 'Ambiguous school context for this class' });
+          }
+          const [approvedClass] = approvedClasses;
+          approvalSchoolId = approvedClass.schoolId;
+          resolvedSchoolClassId = approvedClass.id;
+          resolvedSchoolClassSchoolId = approvedClass.schoolId;
+        }
+      }
+
+      console.log('DEBUG /api/evaluations school context', {
+        classId: parseInt(classId),
+        subject: normalizedSubject,
+        classSchoolId: classRecord.schoolId,
+        resolvedSchoolClassId,
+        resolvedSchoolClassSchoolId,
+        userSchoolId: user.schoolId,
+        approvalSchoolId,
+        approvalSource,
+      });
+
+      const approvedSubject = await isApprovedSubjectForSchool(normalizedSubject, approvalSchoolId);
 
       if (!approvedSubject) {
         return res.status(400).json({ error: 'La matière n’est pas approuvée pour cette école' });
