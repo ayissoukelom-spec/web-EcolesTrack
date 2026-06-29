@@ -94,6 +94,10 @@ export default function NotesView({
     })
     : approvedSubjectNames;
 
+  const isGradeModified = (grade: Grade) => {
+    return grade.isModified ?? ((grade.editCount ?? 0) > 0);
+  };
+
   const populateGradeInputsForEvaluation = (evaluationId: string | null) => {
     if (!evaluationId) {
       setGradeInputValues({});

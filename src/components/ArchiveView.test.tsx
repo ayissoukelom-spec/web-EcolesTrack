@@ -71,7 +71,24 @@ describe('Archive UI regression', () => {
     expect(screen.getByText('Devoir 2')).toBeDefined();
   });
 
-  it('permet à un administrateur de modifier une note déjà enregistrée', () => {
+  it('affiche un badge Modifiée pour une note marquée comme modifiée', () => {
+    const modifiedGrades: Grade[] = [
+      { id: 11, evaluationId: 1, studentId: 1, score: '16', studentName: 'Alice Dupont', isModified: true },
+    ];
+
+    render(
+      <ArchiveView
+        {...defaultProps}
+        evaluationsList={[evaluations[0]]}
+        studentsList={[students[0]]}
+        gradesList={modifiedGrades}
+      />
+    );
+
+    expect(screen.getByText(/Modifiée/i)).toBeDefined();
+  });
+
+  it('permet à un administrateur de modifier une note déjà enregistrée', async () => {
     const onAddGrade = vi.fn().mockResolvedValue({ id: 1 });
     const editableStudents: Student[] = [
       { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-06-24T08:00:00Z' },
@@ -109,7 +126,8 @@ describe('Archive UI regression', () => {
     expect(screen.getByRole('option', { name: /Mathématiques/i })).toBeDefined();
     fireEvent.change(evaluationSelect, { target: { value: '1' } });
 
-    expect(screen.getByPlaceholderText('ex. 12.5')).toBeDefined();
-    expect(screen.getByRole('button', { name: /modifier les notes/i })).toBeDefined();
+    const gradeInput = await screen.findByPlaceholderText(/ex\. 15\.5 or Abs/i);
+    expect(gradeInput).toBeDefined();
+    expect(screen.getByText(/bloquée/i)).toBeDefined();
   });
 });

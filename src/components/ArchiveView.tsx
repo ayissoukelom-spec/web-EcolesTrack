@@ -47,6 +47,10 @@ export default function ArchiveView({
   const isEvaluationFullyGraded = (ev: Evaluation) =>
     isEvaluationFullyGradedUtil(ev, studentsList, gradesList);
 
+  const isGradeModified = (grade: Grade) => {
+    return grade.isModified ?? ((grade.editCount ?? 0) > 0);
+  };
+
   const filteredArchived = evaluationsList.filter((ev) => {
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
@@ -147,7 +151,14 @@ export default function ArchiveView({
                       const student = studentsList.find((st) => st.id === grade.studentId);
                       return (
                         <div key={grade.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                          <div className="text-sm font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                            {isGradeModified(grade) && (
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-800 bg-amber-100 rounded-full px-2 py-0.5">
+                                Modifiée
+                              </span>
+                            )}
+                          </div>
                           <div className="mt-2 text-slate-600 text-xs">
                             <div>Note : <span className="font-bold text-slate-900">{grade.score}</span></div>
                             <div>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></div>
