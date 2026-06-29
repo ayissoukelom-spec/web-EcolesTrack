@@ -37,6 +37,8 @@ export default function ArchiveView({
     ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
     : availableClasses;
   const [selectedClassId, setSelectedClassId] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
 
   const normalizeDateOnly = (value: string | Date | undefined | null): string | null => {
     const date = parseDateValue(value);
@@ -54,18 +56,37 @@ export default function ArchiveView({
     return grade.isModified ?? ((grade.editCount ?? 0) > 0);
   };
 
-  const filteredArchived = evaluationsList.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
-    }
-    if (schoolFilterId) {
-      const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
-      if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
-    }
-    if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
-    return isEvaluationCompleted(ev);
-  });
+  const getEvaluationDateValue = (ev: Evaluation): string | null => {
+    return normalizeDateOnly(ev.date || ev.createdAt);
+  };
+
+  const filteredArchived = evaluationsList
+    .filter((ev) => {
+      if (userRole === 'teacher') {
+        if (teacherId == null) return false;
+        if (ev.teacherId !== teacherId) return false;
+      }
+      if (schoolFilterId) {
+        const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
+        if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
+      }
+      if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
+      if (!isEvaluationCompleted(ev)) return false;
+
+      const evaluationDateValue = getEvaluationDateValue(ev);
+      if (fromDate && (!evaluationDateValue || evaluationDateValue < fromDate)) return false;
+      if (toDate && (!evaluationDateValue || evaluationDateValue > toDate)) return false;
+
+      return true;
+    })
+    .sort((a, b) => {
+      const aDate = getEvaluationDateValue(a);
+      const bDate = getEvaluationDateValue(b);
+      if (aDate && bDate) return bDate.localeCompare(aDate);
+      if (aDate && !bDate) return -1;
+      if (!aDate && bDate) return 1;
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
 
   return (
     <div className="space-y-6" id="archive-view">
@@ -80,7 +101,7 @@ export default function ArchiveView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white p-4 border border-slate-50 rounded-2xl shadow-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 bg-white p-4 border border-slate-50 rounded-2xl shadow-sm">
         {userRole === 'super_admin' && (
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Filtrer par école</label>
@@ -113,8 +134,26 @@ export default function ArchiveView({
             ))}
           </select>
         </div>
-        <div className="sm:col-span-2 flex flex-col justify-end text-slate-500 text-xs leading-relaxed">
-          <p>Cet écran affiche les évaluations terminées avec toutes les notes saisies. Vous pouvez choisir une école puis une classe pour limiter l’archive.</p>
+        <div>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Du</label>
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Au</label>
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
+          />
+        </div>
+        <div className="sm:col-span-1 flex flex-col justify-end text-slate-500 text-xs leading-relaxed">
+          <p>Les devoirs les plus récents apparaissent en premier. Vous pouvez aussi filtrer par période.</p>
         </div>
       </div>
 
