@@ -364,6 +364,32 @@ export default function App() {
     }
   };
 
+  const handleApproveClass = async (id: number) => {
+    try {
+      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      if (!schoolId) throw new Error('Aucun établissement sélectionné pour approuver la classe');
+      await apiFetch(`/api/schools/${schoolId}/classes/${id}/approve`, { method: 'POST' });
+      setClassesList((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'approved' } : c)));
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible d\'approuver la classe.');
+      throw err;
+    }
+  };
+
+  const handleRejectClass = async (id: number) => {
+    try {
+      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      if (!schoolId) throw new Error('Aucun établissement sélectionné pour refuser la classe');
+      await apiFetch(`/api/schools/${schoolId}/classes/${id}/reject`, { method: 'POST' });
+      setClassesList((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'rejected' } : c)));
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de refuser la classe.');
+      throw err;
+    }
+  };
+
   const handleDeleteSchool = async (id: number) => {
     try {
       await apiFetch(`/api/schools/${id}`, { method: 'DELETE' });
@@ -942,6 +968,8 @@ export default function App() {
                   onDeleteSubject={handleDeleteSubject}
                   onApproveSubject={handleApproveSubject}
                   onRejectSubject={handleRejectSubject}
+                  onApproveClass={handleApproveClass}
+                  onRejectClass={handleRejectClass}
                   currentSchoolId={currentSchoolId}
                   />
                 </ErrorBoundary>

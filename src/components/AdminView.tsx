@@ -364,6 +364,8 @@ interface AdminViewProps {
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
+  onApproveClass?: (id: number) => Promise<any>;
+  onRejectClass?: (id: number) => Promise<any>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
   onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string }) => void;
   onBatchCreateStudents?: (records: any[]) => void;
@@ -380,6 +382,8 @@ interface AdminViewProps {
   onDeleteSubject?: (id: number) => Promise<void>;
   onApproveSubject?: (id: number) => Promise<any>;
   onRejectSubject?: (id: number) => Promise<any>;
+  onApproveClass?: (id: number) => Promise<any>;
+  onRejectClass?: (id: number) => Promise<any>;
   currentSchoolId?: number | null;
 }
 
@@ -416,6 +420,8 @@ export default function AdminView({
   onDeleteSubject,
   onApproveSubject,
   onRejectSubject,
+  onApproveClass,
+  onRejectClass,
   currentSchoolId,
 }: AdminViewProps) {
   const teacherSpecializations = Array.from(new Set(
@@ -3112,6 +3118,7 @@ export default function AdminView({
                   <th className="px-6 py-4">Nom de la classe</th>
                   <th className="px-6 py-4">Enseignant Principal</th>
                   <th className="px-6 py-4">Lien Année</th>
+                  <th className="px-6 py-4">Statut</th>
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -3123,7 +3130,16 @@ export default function AdminView({
                       <td className="px-6 py-4 font-bold text-slate-800">{cls.name}</td>
                       <td className="px-6 py-4 text-indigo-600 font-semibold">{cls.teacherName || 'Non assigné'}</td>
                       <td className="px-6 py-4 text-slate-500">{cls.yearName || 'N/A'}</td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-6 py-4">
+                        {cls.status ? (
+                          <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${cls.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : cls.status === 'rejected' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                            {cls.status === 'approved' ? 'Approuvée' : cls.status === 'rejected' ? 'Refusée' : 'En attente'}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right space-x-2">
                         {userRole === 'super_admin' && (
                           <button
                             onClick={() => onDeleteClass(cls.id)}
@@ -3133,12 +3149,29 @@ export default function AdminView({
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         )}
+                        {userRole === 'school_admin' && cls.status !== 'approved' && (
+                          <>
+                            <button
+                              onClick={() => onApproveClass?.(cls.id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Approuver
+                            </button>
+                            <button
+                              onClick={() => onRejectClass?.(cls.id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors"
+                            >
+                              Refuser
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
                 {classesList.filter((c) => (!superAdminSchoolFilterId || c.schoolId === superAdminSchoolFilterId) && filterBySearch(c.name)).length === 0 && (
                   <tr>
-                    <td colSpan={4} className="text-center py-8 text-slate-400 text-xs">Aucune classe trouvée.</td>
+                    <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucune classe trouvée.</td>
                   </tr>
                 )}
               </tbody>
