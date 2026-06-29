@@ -357,13 +357,13 @@ export default function MobileParentView({
                               className="bg-slate-900 p-3 rounded-lg border border-slate-800/50 flex flex-col justify-between h-20 hover:border-slate-700 cursor-pointer"
                             >
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Trimestre</span>
-                              <p className="text-lg font-black text-indigo-400 mt-1">{calculateGPA()} <span className="text-[10px] text-slate-500 font-normal">/20</span></p>
+                              <p className="text-lg font-black text-indigo-400 mt-1">{calculateGPA()} <span className="text-[10px] text-slate-500 font-normal">/{(childGrades[0]?.maxScore ?? 20)}</span></p>
                               <p className="text-[8px] text-slate-500">Moyenne Générale</p>
                             </div>
                           ) : (
                             <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/20 flex flex-col justify-between h-20 opacity-60">
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Trimestre</span>
-                              <p className="text-lg font-black text-indigo-400 mt-1">— <span className="text-[10px] text-slate-500 font-normal">/20</span></p>
+                              <p className="text-lg font-black text-indigo-400 mt-1">— <span className="text-[10px] text-slate-500 font-normal">/{(childGrades[0]?.maxScore ?? 20)}</span></p>
                               <p className="text-[8px] text-slate-500">Moyenne indisponible</p>
                             </div>
                           )}
@@ -469,7 +469,7 @@ export default function MobileParentView({
                       <div className="space-y-3 animate-fade-in">
                         <div className="flex justify-between items-center pb-1 border-b border-slate-800/40">
                           <h4 className="font-extrabold text-xs text-white">Carnet de Notes</h4>
-                          <span className="text-[10px] text-slate-400">Moyenne: <strong className="text-yellow-400">{calculateGPA()}/20</strong></span>
+                          <span className="text-[10px] text-slate-400">Moyenne: <strong className="text-yellow-400">{calculateGPA()}/{(childGrades[0]?.maxScore ?? 20)}</strong></span>
                         </div>
 
                         <div className="space-y-2">
@@ -481,7 +481,7 @@ export default function MobileParentView({
                               </div>
                               <div className="text-right">
                                 <span className="font-mono font-black text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded">
-                                  {g.score}/20
+                                  {g.score}/{g.maxScore ?? 20}
                                 </span>
                               </div>
                             </div>

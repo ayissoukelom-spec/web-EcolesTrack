@@ -96,6 +96,8 @@ export default function NotesView({
     })
     : approvedSubjectNames;
 
+  const currentEvaluation = evaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
+
   const isGradeModified = (grade: Grade) => {
     return grade.isModified ?? ((grade.editCount ?? 0) > 0);
   };
@@ -250,7 +252,8 @@ export default function NotesView({
   const getEligibleStudentsWithHistoryForEvaluation = (evaluation: Evaluation | null): Student[] =>
     getEligibleStudentsWithHistoryForEvaluationUtil(evaluation, currentClassStudents, gradesList);
 
-  const currentEvaluation = evaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
+  const scoreScaleSuffix = currentEvaluation?.maxScore != null ? `/${currentEvaluation.maxScore}` : '/20';
+  const classAverageScaleSuffix = currentEvaluation?.maxScore != null ? `/${currentEvaluation.maxScore}` : '/20';
   const eligibleStudentsForSelectedEval = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
   const selectedEvalGrades = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
   const ineligibleStudentsForSelectedEval = currentClassStudents.filter(
@@ -673,7 +676,7 @@ export default function NotesView({
                             <div key={grade.id} className="rounded-xl border border-slate-200 bg-white p-3">
                               <div className="font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
                               <div className="flex flex-col gap-1 mt-1 text-slate-600">
-                                <span>Note : <span className="font-bold text-slate-900">{grade.score}</span></span>
+                                <span>Note : <span className="font-bold text-slate-900">{grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></span>
                                 <span>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></span>
                               </div>
                             </div>
@@ -702,7 +705,7 @@ export default function NotesView({
                 <div className="space-y-1">
                   <span className="text-[10px] font-bold text-indigo-200 uppercase tracking-wider">Statistiques du devoir</span>
                   <h4 className="text-sm sm:text-base font-bold">
-                    Moyenne générale de la classe : <span className="font-mono text-lg font-black bg-white/20 px-2.5 py-1 rounded-xl text-yellow-300 ml-1">{getClassAverage()} / 20</span>
+                    Moyenne générale de la classe : <span className="font-mono text-lg font-black bg-white/20 px-2.5 py-1 rounded-xl text-yellow-300 ml-1">{getClassAverage()} {classAverageScaleSuffix}</span>
                   </h4>
                 </div>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 text-xs text-indigo-100">
@@ -727,7 +730,7 @@ export default function NotesView({
                     <th className="px-6 py-4">Moyenne Générale du Trimestre</th>
                     {selectedEvalId && (
                       <>
-                        <th className="px-6 py-4">Note au devoir ( / 20)</th>
+                        <th className="px-6 py-4">Note au devoir ({scoreScaleSuffix})</th>
                         <th className="px-6 py-4">Appréciation / Remarques</th>
                         {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
                           <th className="px-6 py-4 text-right">Actions</th>
@@ -754,7 +757,7 @@ export default function NotesView({
                         <td className="px-6 py-4 font-bold text-slate-800">{st.firstName} {st.lastName}</td>
                         <td className="px-6 py-4 font-bold text-slate-700">
                           <span className="bg-slate-100 px-2.5 py-1 rounded-lg text-xs">
-                            {studentAverage} / 20
+                            {studentAverage} {scoreScaleSuffix}
                           </span>
                         </td>
 
@@ -765,7 +768,7 @@ export default function NotesView({
                               {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
                                 existingGrade && userRole === 'teacher' ? (
                                   <div className="text-xs space-y-1">
-                                    <div className="font-mono font-bold text-indigo-700">{existingGrade.score} / 20</div>
+                                    <div className="font-mono font-bold text-indigo-700">{existingGrade.score} {scoreScaleSuffix}</div>
                                     <div className="text-slate-400 text-[10px]">Note déjà enregistrée</div>
                                   </div>
                                 ) : isEligible ? (
@@ -797,7 +800,7 @@ export default function NotesView({
                                   )
                               ) : (
                                 <span className="font-mono text-xs font-extrabold text-indigo-700">
-                                  {gradeInputValues[st.id]?.score || '—'} / 20
+                                  {gradeInputValues[st.id]?.score || '—'} {scoreScaleSuffix}
                                 </span>
                               )}
                             </td>

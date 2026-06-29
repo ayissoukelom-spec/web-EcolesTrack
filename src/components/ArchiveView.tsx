@@ -163,7 +163,7 @@ export default function ArchiveView({
                             )}
                           </div>
                           <div className="mt-2 text-slate-600 text-xs">
-                            <div>Note : <span className="font-bold text-slate-900">{grade.score}</span></div>
+                            <div>Note : <span className="font-bold text-slate-900">{grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></div>
                             <div>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></div>
                           </div>
                         </div>

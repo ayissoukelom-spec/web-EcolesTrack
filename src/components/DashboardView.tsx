@@ -295,7 +295,7 @@ export default function DashboardView({
                   </div>
                   <div className="text-right">
                     <span className="text-sm font-bold bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100/60 inline-block font-mono">
-                      {grade.score} / 20
+                      {grade.score}{grade.maxScore != null ? `/${grade.maxScore}` : '/20'}
                     </span>
                   </div>
                 </div>
