@@ -23,6 +23,7 @@ import {
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
+import { isEvaluationCompleted } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
 import DashboardView from './components/DashboardView.tsx';
@@ -740,6 +741,10 @@ export default function App() {
     return <LoginView onLogin={(role) => { setSimulatedRole(role); setCurrentRole(role as UserRole); }} />;
   }
 
+  // Centralized filtering of evaluations: separate active from completed
+  const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationCompleted(ev, studentsList, gradesList));
+  const completedEvaluations = evaluationsList.filter((ev) => isEvaluationCompleted(ev, studentsList, gradesList));
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
       {/* Simulation console bar at the header */}
@@ -1004,7 +1009,7 @@ export default function App() {
               {activeTab === 'notes' && currentRole !== 'parent' && (
                 <NotesView
                   userRole={currentRole}
-                  evaluationsList={evaluationsList}
+                  evaluationsList={activeEvaluations}
                   gradesList={gradesList}
                   studentsList={studentsList}
                   classesList={classesList}
@@ -1023,7 +1028,7 @@ export default function App() {
               {activeTab === 'archive' && currentRole !== 'parent' && (
                 <ArchiveView
                   userRole={currentRole}
-                  evaluationsList={evaluationsList}
+                  evaluationsList={completedEvaluations}
                   gradesList={gradesList}
                   studentsList={studentsList}
                   classesList={classesList}

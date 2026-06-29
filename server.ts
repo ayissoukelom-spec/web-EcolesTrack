@@ -24,6 +24,7 @@ import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import { validateGradeScore } from './src/lib/gradeValidation.ts';
 import {
   schools,
   academicYears,
@@ -3586,6 +3587,7 @@ async function startServer() {
 
   app.post('/api/grades', requireAuth, async (req: AuthRequest, res) => {
     try {
+      console.log('POST /api/grades payload', req.body);
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       // Prevent parents from recording/updating grades
       const [requestingUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
@@ -3597,6 +3599,11 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing grade details' });
       }
 
+      const normalizedScore = typeof score === 'string' ? score.trim() : score;
+      if (normalizedScore === '' || normalizedScore === null || normalizedScore === undefined) {
+        return res.status(400).json({ error: 'La note est requise' });
+      }
+
       // Load user and validate school permission
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
@@ -3605,9 +3612,23 @@ async function startServer() {
       const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
       if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
 
+      const scoreValidation = validateGradeScore(normalizedScore, evaluation.maxScore);
+      if (!scoreValidation.isValid) {
+        return res.status(400).json({ error: scoreValidation.error });
+      }
+
       // Load the student to check their school
       const [student] = await db.select().from(students).where(eq(students.id, parseInt(studentId)));
       if (!student) return res.status(404).json({ error: 'Student not found' });
+      console.log('Grade save details', {
+        evaluationId,
+        studentId,
+        score,
+        remarks,
+        studentSchoolId: student.schoolId,
+        userSchoolId: user.schoolId,
+        evaluationSchoolId: evaluation.schoolId,
+      });
 
       // Validate that student was enrolled in the class before or at the evaluation timestamp.
       // Prefer the evaluation.createdAt timestamp if available, otherwise fall back to evaluation.date.
@@ -3699,8 +3720,9 @@ async function startServer() {
 
       res.status(200).json(savedGrade);
     } catch (err: any) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to record student grade' });
+      console.error('POST /api/grades error:', err);
+      console.error(err?.stack || err);
+      res.status(500).json({ error: err?.message || 'Failed to record student grade' });
     }
   });
 

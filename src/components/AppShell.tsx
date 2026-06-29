@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
+import { isEvaluationCompleted } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
 import DashboardView from './DashboardView.tsx';
@@ -337,6 +338,10 @@ export default function AppShell() {
   };
 
   const content = (() => {
+    // Centralized filtering of evaluations: separate active from completed
+    const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationCompleted(ev, studentsList, gradesList));
+    const completedEvaluations = evaluationsList.filter((ev) => isEvaluationCompleted(ev, studentsList, gradesList));
+
     if (activeTab === 'tableau-de-bord') {
       return <DashboardView stats={stats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
     }
@@ -384,7 +389,7 @@ export default function AppShell() {
       return (
         <NotesView
           userRole={currentRole}
-          evaluationsList={evaluationsList}
+          evaluationsList={activeEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
           classesList={classesList}
@@ -404,7 +409,7 @@ export default function AppShell() {
       return (
         <ArchiveView
           userRole={currentRole}
-          evaluationsList={evaluationsList}
+          evaluationsList={completedEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
           classesList={classesList}
@@ -418,7 +423,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'bulletins') {
-      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={evaluationsList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
+      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
     }
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {

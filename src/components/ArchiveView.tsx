@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { BookOpen } from 'lucide-react';
-import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationFullyGraded as isEvaluationFullyGradedUtil, parseDateValue } from '../lib/evaluationUtils';
+import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationFullyGraded as isEvaluationFullyGradedUtil, isEvaluationCompleted as isEvaluationCompletedUtil, parseDateValue } from '../lib/evaluationUtils';
 
 interface ArchiveViewProps {
   userRole: UserRole;
@@ -47,6 +47,9 @@ export default function ArchiveView({
   const isEvaluationFullyGraded = (ev: Evaluation) =>
     isEvaluationFullyGradedUtil(ev, studentsList, gradesList);
 
+  const isEvaluationCompleted = (ev: Evaluation) =>
+    isEvaluationCompletedUtil(ev, studentsList, gradesList);
+
   const isGradeModified = (grade: Grade) => {
     return grade.isModified ?? ((grade.editCount ?? 0) > 0);
   };
@@ -61,7 +64,7 @@ export default function ArchiveView({
       if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
     }
     if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
-    return isEvaluationFullyGraded(ev);
+    return isEvaluationCompleted(ev);
   });
 
   return (

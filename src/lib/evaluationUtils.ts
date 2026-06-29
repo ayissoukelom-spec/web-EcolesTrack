@@ -139,7 +139,23 @@ export const isEvaluationFullyGraded = (evaluation: Evaluation, students: Studen
     (g) => g.evaluationId === evaluation.id && eligibleStudentIds.has(g.studentId),
   );
 
-  return gradesForEval.length >= eligibleStudents.length;
+  return gradesForEval.length > 0;
+};
+
+export const isEvaluationCompleted = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean => {
+  const classStudents = students.filter((st) => st.classId === evaluation.classId);
+  if (classStudents.length === 0) return false;
+
+  const eligibleStudents = getEligibleStudentsForEvaluationWithGrades(evaluation, classStudents, grades);
+  if (eligibleStudents.length === 0) return false;
+
+  const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
+  const gradesForEval = grades.filter(
+    (g) => g.evaluationId === evaluation.id && eligibleStudentIds.has(g.studentId),
+  );
+
+  // Evaluation is completed when ALL eligible students have a grade
+  return gradesForEval.length === eligibleStudentIds.size;
 };
 
 export const getFullyGradedEvaluations = (evaluations: Evaluation[], students: Student[], grades: Grade[]): Evaluation[] =>
