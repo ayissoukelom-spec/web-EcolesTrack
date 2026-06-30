@@ -24,6 +24,7 @@ import { getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulated
 import { sortClasses } from '../lib/classOrdering';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
+import ModalOverlay from './ModalOverlay';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -1572,7 +1573,7 @@ export default function AdminView({
 
         {/* Edit School Modal */}
         {editSchoolOpen && schoolToEdit && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4 z-50 overflow-x-hidden">
+          <ModalOverlay isOpen={editSchoolOpen && Boolean(schoolToEdit)} onClose={() => { setEditSchoolOpen(false); setSchoolToEdit(null); setEditSchoolError(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md">
               <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'école</h3>
               <div className="space-y-3 text-sm">
@@ -1701,12 +1702,12 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {/* Edit Student Modal */}
         {editStudentOpen && studentToEdit && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4 z-50 overflow-x-hidden">
+          <ModalOverlay isOpen={editStudentOpen && Boolean(studentToEdit)} onClose={() => { setEditStudentOpen(false); setStudentToEdit(null); setEditStudentError(null); }} backdropClassName="bg-black/40" contentClassName="max-w-3xl w-full">
               <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] relative">
                 <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'élève</h3>
                 <div className={`space-y-3 text-sm max-h-[70vh] ${allowSelectOverflow ? 'overflow-visible' : 'overflow-auto'} pr-2`}>
@@ -1946,12 +1947,12 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {/* Deprecated popup removed; creation is inline now. */}
         {editUserOpen && userToEdit && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={editUserOpen && Boolean(userToEdit)} onClose={() => { setEditUserOpen(false); setUserToEdit(null); setEditUserError(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
               <h3 className="font-bold mb-3">Modifier le compte</h3>
               <div className="space-y-3 text-sm">
@@ -2166,12 +2167,12 @@ export default function AdminView({
                 </div>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {/* Created user preview modal */}
         {showCreatedUserPreview && createdUserPreview && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={showCreatedUserPreview && Boolean(createdUserPreview)} onClose={() => { setShowCreatedUserPreview(false); setCreatedUserPreview(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md">
               <h3 className="font-bold mb-3">Compte créé</h3>
               <div className="text-sm text-slate-700 space-y-2">
@@ -2201,11 +2202,11 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setShowCreatedUserPreview(false); setCreatedUserPreview(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {studentDetailOpen && studentDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={studentDetailOpen && Boolean(studentDetail)} onClose={() => { setStudentDetailOpen(false); setStudentDetail(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
@@ -2240,11 +2241,11 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setStudentDetailOpen(false); setStudentDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {teacherDetailOpen && teacherDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={teacherDetailOpen && Boolean(teacherDetail)} onClose={() => { setTeacherDetailOpen(false); setTeacherDetail(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
@@ -2272,11 +2273,11 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setTeacherDetailOpen(false); setTeacherDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {parentDetailOpen && parentDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={parentDetailOpen && Boolean(parentDetail)} onClose={() => { setParentDetailOpen(false); setParentDetail(null); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
@@ -2308,12 +2309,12 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setParentDetailOpen(false); setParentDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
 
         {/* Delete user confirmation modal */}
         {deleteUserOpen && userToDelete && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay isOpen={deleteUserOpen && Boolean(userToDelete)} onClose={() => { setDeleteUserOpen(false); setUserToDelete(null); setDeleteUserError(null); setDeleteUserSuccess(false); }} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md">
               <h3 className="font-bold mb-3">Confirmer la suppression</h3>
               <p className="text-sm text-slate-600">Voulez-vous vraiment désactiver le compte de <strong>{userToDelete.name}</strong> ({userToDelete.email}) ? Ce compte sera désactivé mais toutes les données liées (élèves, notes, absences) resteront intactes et accessibles.</p>
@@ -2349,12 +2350,12 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
       </div>
       {/* Confirmation modal (replace window.confirm) */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <ModalOverlay isOpen={Boolean(confirmOpen)} onClose={() => setConfirmOpen(false)} backdropClassName="bg-black/40" contentClassName="max-w-md w-full">
           <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
             <p className="text-sm text-slate-700 mb-4">{confirmMessage}</p>
             <div className="flex justify-end gap-2">
@@ -2375,7 +2376,7 @@ export default function AdminView({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Tabs navigation panel */}
@@ -2973,7 +2974,12 @@ export default function AdminView({
         )}
         {/* Import preview / validation modal */}
         {showImportDetails && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+          <ModalOverlay
+            isOpen={showImportDetails}
+            onClose={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); }}
+            backdropClassName="bg-black/40"
+            contentClassName="max-w-3xl w-full"
+          >
             <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[80vh] overflow-auto shadow-lg">
               <div className="flex items-start justify-between mb-4">
                 <h3 className="text-lg font-bold">Aperçu avant import</h3>
@@ -3039,7 +3045,7 @@ export default function AdminView({
                 ) : null}
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
         
         {/* TAB 1: SCHOOLS */}

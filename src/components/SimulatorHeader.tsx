@@ -4,6 +4,7 @@ import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser,
 import { School, AcademicYear, Class, Teacher, Student, Parent, User } from '../types';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
+import ModalOverlay from './ModalOverlay';
 
 interface SimulatorHeaderProps {
   currentRole: string;
@@ -495,11 +496,10 @@ export default function SimulatorHeader({
         </div>
       </div>
       {/* Login modal */}
-      {loginOpen && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md text-slate-800">
-            <h3 className="font-bold mb-3">Se connecter (simulation)</h3>
-            <div className="space-y-4 text-sm">
+      <ModalOverlay isOpen={loginOpen} onClose={() => setLoginOpen(false)} backdropClassName="bg-black/50" contentClassName="max-w-md w-full">
+        <div className="bg-white rounded-2xl p-6 text-slate-800">
+          <h3 className="font-bold mb-3">Se connecter (simulation)</h3>
+          <div className="space-y-4 text-sm">
               <div>
                 <label className="block text-xs">
                   <RequiredLabel label="Rôle" required />
@@ -611,18 +611,16 @@ export default function SimulatorHeader({
               </div>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
 
       {/* Create Account modal */}
-      {createAccountOpen && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto text-slate-800 shadow-xl relative z-[10000]">
-            <div className="flex items-start justify-between mb-4">
-              <h3 className="font-bold">Créer un nouveau compte</h3>
-              <button aria-label="Fermer" className="text-slate-400 hover:text-slate-600 font-bold text-lg" onClick={() => setCreateAccountOpen(false)}>✕</button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+      <ModalOverlay isOpen={createAccountOpen} onClose={() => setCreateAccountOpen(false)} backdropClassName="bg-black/50" contentClassName="max-w-3xl w-full">
+        <div className="bg-white rounded-2xl p-6 max-h-[90vh] overflow-auto text-slate-800 shadow-xl relative z-[10000]">
+          <div className="flex items-start justify-between mb-4">
+            <h3 className="font-bold">Créer un nouveau compte</h3>
+            <button aria-label="Fermer" className="text-slate-400 hover:text-slate-600 font-bold text-lg" onClick={() => setCreateAccountOpen(false)}>✕</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <label className="block text-xs">
                   <RequiredLabel label="Rôle" required />
@@ -1050,8 +1048,7 @@ export default function SimulatorHeader({
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
 
       <div className="max-w-7xl mx-auto p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         {/* Title */}
@@ -1161,81 +1158,79 @@ export default function SimulatorHeader({
           </span>
         </div>
       </div>
-      {profileEditOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70">
-          <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">Modifier le profil</h2>
-                <p className="text-sm text-slate-500">Mettez à jour votre nom, téléphone et photo de profil.</p>
-              </div>
-              <button type="button" className="text-slate-500 hover:text-slate-800" onClick={() => setProfileEditOpen(false)} aria-label="Fermer le formulaire de profil">✕</button>
+      <ModalOverlay isOpen={profileEditOpen} onClose={() => setProfileEditOpen(false)} backdropClassName="bg-slate-950/70" contentClassName="max-w-md w-full">
+        <div className="w-full overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Modifier le profil</h2>
+              <p className="text-sm text-slate-500">Mettez à jour votre nom, téléphone et photo de profil.</p>
             </div>
-            <div className="space-y-4 p-6">
-              <div className="flex items-center gap-4">
-                <label htmlFor="profile-photo-input" className="flex cursor-pointer items-center gap-4 rounded-full border border-slate-200 bg-slate-100 p-1 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50">
-                  <div className="h-16 w-16 overflow-hidden rounded-full bg-slate-100 border border-slate-200">
-                    {profilePhotoPreview ? (
-                      <img src={profilePhotoPreview} alt="Aperçu" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-slate-400">
-                        <Users className="h-8 w-8" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-sm">
-                    <div className="font-medium">Photo de profil</div>
-                    <div className="text-slate-500 text-xs">Cliquer pour modifier</div>
-                  </div>
-                </label>
-                <input
-                  id="profile-photo-input"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleProfilePhotoChange}
-                  className="hidden"
-                />
-              </div>
+            <button type="button" className="text-slate-500 hover:text-slate-800" onClick={() => setProfileEditOpen(false)} aria-label="Fermer le formulaire de profil">✕</button>
+          </div>
+          <div className="space-y-4 p-6">
+            <div className="flex items-center gap-4">
+              <label htmlFor="profile-photo-input" className="flex cursor-pointer items-center gap-4 rounded-full border border-slate-200 bg-slate-100 p-1 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50">
+                <div className="h-16 w-16 overflow-hidden rounded-full bg-slate-100 border border-slate-200">
+                  {profilePhotoPreview ? (
+                    <img src={profilePhotoPreview} alt="Aperçu" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-slate-400">
+                      <Users className="h-8 w-8" />
+                    </div>
+                  )}
+                </div>
+                <div className="text-sm">
+                  <div className="font-medium">Photo de profil</div>
+                  <div className="text-slate-500 text-xs">Cliquer pour modifier</div>
+                </div>
+              </label>
+              <input
+                id="profile-photo-input"
+                type="file"
+                accept="image/*"
+                onChange={handleProfilePhotoChange}
+                className="hidden"
+              />
+            </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="block text-sm">
-                  <div className="text-slate-700 font-medium">Nom</div>
-                  <input
-                    value={profileLastName}
-                    onChange={(event) => setProfileLastName(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  />
-                </label>
-                <label className="block text-sm">
-                  <div className="text-slate-700 font-medium">Prénom</div>
-                  <input
-                    value={profileFirstName}
-                    onChange={(event) => setProfileFirstName(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  />
-                </label>
-              </div>
-
+            <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm">
-                <div className="text-slate-700 font-medium">Téléphone</div>
+                <div className="text-slate-700 font-medium">Nom</div>
                 <input
-                  value={profilePhone}
-                  onChange={(event) => setProfilePhone(event.target.value)}
+                  value={profileLastName}
+                  onChange={(event) => setProfileLastName(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                />
+              </label>
+              <label className="block text-sm">
+                <div className="text-slate-700 font-medium">Prénom</div>
+                <input
+                  value={profileFirstName}
+                  onChange={(event) => setProfileFirstName(event.target.value)}
                   className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </label>
             </div>
-            <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
-              <button type="button" className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setProfileEditOpen(false)}>
-                Annuler
-              </button>
-              <button type="button" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" onClick={saveProfileChanges}>
-                Enregistrer
-              </button>
-            </div>
+
+            <label className="block text-sm">
+              <div className="text-slate-700 font-medium">Téléphone</div>
+              <input
+                value={profilePhone}
+                onChange={(event) => setProfilePhone(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+            </label>
+          </div>
+          <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+            <button type="button" className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setProfileEditOpen(false)}>
+              Annuler
+            </button>
+            <button type="button" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" onClick={saveProfileChanges}>
+              Enregistrer
+            </button>
           </div>
         </div>
-      )}
+      </ModalOverlay>
     </div>
   );
 }

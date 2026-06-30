@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BookOpen, Plus, Edit2, Trash2, X, CheckCircle2, XCircle } from 'lucide-react';
 import { Subject } from '../types.ts';
+import ModalOverlay from './ModalOverlay';
 
 interface SchoolOption {
   id: number;
@@ -234,22 +235,21 @@ export default function SubjectsView({
       </div>
 
       {/* Form Modal */}
-      {isFormOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-100 p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-slate-800">
-                {editingId ? 'Modifier la matière' : 'Ajouter une matière'}
-              </h3>
-              <button
-                onClick={handleCloseForm}
-                className="text-slate-400 hover:text-slate-600 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+      <ModalOverlay isOpen={isFormOpen} onClose={handleCloseForm} backdropClassName="bg-black/30" contentClassName="max-w-md w-full">
+        <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-bold text-slate-800">
+              {editingId ? 'Modifier la matière' : 'Ajouter une matière'}
+            </h3>
+            <button
+              onClick={handleCloseForm}
+              className="text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label htmlFor="subject-name-input" className="block text-sm font-semibold text-slate-700 mb-2">
                   Nom de la matière <span className="text-rose-500">*</span>
@@ -317,8 +317,7 @@ export default function SubjectsView({
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
     </div>
   );
 }
