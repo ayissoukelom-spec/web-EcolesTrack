@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getSimulatedSchoolId, apiFetch } from '../lib/api.ts';
 import RequiredLabel from './RequiredLabel';
+import ModalSurface from './ModalSurface';
 
 export default function AdminModal(props: any) {
   const {
@@ -268,16 +269,13 @@ export default function AdminModal(props: any) {
   if (!isModalOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 flex items-center justify-center bg-black/40 p-4 z-50 overflow-x-hidden"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose?.();
-        }
-      }}
+    <ModalSurface
+      isOpen={!!isModalOpen}
+      onClose={() => onClose?.()}
+      contentClassName="max-w-3xl"
+      ariaLabel="Formulaire d'administration"
     >
-      <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto" onMouseDown={(e) => e.stopPropagation()}>
-        <form onSubmit={handleFormSubmit} className="space-y-3 overflow-auto max-h-[80vh]">
+      <form onSubmit={handleFormSubmit} className="space-y-3 overflow-auto max-h-[80vh]">
           {/* Form 1: SCHOOL */}
           {activeTab === 'schools' && (
             <div className="space-y-3">
@@ -933,8 +931,7 @@ export default function AdminModal(props: any) {
             <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md inline-flex items-center gap-1 cursor-pointer">Enregistrer</button>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalSurface>
   );
 }
 

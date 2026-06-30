@@ -24,6 +24,7 @@ import { getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulated
 import { sortClasses } from '../lib/classOrdering';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
+import ModalSurface from './ModalSurface';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -1521,8 +1522,17 @@ export default function AdminView({
 
         {/* Edit School Modal */}
         {editSchoolOpen && schoolToEdit && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4 z-50 overflow-x-hidden">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+          <ModalSurface
+            isOpen={editSchoolOpen && !!schoolToEdit}
+            onClose={() => {
+              setEditSchoolOpen(false);
+              setSchoolToEdit(null);
+              setEditSchoolError(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Modifier l'école"
+          >
+            <div className="w-full">
               <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'école</h3>
               <div className="space-y-3 text-sm">
                 <div>
@@ -1650,13 +1660,22 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {/* Edit Student Modal */}
         {editStudentOpen && studentToEdit && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4 z-50 overflow-x-hidden">
-              <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] relative">
+          <ModalSurface
+            isOpen={editStudentOpen && !!studentToEdit}
+            onClose={() => {
+              setEditStudentOpen(false);
+              setStudentToEdit(null);
+              setEditStudentError(null);
+            }}
+            contentClassName="max-w-3xl"
+            ariaLabel="Modifier l'élève"
+          >
+              <div className="w-full relative">
                 <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'élève</h3>
                 <div className={`space-y-3 text-sm max-h-[70vh] ${allowSelectOverflow ? 'overflow-visible' : 'overflow-auto'} pr-2`}>
                 <div>
@@ -1895,13 +1914,22 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {/* Deprecated popup removed; creation is inline now. */}
         {editUserOpen && userToEdit && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+          <ModalSurface
+            isOpen={editUserOpen && !!userToEdit}
+            onClose={() => {
+              setEditUserOpen(false);
+              setUserToEdit(null);
+              setEditUserError(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Modifier le compte"
+          >
+            <div className="w-full max-h-[90vh] overflow-auto">
               <h3 className="font-bold mb-3">Modifier le compte</h3>
               <div className="space-y-3 text-sm">
                 <input className="w-full p-2 border rounded" placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
@@ -2115,13 +2143,21 @@ export default function AdminView({
                 </div>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {/* Created user preview modal */}
         {showCreatedUserPreview && createdUserPreview && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+          <ModalSurface
+            isOpen={showCreatedUserPreview && !!createdUserPreview}
+            onClose={() => {
+              setShowCreatedUserPreview(false);
+              setCreatedUserPreview(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Compte créé"
+          >
+            <div className="w-full">
               <h3 className="font-bold mb-3">Compte créé</h3>
               <div className="text-sm text-slate-700 space-y-2">
                 <div><strong>Nom:</strong> {createdUserPreview.name}</div>
@@ -2150,12 +2186,20 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setShowCreatedUserPreview(false); setCreatedUserPreview(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {studentDetailOpen && studentDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+          <ModalSurface
+            isOpen={studentDetailOpen && !!studentDetail}
+            onClose={() => {
+              setStudentDetailOpen(false);
+              setStudentDetail(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Détails de l'élève"
+          >
+            <div className="w-full">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <h3 className="font-bold text-lg">Détails de l'élève</h3>
@@ -2189,12 +2233,20 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setStudentDetailOpen(false); setStudentDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {teacherDetailOpen && teacherDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+          <ModalSurface
+            isOpen={teacherDetailOpen && !!teacherDetail}
+            onClose={() => {
+              setTeacherDetailOpen(false);
+              setTeacherDetail(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Détails de l'enseignant"
+          >
+            <div className="w-full">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <h3 className="font-bold text-lg">Détails de l'enseignant</h3>
@@ -2221,12 +2273,20 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setTeacherDetailOpen(false); setTeacherDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {parentDetailOpen && parentDetail && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+          <ModalSurface
+            isOpen={parentDetailOpen && !!parentDetail}
+            onClose={() => {
+              setParentDetailOpen(false);
+              setParentDetail(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Détails du parent"
+          >
+            <div className="w-full">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <h3 className="font-bold text-lg">Détails du parent</h3>
@@ -2257,13 +2317,23 @@ export default function AdminView({
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setParentDetailOpen(false); setParentDetail(null); }}>Fermer</button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
 
         {/* Delete user confirmation modal */}
         {deleteUserOpen && userToDelete && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+          <ModalSurface
+            isOpen={deleteUserOpen && !!userToDelete}
+            onClose={() => {
+              setDeleteUserOpen(false);
+              setUserToDelete(null);
+              setDeleteUserError(null);
+              setDeleteUserSuccess(false);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Confirmer la suppression"
+          >
+            <div className="w-full">
               <h3 className="font-bold mb-3">Confirmer la suppression</h3>
               <p className="text-sm text-slate-600">Voulez-vous vraiment désactiver le compte de <strong>{userToDelete.name}</strong> ({userToDelete.email}) ? Ce compte sera désactivé mais toutes les données liées (élèves, notes, absences) resteront intactes et accessibles.</p>
               {deleteUserError && <div className="text-rose-600 text-sm mt-3">{deleteUserError}</div>}
@@ -2298,13 +2368,19 @@ export default function AdminView({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
       </div>
       {/* Confirmation modal (replace window.confirm) */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
+        <ModalSurface
+          isOpen={confirmOpen}
+          onClose={() => setConfirmOpen(false)}
+          contentClassName="max-w-md rounded-lg"
+          overlayClassName="z-50"
+          ariaLabel="Confirmation"
+        >
+          <div className="w-full">
             <p className="text-sm text-slate-700 mb-4">{confirmMessage}</p>
             <div className="flex justify-end gap-2">
               <button
@@ -2324,7 +2400,7 @@ export default function AdminView({
               </button>
             </div>
           </div>
-        </div>
+        </ModalSurface>
       )}
 
       {/* Tabs navigation panel */}
@@ -2432,8 +2508,17 @@ export default function AdminView({
 
       {/* Create User Modal */}
       {showCreateUserForm && activeTab === 'accounts' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto shadow-lg relative">
+        <ModalSurface
+          isOpen={showCreateUserForm && activeTab === 'accounts'}
+          onClose={() => {
+            setShowCreateUserForm(false);
+            setNewUserForm(getDefaultNewUserForm());
+          }}
+          contentClassName="max-w-3xl shadow-lg relative"
+          overlayClassName="z-[9999]"
+          ariaLabel="Créer un nouveau compte utilisateur"
+        >
+          <div className="w-full max-h-[90vh] overflow-auto">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="flex items-center gap-2">
                 <UserPlus className="h-5 w-5 text-indigo-600" />
@@ -2852,7 +2937,7 @@ export default function AdminView({
               </div>
             </div>
           </div>
-        </div>
+        </ModalSurface>
       )}
 
       {/* Tab Panels Contents */}
@@ -2909,8 +2994,21 @@ export default function AdminView({
         )}
         {/* Import preview / validation modal */}
         {showImportDetails && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[80vh] overflow-auto shadow-lg">
+          <ModalSurface
+            isOpen={showImportDetails}
+            onClose={() => {
+              setShowImportDetails(false);
+              setValidImportRecords(null);
+              setImportPreviewRecords(null);
+              setImportPreviewHeaders(null);
+              setImportErrorsList(null);
+              setImportRowErrors(null);
+            }}
+            contentClassName="max-w-3xl shadow-lg"
+            overlayClassName="z-[9999]"
+            ariaLabel="Aperçu avant import"
+          >
+            <div className="w-full max-h-[80vh] overflow-auto">
               <div className="flex items-start justify-between mb-4">
                 <h3 className="text-lg font-bold">Aperçu avant import</h3>
                 <button className="text-slate-400 hover:text-slate-600" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); }}>✕</button>
@@ -2975,7 +3073,7 @@ export default function AdminView({
                 ) : null}
               </div>
             </div>
-          </div>
+          </ModalSurface>
         )}
         
         {/* TAB 1: SCHOOLS */}

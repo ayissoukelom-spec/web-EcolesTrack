@@ -4,6 +4,7 @@ import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag } from 'lucide-react';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
+import ModalSurface from './ModalSurface';
 
 interface AbsenceViewProps {
   userRole: UserRole;
@@ -390,9 +391,14 @@ export default function AbsenceView({
 
       {/* JUSTIFICATION MODAL */}
       {showJustifyModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100">
-            <div className="bg-indigo-600 px-6 py-5 text-white flex justify-between items-center">
+        <ModalSurface
+          isOpen={!!showJustifyModal}
+          onClose={() => setShowJustifyModal(null)}
+          ariaLabel="Justifier l'absence"
+          contentClassName="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100"
+          overlayClassName="bg-slate-900/50 backdrop-blur-sm"
+        >
+          <div className="bg-indigo-600 px-6 py-5 text-white flex justify-between items-center">
               <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
                 <FileSymlink className="h-5 w-5" />
                 Justifier l'absence de {showJustifyModal.studentName}
@@ -460,8 +466,7 @@ export default function AbsenceView({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalSurface>
       )}
     </div>
   );

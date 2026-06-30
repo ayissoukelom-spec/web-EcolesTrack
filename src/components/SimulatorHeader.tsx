@@ -4,6 +4,7 @@ import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser,
 import { School, AcademicYear, Class, Teacher, Student, Parent, User } from '../types';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
+import ModalSurface from './ModalSurface';
 
 interface SimulatorHeaderProps {
   currentRole: string;
@@ -496,9 +497,14 @@ export default function SimulatorHeader({
       </div>
       {/* Login modal */}
       {loginOpen && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md text-slate-800">
-            <h3 className="font-bold mb-3">Se connecter (simulation)</h3>
+        <ModalSurface
+          isOpen={loginOpen}
+          onClose={() => setLoginOpen(false)}
+          ariaLabel="Connexion"
+          contentClassName="bg-white rounded-2xl p-6 w-full max-w-md text-slate-800"
+          overlayClassName="bg-black/50"
+        >
+          <h3 className="font-bold mb-3">Se connecter (simulation)</h3>
             <div className="space-y-4 text-sm">
               <div>
                 <label className="block text-xs">
@@ -610,15 +616,19 @@ export default function SimulatorHeader({
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </ModalSurface>
       )}
 
       {/* Create Account modal */}
       {createAccountOpen && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto text-slate-800 shadow-xl relative z-[10000]">
-            <div className="flex items-start justify-between mb-4">
+        <ModalSurface
+          isOpen={createAccountOpen}
+          onClose={() => setCreateAccountOpen(false)}
+          ariaLabel="Créer un nouveau compte"
+          contentClassName="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto text-slate-800 shadow-xl relative z-[10000]"
+          overlayClassName="bg-black/50 z-[9999]"
+        >
+          <div className="flex items-start justify-between mb-4">
               <h3 className="font-bold">Créer un nouveau compte</h3>
               <button aria-label="Fermer" className="text-slate-400 hover:text-slate-600 font-bold text-lg" onClick={() => setCreateAccountOpen(false)}>✕</button>
             </div>
@@ -1049,8 +1059,7 @@ export default function SimulatorHeader({
                 {isCreating ? 'Création...' : 'Créer'}
               </button>
             </div>
-          </div>
-        </div>
+        </ModalSurface>
       )}
 
       <div className="max-w-7xl mx-auto p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -1162,9 +1171,14 @@ export default function SimulatorHeader({
         </div>
       </div>
       {profileEditOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70">
-          <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+        <ModalSurface
+          isOpen={profileEditOpen}
+          onClose={() => setProfileEditOpen(false)}
+          ariaLabel="Modifier le profil"
+          contentClassName="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl"
+          overlayClassName="z-50 bg-slate-950/70"
+        >
+          <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Modifier le profil</h2>
                 <p className="text-sm text-slate-500">Mettez à jour votre nom, téléphone et photo de profil.</p>
@@ -1233,8 +1247,7 @@ export default function SimulatorHeader({
                 Enregistrer
               </button>
             </div>
-          </div>
-        </div>
+        </ModalSurface>
       )}
     </div>
   );

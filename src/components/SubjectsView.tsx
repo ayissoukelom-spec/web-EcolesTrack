@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BookOpen, Plus, Edit2, Trash2, X, CheckCircle2, XCircle } from 'lucide-react';
 import { Subject } from '../types.ts';
+import ModalSurface from './ModalSurface';
 
 interface SchoolOption {
   id: number;
@@ -235,9 +236,14 @@ export default function SubjectsView({
 
       {/* Form Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-100 p-6">
-            <div className="flex justify-between items-center mb-6">
+        <ModalSurface
+          isOpen={isFormOpen}
+          onClose={handleCloseForm}
+          ariaLabel={editingId ? 'Modifier la matière' : 'Ajouter une matière'}
+          contentClassName="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-100 p-6"
+          overlayClassName="bg-black/30"
+        >
+          <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold text-slate-800">
                 {editingId ? 'Modifier la matière' : 'Ajouter une matière'}
               </h3>
@@ -316,8 +322,7 @@ export default function SubjectsView({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalSurface>
       )}
     </div>
   );
