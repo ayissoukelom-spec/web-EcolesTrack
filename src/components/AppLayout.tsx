@@ -62,6 +62,19 @@ export default function AppLayout({
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
+      {visibleErrorMsg && (
+        <div className="fixed inset-x-0 top-4 z-[70] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto max-w-md w-full bg-rose-50 border border-rose-100 p-4 rounded-2xl shadow-lg flex items-start gap-3 animate-fade-in text-xs sm:text-sm">
+            <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+            <div className="space-y-1 leading-relaxed">
+              <p className="font-bold text-rose-800">Alerte Système</p>
+              <p className="text-rose-700">{visibleErrorMsg}</p>
+            </div>
+            <button onClick={onClearError} className="ml-auto text-rose-400 font-bold hover:text-rose-600 cursor-pointer">✕</button>
+          </div>
+        </div>
+      )}
+
       <SimulatorHeader
         currentRole={currentRole}
         schoolsList={schoolsList}
@@ -232,17 +245,6 @@ export default function AppLayout({
         </aside>
 
         <main className="flex-1 min-w-0" id="main-viewport">
-          {visibleErrorMsg && (
-            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-fade-in text-xs sm:text-sm">
-              <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
-              <div className="space-y-1 leading-relaxed">
-                <p className="font-bold text-rose-800">Alerte Système</p>
-                <p className="text-rose-700">{visibleErrorMsg}</p>
-              </div>
-              <button onClick={onClearError} className="ml-auto text-rose-400 font-bold hover:text-rose-600 cursor-pointer">✕</button>
-            </div>
-          )}
-
           {isSyncing && (
             <div className="bg-white/60 p-12 text-center rounded-2xl border border-slate-50 shadow-sm flex flex-col justify-center items-center gap-3 my-12">
               <RefreshCw className="h-10 w-10 text-indigo-600 animate-spin" />

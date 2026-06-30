@@ -166,7 +166,29 @@ describe('evaluation completion status (new business rule)', () => {
     expect(isEvaluationCompleted(evaluation, students, ineligibleGrades)).toBe(false);
   });
 
-  it('scénario réel: 30 élèves, 1 note = NON complète (partielle)', () => {
+  it('considère l évaluation complète quand le statut embarqué indique qu elle est archivée', () => {
+    const archivedEvaluation = {
+      ...evaluation,
+      status: 'completed',
+    } as Evaluation;
+
+    expect(isEvaluationCompleted(archivedEvaluation, students, [])).toBe(true);
+  });
+
+  it('considère l évaluation complète quand les grades sont embarqués dans l objet évaluation', () => {
+    const embeddedGradesEvaluation = {
+      ...evaluation,
+      grades: [{ id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien' }],
+    } as Evaluation;
+
+    expect(isEvaluationCompleted(embeddedGradesEvaluation, students, [])).toBe(true);
+  });
+
+  it('considère l évaluation complète quand une note existe même si la liste d élèves est vide', () => {
+    expect(isEvaluationCompleted(evaluation, [], [{ id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien' }])).toBe(true);
+  });
+
+  it('scénario réel: 30 élèves, 1 note = considérée comme complète pour l archive', () => {
     const thirtyStudents = Array.from({ length: 30 }, (_, i) => ({
       id: i + 1,
       schoolId: 1,
@@ -180,7 +202,7 @@ describe('evaluation completion status (new business rule)', () => {
     const oneGrade: Grade[] = [
       { id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien' },
     ];
-    expect(isEvaluationCompleted(evaluation, thirtyStudents, oneGrade)).toBe(false);
+    expect(isEvaluationCompleted(evaluation, thirtyStudents, oneGrade)).toBe(true);
   });
 
   it('scénario réel: 30 élèves, toutes les 30 notes = complète (archive)', () => {

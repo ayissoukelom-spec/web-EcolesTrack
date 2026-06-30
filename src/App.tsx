@@ -773,9 +773,36 @@ export default function App() {
     return <LoginView onLogin={(role) => { setSimulatedRole(role); setCurrentRole(role as UserRole); }} />;
   }
 
-  // Centralized filtering of evaluations: separate active from completed
-  const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationCompleted(ev, studentsList, gradesList));
-  const completedEvaluations = evaluationsList.filter((ev) => isEvaluationCompleted(ev, studentsList, gradesList));
+  // Centralized filtering of evaluations: separate active from completed while preserving the original source list for views.
+  const sourceEvaluations = Array.isArray(evaluationsList) ? evaluationsList : [];
+  console.log('[evaluation-flow] before separation', {
+    sourceCount: sourceEvaluations.length,
+    evaluations: sourceEvaluations,
+  });
+
+  const evaluationCompletionMap = new Map<number, boolean>();
+  sourceEvaluations.forEach((ev) => {
+    evaluationCompletionMap.set(ev.id, isEvaluationCompleted(ev, studentsList, gradesList));
+  });
+
+  const activeEvaluations = sourceEvaluations.filter((ev) => {
+    const completed = evaluationCompletionMap.get(ev.id) ?? false;
+    return !completed;
+  });
+  const completedEvaluations = sourceEvaluations.filter((ev) => {
+    const completed = evaluationCompletionMap.get(ev.id) ?? false;
+    return completed;
+  });
+  const notesViewEvaluations = activeEvaluations.length > 0 ? activeEvaluations : sourceEvaluations;
+  const archiveViewEvaluations = completedEvaluations.length > 0 ? completedEvaluations : sourceEvaluations;
+
+  console.log('[evaluation-flow] after separation', {
+    sourceCount: sourceEvaluations.length,
+    activeCount: activeEvaluations.length,
+    completedCount: completedEvaluations.length,
+    notesViewCount: notesViewEvaluations.length,
+    archiveViewCount: archiveViewEvaluations.length,
+  });
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -965,16 +992,16 @@ export default function App() {
 
         {/* WORKSPACE CENTRAL BOARD */}
         <main className="flex-1 min-w-0" id="main-viewport">
-          
-          {/* Error warning notification banners */}
           {visibleErrorMsg && (
-            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-fade-in text-xs sm:text-sm">
-              <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
-              <div className="space-y-1 leading-relaxed">
-                <p className="font-bold text-rose-800">Alerte Système</p>
-                <p className="text-rose-700">{visibleErrorMsg}</p>
+            <div className="fixed inset-x-0 top-4 z-[70] flex justify-center px-4 pointer-events-none">
+              <div className="pointer-events-auto max-w-md w-full bg-rose-50 border border-rose-100 p-4 rounded-2xl shadow-lg flex items-start gap-3 animate-fade-in text-xs sm:text-sm">
+                <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+                <div className="space-y-1 leading-relaxed">
+                  <p className="font-bold text-rose-800">Alerte Système</p>
+                  <p className="text-rose-700">{visibleErrorMsg}</p>
+                </div>
+                <button onClick={() => setErrorMsg(null)} className="ml-auto text-rose-400 font-bold hover:text-rose-600 cursor-pointer">✕</button>
               </div>
-              <button onClick={() => setErrorMsg(null)} className="ml-auto text-rose-400 font-bold hover:text-rose-600 cursor-pointer">✕</button>
             </div>
           )}
 
@@ -1059,7 +1086,7 @@ export default function App() {
               {activeTab === 'notes' && currentRole !== 'parent' && (
                 <NotesView
                   userRole={currentRole}
-                  evaluationsList={activeEvaluations}
+                  evaluationsList={sourceEvaluations}
                   gradesList={gradesList}
                   studentsList={studentsList}
                   classesList={classesList}
@@ -1079,7 +1106,7 @@ export default function App() {
               {activeTab === 'archive' && currentRole !== 'parent' && (
                 <ArchiveView
                   userRole={currentRole}
-                  evaluationsList={completedEvaluations}
+                  evaluationsList={sourceEvaluations}
                   gradesList={gradesList}
                   studentsList={studentsList}
                   classesList={classesList}
@@ -1096,7 +1123,7 @@ export default function App() {
                   currentRole={currentRole}
                   classesList={classesList}
                   studentsList={studentsList}
-                  evaluationsList={activeEvaluations}
+                  evaluationsList={sourceEvaluations}
                   termsList={termsList}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                 />

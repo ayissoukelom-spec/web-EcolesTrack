@@ -351,9 +351,36 @@ export default function AppShell() {
   };
 
   const content = (() => {
-    // Centralized filtering of evaluations: separate active from completed
-    const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationCompleted(ev, studentsList, gradesList));
-    const completedEvaluations = evaluationsList.filter((ev) => isEvaluationCompleted(ev, studentsList, gradesList));
+    // Centralized filtering of evaluations: separate active from completed while preserving the original source list for views.
+    const sourceEvaluations = Array.isArray(evaluationsList) ? evaluationsList : [];
+    console.log('[evaluation-flow] before separation', {
+      sourceCount: sourceEvaluations.length,
+      evaluations: sourceEvaluations,
+    });
+
+    const evaluationCompletionMap = new Map<number, boolean>();
+    sourceEvaluations.forEach((ev) => {
+      evaluationCompletionMap.set(ev.id, isEvaluationCompleted(ev, studentsList, gradesList));
+    });
+
+    const activeEvaluations = sourceEvaluations.filter((ev) => {
+      const completed = evaluationCompletionMap.get(ev.id) ?? false;
+      return !completed;
+    });
+    const completedEvaluations = sourceEvaluations.filter((ev) => {
+      const completed = evaluationCompletionMap.get(ev.id) ?? false;
+      return completed;
+    });
+    const notesViewEvaluations = activeEvaluations.length > 0 ? activeEvaluations : sourceEvaluations;
+    const archiveViewEvaluations = completedEvaluations.length > 0 ? completedEvaluations : sourceEvaluations;
+
+    console.log('[evaluation-flow] after separation', {
+      sourceCount: sourceEvaluations.length,
+      activeCount: activeEvaluations.length,
+      completedCount: completedEvaluations.length,
+      notesViewCount: notesViewEvaluations.length,
+      archiveViewCount: archiveViewEvaluations.length,
+    });
 
     if (activeTab === 'tableau-de-bord') {
       return <DashboardView stats={stats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
@@ -405,7 +432,7 @@ export default function AppShell() {
       return (
         <NotesView
           userRole={currentRole}
-          evaluationsList={activeEvaluations}
+          evaluationsList={sourceEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
           classesList={classesList}
@@ -426,7 +453,7 @@ export default function AppShell() {
       return (
         <ArchiveView
           userRole={currentRole}
-          evaluationsList={completedEvaluations}
+          evaluationsList={sourceEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
           classesList={classesList}
@@ -440,7 +467,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'bulletins') {
-      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} termsList={termsList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
+      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={sourceEvaluations} termsList={termsList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
     }
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {

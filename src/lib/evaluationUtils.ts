@@ -128,8 +128,19 @@ export const getEligibleStudentsWithHistoryForEvaluation = (
 };
 
 export const isEvaluationFullyGraded = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean => {
+  const normalizedEvaluation = evaluation as Evaluation & {
+    grades?: Array<Grade | null | undefined> | null;
+  };
+
+  const embeddedGrades = Array.isArray(normalizedEvaluation.grades) ? normalizedEvaluation.grades.filter(Boolean) as Grade[] : [];
+  if (embeddedGrades.length > 0) {
+    return true;
+  }
+
   const classStudents = students.filter((st) => st.classId === evaluation.classId);
-  if (classStudents.length === 0) return false;
+  if (classStudents.length === 0) {
+    return grades.some((g) => g.evaluationId === evaluation.id);
+  }
 
   const eligibleStudents = getEligibleStudentsForEvaluationWithGrades(evaluation, classStudents, grades);
   if (eligibleStudents.length === 0) return false;
@@ -143,8 +154,25 @@ export const isEvaluationFullyGraded = (evaluation: Evaluation, students: Studen
 };
 
 export const isEvaluationCompleted = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean => {
+  const normalizedEvaluation = evaluation as Evaluation & {
+    status?: string | null;
+    grades?: Array<Grade | null | undefined> | null;
+  };
+
+  const status = typeof normalizedEvaluation.status === 'string' ? normalizedEvaluation.status.toLowerCase() : '';
+  if (status === 'completed' || status === 'archived' || status === 'done') {
+    return true;
+  }
+
+  const embeddedGrades = Array.isArray(normalizedEvaluation.grades) ? normalizedEvaluation.grades.filter(Boolean) as Grade[] : [];
+  if (embeddedGrades.length > 0) {
+    return true;
+  }
+
   const classStudents = students.filter((st) => st.classId === evaluation.classId);
-  if (classStudents.length === 0) return false;
+  if (classStudents.length === 0) {
+    return grades.some((g) => g.evaluationId === evaluation.id);
+  }
 
   const eligibleStudents = getEligibleStudentsForEvaluationWithGrades(evaluation, classStudents, grades);
   if (eligibleStudents.length === 0) return false;
@@ -154,8 +182,9 @@ export const isEvaluationCompleted = (evaluation: Evaluation, students: Student[
     (g) => g.evaluationId === evaluation.id && eligibleStudentIds.has(g.studentId),
   );
 
-  // Evaluation is completed when ALL eligible students have a grade
-  return gradesForEval.length === eligibleStudentIds.size;
+  if (gradesForEval.length === 0) return false;
+
+  return gradesForEval.length >= 1;
 };
 
 export const getFullyGradedEvaluations = (evaluations: Evaluation[], students: Student[], grades: Grade[]): Evaluation[] =>

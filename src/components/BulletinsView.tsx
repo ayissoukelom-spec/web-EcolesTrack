@@ -73,10 +73,23 @@ export default function BulletinsView({
   const [lookupIdInput, setLookupIdInput] = useState('');
   const [parentKnownItems, setParentKnownItems] = useState<BulletinListItem[]>([]);
 
+  const fallbackClasses = useMemo(() => Array.from(
+    new Map(
+      (evaluationsList || [])
+        .filter((ev) => ev?.classId != null)
+        .map((ev) => [String(ev.classId), {
+          id: Number(ev.classId),
+          name: String((ev as any).className || `Classe ${ev.classId}`),
+          schoolId: (ev as any).schoolId ?? null,
+        }])
+    ).values(),
+  ), [evaluationsList]);
+
   const visibleClasses = useMemo(() => {
-    if (!isTeacher) return classesList;
-    return classesList.filter((c) => teacherClassIds.includes(c.id));
-  }, [classesList, isTeacher, teacherClassIds]);
+    if (!isTeacher) return (classesList.length > 0 ? classesList : fallbackClasses);
+    const teacherScoped = classesList.filter((c) => teacherClassIds.includes(c.id) || teacherClassIds.length === 0);
+    return teacherScoped.length > 0 ? teacherScoped : fallbackClasses;
+  }, [classesList, isTeacher, teacherClassIds, fallbackClasses]);
 
   const visibleStudents = useMemo(() => {
     const scopedByClass = filters.classId
@@ -84,6 +97,7 @@ export default function BulletinsView({
       : studentsList;
 
     if (!isTeacher) return scopedByClass;
+    if (teacherClassIds.length === 0) return scopedByClass;
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
 
@@ -258,6 +272,14 @@ export default function BulletinsView({
   const renderedItems = canList ? listHook.items : parentKnownItems;
   const total = canList ? listHook.total : parentKnownItems.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  console.log('[BulletinsView] before-render', {
+    currentRole,
+    evaluationsCount: evaluationsList.length,
+    visibleClasses: visibleClasses.map((cls) => ({ id: cls.id, name: cls.name })),
+    renderedItems: renderedItems.map((item) => ({ id: item.id, classId: item.classId, studentId: item.studentId })),
+    total,
+  });
 
   return (
     <div className="space-y-6" id="bulletins-view">

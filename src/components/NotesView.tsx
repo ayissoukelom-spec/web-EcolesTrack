@@ -59,13 +59,43 @@ export default function NotesView({
   onAddEvaluation,
   onAddGrade,
 }: NotesViewProps) {
-  const sortedClasses = sortClasses(classesList || []);
+  const safeEvaluationsList = Array.isArray(evaluationsList)
+    ? evaluationsList.filter((item): item is Evaluation => Boolean(item))
+    : [];
+  const safeClassesList = Array.isArray(classesList)
+    ? classesList.filter((item): item is Class => Boolean(item))
+    : [];
+  const safeStudentsList = Array.isArray(studentsList)
+    ? studentsList.filter((item): item is Student => Boolean(item))
+    : [];
+  const safeGradesList = Array.isArray(gradesList)
+    ? gradesList.filter((item): item is Grade => Boolean(item))
+    : [];
+  const normalizedTeacherId = teacherId != null ? Number(teacherId) : undefined;
+  const safeTeacherClassIds = Array.isArray(teacherClassIds)
+    ? teacherClassIds.map((id) => Number(id)).filter((value) => !Number.isNaN(value))
+    : [];
+
+  const sortedClasses = sortClasses(safeClassesList);
+  const fallbackClasses = Array.from(
+    new Map(
+      safeEvaluationsList
+        .filter((ev) => ev?.classId != null)
+        .map((ev) => [String(ev.classId), {
+          id: Number(ev.classId),
+          name: String((ev as any).className || `Classe ${ev.classId}`),
+          schoolId: (ev as any).schoolId ?? null,
+        }])
+    ).values(),
+  );
+  const teacherScopedClasses = sortedClasses.filter((c) => safeTeacherClassIds.includes(c.id) || safeTeacherClassIds.length === 0);
   const availableClasses = userRole === 'teacher'
-    ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
-    : sortedClasses;
+    ? (teacherScopedClasses.length > 0 ? teacherScopedClasses : fallbackClasses)
+    : (sortedClasses.length > 0 ? sortedClasses : fallbackClasses);
   const filteredClasses = schoolFilterId
     ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
     : availableClasses;
+  const effectiveClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
@@ -100,7 +130,7 @@ export default function NotesView({
     })
     : approvedSubjectNames;
 
-  const currentEvaluation = evaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
+  const currentEvaluation = safeEvaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
 
   const isGradeModified = (grade: Grade) => {
     return grade.isModified ?? ((grade.editCount ?? 0) > 0);
@@ -252,7 +282,7 @@ export default function NotesView({
   };
 
   // Check if a student is eligible for an evaluation (was enrolled before or at the evaluation timestamp)
-  const currentClassStudents = studentsList.filter((st) => {
+  const currentClassStudents = safeStudentsList.filter((st) => {
     if (!selectedClassId) return true;
     return String(st.classId) === selectedClassId;
   });
@@ -280,20 +310,18 @@ export default function NotesView({
   const isEvaluationCompleted = (ev: Evaluation) =>
     isEvaluationCompletedUtil(ev, studentsList, gradesList);
 
-  const openEvaluations = evaluationsList.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
+  const openEvaluations = safeEvaluationsList.filter((ev) => {
+    if (userRole === 'teacher' && normalizedTeacherId != null && ev.teacherId != null) {
+      if (Number(ev.teacherId) !== normalizedTeacherId) return false;
     }
     if (!selectedClassId) return false;
     if (String(ev.classId) !== selectedClassId) return false;
     return !isEvaluationFullyGraded(ev);
   });
 
-  const selectableEvaluations = evaluationsList.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
+  const selectableEvaluations = safeEvaluationsList.filter((ev) => {
+    if (userRole === 'teacher' && normalizedTeacherId != null && ev.teacherId != null) {
+      if (Number(ev.teacherId) !== normalizedTeacherId) return false;
     }
     if (!selectedClassId) return false;
     if (String(ev.classId) !== selectedClassId) return false;
@@ -301,15 +329,15 @@ export default function NotesView({
   });
 
   useEffect(() => {
-    if (!filteredClasses.length) {
+    if (!effectiveClasses.length) {
       setSelectedClassId('');
       setSelectedEvalId('');
       setGradeInputValues({});
       return;
     }
 
-    if (!selectedClassId) {
-      const firstClassId = String(filteredClasses[0].id);
+    if (!selectedClassId || !effectiveClasses.some((cls) => String(cls.id) === selectedClassId)) {
+      const firstClassId = String(effectiveClasses[0].id);
       setSelectedClassId(firstClassId);
       const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === firstClassId);
       if (firstSelectableEval) {
@@ -322,7 +350,6 @@ export default function NotesView({
       return;
     }
 
-    // Only auto-select if no evaluation is currently selected for this class
     if (!selectedEvalId) {
       const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
       if (firstSelectableEval) {
@@ -332,12 +359,11 @@ export default function NotesView({
         setGradeInputValues({});
       }
     }
-  }, [filteredClasses, selectableEvaluations, selectedClassId]);
+  }, [effectiveClasses, selectableEvaluations, selectedClassId]);
 
-  const archivedEvaluations = evaluationsList.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
+  const archivedEvaluations = safeEvaluationsList.filter((ev) => {
+    if (userRole === 'teacher' && normalizedTeacherId != null && ev.teacherId != null) {
+      if (Number(ev.teacherId) !== normalizedTeacherId) return false;
     }
     if (!selectedClassId) return false;
     if (String(ev.classId) !== selectedClassId) return false;
@@ -354,7 +380,7 @@ export default function NotesView({
 
   const today = new Date();
   const overdueThresholdMs = 7 * 24 * 60 * 60 * 1000;
-  const overdueEvaluations = evaluationsList
+  const overdueEvaluations = safeEvaluationsList
     .filter((ev) => {
       if (!ev.date) return false;
       const evalDate = parseDateValue(ev.date);
@@ -433,7 +459,7 @@ export default function NotesView({
           <button
             type="button"
             onClick={() => {
-              const initialClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
+              const initialClasses = effectiveClasses.length > 0 ? effectiveClasses : availableClasses;
               if (initialClasses.length > 0) {
                 setNewEvalClassId(String(initialClasses[0].id));
               }
@@ -493,7 +519,7 @@ export default function NotesView({
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none placeholder-slate-400"
               >
                 <option value="">-- Choisissez --</option>
-                {filteredClasses.map((c) => (
+                {effectiveClasses.map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>

@@ -29,13 +29,43 @@ export default function ArchiveView({
   teacherClassIds = [],
   teacherId,
 }: ArchiveViewProps) {
-  const sortedClasses = sortClasses(classesList || []);
+  const safeEvaluationsList = Array.isArray(evaluationsList)
+    ? evaluationsList.filter((item): item is Evaluation => Boolean(item))
+    : [];
+  const safeClassesList = Array.isArray(classesList)
+    ? classesList.filter((item): item is Class => Boolean(item))
+    : [];
+  const safeStudentsList = Array.isArray(studentsList)
+    ? studentsList.filter((item): item is Student => Boolean(item))
+    : [];
+  const safeGradesList = Array.isArray(gradesList)
+    ? gradesList.filter((item): item is Grade => Boolean(item))
+    : [];
+  const normalizedTeacherId = teacherId != null ? Number(teacherId) : undefined;
+  const safeTeacherClassIds = Array.isArray(teacherClassIds)
+    ? teacherClassIds.map((id) => Number(id)).filter((value) => !Number.isNaN(value))
+    : [];
+
+  const sortedClasses = sortClasses(safeClassesList);
+  const fallbackClasses = Array.from(
+    new Map(
+      safeEvaluationsList
+        .filter((ev) => ev?.classId != null)
+        .map((ev) => [String(ev.classId), {
+          id: Number(ev.classId),
+          name: String((ev as any).className || `Classe ${ev.classId}`),
+          schoolId: (ev as any).schoolId ?? null,
+        }])
+    ).values(),
+  );
+  const teacherScopedClasses = sortedClasses.filter((c) => safeTeacherClassIds.includes(c.id) || safeTeacherClassIds.length === 0);
   const availableClasses = userRole === 'teacher'
-    ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
-    : sortedClasses;
+    ? (teacherScopedClasses.length > 0 ? teacherScopedClasses : fallbackClasses)
+    : (sortedClasses.length > 0 ? sortedClasses : fallbackClasses);
   const filteredClasses = schoolFilterId
     ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
     : availableClasses;
+  const effectiveClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -60,15 +90,15 @@ export default function ArchiveView({
     return normalizeDateOnly(ev.date || ev.createdAt);
   };
 
-  const filteredArchived = evaluationsList
+  const filteredArchived = safeEvaluationsList
     .filter((ev) => {
-      if (userRole === 'teacher') {
-        if (teacherId == null) return false;
-        if (ev.teacherId !== teacherId) return false;
+      if (userRole === 'teacher' && normalizedTeacherId != null && ev?.teacherId != null) {
+        if (Number(ev.teacherId) !== normalizedTeacherId) return false;
       }
       if (schoolFilterId) {
-        const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
-        if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
+        const evaluationClassId = Number(ev?.classId);
+        const evaluationClass = safeClassesList.find((cls) => cls?.id === evaluationClassId) ?? effectiveClasses.find((cls) => cls?.id === evaluationClassId);
+        if (!evaluationClass || Number(evaluationClass.schoolId) !== schoolFilterId) return false;
       }
       if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
       if (!isEvaluationCompleted(ev)) return false;
@@ -129,7 +159,7 @@ export default function ArchiveView({
             className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
           >
             <option value="">Toutes les classes</option>
-            {filteredClasses.map((cls) => (
+            {effectiveClasses.map((cls) => (
               <option key={cls.id} value={cls.id}>{cls.name}</option>
             ))}
           </select>
@@ -164,9 +194,9 @@ export default function ArchiveView({
       ) : (
         <div className="grid gap-4">
           {filteredArchived.map((ev) => {
-            const gradesForEval = gradesList.filter((g) => g.evaluationId === ev.id);
-            const classStudents = studentsList.filter((st) => st.classId === ev.classId);
-            const evaluationTimestamp = parseDateValue(ev.createdAt || ev.date);
+            const gradesForEval = safeGradesList.filter((g) => g?.evaluationId === ev.id);
+            const classStudents = safeStudentsList.filter((st) => st?.classId === ev.classId);
+            const evaluationTimestamp = parseDateValue(ev?.createdAt || ev?.date);
             const eligibleStudents = classStudents.filter((st) => {
               if (!st.enrolledAt || !evaluationTimestamp) return true;
               const enrollmentDate = parseDateValue(st.enrolledAt);
@@ -190,11 +220,11 @@ export default function ArchiveView({
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {gradesForEval.map((grade) => {
-                      const student = studentsList.find((st) => st.id === grade.studentId);
+                      const student = safeStudentsList.find((st) => st?.id === grade?.studentId);
                       return (
                         <div key={grade.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                            <div className="text-sm font-semibold text-slate-800">{grade?.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
                             {isGradeModified(grade) && (
                               <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-800 bg-amber-100 rounded-full px-2 py-0.5">
                                 Modifiée
@@ -202,8 +232,8 @@ export default function ArchiveView({
                             )}
                           </div>
                           <div className="mt-2 text-slate-600 text-xs">
-                            <div>Note : <span className="font-bold text-slate-900">{grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></div>
-                            <div>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></div>
+                            <div>Note : <span className="font-bold text-slate-900">{grade?.score ?? '—'}{ev?.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></div>
+                            <div>Remarque : <span className="text-slate-700">{grade?.remarks || '—'}</span></div>
                           </div>
                         </div>
                       );

@@ -25,8 +25,11 @@ export default function AbsenceView({
   onAddAbsence,
   onJustifyAbsence,
 }: AbsenceViewProps) {
-  const sortedClasses = sortClasses(classesList || []);
-  const sortedStudents = (studentsList || []).slice().sort((a, b) => {
+  const safeClassesList = (Array.isArray(classesList) ? classesList : []).filter((item): item is Class => Boolean(item));
+  const safeStudentsList = (Array.isArray(studentsList) ? studentsList : []).filter((item): item is Student => Boolean(item));
+  const safeAbsencesList = (Array.isArray(absencesList) ? absencesList : []).filter((item): item is Absence => Boolean(item));
+  const sortedClasses = sortClasses(safeClassesList);
+  const sortedStudents = safeStudentsList.slice().sort((a, b) => {
     // Compare by last name, then first name, then class name
     const last = (a.lastName || '').toLowerCase();
     const lastB = (b.lastName || '').toLowerCase();
@@ -77,7 +80,7 @@ export default function AbsenceView({
 
   const handleCreateAbsence = (e: React.FormEvent) => {
     e.preventDefault();
-    const student = studentsList.find((s) => s.id === parseInt(newAbsenceForm.studentId));
+    const student = safeStudentsList.find((s) => s.id === parseInt(newAbsenceForm.studentId));
     if (!student) return;
 
     onAddAbsence({
@@ -109,12 +112,12 @@ export default function AbsenceView({
   };
 
   // Filter absences
-  const filteredAbsences = absencesList.filter((abs) => {
+  const filteredAbsences = safeAbsencesList.filter((abs) => {
     if (filterSchool) {
-      const cls = classesList.find((c) => c.id === abs.classId);
+      const cls = safeClassesList.find((c) => c.id === abs?.classId);
       if (!cls || String((cls as any).schoolId) !== filterSchool) return false;
     }
-    if (filterClass && String(abs.classId) !== filterClass) return false;
+    if (filterClass && String(abs?.classId) !== filterClass) return false;
     return true;
   });
 
@@ -339,18 +342,18 @@ export default function AbsenceView({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredAbsences.map((abs) => (
-                <tr key={abs.id} className="hover:bg-slate-50/60 transition-colors">
-                  <td className="px-6 py-4 font-bold text-slate-800">{abs.studentName}</td>
-                  <td className="px-6 py-4 text-slate-500 font-semibold">{abs.className}</td>
+                <tr key={abs?.id ?? `absence-${Math.random()}`} className="hover:bg-slate-50/60 transition-colors">
+                  <td className="px-6 py-4 font-bold text-slate-800">{abs?.studentName || '—'}</td>
+                  <td className="px-6 py-4 text-slate-500 font-semibold">{abs?.className || '—'}</td>
                   <td className="px-6 py-4 text-slate-600">
-                    <span className="font-mono text-xs">{abs.date}</span> (
+                    <span className="font-mono text-xs">{abs?.date || '—'}</span> (
                     <span className="font-semibold capitalize text-indigo-600">
-                      {abs.period === 'morning' ? 'matin' : abs.period === 'afternoon' ? 'après-midi' : 'journée'}
+                      {abs?.period === 'morning' ? 'matin' : abs?.period === 'afternoon' ? 'après-midi' : 'journée'}
                     </span>
                     )
                   </td>
                   <td className="px-6 py-4">
-                    {abs.isJustified ? (
+                    {abs?.isJustified ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-100">
                         Justifiée
                       </span>
@@ -361,14 +364,16 @@ export default function AbsenceView({
                     )}
                   </td>
                   <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate text-xs">
-                    {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                    {abs?.justificationReason || '— En attente de motif de l\'enfant...'}
                   </td>
                   <td className="px-6 py-4 text-right">
                     {/* Only specific roles or Parent themselves can justify absences */}
-                    {!abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
+                    {!abs?.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
                       <button
                         onClick={() => {
-                          setShowJustifyModal(abs);
+                          if (abs) {
+                            setShowJustifyModal(abs);
+                          }
                         }}
                         className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-600 hover:bg-indigo-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer"
                         id={`btn-abs-justify-${abs.id}`}
@@ -395,7 +400,7 @@ export default function AbsenceView({
           <div className="bg-indigo-600 px-6 py-5 text-white flex justify-between items-center">
               <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
                 <FileSymlink className="h-5 w-5" />
-                Justifier l'absence de {showJustifyModal.studentName}
+                Justifier l'absence de {showJustifyModal?.studentName || 'l’élève'}
               </h3>
               <button onClick={() => setShowJustifyModal(null)} className="text-white hover:text-white text-xs font-bold cursor-pointer">✕</button>
             </div>
@@ -403,8 +408,8 @@ export default function AbsenceView({
             <form onSubmit={handleJustifySubmit} className="p-6 space-y-4">
               <div className="bg-slate-50 p-3.5 rounded-xl text-xs space-y-1">
                 <p className="text-slate-500">Détails de l'absence :</p>
-                <p className="font-bold text-slate-800">Date : {showJustifyModal.date} ({showJustifyModal.period})</p>
-                <p className="font-bold text-slate-800">Classe : {showJustifyModal.className}</p>
+                <p className="font-bold text-slate-800">Date : {showJustifyModal?.date || '—'} ({showJustifyModal?.period || '—'})</p>
+                <p className="font-bold text-slate-800">Classe : {showJustifyModal?.className || '—'}</p>
               </div>
 
               <div>
