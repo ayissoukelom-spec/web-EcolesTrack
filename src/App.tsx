@@ -35,6 +35,7 @@ import NotificationView from './components/NotificationView.tsx';
 import AuditView from './components/AuditView.tsx';
 import MobileParentView from './components/MobileParentView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
+import BulletinsView from './components/BulletinsView.tsx';
 
 import {
   LayoutDashboard,
@@ -45,6 +46,7 @@ import {
   Smartphone,
   Info,
   BookOpen,
+  FileText,
   LogOut,
   RefreshCw,
   AlertCircle
@@ -850,6 +852,21 @@ export default function App() {
                 </>
               )}
 
+              {(currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher') && (
+                <button
+                  onClick={() => setActiveTab('bulletins')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'bulletins'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-bulletins"
+                >
+                  <FileText className="h-4.5 w-4.5" />
+                  <span>Bulletins</span>
+                </button>
+              )}
+
               {currentRole === 'super_admin' && (
                 <button
                   onClick={() => setActiveTab('audit')}
@@ -1037,6 +1054,16 @@ export default function App() {
                   onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                   teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
+                />
+              )}
+
+              {activeTab === 'bulletins' && (currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher') && (
+                <BulletinsView
+                  currentRole={currentRole}
+                  classesList={classesList}
+                  studentsList={studentsList}
+                  evaluationsList={activeEvaluations}
+                  teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                 />
               )}
 

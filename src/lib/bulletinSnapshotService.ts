@@ -1,5 +1,7 @@
+import type express from 'express';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.ts';
+import { requireRole, verifyToken } from '../middleware/auth.ts';
 import {
   bulletinLines,
   bulletins,
@@ -239,6 +241,53 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
     });
   },
 });
+
+interface RegisterBulletinGenerateRouteOptions {
+  resolveActor: (req: any) => Promise<{ role?: string; schoolId?: number | null } | null>;
+  verifyMiddleware?: express.RequestHandler;
+  accessMiddleware?: express.RequestHandler;
+  generateHandler?: (studentId: number, termId: number) => Promise<BulletinSnapshotResult>;
+}
+
+export const registerBulletinGenerateRoute = (
+  app: express.Express,
+  options: RegisterBulletinGenerateRouteOptions,
+) => {
+  const {
+    resolveActor,
+    verifyMiddleware = verifyToken as any,
+    accessMiddleware = requireRole(['admin']) as any,
+    generateHandler = async (studentId, termId) => generateBulletinSnapshot(studentId, termId),
+  } = options;
+
+  app.post('/api/bulletins/generate', verifyMiddleware, accessMiddleware, async (req: any, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const studentId = Number(req.body?.studentId);
+      const termId = Number(req.body?.termId);
+      if (!Number.isInteger(studentId) || studentId <= 0 || !Number.isInteger(termId) || termId <= 0) {
+        return res.status(400).json({ error: 'studentId and termId are required' });
+      }
+
+      const result = await generateHandler(studentId, termId);
+      const createdId = (result as BulletinSnapshotResult & { id?: number }).id ?? result.bulletinId;
+      return res.status(201).json({
+        id: createdId,
+        studentId: result.studentId,
+        termId: result.termId,
+        average: result.average,
+        rank: result.rank,
+        mention: result.mention,
+        appreciation: result.appreciation,
+      });
+    } catch (err) {
+      console.error('Failed to generate bulletin:', err);
+      return res.status(500).json({ error: 'Failed to generate bulletin' });
+    }
+  });
+};
 
 export const generateBulletinSnapshot = async (
   studentId: number,

@@ -25,6 +25,9 @@ import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
+import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
+import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
+import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import {
   schools,
   academicYears,
@@ -406,6 +409,10 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
+
+  registerBulletinGenerateRoute(app, { resolveActor });
+  registerBulletinReadRoutes(app, { resolveActor });
+  registerBulletinPdfRoute(app, { resolveActor });
 
   // Get available users for profile switcher/simulation with proper access control
   app.get('/api/simulation/users', requireAuth, async (req: AuthRequest, res) => {
