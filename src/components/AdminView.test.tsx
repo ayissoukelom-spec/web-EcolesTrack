@@ -65,7 +65,7 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByRole('button', { name: /Refuser/i })).toBeTruthy();
   });
 
-  it('shows immediate class-selection feedback when a teacher class is checked', () => {
+  it('does not show the create account button in the accounts tab', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
     const classes: Class[] = [
@@ -104,14 +104,7 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Comptes/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Créer un compte/i }));
 
-    const roleSelect = screen.getByLabelText(/Rôle/i);
-    fireEvent.change(roleSelect, { target: { value: 'teacher' } });
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /CM1/i }));
-
-    expect(screen.getByText(/Les classes sélectionnées seront directement associées à l’enseignant/i)).toBeTruthy();
-    expect(screen.getAllByText(/CM1/i).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /Créer un compte/i })).toBeNull();
   });
 });

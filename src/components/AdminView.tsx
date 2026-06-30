@@ -3533,22 +3533,6 @@ export default function AdminView({
                 </div>
               </div>
             )}
-            <div className="flex justify-end">
-              {['super_admin', 'school_admin'].includes(userRole) && (
-                <button
-                  onClick={() => {
-                    setNewUserForm(getDefaultNewUserForm());
-                    setNewUserAssignedClassIds([]);
-                    setCreateUserError(null);
-                    setShowCreateUserForm(true);
-                  }}
-                  className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md shadow-indigo-600/10 transition-colors"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  Créer un compte
-                </button>
-              )}
-            </div>
             <div className="overflow-x-auto overflow-y-auto max-h-[56vh] min-h-[18rem] pb-2">
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
