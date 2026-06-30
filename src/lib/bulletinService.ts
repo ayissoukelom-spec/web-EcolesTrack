@@ -59,7 +59,9 @@ export interface BulletinAverageInput {
 }
 
 export const selectBulletinEvaluationsForTerm = (termId: number, evaluations: BulletinEvaluationLike[]): BulletinEvaluationLike[] =>
-  evaluations.filter((evaluation) => evaluation.termId === termId && evaluation.countInBulletin !== false);
+  evaluations.filter((evaluation) =>
+    (evaluation.termId === termId || evaluation.termId == null) && evaluation.countInBulletin !== false,
+  );
 
 const parseNumericScore = (score: string): number | null => {
   const normalized = String(score).trim().replace(',', '.');
@@ -95,7 +97,8 @@ const resolveCoefficient = (evaluation: BulletinEvaluationLike): number => {
 
 export const calculateStudentTermAverage = ({ term, student, evaluations, grades }: BulletinAverageInput): BulletinTermAverageResult => {
   const selectedEvaluations = selectBulletinEvaluationsForTerm(term.id, evaluations).filter(
-    (evaluation) => evaluation.classId === student.classId,
+    (evaluation) => evaluation.classId === student.classId
+      && (evaluation.studentId == null || evaluation.studentId === student.id),
   );
 
   const snapshots: BulletinEvaluationSnapshot[] = [];

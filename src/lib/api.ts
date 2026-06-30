@@ -2,6 +2,7 @@ import type { BulletinDetail, BulletinListFilters, BulletinListResponse } from '
 
 // Client-side name validation utils
 const LETTERS_AND_SPACES_REGEX = /^[\p{L} ]+$/u;
+const GENERIC_NAME_REGEX = /^[\p{L}0-9 \-_'\/]+$/u;
 const DIGITS_REGEX = /\d+/g;
 
 export function validateClientNames(payload: any) {
@@ -14,6 +15,16 @@ export function validateClientNames(payload: any) {
     if (typeof v !== 'string') continue;
     const trimmed = v.trim();
     if (trimmed.length === 0) continue;
+
+    if (field === 'name') {
+      if (!GENERIC_NAME_REGEX.test(trimmed)) {
+        const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres, chiffres, espaces, tirets, apostrophes et slashs sont autorisés.`);
+        err.field = field;
+        throw err;
+      }
+      continue;
+    }
+
     const digits = trimmed.match(DIGITS_REGEX);
     if (digits && digits.length > 0) {
       const unique = Array.from(new Set(digits.join('').split(''))).slice(0, 10).join('');
@@ -189,12 +200,19 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
   const headers = getSimulationHeaders();
 
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const baseHeaders = {
+    ...headers,
+    ...(options.headers || {}),
+  } as Record<string, string>;
+
+  const bodyIsString = typeof options.body === 'string';
+  if (bodyIsString && !Object.keys(baseHeaders).some((key) => key.toLowerCase() === 'content-type')) {
+    baseHeaders['Content-Type'] = 'application/json';
+  }
+
   const mergedOptions = {
     ...options,
-    headers: {
-      ...headers,
-      ...(options.headers || {}),
-    },
+    headers: baseHeaders,
   };
 
   // Client-side validation: if sending JSON body for create/update, validate name fields.
@@ -238,21 +256,26 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
 }
 
 export async function apiFetchBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
+  console.log('🌐 [apiFetchBlob] Called with endpoint:', endpoint, 'Stack:', new Error().stack);
   const headers = getSimulationHeaders();
+  console.log('🔑 [apiFetchBlob] Headers prepared:', Object.keys(headers));
+
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const mergedHeaders = {
     ...headers,
     ...(options.headers || {}),
   } as Record<string, string>;
 
-  if (mergedHeaders['Content-Type']) {
-    delete mergedHeaders['Content-Type'];
-  }
-
-  const response = await fetch(normalizedEndpoint, {
+  // Keep all headers including Content-Type to preserve authentication headers
+  // (getSimulationHeaders() may be the only source of auth in development)
+  const mergedOptions = {
     ...options,
     headers: mergedHeaders,
-  });
+  };
+
+  console.log('📡 [apiFetchBlob] Sending fetch to:', normalizedEndpoint);
+  const response = await fetch(normalizedEndpoint, mergedOptions);
+  console.log('📨 [apiFetchBlob] Response status:', response.status);
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));

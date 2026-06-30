@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SchoolTerm, SystemNotification, User, UserRole } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -362,6 +362,9 @@ interface AdminViewProps {
   onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
+  onAddSchoolTerm?: (data: { schoolId?: number | null; academicYearId: number; name: string; startDate?: string; endDate?: string; orderIndex?: number; isActive?: boolean }) => Promise<any>;
+  onUpdateSchoolTerm?: (id: number, data: { schoolId?: number | null; academicYearId?: number; name?: string; startDate?: string | null; endDate?: string | null; orderIndex?: number; isActive?: boolean }) => Promise<any>;
+  termsList?: SchoolTerm[];
   onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
@@ -399,6 +402,8 @@ export default function AdminView({
   onUpdateSchool,
   onUpdateStudent,
   onAddYear,
+  onAddSchoolTerm,
+  onUpdateSchoolTerm,
   onAddClass,
   onAddTeacher,
   onAddParent,
@@ -421,6 +426,7 @@ export default function AdminView({
   onApproveClass,
   onRejectClass,
   currentSchoolId,
+  termsList = [],
 }: AdminViewProps) {
   const teacherSpecializations = Array.from(new Set(
     subjectsList
@@ -437,6 +443,7 @@ export default function AdminView({
     const savedTab = window.localStorage.getItem('ecoletrack-admin-active-tab') as
       | 'schools'
       | 'years'
+      | 'terms'
       | 'classes'
       | 'teachers'
       | 'students'
@@ -444,13 +451,13 @@ export default function AdminView({
       | 'accounts'
       | null;
     const validTabs = userRole === 'super_admin'
-      ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts']
-      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts'];
+      ? ['schools', 'years', 'terms', 'classes', 'teachers', 'students', 'parents', 'accounts']
+      : ['years', 'terms', 'classes', 'teachers', 'students', 'parents', 'accounts'];
     if (savedTab && validTabs.includes(savedTab)) return savedTab;
     return userRole === 'super_admin' ? 'schools' : 'years';
   };
 
-  const [activeTab, setActiveTab] = useState<'schools' | 'years' | 'classes' | 'teachers' | 'students' | 'parents' | 'accounts' | 'matieres'>(getDefaultTab);
+  const [activeTab, setActiveTab] = useState<'schools' | 'years' | 'terms' | 'classes' | 'teachers' | 'students' | 'parents' | 'accounts' | 'matieres'>(getDefaultTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
@@ -466,6 +473,9 @@ export default function AdminView({
   const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[] });
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '2026-2027', isActive: true, schoolId: '' });
+  const [termForm, setTermForm] = useState({ schoolId: '', academicYearId: '', name: '', startDate: '', endDate: '', orderIndex: '1', isActive: true });
+  const [termError, setTermError] = useState<string | null>(null);
+  const [editableTermId, setEditableTermId] = useState<number | null>(null);
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' });
@@ -491,8 +501,8 @@ export default function AdminView({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const validTabs = userRole === 'super_admin'
-      ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres']
-      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres'];
+      ? ['schools', 'years', 'terms', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres']
+      : ['years', 'terms', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres'];
     if (!validTabs.includes(activeTab)) {
       setActiveTab(validTabs[0] as typeof activeTab);
       return;
@@ -763,6 +773,47 @@ export default function AdminView({
         isActive: yearForm.isActive,
       });
       setYearForm({ name: '2026-2027', isActive: true, schoolId: '' });
+    } else if (activeTab === 'terms') {
+      const selectedAcademicYearId = Number(termForm.academicYearId);
+      if (!termForm.name.trim() || !selectedAcademicYearId) {
+        setTermError('Le nom et l’année scolaire sont requis.');
+        return;
+      }
+
+      const payload: any = {
+        academicYearId: selectedAcademicYearId,
+        name: termForm.name.trim(),
+        startDate: termForm.startDate || undefined,
+        endDate: termForm.endDate || undefined,
+        orderIndex: Number(termForm.orderIndex) || 1,
+        isActive: Boolean(termForm.isActive),
+      };
+      if (userRole === 'super_admin' && termForm.schoolId) {
+        payload.schoolId = Number(termForm.schoolId);
+      }
+
+      try {
+        if (editableTermId != null) {
+          if (!onUpdateSchoolTerm) {
+            setTermError('Action de modification indisponible.');
+            return;
+          }
+          await onUpdateSchoolTerm(editableTermId, payload);
+          setEditableTermId(null);
+        } else {
+          if (!onAddSchoolTerm) {
+            setTermError('Impossible de créer un trimestre : action indisponible.');
+            return;
+          }
+          await onAddSchoolTerm(payload);
+        }
+
+        setTermForm({ schoolId: '', academicYearId: '', name: '', startDate: '', endDate: '', orderIndex: '1', isActive: true });
+        setTermError(null);
+        setIsModalOpen(false);
+      } catch (err: any) {
+        setTermError(err?.message || 'Impossible de créer/modifier le trimestre.');
+      }
     } else if (activeTab === 'classes') {
       const className = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
       if (!className.trim()) {
@@ -2370,6 +2421,19 @@ export default function AdminView({
 
         {['super_admin', 'school_admin'].includes(userRole) && (
           <button
+            onClick={() => { setActiveTab('terms'); setSearchQuery(''); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+              activeTab === 'terms' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+            id="tab-admin-terms"
+          >
+            <Calendar className="h-4 w-4" />
+            Trimestres
+          </button>
+        )}
+
+        {['super_admin', 'school_admin'].includes(userRole) && (
+          <button
             onClick={() => { setActiveTab('classes'); setSearchQuery(''); }}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
               activeTab === 'classes' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
@@ -3110,6 +3174,109 @@ export default function AdminView({
         </div>
       )}
 
+      {activeTab === 'terms' && (
+        <div>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+            <div>
+              <p className="text-slate-600 text-sm">Gérez les trimestres et leur association aux années scolaires.</p>
+            </div>
+            <button
+              onClick={() => {
+                setEditableTermId(null);
+                setTermForm({
+                  schoolId: userRole === 'school_admin' ? String(currentSchoolId || '') : '',
+                  academicYearId: '',
+                  name: '',
+                  startDate: '',
+                  endDate: '',
+                  orderIndex: '1',
+                  isActive: true,
+                });
+                setTermError(null);
+                setIsModalOpen(true);
+              }}
+              className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-3 py-2 rounded-lg"
+            >
+              Créer un trimestre
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
+                <tr>
+                  <th className="px-6 py-4">Nom</th>
+                  <th className="px-6 py-4">Année scolaire</th>
+                  <th className="px-6 py-4">École</th>
+                  <th className="px-6 py-4">Début</th>
+                  <th className="px-6 py-4">Fin</th>
+                  <th className="px-6 py-4">Ordre</th>
+                  <th className="px-6 py-4">Statut</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {termsList.filter((term) => filterBySearch(term.name || '') || filterBySearch(yearsList.find((year) => year.id === term.academicYearId)?.name || '')).map((term) => (
+                  <tr key={term.id} className="hover:bg-slate-50/60 transition-colors">
+                    <td className="px-6 py-4 font-bold text-slate-800">{term.name}</td>
+                    <td className="px-6 py-4 text-slate-500">{yearsList.find((year) => year.id === term.academicYearId)?.name || '—'}</td>
+                    <td className="px-6 py-4 text-slate-500">{term.schoolId ? schoolsList.find((s) => s.id === term.schoolId)?.name || `École ${term.schoolId}` : 'Global'}</td>
+                    <td className="px-6 py-4 text-slate-500">{term.startDate || '—'}</td>
+                    <td className="px-6 py-4 text-slate-500">{term.endDate || '—'}</td>
+                    <td className="px-6 py-4 text-slate-500">{term.orderIndex ?? '—'}</td>
+                    <td className="px-6 py-4">
+                      {term.isActive ? (
+                        <span className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Actif</span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 text-slate-500">Inactif</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-2">
+                      <button
+                        onClick={() => {
+                          setEditableTermId(term.id);
+                          setTermForm({
+                            schoolId: term.schoolId != null ? String(term.schoolId) : '',
+                            academicYearId: String(term.academicYearId),
+                            name: term.name,
+                            startDate: term.startDate || '',
+                            endDate: term.endDate || '',
+                            orderIndex: String(term.orderIndex || 1),
+                            isActive: Boolean(term.isActive),
+                          });
+                          setTermError(null);
+                          setIsModalOpen(true);
+                        }}
+                        className="p-1 px-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 text-indigo-600 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!onUpdateSchoolTerm) return;
+                          try {
+                            await onUpdateSchoolTerm(term.id, { isActive: !Boolean(term.isActive) });
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }}
+                        className={`p-1 px-2.5 rounded-lg text-xs font-semibold ${term.isActive ? 'bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100' : 'bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100'}`}
+                      >
+                        {term.isActive ? 'Désactiver' : 'Activer'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {termsList.filter((term) => filterBySearch(term.name || '') || filterBySearch(yearsList.find((year) => year.id === term.academicYearId)?.name || '')).length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-slate-400 text-xs">Aucun trimestre trouvé.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
         {/* TAB 3: CLASSES */}
         {activeTab === 'classes' && (
           <div>
@@ -3676,6 +3843,9 @@ export default function AdminView({
         handleSaveNewTeacher={handleSaveNewTeacher}
         userRole={userRole}
         currentSchoolId={currentSchoolId}
+        termForm={termForm}
+        setTermForm={setTermForm}
+        termError={termError}
       />
       {/* Admin modal rendered above */}
     </div>

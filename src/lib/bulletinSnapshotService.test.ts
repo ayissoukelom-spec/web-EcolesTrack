@@ -49,7 +49,9 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
           return draft.students.filter((row) => row.classId === classId);
         },
         async getClassTermEvaluations(classId, termId) {
-          return draft.evaluations.filter((row) => row.classId === classId && row.termId === termId);
+          return draft.evaluations.filter(
+            (row) => row.classId === classId && (row.termId === termId || row.termId == null),
+          );
         },
         async getGradesForStudents(studentIds, evaluationIds) {
           return draft.grades.filter((row) => studentIds.includes(row.studentId) && evaluationIds.includes(row.evaluationId));

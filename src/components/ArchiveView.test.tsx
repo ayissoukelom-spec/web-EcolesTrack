@@ -53,6 +53,7 @@ const defaultProps = {
   studentsList: students,
   classesList: classes,
   schoolsList: schools,
+  termsList: [],
   schoolFilterId: null,
   onSchoolFilterChange: () => undefined,
   teacherClassIds: [10],

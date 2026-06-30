@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   School,
   AcademicYear,
+  SchoolTerm,
   Class,
   Teacher,
   Student,
@@ -73,6 +74,7 @@ export default function App() {
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
   const [schoolsList, setSchoolsList] = useState<School[]>([]);
   const [yearsList, setYearsList] = useState<AcademicYear[]>([]);
+  const [termsList, setTermsList] = useState<SchoolTerm[]>([]);
   const [classesList, setClassesList] = useState<Class[]>([]);
   const [teachersList, setTeachersList] = useState<Teacher[]>([]);
   const [studentsList, setStudentsList] = useState<Student[]>([]);
@@ -188,6 +190,7 @@ export default function App() {
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
+        '/api/school-terms',
         '/api/classes',
         '/api/teachers',
         '/api/students',
@@ -213,6 +216,7 @@ export default function App() {
       }
       if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
       if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
+      if (Array.isArray(map['/api/school-terms'])) setTermsList(map['/api/school-terms']);
       if (Array.isArray(map['/api/classes'])) setClassesList(map['/api/classes']);
 
       const rawStudentsPayload = map['/api/students'];
@@ -367,6 +371,32 @@ export default function App() {
       await fetchAllData(false);
     } catch (err: any) {
       setErrorMsg(err.message || 'Impossible de créer la classe');
+      throw err;
+    }
+  };
+
+  const handleAddSchoolTerm = async (data: { schoolId?: number | null; academicYearId: number; name: string; startDate?: string; endDate?: string; orderIndex?: number; isActive?: boolean }) => {
+    try {
+      await apiFetch('/api/school-terms', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de créer le trimestre');
+      throw err;
+    }
+  };
+
+  const handleUpdateSchoolTerm = async (id: number, data: { schoolId?: number | null; academicYearId?: number; name?: string; startDate?: string | null; endDate?: string | null; orderIndex?: number; isActive?: boolean }) => {
+    try {
+      await apiFetch(`/api/school-terms/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de mettre à jour le trimestre');
       throw err;
     }
   };
@@ -593,7 +623,7 @@ export default function App() {
     }
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; studentId?: number; subject: string; title: string; coefficient: number; maxScore: number; date: string; termId?: number }) => {
     try {
       console.debug('Creating evaluation', data);
       await apiFetch('/api/evaluations', {
@@ -999,6 +1029,9 @@ export default function App() {
                   onDeleteUser={handleDeleteUser}
                   onDeleteClass={handleDeleteClass}
                   onDeleteSchool={handleDeleteSchool}
+                  onAddSchoolTerm={handleAddSchoolTerm}
+                  onUpdateSchoolTerm={handleUpdateSchoolTerm}
+                  termsList={termsList}
                   onAddSubject={handleAddSubject}
                   onUpdateSubject={handleUpdateSubject}
                   onDeleteSubject={handleDeleteSubject}
@@ -1031,6 +1064,7 @@ export default function App() {
                   studentsList={studentsList}
                   classesList={classesList}
                   schoolsList={schoolsList}
+                  termsList={termsList}
                   schoolFilterId={superAdminSchoolFilterId}
                   onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
@@ -1063,6 +1097,7 @@ export default function App() {
                   classesList={classesList}
                   studentsList={studentsList}
                   evaluationsList={activeEvaluations}
+                  termsList={termsList}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                 />
               )}

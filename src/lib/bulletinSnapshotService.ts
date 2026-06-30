@@ -1,5 +1,5 @@
 import type express from 'express';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or, isNull } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { requireRole, verifyToken } from '../middleware/auth.ts';
 import {
@@ -196,7 +196,12 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             coefficient: evaluations.coefficient,
             maxScore: evaluations.maxScore,
             countInBulletin: evaluations.countInBulletin,
-          }).from(evaluations).where(and(eq(evaluations.classId, classId), eq(evaluations.termId, termId)));
+          }).from(evaluations).where(
+            and(
+              eq(evaluations.classId, classId),
+              or(eq(evaluations.termId, termId), isNull(evaluations.termId)),
+            ),
+          );
         },
         async getGradesForStudents(studentIds, evaluationIds) {
           if (studentIds.length === 0 || evaluationIds.length === 0) return [];

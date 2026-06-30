@@ -12,6 +12,8 @@ export default function AdminModal(props: any) {
     setSchoolForm,
     yearForm,
     setYearForm,
+    termForm,
+    setTermForm,
     classForm,
     setClassForm,
     teacherForm,
@@ -21,6 +23,7 @@ export default function AdminModal(props: any) {
     studentForm,
     setStudentForm,
     studentError,
+    termError,
     newParentMode,
     setNewParentMode,
     newParentForm,
@@ -326,10 +329,10 @@ export default function AdminModal(props: any) {
             </div>
           )}
 
-          {studentError && (
+          {(studentError || termError) && (
             <div className="mt-3 p-2 bg-rose-50 border border-rose-200 rounded text-rose-700 text-sm flex items-start gap-2" role="alert">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M21 12A9 9 0 1 1 3 12a9 9 0 0 1 18 0z"/></svg>
-              <div className="text-sm">{studentError}</div>
+              <div className="text-sm">{termError || studentError}</div>
             </div>
           )}
 
@@ -353,6 +356,62 @@ export default function AdminModal(props: any) {
               <div className="flex items-center gap-2">
                 <input id="year-active" type="checkbox" checked={yearForm.isActive} onChange={e => setYearForm({...yearForm, isActive: e.target.checked})} className="w-4 h-4" />
                 <label htmlFor="year-active" className="text-sm text-slate-600">Année active</label>
+              </div>
+            </div>
+          )}
+
+          {/* Form 2.5: SCHOOL TERM */}
+          {activeTab === 'terms' && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Nom du trimestre" required />
+                </label>
+                <input required type="text" value={termForm.name} onChange={e => setTermForm({...termForm, name: e.target.value})} placeholder="1er Trimestre" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Année scolaire</label>
+                  <select required value={termForm.academicYearId} onChange={e => setTermForm({...termForm, academicYearId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                    <option value="">-- Choisissez une année --</option>
+                    {yearsList.map((year: any) => (
+                      <option key={year.id} value={String(year.id)}>{year.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
+                  {userRole === 'school_admin' ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                      {schoolsList.find((s: any) => s.id === currentSchoolId)?.name || 'Votre école sera assignée automatiquement'}
+                    </div>
+                  ) : (
+                    <select value={termForm.schoolId} onChange={e => setTermForm({...termForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                      <option value="">Global</option>
+                      {schoolsList.map((school: any) => (
+                        <option key={school.id} value={String(school.id)}>{school.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Début</label>
+                  <input type="date" value={termForm.startDate} onChange={e => setTermForm({...termForm, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Fin</label>
+                  <input type="date" value={termForm.endDate} onChange={e => setTermForm({...termForm, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Ordre</label>
+                  <input type="number" min="1" value={termForm.orderIndex} onChange={e => setTermForm({...termForm, orderIndex: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input id="term-active" type="checkbox" checked={termForm.isActive} onChange={e => setTermForm({...termForm, isActive: e.target.checked})} className="w-4 h-4" />
+                <label htmlFor="term-active" className="text-sm text-slate-600">Trimestre actif</label>
               </div>
             </div>
           )}

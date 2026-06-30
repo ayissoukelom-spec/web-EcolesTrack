@@ -173,7 +173,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .from(bulletins)
       .innerJoin(students, eq(bulletins.studentId, students.id))
       .innerJoin(classes, eq(bulletins.classId, classes.id))
-      .innerJoin(schools, eq(classes.schoolId, schools.id))
+      .leftJoin(schools, eq(classes.schoolId, schools.id))
       .innerJoin(academicYears, eq(bulletins.schoolYearId, academicYears.id))
       .innerJoin(schoolTerms, eq(bulletins.termId, schoolTerms.id))
       .where(whereClause);
@@ -245,6 +245,10 @@ const drawText = (
   });
 };
 
+const safeText = (value: string | null | undefined): string => {
+  return value ?? '';
+};
+
 export const createBulletinPdfDocument = async (
   data: BulletinPdfData,
   templateOverrides?: Partial<BulletinPdfTemplate>,
@@ -273,7 +277,7 @@ export const createBulletinPdfDocument = async (
 
   page.drawRectangle({ x: 0, y: height - 90, width, height: 90, color: primary });
   drawText(page, template.labels.title, margin, height - 52, 20, rgb(1, 1, 1), fontBold);
-  drawText(page, data.schoolName, margin, height - 76, 12, rgb(1, 1, 1), fontRegular);
+  drawText(page, safeText(data.schoolName), margin, height - 76, 12, rgb(1, 1, 1), fontRegular);
 
   if (template.logoFilePath) {
     try {
@@ -297,10 +301,10 @@ export const createBulletinPdfDocument = async (
   const lineGap = 18;
 
   page.drawRectangle({ x: margin, y: cursorY - 62, width: width - margin * 2, height: 62, color: secondary });
-  drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, margin + 10, cursorY - 20, 11, text, fontRegular);
-  drawText(page, `${template.labels.term}: ${data.termName}`, margin + 10, cursorY - 38, 11, text, fontRegular);
-  drawText(page, `${template.labels.student}: ${data.studentName}`, margin + 250, cursorY - 20, 11, text, fontRegular);
-  drawText(page, `${template.labels.class}: ${data.className}`, margin + 250, cursorY - 38, 11, text, fontRegular);
+  drawText(page, `${template.labels.schoolYear}: ${safeText(data.schoolYearName)}`, margin + 10, cursorY - 20, 11, text, fontRegular);
+  drawText(page, `${template.labels.term}: ${safeText(data.termName)}`, margin + 10, cursorY - 38, 11, text, fontRegular);
+  drawText(page, `${template.labels.student}: ${safeText(data.studentName)}`, margin + 250, cursorY - 20, 11, text, fontRegular);
+  drawText(page, `${template.labels.class}: ${safeText(data.className)}`, margin + 250, cursorY - 38, 11, text, fontRegular);
 
   cursorY -= 90;
 
@@ -320,10 +324,10 @@ export const createBulletinPdfDocument = async (
   cursorY -= 24;
   for (const line of data.lines) {
     page.drawRectangle({ x: tableX, y: cursorY, width: tableWidth, height: 22, borderColor: secondary, borderWidth: 0.6 });
-    drawText(page, line.subjectName, tableX + 8, cursorY + 6, 9, text, fontRegular);
-    drawText(page, String(line.coefficient), tableX + colSubject + 8, cursorY + 6, 9, text, fontRegular);
+    drawText(page, safeText(line.subjectName), tableX + 8, cursorY + 6, 9, text, fontRegular);
+    drawText(page, String(line.coefficient ?? 0), tableX + colSubject + 8, cursorY + 6, 9, text, fontRegular);
     drawText(page, line.average == null ? '-' : line.average.toFixed(2), tableX + colSubject + colCoef + 8, cursorY + 6, 9, text, fontRegular);
-    drawText(page, line.teacherComment || '-', tableX + colSubject + colCoef + colAvg + 8, cursorY + 6, 9, text, fontRegular);
+    drawText(page, line.teacherComment ? safeText(line.teacherComment) : '-', tableX + colSubject + colCoef + colAvg + 8, cursorY + 6, 9, text, fontRegular);
     cursorY -= 22;
     if (cursorY < 160) break;
   }
@@ -379,8 +383,11 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
   const buildPdf = pdfGenerator ?? ((data: BulletinPdfData) => createBulletinPdfDocument(data, template));
 
   app.get('/api/bulletins/:id/pdf', verifyMiddleware, detailAccessMiddleware, async (req: any, res) => {
+    const requestId = `PDF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`📥 [${requestId}] GET /api/bulletins/:id/pdf - params:`, req.params, 'auth:', req.user ? { uid: req.user.uid, role: req.user.role } : 'none', 'headers:', { authorization: req.headers.authorization ? '***' : 'missing', 'x-simulated-role': req.headers['x-simulated-role'] });
     try {
       const actor = await resolveActor(req);
+      console.log(`🔐 [${requestId}] Actor resolved:`, actor ? { role: actor.role, schoolId: actor.schoolId } : null);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
       const bulletinId = Number(req.params.id);

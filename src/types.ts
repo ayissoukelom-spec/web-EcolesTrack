@@ -125,6 +125,7 @@ export interface Evaluation {
   className?: string;
   teacherId: number;
   teacherName?: string;
+  studentId?: number;
   termId?: number | null;
   termName?: string;
   subject: string;

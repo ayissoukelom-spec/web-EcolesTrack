@@ -101,6 +101,39 @@ describe('bulletinService', () => {
     expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1]);
   });
 
+  it('inclut une évaluation sans termId dans le bulletin du trimestre demandé', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: null, subject: 'Math', title: 'DS 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Français', title: 'DS 2', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '14' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '16' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+
+    expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1, 2]);
+    expect(result.average).toBe(15);
+  });
+
+  it('ignore une évaluation avec studentId différent de l élève', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: 7, studentId: 2, subject: 'Math', title: 'DS privé', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'DS commun', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 2, score: '18' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '14' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+
+    expect(result.average).toBe(14);
+    expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([2]);
+    expect(result.snapshots.some((snapshot) => snapshot.evaluationId === 1)).toBe(false);
+  });
+
   it('retourne une moyenne nulle quand l élève n a pas de note', () => {
     const evaluations: Evaluation[] = [
       { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'DS 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
+import type { AcademicYear, AuditEvent, Class, Parent, School, SchoolTerm, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
 import { isEvaluationCompleted } from '../lib/evaluationUtils.ts';
@@ -36,6 +36,7 @@ export default function AppShell() {
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
+  const [termsList, setTermsList] = useState<SchoolTerm[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
 
@@ -94,6 +95,7 @@ export default function AppShell() {
         '/api/evaluations',
         '/api/grades',
         '/api/notifications',
+        '/api/school-terms',
         '/api/simulation/users',
       ];
 
@@ -107,6 +109,7 @@ export default function AppShell() {
       setEvaluationsList(Array.isArray(map['/api/evaluations']) ? map['/api/evaluations'] : []);
       setGradesList(Array.isArray(map['/api/grades']) ? map['/api/grades'] : []);
       setNotificationsList(Array.isArray(map['/api/notifications']) ? map['/api/notifications'] : []);
+      setTermsList(Array.isArray(map['/api/school-terms']) ? map['/api/school-terms'] : []);
       setUsersList(Array.isArray(map['/api/simulation/users']) ? map['/api/simulation/users'] : []);
 
       if (currentRole === 'super_admin') {
@@ -211,6 +214,16 @@ export default function AppShell() {
     await fetchAllData(false);
   };
 
+  const handleAddSchoolTerm = async (data: { schoolId?: number | null; academicYearId: number; name: string; startDate?: string; endDate?: string; orderIndex?: number; isActive?: boolean }) => {
+    await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify(data) });
+    await fetchAllData(false);
+  };
+
+  const handleUpdateSchoolTerm = async (id: number, data: { schoolId?: number | null; academicYearId?: number; name?: string; startDate?: string | null; endDate?: string | null; orderIndex?: number; isActive?: boolean }) => {
+    await apiFetch(`/api/school-terms/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    await fetchAllData(false);
+  };
+
   const handleDeleteClass = async (id: number) => {
     await apiFetch(`/api/classes/${id}`, { method: 'DELETE' });
     await fetchAllData();
@@ -305,7 +318,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; studentId?: number; subject: string; title: string; coefficient: number; maxScore: number; date: string; termId?: number }) => {
     await apiFetch('/api/evaluations', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
   };
@@ -375,6 +388,9 @@ export default function AppShell() {
             onDeleteUser={handleDeleteUser}
             onDeleteClass={handleDeleteClass}
             onDeleteSchool={handleDeleteSchool}
+            onAddSchoolTerm={handleAddSchoolTerm}
+            onUpdateSchoolTerm={handleUpdateSchoolTerm}
+            termsList={termsList}
             currentSchoolId={currentSchoolId}
           />
         </ErrorBoundary>
@@ -394,6 +410,7 @@ export default function AppShell() {
           studentsList={studentsList}
           classesList={classesList}
           schoolsList={schoolsList}
+          termsList={termsList}
           schoolFilterId={superAdminSchoolFilterId}
           onSchoolFilterChange={setSuperAdminSchoolFilterId}
           teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
@@ -423,7 +440,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'bulletins') {
-      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
+      return <BulletinsView currentRole={currentRole} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} termsList={termsList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
     }
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {

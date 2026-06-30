@@ -7,6 +7,7 @@ import type {
   BulletinTermOption,
   Class,
   Evaluation,
+  SchoolTerm,
   Student,
   UserRole,
 } from '../types.ts';
@@ -24,6 +25,7 @@ interface BulletinsViewProps {
   classesList: Class[];
   studentsList: Student[];
   evaluationsList: Evaluation[];
+  termsList: SchoolTerm[];
   teacherClassIds?: number[];
 }
 
@@ -53,6 +55,7 @@ export default function BulletinsView({
   classesList,
   studentsList,
   evaluationsList,
+  termsList,
   teacherClassIds = [],
 }: BulletinsViewProps) {
   const canGenerate = currentRole === 'school_admin' || currentRole === 'super_admin';
@@ -85,16 +88,23 @@ export default function BulletinsView({
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
 
   const termOptions = useMemo<BulletinTermOption[]>(() => {
-    const seen = new Set<number>();
-    const options: BulletinTermOption[] = [];
-    for (const ev of evaluationsList || []) {
-      const termId = Number(ev?.termId);
-      if (!Number.isInteger(termId) || termId <= 0 || seen.has(termId)) continue;
-      seen.add(termId);
-      options.push({ id: termId, name: String(ev?.termName || `Trimestre ${termId}`) });
+    if (!Array.isArray(termsList) || termsList.length === 0) {
+      const seen = new Set<number>();
+      const options: BulletinTermOption[] = [];
+      for (const ev of evaluationsList || []) {
+        const termId = Number(ev?.termId);
+        if (!Number.isInteger(termId) || termId <= 0 || seen.has(termId)) continue;
+        seen.add(termId);
+        options.push({ id: termId, name: String(ev?.termName || `Trimestre ${termId}`) });
+      }
+      return options.sort((a, b) => a.id - b.id);
     }
-    return options.sort((a, b) => a.id - b.id);
-  }, [evaluationsList]);
+
+    return termsList
+      .filter((term) => term && Number.isInteger(term.id) && term.id > 0)
+      .map((term) => ({ id: term.id, name: String(term.name ?? `Trimestre ${term.id}`) }))
+      .sort((a, b) => a.id - b.id);
+  }, [evaluationsList, termsList]);
 
   const suggestedParentStudentId = useMemo(() => {
     if (!isParent) return null;
@@ -239,7 +249,9 @@ export default function BulletinsView({
   };
 
   const handleDownloadPdf = async () => {
+    console.log('🔘 [BulletinsView.handleDownloadPdf] Button clicked, selectedId:', selectedId);
     if (!selectedId) return;
+    console.log('➡️  [BulletinsView.handleDownloadPdf] Calling pdfHook.run(', selectedId, ')');
     await pdfHook.run(selectedId);
   };
 

@@ -19,18 +19,30 @@ export default function BulletinDetail({
   pdfLoading,
   onDownloadPdf,
 }: BulletinDetailProps) {
+  const [downloadInProgress, setDownloadInProgress] = React.useState(false);
+
+  const handleDownloadClick = async () => {
+    if (downloadInProgress) return;
+    setDownloadInProgress(true);
+    try {
+      await onDownloadPdf();
+    } finally {
+      setDownloadInProgress(false);
+    }
+  };
+
   return (
     <section className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3 min-h-[420px]">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-slate-800">Page detail bulletin</h3>
         <button
           type="button"
-          disabled={!selectedId || pdfLoading}
-          onClick={onDownloadPdf}
+          disabled={!selectedId || pdfLoading || downloadInProgress}
+          onClick={handleDownloadClick}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5" />
-          {pdfLoading ? 'Chargement PDF...' : 'Telecharger PDF'}
+          {pdfLoading || downloadInProgress ? 'Chargement PDF...' : 'Telecharger PDF'}
         </button>
       </div>
 

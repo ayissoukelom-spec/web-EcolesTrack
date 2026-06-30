@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
+import { Evaluation, Grade, Student, Class, SchoolTerm, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import {
   Award,
@@ -31,13 +31,14 @@ interface NotesViewProps {
   studentsList: Student[];
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
+  termsList: SchoolTerm[];
   schoolFilterId?: number | null;
   onSchoolFilterChange?: (schoolId: number | null) => void;
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
-  onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
+  onAddEvaluation: (data: { classId: number; studentId?: number; subject: string; title: string; coefficient: number; maxScore: number; date: string; termId?: number }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
 }
 
@@ -48,6 +49,7 @@ export default function NotesView({
   studentsList,
   classesList,
   schoolsList,
+  termsList,
   schoolFilterId,
   onSchoolFilterChange,
   teacherClassIds = [],
@@ -79,11 +81,13 @@ export default function NotesView({
   };
 
   const [newEvalClassId, setNewEvalClassId] = useState('');
+  const [newEvalStudentId, setNewEvalStudentId] = useState('');
   const [newEvalSubject, setNewEvalSubject] = useState('');
   const [newEvalTitle, setNewEvalTitle] = useState('');
   const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
+  const [newEvalTermId, setNewEvalTermId] = useState('');
 
   const approvedSubjectNames = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
@@ -131,22 +135,30 @@ export default function NotesView({
       console.warn('NotesView: missing title for evaluation');
       return;
     }
+    if (termsList.length > 0 && !newEvalTermId) {
+      console.warn('NotesView: missing term selection for evaluation');
+      return;
+    }
 
     onAddEvaluation({
       classId: parseInt(newEvalClassId),
+      studentId: newEvalStudentId ? parseInt(newEvalStudentId) : undefined,
       subject: newEvalSubject,
       title: newEvalTitle,
       coefficient: Number(newEvalCoefficient),
       maxScore: Number(newEvalMaxScore),
       date: normalizeDateToISODate(newEvalDate) || newEvalDate,
+      termId: newEvalTermId ? parseInt(newEvalTermId) : undefined,
     });
     setIsNewEvalFormOpen(false);
     setNewEvalClassId('');
+    setNewEvalStudentId('');
     setNewEvalSubject('');
     setNewEvalTitle('');
     setNewEvalCoefficient(1);
     setNewEvalMaxScore(20);
     setNewEvalDate(formatLocalDatetime());
+    setNewEvalTermId('');
   };
 
   const handleSaveStudentGrade = async (studentId: number) => {
@@ -425,11 +437,13 @@ export default function NotesView({
               if (initialClasses.length > 0) {
                 setNewEvalClassId(String(initialClasses[0].id));
               }
+              setNewEvalStudentId('');
               setNewEvalSubject('');
               setNewEvalTitle('');
               setNewEvalCoefficient(1);
               setNewEvalMaxScore(20);
               setNewEvalDate(formatLocalDatetime());
+              setNewEvalTermId('');
               setIsNewEvalFormOpen(!isNewEvalFormOpen);
             }}
             disabled={userRole === 'teacher' && availableClasses.length === 0}
@@ -472,7 +486,10 @@ export default function NotesView({
               <select
                 required
                 value={newEvalClassId}
-                onChange={(e) => setNewEvalClassId(e.target.value)}
+                onChange={(e) => {
+                  setNewEvalClassId(e.target.value);
+                  setNewEvalStudentId('');
+                }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none placeholder-slate-400"
               >
                 <option value="">-- Choisissez --</option>
@@ -500,6 +517,38 @@ export default function NotesView({
                 ) : (
                   <option value="" disabled>Aucune matière approuvée disponible</option>
                 )}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Trimestre</label>
+              <select
+                value={newEvalTermId}
+                onChange={(e) => setNewEvalTermId(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+              >
+                <option value="">-- Choisir un trimestre --</option>
+                {termsList.length > 0 ? (
+                  termsList.map((term) => (
+                    <option key={term.id} value={term.id}>{term.name}</option>
+                  ))
+                ) : (
+                  <option value="" disabled>Aucun trimestre défini</option>
+                )}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Élève (optionnel)</label>
+              <select
+                value={newEvalStudentId}
+                onChange={(e) => setNewEvalStudentId(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+              >
+                <option value="">-- Tout(e) la classe --</option>
+                {studentsList
+                  .filter((student) => String(student.classId) === newEvalClassId)
+                  .map((student) => (
+                    <option key={student.id} value={student.id}>{`${student.firstName} ${student.lastName}`}</option>
+                  ))}
               </select>
             </div>
             <div>

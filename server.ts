@@ -22,7 +22,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureSchoolTermsTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
@@ -31,6 +31,7 @@ import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import {
   schools,
   academicYears,
+  schoolTerms,
   users,
   localAuths,
   teachers,
@@ -360,6 +361,7 @@ async function startServer() {
 
   console.log('Verifying if database needs seeding...');
   try {
+    await ensureSchoolTermsTableExists();
     await seedDatabaseIfEmpty();
     await ensureSchoolClassesTableExists();
   } catch (error) {
@@ -1797,6 +1799,135 @@ async function startServer() {
       res.status(201).json(result[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to write academic year' });
+    }
+  });
+
+  app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const academicYearId = req.query.academicYearId ? Number(req.query.academicYearId) : undefined;
+      const query = db.select().from(schoolTerms);
+
+      if (user.role === 'super_admin') {
+        if (academicYearId) {
+          const list = await query.where(eq(schoolTerms.academicYearId, academicYearId));
+          return res.json(list);
+        }
+
+        return res.json(await query);
+      }
+
+      if (!user.schoolId) {
+        return res.status(403).json({ error: 'School context required' });
+      }
+
+      const conditions = [
+        or(eq(schoolTerms.schoolId, user.schoolId), sql`${schoolTerms.schoolId} IS NULL`),
+      ];
+      if (academicYearId) {
+        conditions.push(eq(schoolTerms.academicYearId, academicYearId));
+      }
+
+      const list = await db.select().from(schoolTerms).where(and(...conditions));
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch school terms' });
+    }
+  });
+
+  app.post('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const { schoolId: rawSchoolId, academicYearId, name, startDate, endDate, orderIndex, isActive } = req.body;
+      if (!name || !academicYearId) {
+        return res.status(400).json({ error: 'Name and academicYearId are required' });
+      }
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const targetSchoolId = user.role === 'school_admin'
+        ? user.schoolId
+        : rawSchoolId != null && rawSchoolId !== ''
+          ? Number(rawSchoolId)
+          : null;
+
+      if (user.role === 'school_admin' && !targetSchoolId) {
+        return res.status(403).json({ error: 'School admin must have a school assigned' });
+      }
+
+      const year = await db.select().from(academicYears).where(eq(academicYears.id, Number(academicYearId)));
+      if (year.length === 0) {
+        return res.status(400).json({ error: 'Academic year not found' });
+      }
+
+      const result = await db.insert(schoolTerms).values({
+        schoolId: targetSchoolId ?? undefined,
+        academicYearId: Number(academicYearId),
+        name: String(name),
+        startDate: startDate ? String(startDate) : null,
+        endDate: endDate ? String(endDate) : null,
+        orderIndex: Number(orderIndex || 1),
+        isActive: Boolean(isActive ?? true),
+      }).returning();
+
+      res.status(201).json(result[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to create school term' });
+    }
+  });
+
+  app.put('/api/school-terms/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      const { schoolId: rawSchoolId, academicYearId, name, startDate, endDate, orderIndex, isActive } = req.body;
+      if (!id) return res.status(400).json({ error: 'Invalid term id' });
+
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const existingTerm = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
+      if (existingTerm.length === 0) {
+        return res.status(404).json({ error: 'School term not found' });
+      }
+
+      const targetSchoolId = user.role === 'school_admin'
+        ? user.schoolId
+        : rawSchoolId != null && rawSchoolId !== ''
+          ? Number(rawSchoolId)
+          : existingTerm[0].schoolId;
+
+      if (user.role === 'school_admin' && !targetSchoolId) {
+        return res.status(403).json({ error: 'School admin must have a school assigned' });
+      }
+
+      if (academicYearId) {
+        const year = await db.select().from(academicYears).where(eq(academicYears.id, Number(academicYearId)));
+        if (year.length === 0) {
+          return res.status(400).json({ error: 'Academic year not found' });
+        }
+      }
+
+      const updated = await db.update(schoolTerms)
+        .set({
+          schoolId: targetSchoolId ?? undefined,
+          academicYearId: academicYearId != null ? Number(academicYearId) : existingTerm[0].academicYearId,
+          name: name != null ? String(name) : existingTerm[0].name,
+          startDate: startDate !== undefined ? (startDate ? String(startDate) : null) : existingTerm[0].startDate,
+          endDate: endDate !== undefined ? (endDate ? String(endDate) : null) : existingTerm[0].endDate,
+          orderIndex: orderIndex != null ? Number(orderIndex) : existingTerm[0].orderIndex,
+          isActive: isActive != null ? Boolean(isActive) : existingTerm[0].isActive,
+        })
+        .where(eq(schoolTerms.id, id))
+        .returning();
+
+      res.json(updated[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to update school term' });
     }
   });
 
@@ -3315,6 +3446,9 @@ async function startServer() {
           className: classes.name,
           teacherId: evaluations.teacherId,
           teacherName: users.name,
+          studentId: evaluations.studentId,
+          termId: evaluations.termId,
+          termName: schoolTerms.name,
           subject: evaluations.subject,
           title: evaluations.title,
           coefficient: evaluations.coefficient,
@@ -3326,7 +3460,8 @@ async function startServer() {
         .from(evaluations)
         .innerJoin(classes, eq(evaluations.classId, classes.id))
         .innerJoin(teachers, eq(evaluations.teacherId, teachers.id))
-        .innerJoin(users, eq(teachers.userId, users.id));
+        .innerJoin(users, eq(teachers.userId, users.id))
+        .leftJoin(schoolTerms, eq(evaluations.termId, schoolTerms.id));
 
       if (actor.role !== 'super_admin') {
         // School admin, teacher, and others see only their school's evaluations
@@ -3370,9 +3505,27 @@ async function startServer() {
       if (requestingUser && requestingUser.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, subject, title, coefficient, maxScore, date } = req.body;
+      const { classId, teacherId, studentId, subject, title, coefficient, maxScore, date, termId } = req.body;
       if (!classId || !subject || !title || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
+      }
+      const parsedTermId = termId ? parseInt(termId) : undefined;
+      if (termId && Number.isNaN(parsedTermId)) {
+        return res.status(400).json({ error: 'Invalid termId' });
+      }
+      const parsedStudentId = studentId ? parseInt(studentId) : undefined;
+      if (studentId && Number.isNaN(parsedStudentId)) {
+        return res.status(400).json({ error: 'Invalid studentId' });
+      }
+
+      if (parsedStudentId) {
+        const [studentRecord] = await db.select().from(students).where(eq(students.id, parsedStudentId));
+        if (!studentRecord) {
+          return res.status(404).json({ error: 'Student not found' });
+        }
+        if (studentRecord.classId !== parseInt(classId)) {
+          return res.status(400).json({ error: 'Student does not belong to the selected class' });
+        }
       }
 
       // Load effective user context (including simulated header schoolId fallback when needed)
@@ -3502,6 +3655,8 @@ async function startServer() {
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
+        studentId: parsedStudentId ?? null,
+        termId: parsedTermId ?? null,
         subject: normalizedSubject,
         title,
         coefficient: coefficient ? parseInt(coefficient) : 1,
@@ -3634,7 +3789,7 @@ async function startServer() {
         remarks,
         studentSchoolId: student.schoolId,
         userSchoolId: user.schoolId,
-        evaluationSchoolId: evaluation.schoolId,
+        evaluationClassId: evaluation.classId,
       });
 
       // Validate that student was enrolled in the class before or at the evaluation timestamp.
