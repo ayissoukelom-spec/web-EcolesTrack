@@ -98,8 +98,69 @@ export async function ensureUsersTableSchema() {
   try {
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;`);
+    await db.execute(sql`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_unique;`);
+
+    const duplicateCheck = await db.execute(sql`SELECT 1 AS duplicate
+      FROM users
+      GROUP BY LOWER(email)
+      HAVING COUNT(*) > 1
+      LIMIT 1;`);
+
+    if (Array.isArray(duplicateCheck.rows) && duplicateCheck.rows.length > 0) {
+      console.warn('Skipping users.email UNIQUE constraint because duplicate emails already exist; new duplicates are blocked by application checks.');
+    } else {
+      await db.execute(sql`ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE (email);`);
+    }
   } catch (err: any) {
     console.error('Failed to ensure users table schema exists:', err?.message || err);
+    throw err;
+  }
+}
+
+export async function ensureUserSchoolsTableExists() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS user_schools (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      role TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP DEFAULT now()
+    );`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS user_schools_user_id_school_id_idx ON user_schools (user_id, school_id);`);
+    // Ensure columns exist for older DBs that may have been created without them
+    await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS role TEXT;`);
+    await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;`);
+    await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();`);
+    // Ensure roles are backfilled from business tables before making the column NOT NULL.
+    await db.execute(sql`
+      UPDATE user_schools
+      SET role = 'teacher'
+      FROM teachers
+      WHERE user_schools.role IS NULL
+        AND user_schools.user_id = teachers.user_id
+        AND user_schools.school_id = teachers.school_id;
+    `);
+    await db.execute(sql`
+      UPDATE user_schools
+      SET role = 'parent'
+      FROM parents
+      WHERE user_schools.role IS NULL
+        AND user_schools.user_id = parents.user_id
+        AND user_schools.school_id = parents.school_id;
+    `);
+    await db.execute(sql`
+      UPDATE user_schools
+      SET role = users.role
+      FROM users
+      WHERE user_schools.role IS NULL
+        AND user_schools.user_id = users.id
+        AND users.role IN ('teacher', 'parent', 'school_admin', 'student');
+    `);
+    await db.execute(sql`UPDATE user_schools SET is_active = true WHERE is_active IS NULL;`);
+    await db.execute(sql`ALTER TABLE user_schools ALTER COLUMN role SET NOT NULL;`);
+  } catch (err: any) {
+    console.error('Failed to ensure user_schools table exists:', err?.message || err);
     throw err;
   }
 }

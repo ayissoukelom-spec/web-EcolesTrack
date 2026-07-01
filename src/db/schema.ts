@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { boolean, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Schools
@@ -45,6 +45,17 @@ export const users = pgTable('users', {
   isDeleted: boolean('is_deleted').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const userSchools = pgTable('user_schools', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  role: text('role').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userSchoolUniqueIdx: uniqueIndex('user_schools_user_id_school_id_idx').on(table.userId, table.schoolId),
+}));
 
 // 3b. Local auth store for username/password (optional, dev-friendly)
 export const localAuths = pgTable('local_auths', {

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import AdminModal from './AdminModal';
+import { apiFetch } from '../lib/api.ts';
 import SubjectsView from './SubjectsView';
 import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
 import {
@@ -1323,6 +1324,11 @@ export default function AdminView({
   const [parentDetail, setParentDetail] = useState<Parent | null>(null);
   const [editUserOpen, setEditUserOpen] = useState(false);
   const [userToEdit, setUserToEdit] = useState<User | null>(null);
+  const [manageMultiSchoolOpen, setManageMultiSchoolOpen] = useState(false);
+  const [multiSchoolTargetUser, setMultiSchoolTargetUser] = useState<User | null>(null);
+  const [multiSchoolSelectedSchoolId, setMultiSchoolSelectedSchoolId] = useState<number | ''>('');
+  const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
+  const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
   const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', assignedClassIds: [] as number[] });
   const [editUserPassword, setEditUserPassword] = useState('');
   const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
@@ -3701,6 +3707,21 @@ export default function AdminView({
                           Supprimer
                         </button>
                       )}
+                      {userRole === 'super_admin' && (user.role === 'teacher' || user.role === 'parent') && (
+                        <button
+                          onClick={() => {
+                            setMultiSchoolTargetUser(user);
+                            setMultiSchoolSelectedSchoolId('');
+                            setMultiSchoolRole(user.role);
+                            setMultiSchoolError(null);
+                            setManageMultiSchoolOpen(true);
+                          }}
+                          className="p-1 px-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold transition-colors"
+                          title="Ajouter à une autre école"
+                        >
+                          Ajouter à une autre école
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -3711,6 +3732,42 @@ export default function AdminView({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-school manager modal (super_admin only) */}
+      {manageMultiSchoolOpen && multiSchoolTargetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/30" onClick={() => { setManageMultiSchoolOpen(false); setMultiSchoolTargetUser(null); setMultiSchoolError(null); }} />
+          <div className="bg-white p-6 rounded shadow-lg z-50 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-2">Ajouter {multiSchoolTargetUser.name} à une autre école</h3>
+            {multiSchoolError && <div className="text-rose-600 mb-2">{multiSchoolError}</div>}
+            <label className="block text-sm mb-2">
+              <span className="text-xs font-semibold">École</span>
+              <select className="w-full mt-1 p-2 border rounded" value={multiSchoolSelectedSchoolId} onChange={(e) => setMultiSchoolSelectedSchoolId(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">Sélectionnez une école</option>
+                {schoolsList.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+              </select>
+            </label>
+            <label className="block text-sm mb-4">
+              <span className="text-xs font-semibold">Rôle dans cette école</span>
+              <div className="w-full mt-1 p-2 border rounded bg-slate-50 text-slate-700">{multiSchoolRole}</div>
+            </label>
+            <div className="flex gap-2 justify-end">
+              <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setManageMultiSchoolOpen(false); setMultiSchoolTargetUser(null); setMultiSchoolError(null); }}>Annuler</button>
+              <button className="px-3 py-2 rounded bg-indigo-600 text-white" onClick={async () => {
+                setMultiSchoolError(null);
+                if (!multiSchoolSelectedSchoolId) { setMultiSchoolError('Veuillez sélectionner une école'); return; }
+                try {
+                  const resp = await apiFetch(`/api/users/${multiSchoolTargetUser.id}/schools`, { method: 'POST', body: JSON.stringify({ schoolId: multiSchoolSelectedSchoolId, role: multiSchoolRole }) });
+                  // refresh user list (simple reload)
+                  window.location.reload();
+                } catch (err: any) {
+                  setMultiSchoolError(err?.message || 'Échec lors de l’ajout de l’école');
+                }
+              }}>Valider</button>
+            </div>
           </div>
         </div>
       )}

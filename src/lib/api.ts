@@ -34,6 +34,7 @@ export function validateClientNames(payload: any) {
 // helper to communicate with the full-stack backend
 const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
+const LOCAL_STORAGE_ACTIVE_SCHOOL_KEY = 'ecoletrack_active_school_id';
 
 function isSuppressedSystemError(message: string): boolean {
   return /Unauthorized:\s*Missing token/i.test(message);
@@ -90,6 +91,22 @@ export function setSimulatedUser(user: any) {
 
 export function clearSimulatedUser() {
   localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+  localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
+}
+
+export function getActiveSchoolId(): number | null {
+  const value = localStorage.getItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function setActiveSchoolId(schoolId: number | null) {
+  if (schoolId == null) {
+    localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
+    return;
+  }
+  localStorage.setItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY, String(schoolId));
 }
 
 export function findTeacherProfileFromSimulatedUser(
@@ -150,7 +167,7 @@ function getSimulationHeaders(): Record<string, string> {
   let uid = simulatedUser?.uid ?? 'sim_superadmin_123';
   let email = simulatedUser?.email ?? 'superadmin@ecoletrack.fr';
   let name = simulatedUser?.name ?? 'M. Jean-Marc Super-Admin';
-  let schoolId = simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null;
+  let schoolId = getActiveSchoolId() != null ? String(getActiveSchoolId()) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
 
   if (role === 'school_admin') {
     uid = simulatedUser?.uid ?? 'sim_schooladmin_123';

@@ -22,9 +22,10 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
+import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
@@ -32,6 +33,7 @@ import {
   schools,
   academicYears,
   users,
+  userSchools,
   localAuths,
   teachers,
   parents,
@@ -48,42 +50,7 @@ import {
   auditEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
-import * as dotenv from 'dotenv';
 
-console.log('FILE EXECUTED = server.ts');
-
-// Backend business rules documentation
-// =====================================
-// Official rules:
-// - Parent / Student relation is unique and direct.
-//   The canonical relation is `students.parentId -> parents.id`.
-//   The `parents.studentId` field may exist for compatibility, but
-//   access control and visibility are enforced only through `students.parentId`.
-// - No OR(...) logic is allowed in critical access checks.
-//   Critical routes must use explicit equality filters only.
-// - schoolId rules are strict.
-//   A user or entity can only access data for its own `schoolId`.
-//   No fallback on related entity schoolId is permitted for parent or grade access.
-// - GET /api/grades access rules:
-//   * Parents may only see grades for students where `students.parentId = parents.id`.
-//   * School staff may only see grades for students in their own school.
-//   * No implicit access via `parents.studentId` or other indirect relation is allowed.
-// - resolveActor rules:
-//   * In simulated mode, a DB user is resolved by uid or email.
-//   * If a matching DB user exists, the DB record is never modified to inject `schoolId`.
-//   * The effective actor may include `schoolId` from the auth token only in-memory.
-//   * Real authenticated users are loaded from the DB and returned as-is.
-// - Class / Teacher rules:
-//   * Class teacher joins are strict: the teacher must belong to the same school as the class.
-//   * Teacher assignment lookups are filtered by class schoolId.
-// - Forbidden architecture patterns:
-//   * No indirect parent/child access through `parents.studentId` when resolving parent-owned students.
-//   * No `OR` joins or allowed school checks in protected lists like `/api/parents`, `/api/grades`, `/api/classes`, `/api/teachers`.
-
-// Load env variables
-dotenv.config();
-
-// Utility: check users/teachers school_id consistency and log a warning if mismatch found
 async function logIfTeacherUserMismatch(userId: number | null | undefined, teacherId: number | null | undefined) {
   try {
     if (!userId || !teacherId) return;
@@ -97,6 +64,31 @@ async function logIfTeacherUserMismatch(userId: number | null | undefined, teach
   } catch (e: any) {
     console.warn('DIAG: failed to verify teacher/user school_id consistency', { userId, teacherId, err: e?.message || e });
   }
+}
+
+async function findExistingUsersByEmail(email: string | null | undefined) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return [];
+
+  return db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
+}
+
+// Find existing user by email AND schoolId (for per-school uniqueness)
+async function findExistingUsersByEmailAndSchool(email: string | null | undefined, schoolId: number | null | undefined) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return [];
+  
+  if (schoolId == null) {
+    // If no schoolId provided, return empty (can't check per-school uniqueness without school)
+    return [];
+  }
+
+  return db.select().from(users).where(
+    and(
+      eq(sql`LOWER(${users.email})`, normalizedEmail),
+      eq(users.schoolId, schoolId)
+    )
+  );
 }
 
 // Helper to resolve actor with fallback to simulated profile in dev
@@ -140,9 +132,93 @@ async function resolveActor(req: AuthRequest) {
 
   // Otherwise, load from DB for real authenticated users.
   const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-  if (dbUser) return dbUser;
+  if (dbUser) {
+    const activeSchoolId = req.user.schoolId ?? null;
+    if (activeSchoolId != null) {
+      return { ...dbUser, schoolId: activeSchoolId };
+    }
+    return dbUser;
+  }
 
   return null;
+}
+
+async function getUserSchoolMemberships(userId: number | null | undefined) {
+  if (!userId) return [];
+
+  const rows = await db.select({
+    schoolId: userSchools.schoolId,
+    isActive: userSchools.isActive,
+  }).from(userSchools).where(eq(userSchools.userId, userId));
+
+  return rows;
+}
+
+async function ensureUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, requiredRole?: string | null) {
+  if (!userId || schoolId == null) return null;
+
+  const whereClause = requiredRole
+    ? and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId), eq(userSchools.role, requiredRole))
+    : and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId));
+
+  const existing = await db.select().from(userSchools).where(whereClause);
+  return existing[0] ?? null;
+}
+
+async function upsertUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, role: string, isActive = true) {
+  if (!userId || schoolId == null) return null;
+
+  const existing = await ensureUserSchoolMembership(userId, schoolId);
+  if (existing) {
+    const updates: Record<string, any> = {};
+    if (existing.role !== role) updates.role = role;
+    if (existing.isActive !== isActive) updates.isActive = isActive;
+
+    if (Object.keys(updates).length > 0) {
+      const [updated] = await db.update(userSchools)
+        .set(updates)
+        .where(and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId)))
+        .returning();
+      return updated ?? existing;
+    }
+
+    return existing;
+  }
+
+  const [inserted] = await db.insert(userSchools).values({
+    userId,
+    schoolId,
+    role,
+    isActive,
+  }).returning();
+
+  return inserted ?? null;
+}
+
+async function repairMissingSchoolAdminMemberships() {
+  const schoolAdmins = await db.select({
+    id: users.id,
+    schoolId: users.schoolId,
+  }).from(users).where(and(eq(users.role, 'school_admin'), sql`${users.schoolId} IS NOT NULL`));
+
+  for (const schoolAdmin of schoolAdmins) {
+    if (schoolAdmin.schoolId == null) continue;
+    const existing = await ensureUserSchoolMembership(schoolAdmin.id, schoolAdmin.schoolId);
+    if (!existing) {
+      await upsertUserSchoolMembership(schoolAdmin.id, schoolAdmin.schoolId, 'school_admin', true);
+    }
+  }
+}
+
+async function setActiveUserSchool(userId: number | null | undefined, schoolId: number | null | undefined) {
+  if (!userId || schoolId == null) return null;
+
+  const membership = await ensureUserSchoolMembership(userId, schoolId);
+  if (!membership) return null;
+
+  await db.update(userSchools).set({ isActive: false }).where(eq(userSchools.userId, userId));
+  const updated = await db.update(userSchools).set({ isActive: true }).where(and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId))).returning();
+  return updated[0] ?? null;
 }
 
 function normalizeSpecialization(value: any) {
@@ -362,6 +438,9 @@ async function startServer() {
   try {
     await seedDatabaseIfEmpty();
     await ensureSchoolClassesTableExists();
+    await ensureUsersTableSchema();
+    await ensureUserSchoolsTableExists();
+    await repairMissingSchoolAdminMemberships();
   } catch (error) {
     console.error('Database initialization failed, shutting down application.', error);
     process.exit(1);
@@ -414,6 +493,57 @@ async function startServer() {
   registerBulletinReadRoutes(app, { resolveActor });
   registerBulletinPdfRoute(app, { resolveActor });
 
+  // Register POST /api/users/:userId/schools (manage multi-school memberships)
+  app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      console.log('HANDLER ENTER /api/users/:userId/schools', { params: req.params, body: req.body, simulatedRole: req.headers['x-simulated-role'], hasAuth: !!req.headers.authorization });
+
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actorRole = req.user?.role;
+      if (!actorRole) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const userIdParam = parseInt(String(req.params.userId), 10);
+      if (!Number.isFinite(userIdParam)) return res.status(400).json({ error: 'Invalid userId' });
+
+      const { schoolId, role } = req.body ?? {};
+      const parsedSchoolId = typeof schoolId === 'number' ? schoolId : parseInt(String(schoolId), 10);
+      if (!Number.isFinite(parsedSchoolId)) return res.status(400).json({ error: 'Invalid schoolId' });
+
+      if (actorRole !== 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden: only super_admin can manage multi-school memberships' });
+      }
+
+      const [targetUser] = await db.select().from(users).where(eq(users.id, userIdParam)).limit(1);
+      if (!targetUser) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+
+      if (!['teacher', 'parent'].includes(targetUser.role)) {
+        return res.status(400).json({ error: 'Cannot add a school membership for school_admin or student accounts' });
+      }
+
+      const membershipRole = role ?? targetUser.role;
+      if (membershipRole !== targetUser.role) {
+        return res.status(400).json({ error: 'Membership role must match the user role for teacher and parent accounts' });
+      }
+      if (!['teacher', 'parent'].includes(membershipRole)) {
+        return res.status(400).json({ error: 'Membership role must be teacher or parent' });
+      }
+
+      const [targetSchool] = await db.select().from(schools).where(eq(schools.id, parsedSchoolId)).limit(1);
+      if (!targetSchool) return res.status(404).json({ error: 'SCHOOL_NOT_FOUND' });
+
+      const existing = await db.select().from(userSchools).where(and(eq(userSchools.userId, userIdParam), eq(userSchools.schoolId, parsedSchoolId)));
+      if (existing.length > 0) {
+        return res.status(200).json({ message: 'Membership already exists', membership: existing[0] });
+      }
+
+      const inserted = await db.insert(userSchools).values({ userId: userIdParam, schoolId: parsedSchoolId, role: membershipRole }).returning();
+      res.status(201).json(inserted[0] ?? null);
+    } catch (err: any) {
+      console.error('Error associating user with school:', err);
+      res.status(500).json({ error: err?.message || 'Failed to associate user with school' });
+    }
+  });
+
   // Get available users for profile switcher/simulation with proper access control
   app.get('/api/simulation/users', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -425,11 +555,11 @@ async function startServer() {
 
       // Apply role-based filtering
       if (actor.role === 'school_admin' && actor.schoolId) {
-        // School admin sees only users in their school.
+        // School admin sees only users linked to their school via membership.
         // Include same-school admins so the student creation form can assign a school admin account.
         filterConditions = and(
           filterConditions,
-          eq(users.schoolId, actor.schoolId),
+          or(eq(userSchools.schoolId, actor.schoolId), eq(users.schoolId, actor.schoolId)),
           notInArray(users.role, ['super_admin'])
         );
       } else if (actor.role === 'super_admin') {
@@ -467,6 +597,7 @@ async function startServer() {
         .from(users)
         .leftJoin(teachers, eq(teachers.userId, users.id))
         .leftJoin(parents, eq(parents.userId, users.id))
+        .leftJoin(userSchools, eq(userSchools.userId, users.id))
         .where(filterConditions);
 
       const normalizedById = allUsers.reduce((acc: Record<number, any>, user: any) => {
@@ -596,7 +727,8 @@ async function startServer() {
 
       const { uid, email, name, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, gender, password, classIds, studentId } = req.body;
       console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
-      if (!email || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
+      const normalizedEmail = normalizeEmail(email);
+      if (!normalizedEmail || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
 
       // Ensure role is one of allowed
       const allowed = ['super_admin', 'school_admin', 'teacher', 'parent'];
@@ -647,12 +779,30 @@ async function startServer() {
       // Generate a uid if none provided
       const finalUid = uid || `${role}_${Date.now()}`;
 
-      // Check existing by uid or email
-      const exists = await db.select().from(users).where(sql`(uid = ${finalUid} OR email = ${email})`);
-      if (exists.length > 0) return res.status(409).json({ error: 'User with same uid or email already exists' });
+      const existingByUid = await db.select().from(users).where(eq(users.uid, finalUid));
+      if (existingByUid.length > 0) return res.status(409).json({ error: 'User with same uid already exists' });
 
-      const newUserRows = await db.insert(users).values({ uid: finalUid, email, name, role, schoolId: resolvedSchoolId, academicYearId, gender: gender ?? null }).returning();
+      // Email uniqueness check:
+      // - super_admin: globally unique (across all schools)
+      // - others: unique per school
+      let existingByEmail: any[] = [];
+      if (role === 'super_admin') {
+        existingByEmail = await findExistingUsersByEmail(normalizedEmail);
+      } else {
+        // For non-super_admin roles, check email uniqueness within the school
+        existingByEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, resolvedSchoolId);
+      }
+      
+      if (existingByEmail.length > 0) {
+        return res.status(409).json({ error: 'User with same email already exists' + (resolvedSchoolId && role !== 'super_admin' ? ' in this school' : '') });
+      }
+
+      const newUserRows = await db.insert(users).values({ uid: finalUid, email: normalizedEmail, name, role, schoolId: resolvedSchoolId, academicYearId, gender: gender ?? null }).returning();
       const createdUser = newUserRows[0];
+
+      if (role === 'school_admin' && resolvedSchoolId != null) {
+        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
+      }
 
       // Create linked profile for teacher/parent
       let teacherProfile: any = null;
@@ -682,11 +832,29 @@ async function startServer() {
           studentId: parentStudentId || undefined,
           schoolId: parentSchoolId,
         });
+
+        if (parentSchoolId != null) {
+          await db.insert(userSchools).values({
+            userId: createdUser.id,
+            schoolId: parentSchoolId,
+            role: 'parent',
+            isActive: true,
+          });
+        }
       } else if (role === 'teacher') {
         const teacherResult = await db.insert(teachers)
           .values({ userId: createdUser.id, schoolId: resolvedSchoolId, phone: phone || '', specialization: normalizeSpecialization(specialization) || null })
           .returning();
         teacherProfile = teacherResult[0];
+
+        if (resolvedSchoolId != null) {
+          await db.insert(userSchools).values({
+            userId: createdUser.id,
+            schoolId: resolvedSchoolId,
+            role: 'teacher',
+            isActive: true,
+          });
+        }
 
         // Assign provided classes to this teacher when classIds are supplied
         if (Array.isArray(classIds) && classIds.length > 0) {
@@ -730,7 +898,7 @@ async function startServer() {
             }
           }
         }
-        // Ensure users.schoolId stays consistent with teachers.schoolId
+          // Ensure users.schoolId stays consistent with teachers.schoolId
         try {
           await db.update(users).set({ schoolId: resolvedSchoolId ?? null }).where(eq(users.id, createdUser.id));
         } catch (e: any) {
@@ -824,8 +992,45 @@ async function startServer() {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot modify admin accounts' });
       }
 
-      const existingSameEmail = await db.select().from(users).where(sql`email = ${email} AND id != ${id}`);
-      if (existingSameEmail.length > 0) return res.status(409).json({ error: 'Email already in use by another user' });
+      // Email uniqueness check when changing email:
+      // - Exclude the user being updated (id != ${id})
+      // - For super_admin: globally unique
+      // - For others: unique per school
+      if (email !== targetUser.email) {
+        // Email is being changed, check if new email is available
+        const normalizedEmail = email.trim().toLowerCase();
+        
+        let emailConflicts: any[] = [];
+        if (targetUser.role === 'super_admin' || role === 'super_admin') {
+          // Super admin emails are globally unique
+          emailConflicts = await db.select().from(users).where(
+            and(
+              eq(sql`LOWER(${users.email})`, normalizedEmail),
+              sql`${users.id} != ${id}`
+            )
+          );
+        } else {
+          // For other roles: unique per school
+          const schoolForCheck = parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId;
+          if (schoolForCheck != null) {
+            emailConflicts = await db.select().from(users).where(
+              and(
+                eq(sql`LOWER(${users.email})`, normalizedEmail),
+                eq(users.schoolId, schoolForCheck),
+                sql`${users.id} != ${id}`
+              )
+            );
+          }
+        }
+        
+        if (emailConflicts.length > 0) {
+          const school = parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId;
+          const msg = role === 'super_admin' || targetUser.role === 'super_admin' 
+            ? 'Email already in use by another user'
+            : (school ? 'Email already in use by another user in this school' : 'Email already in use by another user');
+          return res.status(409).json({ error: msg });
+        }
+      }
 
       const updatedValues: any = { email, name, role, gender: gender ?? null };
       if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
@@ -850,6 +1055,13 @@ async function startServer() {
 
       if (updatedUsers.length === 0) {
         return res.status(404).json({ error: 'User not found' });
+      }
+
+      const effectiveSchoolIdForMembership = role === 'school_admin'
+        ? (parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId)
+        : null;
+      if (role === 'school_admin' && effectiveSchoolIdForMembership != null) {
+        await upsertUserSchoolMembership(id, effectiveSchoolIdForMembership, 'school_admin', true);
       }
 
       if (role === 'teacher') {
@@ -1128,6 +1340,83 @@ async function startServer() {
     }
   });
 
+  app.get('/api/auth/schools', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      // Get user school memberships from database (single source of truth)
+      const memberships = await getUserSchoolMemberships(actor.id ?? null);
+      
+      let schoolsList = [] as any[];
+      if (actor.role === 'super_admin') {
+        // Super admins can access all schools
+        schoolsList = await db.select().from(schools);
+      } else {
+        // Non-super-admin users: only return schools they are actually members of
+        if (memberships.length === 0) {
+          return res.json({ schools: [], activeSchoolId: null });
+        }
+        
+        const schoolIds = memberships.map((membership) => membership.schoolId);
+        schoolsList = await db.select().from(schools).where(inArray(schools.id, schoolIds));
+      }
+
+      // Find active school from memberships (for non-super-admin)
+      const activeSchoolId = actor.role === 'super_admin' 
+        ? null 
+        : memberships.find((membership) => membership.isActive)?.schoolId ?? memberships[0]?.schoolId ?? null;
+      
+      res.json({ 
+        schools: schoolsList.map((school) => ({ id: school.id, name: school.name })), 
+        activeSchoolId 
+      });
+    } catch (err: any) {
+      console.error('Error fetching user schools:', err);
+      res.status(500).json({ error: err?.message || 'Failed to fetch user schools' });
+    }
+  });
+
+  app.post('/api/auth/schools/active', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      
+      const { schoolId } = req.body ?? {};
+      const parsedSchoolId = typeof schoolId === 'number' ? schoolId : parseInt(String(schoolId), 10);
+      if (!Number.isFinite(parsedSchoolId)) return res.status(400).json({ error: 'Invalid schoolId' });
+
+      // Super admins can select any school
+      if (actor.role === 'super_admin') {
+        res.json({ schoolId: parsedSchoolId });
+        return;
+      }
+
+      // For school_admin roles: strictly verify a school_admin membership exists in user_schools
+      const membership = actor.role === 'school_admin'
+        ? await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId, 'school_admin')
+        : await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId);
+      if (!membership) {
+        console.warn('School selection denied: user has no membership for school', { 
+          userId: actor.id, 
+          schoolId: parsedSchoolId,
+          userRole: actor.role 
+        });
+        return res.status(403).json({ error: 'School membership not found for this user' });
+      }
+      
+      // Membership exists, set it as active
+      await setActiveUserSchool(actor.id ?? null, parsedSchoolId);
+      console.log('School activated successfully', { userId: actor.id, schoolId: parsedSchoolId });
+      res.json({ schoolId: parsedSchoolId });
+    } catch (err: any) {
+      console.error('Error setting active school:', err);
+      res.status(500).json({ error: err?.message || 'Failed to set active school' });
+    }
+  });
+
   // ==========================================
   // SECURE CUSTOMER OR CURRENT USER DATA
   // ==========================================
@@ -1140,6 +1429,7 @@ async function startServer() {
       }
 
       const { uid, email, name, role } = req.user;
+      const normalizedEmail = normalizeEmail(email);
 
       // Find if user already exists
       const existingUser = await db.select().from(users).where(eq(users.uid, uid));
@@ -1151,6 +1441,33 @@ async function startServer() {
           existing.schoolId = req.user.schoolId;
         }
         return res.json(existing);
+      }
+
+      if (normalizedEmail) {
+        // Search for existing user by email
+        // If user has a schoolId in context, search per-school; otherwise global
+        let existingByEmail: any[] = [];
+        if (req.user.schoolId) {
+          // Per-school search
+          existingByEmail = await db.select().from(users).where(
+            and(
+              eq(sql`LOWER(${users.email})`, normalizedEmail),
+              eq(users.schoolId, req.user.schoolId)
+            )
+          );
+        } else {
+          // Global search (fallback)
+          existingByEmail = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
+        }
+        
+        if (existingByEmail.length > 0) {
+          const existing = existingByEmail[0];
+          if (req.user.schoolId && existing.schoolId !== req.user.schoolId) {
+            await db.update(users).set({ schoolId: req.user.schoolId }).where(eq(users.id, existing.id));
+            existing.schoolId = req.user.schoolId;
+          }
+          return res.json(existing);
+        }
       }
 
       // If user is simulated or we need to auto-create, preserve known roles, otherwise default to parent
@@ -1183,6 +1500,26 @@ async function startServer() {
           phone: '',
           address: '',
         });
+        if (resolvedSchoolId != null) {
+          try {
+            await db.insert(userSchools).values({
+              userId: createdUser.id,
+              schoolId: resolvedSchoolId,
+              role: 'parent',
+              isActive: true,
+            });
+          } catch (e: any) {
+            console.warn('Failed to insert user_schools for register-or-login parent', e?.message || e);
+          }
+        }
+      } else if (finalRole === 'school_admin') {
+        if (resolvedSchoolId != null) {
+          try {
+            await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
+          } catch (e: any) {
+            console.warn('Failed to insert user_schools for register-or-login school_admin', e?.message || e);
+          }
+        }
       } else if (finalRole === 'teacher') {
         // Find default school if exists
         const defaultSchool = await db.select().from(schools).limit(1);
@@ -1193,6 +1530,16 @@ async function startServer() {
             phone: '',
             specialization: 'Général',
           });
+          try {
+            await db.insert(userSchools).values({
+              userId: createdUser.id,
+              schoolId: defaultSchool[0].id,
+              role: 'teacher',
+              isActive: true,
+            });
+          } catch (e: any) {
+            console.warn('Failed to insert user_schools for register-or-login teacher', e?.message || e);
+          }
           // If a teacher profile was created in register-or-login flow, attempt to find it and log inconsistencies
           try {
             const createdTeacherRow = await db.select().from(teachers).where(eq(teachers.userId, createdUser.id));
@@ -1275,7 +1622,7 @@ async function startServer() {
           let yearId = globalActiveYear?.id;
 
           if (!yearId) {
-            const [globalYear] = await db.select().from(academicYears).where(eq(academicYears.schoolId, null)).orderBy(desc(academicYears.id)).limit(1);
+            const [globalYear] = await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`).orderBy(desc(academicYears.id)).limit(1);
             yearId = globalYear?.id;
           }
 
@@ -1353,7 +1700,7 @@ async function startServer() {
           let yearId = globalActiveYear?.id;
 
           if (!yearId) {
-            const [globalYear] = await db.select().from(academicYears).where(eq(academicYears.schoolId, null)).orderBy(desc(academicYears.id)).limit(1);
+            const [globalYear] = await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`).orderBy(desc(academicYears.id)).limit(1);
             yearId = globalYear?.id;
           }
 
@@ -1743,7 +2090,7 @@ async function startServer() {
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      let list;
+      let list: any[];
       if (user.role === 'super_admin') {
         list = await db.select().from(academicYears);
       } else if (user.role === 'school_admin') {
@@ -1758,7 +2105,7 @@ async function startServer() {
         // Teachers and parents see global academic years plus any legacy school-specific ones
         list = await db.select().from(academicYears).where(
           or(
-            eq(academicYears.schoolId, null),
+            sql`${academicYears.schoolId} IS NULL`,
             eq(academicYears.schoolId, user.schoolId)
           )
         );
@@ -2160,35 +2507,62 @@ async function startServer() {
   app.get('/api/teachers', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      let query = db
-        .select({
-          id: teachers.id,
-          userId: teachers.userId,
-          uid: users.uid,
-          name: users.name,
-          email: users.email,
-          gender: users.gender,
-          phone: teachers.phone,
-          specialization: teachers.specialization,
-          schoolId: teachers.schoolId,
-        })
+      const teacherProjection = {
+        id: teachers.id,
+        userId: teachers.userId,
+        uid: users.uid,
+        name: users.name,
+        email: users.email,
+        gender: users.gender,
+        phone: teachers.phone,
+        specialization: teachers.specialization,
+        schoolId: teachers.schoolId,
+      };
+
+      const baseOldModel = db
+        .select(teacherProjection)
         .from(teachers)
         .innerJoin(users, eq(teachers.userId, users.id));
 
-      if (user.role !== 'super_admin') {
-        // School admin and others see only their school's teachers
-        if (user.schoolId) {
-          query = query.where(eq(teachers.schoolId, user.schoolId)) as any;
-        } else {
+      const baseNewModel = db
+        .select({
+          ...teacherProjection,
+          schoolId: userSchools.schoolId,
+        })
+        .from(teachers)
+        .innerJoin(users, eq(teachers.userId, users.id))
+        .innerJoin(userSchools, and(eq(userSchools.userId, users.id), eq(userSchools.role, 'teacher')));
+
+      let oldModelQuery = baseOldModel;
+      let newModelQuery = baseNewModel;
+
+      if (actor.role !== 'super_admin') {
+        if (!actor.schoolId) {
           return res.json([]);
+        }
+        oldModelQuery = oldModelQuery.where(eq(teachers.schoolId, actor.schoolId)) as any;
+        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, actor.schoolId)) as any;
+      }
+
+      const [oldTeachers, newTeachers] = await Promise.all([
+        oldModelQuery,
+        newModelQuery,
+      ]);
+
+      const teacherById = new Map<number, any>();
+      for (const teacher of oldTeachers) {
+        teacherById.set(teacher.id, teacher);
+      }
+      for (const teacher of newTeachers) {
+        if (!teacherById.has(teacher.id)) {
+          teacherById.set(teacher.id, teacher);
         }
       }
 
-      const teachersList = await query;
+      const teachersList = Array.from(teacherById.values());
       const teacherIds = teachersList.map((teacher) => teacher.id).filter(Boolean);
 
       let assignments: Array<{ teacherId: number; classId: number }> = [];
@@ -2222,27 +2596,36 @@ async function startServer() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { name, email, phone, specialization, schoolId, classIds, gender } = req.body;
       const requestedClassIds = Array.isArray(classIds) ? classIds : [];
-      if (!name || !email || !schoolId) return res.status(400).json({ error: `Missing compulsory details. Received name=${name}, email=${email}, schoolId=${schoolId}` });
+      const normalizedEmail = normalizeEmail(email);
+      if (!name || !normalizedEmail || !schoolId) return res.status(400).json({ error: `Missing compulsory details. Received name=${name}, email=${email}, schoolId=${schoolId}` });
 
       // Load user and validate school permission
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
+      const parsedSchoolId = parseInt(String(schoolId), 10);
+
       // School admin can only create teachers in their own school
       if (user.role !== 'super_admin') {
-        if (user.schoolId && parseInt(schoolId) !== user.schoolId) {
+        if (user.schoolId && parsedSchoolId !== user.schoolId) {
           return res.status(403).json({ error: 'Cannot create teacher in another school' });
         }
+      }
+      
+      // Email uniqueness check: per-school (same email allowed in different schools)
+      const existingTeacherEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, parsedSchoolId);
+      if (existingTeacherEmail.length > 0) {
+        return res.status(409).json({ error: 'User with same email already exists in this school' });
       }
 
       // Create User entry first (fake uid for simulation unless logged in on firebase auth)
       const fakeUid = `sim_teacher_${Date.now()}`;
       const userResult = await db.insert(users).values({
         uid: fakeUid,
-        email,
+        email: normalizedEmail,
         name,
         role: 'teacher',
-        schoolId: parseInt(schoolId),
+        schoolId: parsedSchoolId,
         gender: gender ?? null,
       }).returning();
 
@@ -2256,6 +2639,18 @@ async function startServer() {
       }).returning();
 
       const createdTeacher = teacherResult[0];
+      if (parsedSchoolId != null) {
+        try {
+          await db.insert(userSchools).values({
+            userId: createdUser.id,
+            schoolId: parsedSchoolId,
+            role: 'teacher',
+            isActive: true,
+          });
+        } catch (e: any) {
+          console.warn('Failed to insert user_schools for public teacher create', e?.message || e);
+        }
+      }
 
       // Log if inconsistency exists after public create
       try {
@@ -2349,49 +2744,81 @@ async function startServer() {
         return res.status(403).json({ error: 'Cannot request parents for another school' });
       }
 
-      let query = db
-        .select({
-          id: parents.id,
-          userId: parents.userId,
-          name: users.name,
-          email: users.email,
-          gender: users.gender,
-          phone: parents.phone,
-          address: parents.address,
-          studentId: parents.studentId,
-          studentFirstName: students.firstName,
-          studentLastName: students.lastName,
-          studentClassId: students.classId,
-          studentSchoolId: students.schoolId,
-          schoolId: parents.schoolId,
-          className: classes.name,
-          schoolName: schools.name,
-        })
+      const parentProjection = {
+        id: parents.id,
+        userId: parents.userId,
+        name: users.name,
+        email: users.email,
+        gender: users.gender,
+        phone: parents.phone,
+        address: parents.address,
+        studentId: parents.studentId,
+        studentFirstName: students.firstName,
+        studentLastName: students.lastName,
+        studentClassId: students.classId,
+        studentSchoolId: students.schoolId,
+        schoolId: parents.schoolId,
+        className: classes.name,
+        schoolName: schools.name,
+      };
+
+      const baseOldModel = db
+        .select(parentProjection)
         .from(parents)
         .innerJoin(users, eq(parents.userId, users.id))
-        .leftJoin(students, and(eq(students.parentId, parents.id), eq(students.schoolId, parents.schoolId)))
+        .leftJoin(students, eq(students.parentId, parents.id))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(parents.schoolId, schools.id));
 
-      // apply query filters if provided
-      console.debug('[api/parents] incoming filters:', { filterSchoolId, filterClassId, actor: actor?.role });
+      const baseNewModel = db
+        .select({
+          ...parentProjection,
+          schoolId: userSchools.schoolId,
+        })
+        .from(parents)
+        .innerJoin(users, eq(parents.userId, users.id))
+        .innerJoin(userSchools, and(eq(userSchools.userId, users.id), eq(userSchools.role, 'parent')))
+        .leftJoin(students, eq(students.parentId, parents.id))
+        .leftJoin(classes, eq(students.classId, classes.id))
+        .leftJoin(schools, eq(userSchools.schoolId, schools.id));
+
+      let oldModelQuery = baseOldModel;
+      let newModelQuery = baseNewModel;
+
       if (filterSchoolId) {
-        query = query.where(eq(parents.schoolId, filterSchoolId)) as any;
+        oldModelQuery = oldModelQuery.where(eq(parents.schoolId, filterSchoolId)) as any;
+        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, filterSchoolId)) as any;
       }
       if (filterClassId) {
-        query = query.where(eq(students.classId, filterClassId)) as any;
+        oldModelQuery = oldModelQuery.where(eq(students.classId, filterClassId)) as any;
+        newModelQuery = newModelQuery.where(eq(students.classId, filterClassId)) as any;
       }
 
       if (actor.role !== 'super_admin') {
-        if (actor.schoolId) {
-          query = query.where(eq(parents.schoolId, actor.schoolId)) as any;
-        } else {
+        if (!actor.schoolId) {
           return res.json([]);
+        }
+        oldModelQuery = oldModelQuery.where(eq(parents.schoolId, actor.schoolId)) as any;
+        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, actor.schoolId)) as any;
+      }
+
+      const [oldParents, newParents] = await Promise.all([
+        oldModelQuery,
+        newModelQuery,
+      ]);
+
+      const parentById = new Map<number, any>();
+      for (const parent of oldParents) {
+        parentById.set(parent.id, parent);
+      }
+      for (const parent of newParents) {
+        if (!parentById.has(parent.id)) {
+          parentById.set(parent.id, parent);
         }
       }
 
-      const list = await query;
-      console.debug('[api/parents] returning parents count:', Array.isArray(list) ? list.length : 0, 'requestedClassId=', filterClassId, 'requestedSchoolId=', filterSchoolId);
+      const list = Array.from(parentById.values());
+      console.debug('[api/parents] returning parents count:', list.length, 'requestedClassId=', filterClassId, 'requestedSchoolId=', filterSchoolId);
       res.json(list);
     } catch (err: any) {
       console.error('Error fetching parents:', err);
@@ -2404,7 +2831,8 @@ async function startServer() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       console.debug('[api/parents POST] body received:', req.body);
           const { name, email, phone, address, schoolId, studentId, gender } = req.body;
-          if (!name || !email) return res.status(400).json({ error: 'Name and Email are required' });
+          const normalizedEmail = normalizeEmail(email);
+          if (!name || !normalizedEmail) return res.status(400).json({ error: 'Name and Email are required' });
 
           // Load user and validate school permission
           const actor = await resolveActor(req);
@@ -2438,10 +2866,16 @@ async function startServer() {
             return res.status(403).json({ error: 'Cannot create parent in another school' });
           }
 
+          // Email uniqueness check: per-school (same email allowed in different schools)
+          const existingParentEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, effectiveSchoolId);
+          if (existingParentEmail.length > 0) {
+            return res.status(409).json({ error: 'User with same email already exists in this school' });
+          }
+
           const fakeUid = `sim_parent_${Date.now()}`;
           const userResult = await db.insert(users).values({
             uid: fakeUid,
-            email,
+            email: normalizedEmail,
             name,
             role: 'parent',
             schoolId: effectiveSchoolId,
@@ -2460,6 +2894,15 @@ async function startServer() {
           const createdParent = parentResult[0];
           if (parsedStudentId) {
             await db.update(students).set({ parentId: createdParent.id }).where(eq(students.id, parsedStudentId));
+          }
+
+          if (effectiveSchoolId != null) {
+            await db.insert(userSchools).values({
+              userId: createdUser.id,
+              schoolId: effectiveSchoolId,
+              role: 'parent',
+              isActive: true,
+            });
           }
 
           console.debug('[api/parents POST] parent inserted:', createdParent);
@@ -2546,26 +2989,26 @@ async function startServer() {
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i] || {};
         const name = (r.name || r.fullName || '').trim();
-        const email = (r.email || '').trim().toLowerCase();
+        const normalizedEmail = normalizeEmail(r.email || '');
         const phone = (r.phone || '').trim();
         const address = (r.address || '').trim();
         const schoolId = r.schoolId ? parseInt(r.schoolId) : (actor.role === 'school_admin' ? actor.schoolId : null);
 
-        if (!name || !email) {
-          errors.push({ row: i, email: email || undefined, error: 'name and email are required' });
+        if (!name || !normalizedEmail) {
+          errors.push({ row: i, email: normalizedEmail || undefined, error: 'name and email are required' });
           continue;
         }
 
-        // duplicate check by email
-        const existing = await db.select().from(users).where(eq(users.email, email));
+        // Check email uniqueness per-school (same email allowed in different schools)
+        const existing = await findExistingUsersByEmailAndSchool(normalizedEmail, schoolId);
         if (existing && existing.length > 0) {
-          errors.push({ row: i, email, error: 'duplicate email' });
+          errors.push({ row: i, email: normalizedEmail, error: 'duplicate email in this school' });
           continue;
         }
 
         // create user and parent profile
         const fakeUid = `sim_parent_${Date.now()}_${i}`;
-        const userRes = await db.insert(users).values({ uid: fakeUid, email, name, role: 'parent', schoolId }).returning();
+        const userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId }).returning();
         const createdUser = userRes[0];
 
         // option: link to student by studentIds or studentNames
@@ -2577,7 +3020,7 @@ async function startServer() {
             if (srow) { linkedStudentId = srow.id; break; }
           }
           if (ids.length > 0 && !linkedStudentId) {
-            errors.push({ row: i, email, error: `studentIds provided but no matching student found (${String(r.studentIds)})` });
+            errors.push({ row: i, email: normalizedEmail, error: `studentIds provided but no matching student found (${String(r.studentIds)})` });
           }
         } else if (r.studentNames) {
           const names = String(r.studentNames).split(/[,;]+/).map((s: string) => s.trim()).filter(Boolean);
@@ -2591,11 +3034,23 @@ async function startServer() {
             }
           }
           if (names.length > 0 && !linkedStudentId) {
-            errors.push({ row: i, email, error: `studentNames provided but no matching student found (${String(r.studentNames)})` });
+            errors.push({ row: i, email: normalizedEmail, error: `studentNames provided but no matching student found (${String(r.studentNames)})` });
           }
         }
 
         const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: phone || null, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
+        try {
+          if (schoolId != null) {
+            await db.insert(userSchools).values({
+              userId: createdUser.id,
+              schoolId,
+              role: 'parent',
+              isActive: true,
+            });
+          }
+        } catch (e: any) {
+          console.warn('Failed to insert user_schools for imported parent', e?.message || e);
+        }
         inserted.push({ user: createdUser, parentId: parentRes[0].id });
       }
 
@@ -3714,7 +4169,9 @@ async function startServer() {
       // Create simulated push notification for parent of this student
       const [evaluationRecord] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
       if (evaluationRecord) {
-        const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
+        const [parentRecord] = student.parentId != null
+          ? await db.select().from(parents).where(eq(parents.id, student.parentId))
+          : [null];
         if (parentRecord) {
           await db.insert(notifications).values({
             userId: parentRecord.userId,
@@ -4129,6 +4586,29 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
+    // Print registered routes for debugging
+    try {
+      const routes: string[] = [];
+      (app as any)._router.stack.forEach((middleware: any) => {
+        if (middleware.route) {
+          // routes registered directly on the app
+          const methods = Object.keys(middleware.route.methods).join(',').toUpperCase();
+          routes.push(`${methods} ${middleware.route.path}`);
+        } else if (middleware.name === 'router' && middleware.handle && middleware.handle.stack) {
+          // router middleware
+          middleware.handle.stack.forEach((handler: any) => {
+            const route = handler.route;
+            if (route) {
+              const methods = Object.keys(route.methods).join(',').toUpperCase();
+              routes.push(`${methods} ${route.path}`);
+            }
+          });
+        }
+      });
+      console.log('Registered routes:', routes.join(' | '));
+    } catch (e) {
+      console.error('Failed to list registered routes:', e);
+    }
     console.log(`Server starting on http://localhost:${PORT}`);
   });
 }
