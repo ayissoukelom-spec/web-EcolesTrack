@@ -979,7 +979,15 @@ async function startServer() {
         return res.status(403).json({ error: 'Forbidden: cannot change role for teacher accounts' });
       }
       if (actor.role === 'school_admin' && actor.schoolId !== targetUser.schoolId) {
-        return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+        // Teachers and parents may belong to multiple schools through userSchools.
+        if (['teacher', 'parent'].includes(targetUser.role)) {
+          const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+          if (!membership) {
+            return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+          }
+        } else {
+          return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+        }
       }
 
       // Enforce hierarchy: school_admin cannot modify to super_admin or school_admin
