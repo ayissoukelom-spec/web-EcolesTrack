@@ -37,6 +37,7 @@ interface NotesViewProps {
   teacherSpecializations?: string[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
+  currentSchoolId?: number | null;
   onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
 }
@@ -54,16 +55,35 @@ export default function NotesView({
   teacherSpecializations = [],
   approvedSubjectsList = [],
   teacherId,
+  currentSchoolId,
   onAddEvaluation,
   onAddGrade,
 }: NotesViewProps) {
   const sortedClasses = sortClasses(classesList || []);
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
+    if (schoolId == null) {
+      if (cls.status != null) return cls.status === 'approved';
+      return true;
+    }
+    if (cls.schoolId === schoolId) return true;
+    return cls.schoolId == null && cls.status === 'approved';
+  };
+
   const availableClasses = userRole === 'teacher'
     ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
-    : sortedClasses;
+    : userRole === 'school_admin'
+      ? sortedClasses.filter((c) => isApprovedForSchool(c, currentSchoolId))
+      : sortedClasses;
   const filteredClasses = schoolFilterId
     ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
     : availableClasses;
+
+  const approvedEvaluations = userRole === 'school_admin'
+    ? evaluationsList.filter((ev) => {
+      const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
+      return evaluationClass ? isApprovedForSchool(evaluationClass, currentSchoolId) : false;
+    })
+    : evaluationsList;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
@@ -96,7 +116,7 @@ export default function NotesView({
     })
     : approvedSubjectNames;
 
-  const currentEvaluation = evaluationsList.find((ev) => String(ev.id) === selectedEvalId) || null;
+  const currentEvaluation = approvedEvaluations.find((ev) => String(ev.id) === selectedEvalId) || null;
 
   const isGradeModified = (grade: Grade) => {
     return grade.isModified ?? ((grade.editCount ?? 0) > 0);
@@ -268,7 +288,7 @@ export default function NotesView({
   const isEvaluationCompleted = (ev: Evaluation) =>
     isEvaluationCompletedUtil(ev, studentsList, gradesList);
 
-  const openEvaluations = evaluationsList.filter((ev) => {
+  const openEvaluations = approvedEvaluations.filter((ev) => {
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
@@ -278,7 +298,7 @@ export default function NotesView({
     return !isEvaluationFullyGraded(ev);
   });
 
-  const selectableEvaluations = evaluationsList.filter((ev) => {
+  const selectableEvaluations = approvedEvaluations.filter((ev) => {
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
@@ -322,7 +342,7 @@ export default function NotesView({
     }
   }, [filteredClasses, selectableEvaluations, selectedClassId]);
 
-  const archivedEvaluations = evaluationsList.filter((ev) => {
+  const archivedEvaluations = approvedEvaluations.filter((ev) => {
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
@@ -590,7 +610,7 @@ export default function NotesView({
             onChange={(e) => {
               const nextClassId = e.target.value;
               setSelectedClassId(nextClassId);
-              const firstEvalForClass = evaluationsList.find((ev) => String(ev.classId) === nextClassId);
+              const firstEvalForClass = approvedEvaluations.find((ev) => String(ev.classId) === nextClassId);
               if (firstEvalForClass) {
                 setSelectedEvalId(String(firstEvalForClass.id));
                 populateGradeInputsForEvaluation(String(firstEvalForClass.id));

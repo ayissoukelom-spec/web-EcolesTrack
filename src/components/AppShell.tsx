@@ -399,6 +399,7 @@ export default function AppShell() {
           teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
           teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
           teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
+          currentSchoolId={currentSchoolId}
           onAddEvaluation={handleAddEvaluation}
           onAddGrade={handleAddGrade}
         />
