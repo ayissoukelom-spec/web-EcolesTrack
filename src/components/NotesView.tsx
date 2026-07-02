@@ -373,6 +373,13 @@ export default function NotesView({
       return;
     }
 
+    if (selectedClassId && !filteredClasses.some((c) => String(c.id) === selectedClassId)) {
+      setSelectedClassId('');
+      setSelectedEvalId('');
+      setGradeInputValues({});
+      return;
+    }
+
     if (!selectedClassId) {
       const firstClassId = String(filteredClasses[0].id);
       setSelectedClassId(firstClassId);
@@ -715,6 +722,12 @@ export default function NotesView({
           {userRole === 'teacher' && availableClasses.length === 0 && (
             <p className="mt-2 text-[11px] text-amber-600 italic">
               Vous n’avez actuellement aucune classe assignée. Contactez l’administrateur pour en ajouter.
+            </p>
+          )}
+
+          {userRole === 'super_admin' && schoolFilterId != null && filteredClasses.length === 0 && (
+            <p className="mt-2 text-[11px] text-amber-600 italic">
+              Aucun résultat pour cette école. Vérifiez que les classes sont bien rattachées à l’école sélectionnée et que leur `schoolId` est correct.
             </p>
           )}
         </div>
