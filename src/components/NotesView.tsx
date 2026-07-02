@@ -195,18 +195,33 @@ export default function NotesView({
         return;
       }
 
-      if (userRole === 'school_admin') {
-        if (isGradeModified(existingGrade)) {
-          setSaveStatus('Cette note a déjà été modifiée. Veuillez contacter le super admin pour toute correction supplémentaire.');
-          setTimeout(() => setSaveStatus(null), 4000);
-          return;
-        }
+      if (userRole === 'school_admin' && isGradeModified(existingGrade)) {
+        setSaveStatus('Cette note a déjà été modifiée. Veuillez contacter le super admin pour toute correction supplémentaire.');
+        setTimeout(() => setSaveStatus(null), 4000);
+        return;
       }
 
-      if (onUpdateGrade && existingGrade && existingGrade.id != null) {
+      if (userRole === 'school_admin' || userRole === 'super_admin') {
+        if (onUpdateGrade && existingGrade.id != null) {
+          try {
+            await onUpdateGrade({
+              gradeId: existingGrade.id,
+              evaluationId: parseInt(selectedEvalId),
+              studentId,
+              score: input.score,
+              remarks: input.remarks || '',
+            });
+            setSaveStatus('Note mise à jour.');
+          } catch (err: any) {
+            setSaveStatus(err?.message || 'Erreur lors de la mise à jour de la note');
+            console.error('Failed to update grade:', err);
+          }
+          setTimeout(() => setSaveStatus(null), 3000);
+          return;
+        }
+
         try {
-          await onUpdateGrade({
-            gradeId: existingGrade.id,
+          await onAddGrade({
             evaluationId: parseInt(selectedEvalId),
             studentId,
             score: input.score,
@@ -215,12 +230,11 @@ export default function NotesView({
           setSaveStatus('Note mise à jour.');
         } catch (err: any) {
           setSaveStatus(err?.message || 'Erreur lors de la mise à jour de la note');
-          console.error('Failed to update grade:', err);
+          console.error('Failed to save updated grade:', err);
         }
         setTimeout(() => setSaveStatus(null), 3000);
         return;
       }
-      // fallthrough to onAddGrade if no update handler
     }
 
     const validation = validateGradeScore(input.score, currentEvaluation?.maxScore);

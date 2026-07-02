@@ -4148,18 +4148,16 @@ async function startServer() {
           )
         );
 
-      if (existing.length > 0) {
-        const message = user.role === 'teacher'
-          ? 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.'
-          : 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le super admin.';
-        return res.status(403).json({ error: message });
-      }
-
       let savedGrade;
       if (existing.length > 0) {
+        if (user.role === 'teacher') {
+          const message = 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.';
+          return res.status(403).json({ error: message });
+        }
+
         const updated = await db
           .update(grades)
-          .set({ score: String(score), remarks, editCount: (existing[0].editCount ?? 0) })
+          .set({ score: String(score), remarks, editCount: (existing[0].editCount ?? 0) + 1 })
           .where(eq(grades.id, existing[0].id))
           .returning();
         savedGrade = updated[0];

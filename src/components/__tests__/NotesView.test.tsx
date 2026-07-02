@@ -6,9 +6,9 @@ import { fireEvent } from '@testing-library/react';
 // Mock evaluation utils used by NotesView to control completed/fully graded behaviour
 vi.mock('../../lib/evaluationUtils', () => ({
   getEligibleStudentsForEvaluation: (ev: any, classStudents: any[]) => classStudents,
-  getEligibleStudentsForEvaluationWithGrades: () => [],
-  getEligibleStudentsWithHistoryForEvaluation: () => [],
-  getEligibleGradesForEvaluation: () => [],
+  getEligibleStudentsForEvaluationWithGrades: (ev: any, classStudents: any[]) => classStudents,
+  getEligibleStudentsWithHistoryForEvaluation: (ev: any, classStudents: any[]) => classStudents,
+  getEligibleGradesForEvaluation: (ev: any, classStudents: any[]) => classStudents.map((st) => ({ evaluationId: ev?.id ?? 0, studentId: st.id, score: '0', remarks: '' })),
   isEvaluationFullyGraded: (ev: any) => ev.id === 2,
   isEvaluationCompleted: (ev: any) => ev.id === 2,
   isStudentEligibleForEvaluation: () => true,
