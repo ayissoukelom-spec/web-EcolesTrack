@@ -40,6 +40,12 @@ interface NotesViewProps {
   currentSchoolId?: number | null;
   onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
+  onUpdateGrade?: (data: { gradeId: number; evaluationId: number; studentId: number; score: string; remarks: string }) => void | Promise<void>;
+  onAddClass?: (data: { name: string; schoolId?: number | null }) => void;
+  // Test helper: optionally pre-select an evaluation by id
+  initialSelectedEvalId?: number | null;
+  // Test helper: directly trigger save for a student (tests only)
+  testTriggerSaveForStudentId?: number | null;
 }
 
 export default function NotesView({
@@ -58,6 +64,10 @@ export default function NotesView({
   currentSchoolId,
   onAddEvaluation,
   onAddGrade,
+  onUpdateGrade,
+  initialSelectedEvalId,
+  testTriggerSaveForStudentId,
+  onAddClass,
 }: NotesViewProps) {
   const sortedClasses = sortClasses(classesList || []);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
@@ -78,14 +88,13 @@ export default function NotesView({
     ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
     : availableClasses;
 
-  const approvedEvaluations = userRole === 'school_admin'
-    ? evaluationsList.filter((ev) => {
-      const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
-      return evaluationClass ? isApprovedForSchool(evaluationClass, currentSchoolId) : false;
-    })
-    : evaluationsList;
+  // Use the raw evaluations list here; class-level approval/sync issues
+  // are handled at the NotesView UI filtering level.
+  const approvedEvaluations = evaluationsList;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
+  const selectedClassIdNumber = selectedClassId ? Number(selectedClassId) : null;
+  const selectedEvalIdNumber = selectedEvalId ? Number(selectedEvalId) : null;
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
   const [gradeInputValues, setGradeInputValues] = useState<{ [studentId: number]: { score: string; remarks: string } }>({});
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
@@ -171,20 +180,48 @@ export default function NotesView({
 
   const handleSaveStudentGrade = async (studentId: number) => {
     if (!selectedEvalId) return;
+    const input = gradeInputValues[studentId];
+    if (!input || input.score === undefined) return;
+
     const existingGrade = gradesList.find(
       (g) => String(g.evaluationId) === selectedEvalId && g.studentId === studentId
     );
-    if (existingGrade) {
-      const message = userRole === 'teacher'
-        ? 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.'
-        : 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le super admin.';
-      setSaveStatus(message);
-      setTimeout(() => setSaveStatus(null), 4000);
-      return;
-    }
 
-    const input = gradeInputValues[studentId];
-    if (!input || input.score === undefined) return;
+    if (existingGrade) {
+      if (userRole === 'teacher') {
+        const message = 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.';
+        setSaveStatus(message);
+        setTimeout(() => setSaveStatus(null), 4000);
+        return;
+      }
+
+      if (userRole === 'school_admin') {
+        if (isGradeModified(existingGrade)) {
+          setSaveStatus('Cette note a déjà été modifiée. Veuillez contacter le super admin pour toute correction supplémentaire.');
+          setTimeout(() => setSaveStatus(null), 4000);
+          return;
+        }
+      }
+
+      if (onUpdateGrade && existingGrade && existingGrade.id != null) {
+        try {
+          await onUpdateGrade({
+            gradeId: existingGrade.id,
+            evaluationId: parseInt(selectedEvalId),
+            studentId,
+            score: input.score,
+            remarks: input.remarks || '',
+          });
+          setSaveStatus('Note mise à jour.');
+        } catch (err: any) {
+          setSaveStatus(err?.message || 'Erreur lors de la mise à jour de la note');
+          console.error('Failed to update grade:', err);
+        }
+        setTimeout(() => setSaveStatus(null), 3000);
+        return;
+      }
+      // fallthrough to onAddGrade if no update handler
+    }
 
     const validation = validateGradeScore(input.score, currentEvaluation?.maxScore);
     if (!validation.isValid) {
@@ -299,13 +336,19 @@ export default function NotesView({
   });
 
   const selectableEvaluations = approvedEvaluations.filter((ev) => {
+    // class filter (single source of truth)
+    if (selectedClassIdNumber === null) return false;
+    if (Number(ev.classId) !== selectedClassIdNumber) return false;
+
+    // teacher: see only their own non-completed evaluations
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
+      return !isEvaluationCompleted(ev);
     }
-    if (!selectedClassId) return false;
-    if (String(ev.classId) !== selectedClassId) return false;
-    return userRole !== 'teacher' || !isEvaluationCompleted(ev);
+
+    // admins see all evaluations for the selected class
+    return true;
   });
 
   useEffect(() => {
@@ -321,8 +364,20 @@ export default function NotesView({
       setSelectedClassId(firstClassId);
       const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === firstClassId);
       if (firstSelectableEval) {
-        setSelectedEvalId(String(firstSelectableEval.id));
-        populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+        // If tests provided an initial selected evaluation, prefer it when applicable
+        if (initialSelectedEvalId != null) {
+          const match = selectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === firstClassId);
+          if (match) {
+            setSelectedEvalId(String(initialSelectedEvalId));
+            populateGradeInputsForEvaluation(String(initialSelectedEvalId));
+          } else {
+            setSelectedEvalId(String(firstSelectableEval.id));
+            populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+          }
+        } else {
+          setSelectedEvalId(String(firstSelectableEval.id));
+          populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+        }
       } else {
         setSelectedEvalId('');
         setGradeInputValues({});
@@ -334,8 +389,19 @@ export default function NotesView({
     if (!selectedEvalId) {
       const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
       if (firstSelectableEval) {
-        setSelectedEvalId(String(firstSelectableEval.id));
-        populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+        if (initialSelectedEvalId != null) {
+          const match = selectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === selectedClassId);
+          if (match) {
+            setSelectedEvalId(String(initialSelectedEvalId));
+            populateGradeInputsForEvaluation(String(initialSelectedEvalId));
+          } else {
+            setSelectedEvalId(String(firstSelectableEval.id));
+            populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+          }
+        } else {
+          setSelectedEvalId(String(firstSelectableEval.id));
+          populateGradeInputsForEvaluation(String(firstSelectableEval.id));
+        }
       } else {
         setGradeInputValues({});
       }
@@ -343,12 +409,17 @@ export default function NotesView({
   }, [filteredClasses, selectableEvaluations, selectedClassId]);
 
   const archivedEvaluations = approvedEvaluations.filter((ev) => {
+    // super_admin should never see evaluations in the archive
+    if (userRole === 'super_admin') return false;
+
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
     }
-    if (!selectedClassId) return false;
-    if (String(ev.classId) !== selectedClassId) return false;
+
+    if (selectedClassIdNumber === null) return false;
+    if (Number(ev.classId) !== selectedClassIdNumber) return false;
+
     return isEvaluationCompleted(ev);
   });
 
@@ -649,7 +720,7 @@ export default function NotesView({
             <option value="">-- Sélectionnez un devoir --</option>
             {selectableEvaluations.map((ev) => (
               <option key={ev.id} value={ev.id}>
-                {ev.subject} — {ev.title} ({ev.date}){userRole !== 'teacher' && isEvaluationCompleted(ev) ? ' — Archivée' : ''}
+                {ev.subject} — {ev.title} ({ev.date}){userRole === 'school_admin' && isEvaluationCompleted(ev) ? ' — Archivée' : ''}
               </option>
             ))}
           </select>
@@ -768,7 +839,7 @@ export default function NotesView({
                         (g) => String(g.evaluationId) === selectedEvalId && g.studentId === st.id
                       );
                       const canEditGrade = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
-                      const isLockedBySchoolAdmin = !!existingGrade;
+                      const isLockedBySchoolAdmin = userRole === 'school_admin' ? (existingGrade ? isGradeModified(existingGrade) : false) : false;
                       const isEligible = eligibleStudentsForSelectedEval.some((s) => s.id === st.id);
                       const isIneligibleWithGrade = !isEligible && existingGrade;
 

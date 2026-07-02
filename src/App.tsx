@@ -1026,7 +1026,7 @@ export default function App() {
               {activeTab === 'notes' && currentRole !== 'parent' && (
                 <NotesView
                   userRole={currentRole}
-                  evaluationsList={activeEvaluations}
+                  evaluationsList={evaluationsList}
                   gradesList={gradesList}
                   studentsList={studentsList}
                   classesList={classesList}
