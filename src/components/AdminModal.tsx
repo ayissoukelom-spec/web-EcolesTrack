@@ -92,6 +92,7 @@ export default function AdminModal(props: any) {
   const disableStudentSchoolSelection = userRole === 'school_admin' && currentSchoolId != null;
   const selectedStudentParentId = studentForm.parentId ? parseInt(studentForm.parentId, 10) : undefined;
   const [localParents, setLocalParents] = useState<any[] | null>(null);
+  const [parentSearchQuery, setParentSearchQuery] = useState('');
   const availableClassesForSchool = userRole === 'school_admin' && currentSchoolId
     ? sortedClasses.filter((c: any) => isApprovedForSchool(c, currentSchoolId))
     : sortedClasses.filter((c: any) => isApprovedForSchool(c));
@@ -125,6 +126,33 @@ export default function AdminModal(props: any) {
   const uniqueParentOptions = Array.from(
     new Map(parentOptions.map((p: any) => [p.id, p])).values(),
   );
+  const normalizedParentSearchQuery = parentSearchQuery.trim().toLowerCase();
+  const parentOptionLabel = (p: any) => {
+    const name = String(p.name || `${p.firstName || ''} ${p.lastName || ''}`.trim()).trim();
+    return name || p.email || p.phone || `Parent #${p.id}`;
+  };
+  const displayedParentOptions = normalizedParentSearchQuery
+    ? uniqueParentOptions.filter((p: any) => {
+      const searchableText = [
+        p.name,
+        p.firstName,
+        p.lastName,
+        p.email,
+        p.phone,
+        p.studentFirstName,
+        p.studentLastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return searchableText.includes(normalizedParentSearchQuery);
+    })
+    : uniqueParentOptions;
+
+  // Reset parent search when class selection changes
+  useEffect(() => {
+    setParentSearchQuery('');
+  }, [selectedStudentClassId]);
 
   // Load parents from API by school/class when either changes (debug logs included)
   useEffect(() => {
@@ -774,6 +802,14 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Parent rattaché (optionnel)</label>
+                    <input
+                      type="text"
+                      value={parentSearchQuery}
+                      onChange={(e) => setParentSearchQuery(e.target.value)}
+                      disabled={!selectedStudentClassId}
+                      placeholder="Rechercher un parent..."
+                      className="w-full mb-2 px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    />
                     <select
                       value={studentForm.parentId}
                       onChange={e => setStudentForm({...studentForm, parentId: e.target.value})}
@@ -781,13 +817,15 @@ export default function AdminModal(props: any) {
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <option value="">-- Choisissez le parent --</option>
-                      {uniqueParentOptions.map((p: any) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
+                      {displayedParentOptions.map((p: any) => (
+                        <option key={p.id} value={p.id}>{parentOptionLabel(p)}</option>
                       ))}
                     </select>
                     {selectedStudentClassId ? (
                       (localParents ?? filteredParents).length === 0 ? (
                         <p className="mt-2 text-xs text-slate-500">Aucun parent disponible pour cette classe.</p>
+                      ) : displayedParentOptions.length === 0 ? (
+                        <p className="mt-2 text-xs text-slate-500">Aucun parent ne correspond à votre recherche.</p>
                       ) : null
                     ) : (
                       <p className="mt-2 text-xs text-slate-500">Sélectionnez d'abord la classe pour activer le champ des parents.</p>
