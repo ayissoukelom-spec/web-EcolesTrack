@@ -1362,19 +1362,41 @@ async function startServer() {
         // Super admins can access all schools
         schoolsList = await db.select().from(schools);
       } else {
-        // Non-super-admin users: only return schools they are actually members of
-        if (memberships.length === 0) {
-          return res.json({ schools: [], activeSchoolId: null });
+        const schoolIds = memberships.map((membership) => membership.schoolId).filter((id): id is number => id != null);
+        if (schoolIds.length > 0) {
+          schoolsList = await db.select().from(schools).where(inArray(schools.id, schoolIds));
+        } else if (actor.schoolId != null) {
+          schoolsList = await db.select().from(schools).where(eq(schools.id, actor.schoolId));
+        } else if (actor.role === 'parent' && actor.id) {
+          const parentRows = await db.select({ schoolId: parents.schoolId, studentId: parents.studentId })
+            .from(parents)
+            .where(eq(parents.userId, actor.id));
+
+          const fallbackIds = new Set<number>();
+          for (const row of parentRows) {
+            if (row.schoolId != null) fallbackIds.add(row.schoolId);
+            if (row.studentId != null) {
+              const [studentRow] = await db.select({ schoolId: students.schoolId })
+                .from(students)
+                .where(eq(students.id, row.studentId));
+              if (studentRow?.schoolId != null) {
+                fallbackIds.add(studentRow.schoolId);
+              }
+            }
+          }
+
+          if (fallbackIds.size > 0) {
+            schoolsList = await db.select().from(schools).where(inArray(schools.id, Array.from(fallbackIds)));
+          }
         }
-        
-        const schoolIds = memberships.map((membership) => membership.schoolId);
-        schoolsList = await db.select().from(schools).where(inArray(schools.id, schoolIds));
       }
 
-      // Find active school from memberships (for non-super-admin)
-      const activeSchoolId = actor.role === 'super_admin' 
-        ? null 
-        : memberships.find((membership) => membership.isActive)?.schoolId ?? memberships[0]?.schoolId ?? null;
+      const activeSchoolId = actor.role === 'super_admin'
+        ? null
+        : memberships.find((membership) => membership.isActive)?.schoolId
+          ?? actor.schoolId
+          ?? schoolsList[0]?.id
+          ?? null;
       
       res.json({ 
         schools: schoolsList.map((school) => ({ id: school.id, name: school.name })), 
@@ -1402,10 +1424,55 @@ async function startServer() {
         return;
       }
 
-      // For school_admin roles: strictly verify a school_admin membership exists in user_schools
-      const membership = actor.role === 'school_admin'
+      // For other roles: check if membership exists or can be auto-created from fallback sources
+      let membership = actor.role === 'school_admin'
         ? await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId, 'school_admin')
         : await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId);
+
+      // If membership not found, try to auto-create it for parent from fallback sources
+      if (!membership && actor.role === 'parent' && actor.id) {
+        try {
+          const parentRows = await db.select({ schoolId: parents.schoolId, studentId: parents.studentId })
+            .from(parents)
+            .where(eq(parents.userId, actor.id));
+
+          let canCreate = false;
+          for (const row of parentRows) {
+            if (row.schoolId === parsedSchoolId) {
+              canCreate = true;
+              break;
+            }
+            if (row.studentId != null) {
+              const [studentRow] = await db.select({ schoolId: students.schoolId })
+                .from(students)
+                .where(eq(students.id, row.studentId));
+              if (studentRow?.schoolId === parsedSchoolId) {
+                canCreate = true;
+                break;
+              }
+            }
+          }
+
+          if (canCreate) {
+            await upsertUserSchoolMembership(actor.id, parsedSchoolId, 'parent', true);
+            membership = await ensureUserSchoolMembership(actor.id, parsedSchoolId);
+            console.log('Auto-created user_schools membership for parent', { userId: actor.id, schoolId: parsedSchoolId });
+          }
+        } catch (e: any) {
+          console.warn('Failed to auto-create parent membership:', e?.message || e);
+        }
+      }
+
+      // If membership not found and actor has no ID, reject early
+      if (!membership && !actor.id) {
+        console.warn('School selection rejected: actor has no ID', {
+          schoolId: parsedSchoolId,
+          userRole: actor.role,
+          actorHasId: !!actor.id
+        });
+        return res.status(403).json({ error: 'User identity cannot be verified' });
+      }
+
       if (!membership) {
         console.warn('School selection denied: user has no membership for school', { 
           userId: actor.id, 

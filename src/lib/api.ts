@@ -87,6 +87,12 @@ export function getSimulatedUser() {
 
 export function setSimulatedUser(user: any) {
   localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(user));
+  // Emit custom event so all components can sync without props drilling
+  try {
+    window.dispatchEvent(new CustomEvent('simulatedUserChanged', { detail: user }));
+  } catch (e) {
+    console.warn('Failed to dispatch simulatedUserChanged event:', e);
+  }
 }
 
 export function clearSimulatedUser() {

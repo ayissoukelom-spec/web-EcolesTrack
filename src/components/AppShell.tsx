@@ -136,6 +136,7 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
+    setCurrentSchoolId(getSimulatedSchoolId());
     if (currentRole !== 'super_admin') {
       setSuperAdminSchoolFilterId(null);
     }

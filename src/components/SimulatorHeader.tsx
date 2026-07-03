@@ -50,6 +50,40 @@ export default function SimulatorHeader({
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
 
+  // Sync simUser with localStorage when it changes (e.g., after login or school selection)
+  useEffect(() => {
+    const onStorageChange = () => {
+      const updatedUser = getSimulatedUser();
+      setSimUser(updatedUser);
+    };
+
+    // Listen for custom event when setSimulatedUser is called in same tab
+    const onSimulatedUserChanged = (event: Event) => {
+      if (event instanceof CustomEvent) {
+        setSimUser(event.detail);
+      }
+    };
+
+    // Listen for storage changes (from other tabs)
+    window.addEventListener('storage', onStorageChange);
+    window.addEventListener('simulatedUserChanged', onSimulatedUserChanged);
+    
+    // Also sync on visibility change since the user might have switched tabs
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        const updatedUser = getSimulatedUser();
+        setSimUser(updatedUser);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.removeEventListener('storage', onStorageChange);
+      window.removeEventListener('simulatedUserChanged', onSimulatedUserChanged);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!profileRef.current) return;
@@ -116,7 +150,11 @@ export default function SimulatorHeader({
   };
 
   const profileAvatar = simUser?.avatarUrl || null;
-  const profileDisplayName = simUser ? ((simUser.firstName || simUser.lastName) ? `${simUser.firstName || ''} ${simUser.lastName || ''}`.trim() : simUser.name) : 'Profil';
+  const profileDisplayName = simUser
+    ? ((simUser.firstName || simUser.lastName)
+      ? `${simUser.firstName || ''} ${simUser.lastName || ''}`.trim()
+      : (simUser.name || simUser.email || 'Utilisateur'))
+    : 'Profil';
   const defaultSchoolId = schoolsList.length > 0 ? String(schoolsList[0].id) : '';
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -410,7 +448,9 @@ export default function SimulatorHeader({
   });
 
   const displayName = currentRole === 'parent'
-    ? (parentProfile ? `${parentProfile.firstName} ${parentProfile.lastName}` : (simUser?.name || simUser?.displayName || simUser?.email || 'Parent connecté'))
+    ? (parentProfile
+      ? `${parentProfile.firstName || ''} ${parentProfile.lastName || ''}`.trim() || parentProfile.email || 'Parent connecté'
+      : (simUser?.name || simUser?.displayName || simUser?.email || 'Parent connecté'))
     : (simUser?.name || simUser?.displayName || simUser?.email || 'Utilisateur');
 
   useEffect(() => {
@@ -1102,8 +1142,8 @@ export default function SimulatorHeader({
             {profileMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white text-slate-800 rounded shadow-lg z-40">
                 <div className="p-3 border-b text-sm">
-                  <div className="font-semibold">{simUser ? simUser.name : 'Aucun utilisateur'}</div>
-                  <div className="text-xs text-slate-500">{simUser ? simUser.email : ''}</div>
+                  <div className="font-semibold">{simUser ? (simUser.name || simUser.email || 'Utilisateur') : 'Aucun utilisateur'}</div>
+                  <div className="text-xs text-slate-500">{simUser ? (simUser.email || '') : ''}</div>
                 </div>
                 <div className="p-2 flex flex-col gap-1">
                   {currentRole !== 'parent' && currentRole !== 'teacher' && (

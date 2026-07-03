@@ -280,6 +280,7 @@ export default function App() {
   }, [teachersList]);
 
   useEffect(() => {
+    setCurrentSchoolId(getSimulatedSchoolId());
     if (currentRole !== 'super_admin') {
       setSuperAdminSchoolFilterId(null);
     }
@@ -756,7 +757,7 @@ export default function App() {
 
   // If not authenticated, render SPA login view
   if (!currentRole) {
-    return <LoginView onLogin={(role) => { setSimulatedRole(role); setCurrentRole(role as UserRole); }} />;
+    return <LoginView onLogin={(role) => { setSimulatedRole(role); setCurrentSchoolId(getSimulatedSchoolId()); setCurrentRole(role as UserRole); }} />;
   }
 
   // Centralized filtering of evaluations: separate active from completed

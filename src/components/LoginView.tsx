@@ -55,9 +55,11 @@ export default function LoginView({ onLogin }: Props) {
       setLoggedInUser(user);
       // Persist simulation state locally so apiFetch will include headers
       setSimulatedRole(user.role || 'parent');
-      // DO NOT include schoolId in simulatedUser yet - it needs to be fetched from user_schools first
-      // to avoid requesting with an invalid school in headers
+      // Reset any previously selected school before membership sync
+      setActiveSchoolId(null);
       setSimulatedUser({ uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
+
+      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
 
       if (user.role === 'super_admin') {
         window.history.pushState(null, '', '/');
@@ -112,7 +114,9 @@ export default function LoginView({ onLogin }: Props) {
           <h2 className="text-lg font-bold mb-2">Choisir votre école</h2>
           <p className="text-sm text-slate-600 mb-4">Sélectionnez l’école à utiliser pour cette session.</p>
           {error && <div className="text-rose-600 mb-2">{error}</div>}
-          {schools.length === 0 ? (
+          {schoolsLoading ? (
+            <div className="text-sm text-slate-600">Chargement des écoles...</div>
+          ) : schools.length === 0 ? (
             <div className="text-sm text-slate-600">Aucune école n’est encore disponible pour ce compte.</div>
           ) : (
             <>
@@ -132,7 +136,7 @@ export default function LoginView({ onLogin }: Props) {
               </label>
               <button
                 type="button"
-                disabled={loading}
+                disabled={loading || schoolsLoading}
                 onClick={confirmSchoolSelection}
                 className="w-full px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
