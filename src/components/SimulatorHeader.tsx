@@ -143,7 +143,6 @@ export default function SimulatorHeader({
   const [createSchoolId, setCreateSchoolId] = useState('');
   const [createAcademicYearId, setCreateAcademicYearId] = useState('');
   const [createParentSchoolId, setCreateParentSchoolId] = useState('');
-  const [createParentClassId, setCreateParentClassId] = useState('');
   const [createSpecializations, setCreateSpecializations] = useState<string[]>([]);
   const [createAssignedClassIds, setCreateAssignedClassIds] = useState<number[]>([]);
   const [showClassSelection, setShowClassSelection] = useState(true);
@@ -654,14 +653,12 @@ export default function SimulatorHeader({
                     }
                     if (selectedRole === 'parent' && currentRole === 'school_admin') {
                       setCreateParentSchoolId(String(simUser?.schoolId ?? ''));
-                      setCreateParentClassId('');
                     }
                     if (selectedRole !== 'teacher') {
                       setCreateAssignedClassIds([]);
                     }
                     if (selectedRole !== 'parent') {
                       setCreateParentSchoolId('');
-                      setCreateParentClassId('');
                     }
                   }}
                 >
@@ -729,7 +726,6 @@ export default function SimulatorHeader({
                     ) : (
                       <select className="w-full p-2 border rounded" value={createParentSchoolId} onChange={(e) => {
                         setCreateParentSchoolId(e.target.value);
-                        setCreateParentClassId('');
                       }}>
                         <option value="">-- Choisir une école --</option>
                         {schoolsList.length > 0 ? (
@@ -741,25 +737,6 @@ export default function SimulatorHeader({
                         )}
                       </select>
                     )}
-                  </div>
-                  <div>
-                    <label className="block text-xs">
-                      <RequiredLabel label="Classe" required />
-                    </label>
-                    <select className="w-full p-2 border rounded" value={createParentClassId} onChange={(e) => {
-                      setCreateParentClassId(e.target.value);
-                    }}>
-                      <option value="">-- Choisir une classe --</option>
-                      {createParentSchoolId ? (
-                        (classesList || [])
-                          .filter((cls) => String(cls.schoolId) === createParentSchoolId && isApprovedForSchool(cls, Number(createParentSchoolId)))
-                          .map((cls) => (
-                            <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
-                          ))
-                      ) : (
-                        <option value="">Sélectionnez d'abord une école</option>
-                      )}
-                    </select>
                   </div>
                 </>
               )}
@@ -1045,7 +1022,6 @@ export default function SimulatorHeader({
                   setCreateSchoolId('');
                   setCreateAcademicYearId('');
                   setCreateParentSchoolId('');
-                  setCreateParentClassId('');
                   setCreateSpecializations([]);
                   setCreateAssignedClassIds([]);
                   setCreateGender('');
