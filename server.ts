@@ -3792,9 +3792,17 @@ async function startServer() {
         .innerJoin(users, eq(teachers.userId, users.id));
 
       if (actor.role !== 'super_admin') {
-        // School admin, teacher, and others see only their school's evaluations
+        // School admin, teacher, and others see only their school's evaluations.
+        // Also allow global classes (classes.schoolId IS NULL) that have been
+        // explicitly approved for this school via `school_classes`.
         if (actor.schoolId) {
-          query = query.where(eq(classes.schoolId, actor.schoolId)) as any;
+          query = query.where(or(
+            eq(classes.schoolId, actor.schoolId),
+            and(
+              sql`${classes.schoolId} IS NULL`,
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${actor.schoolId} AND sc.status = 'approved')`
+            )
+          )) as any;
         } else {
           return res.json([]);
         }

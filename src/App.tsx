@@ -259,6 +259,22 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  // When Super Admin selects a school filter, fetch classes annotated for that school
+  // so that global classes approved for the school have their `status` populated.
+  useEffect(() => {
+    if (currentRole !== 'super_admin') return;
+    const schoolId = superAdminSchoolFilterId;
+    const endpoint = schoolId ? `/api/classes?schoolId=${schoolId}` : '/api/classes';
+    (async () => {
+      try {
+        const payload = await apiFetch(endpoint);
+        setClassesList(Array.isArray(payload) ? payload : []);
+      } catch (err: any) {
+        console.warn('Failed to load classes for super admin school filter', err);
+      }
+    })();
+  }, [superAdminSchoolFilterId, currentRole]);
+
   useEffect(() => {
     logTeachersPayload('AFTER_SET_TEACHERSLIST', teachersList);
   }, [teachersList]);
