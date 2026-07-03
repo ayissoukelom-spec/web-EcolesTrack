@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
+import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
 import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationFullyGraded as isEvaluationFullyGradedUtil, isEvaluationCompleted as isEvaluationCompletedUtil, parseDateValue } from '../lib/evaluationUtils';
 
@@ -34,7 +35,7 @@ export default function ArchiveView({
     ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
     : sortedClasses;
   const filteredClasses = schoolFilterId
-    ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
+    ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
     : availableClasses;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [fromDate, setFromDate] = useState('');

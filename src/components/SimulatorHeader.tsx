@@ -3,6 +3,7 @@ import { Shield, Settings, BookOpen, Users, Bell, Smartphone, RefreshCw } from '
 import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
 import { School, AcademicYear, Class, Teacher, Student, Parent, User } from '../types';
 import CustomDropdown from './CustomDropdown';
+import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 
@@ -151,14 +152,7 @@ export default function SimulatorHeader({
   const createTeacherSchoolId = createRole === 'teacher'
     ? (currentRole === 'school_admin' ? Number(simUser?.schoolId) : (Number(createSchoolId) || undefined))
     : undefined;
-  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
-    if (schoolId == null) {
-      if (cls.status != null) return cls.status === 'approved';
-      return true;
-    }
-    if (cls.schoolId === schoolId) return true;
-    return cls.schoolId == null && cls.status === 'approved';
-  };
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
   const teacherSpecializations = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)

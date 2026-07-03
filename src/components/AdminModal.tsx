@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getSimulatedSchoolId, apiFetch } from '../lib/api.ts';
+import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 
@@ -73,15 +74,7 @@ export default function AdminModal(props: any) {
   const currentStudentSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? selectedStudentSchoolId) : selectedStudentSchoolId;
   const selectedStudentClassId = studentForm.classId ? parseInt(studentForm.classId, 10) : undefined;
   const selectedStudentClass = sortedClasses.find((c: any) => c.id === selectedStudentClassId);
-  const isApprovedForSchool = (c: any, schoolId?: number | null) => {
-    if (schoolId == null) {
-      if (c.status != null) return c.status === 'approved';
-      return true;
-    }
-    if (c.schoolId === schoolId) return true;
-    return c.schoolId == null && c.status === 'approved';
-  };
-  const filteredStudentClasses = sortedClasses.filter((c: any) => !currentStudentSchoolId || isApprovedForSchool(c, currentStudentSchoolId));
+  const filteredStudentClasses = sortedClasses.filter((c: any) => !currentStudentSchoolId || isClassVisibleToSchool(c, currentStudentSchoolId));
   // Get all teachers assigned to the selected class (via classIds, not just teacherId)
   const teachersInSelectedClass = selectedStudentClass
     ? teachersList.filter((t: any) => (t.classIds || []).includes(selectedStudentClass.id))
@@ -94,8 +87,8 @@ export default function AdminModal(props: any) {
   const [localParents, setLocalParents] = useState<any[] | null>(null);
   const [parentSearchQuery, setParentSearchQuery] = useState('');
   const availableClassesForSchool = userRole === 'school_admin' && currentSchoolId
-    ? sortedClasses.filter((c: any) => isApprovedForSchool(c, currentSchoolId))
-    : sortedClasses.filter((c: any) => isApprovedForSchool(c));
+    ? sortedClasses.filter((c: any) => isClassVisibleToSchool(c, currentSchoolId))
+    : sortedClasses;
 
   const availableClassNames = Array.from(new Set<string>(availableClassesForSchool.map((c: any) => String(c.name)))).sort((a, b) => {
     const order = ['4ème','3ème','2nde a4','2nde cd','2nde','1ère a4','1ère d','1ère','tle a4','tle d','tle'];
@@ -537,7 +530,7 @@ export default function AdminModal(props: any) {
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                 {(() => {
                   const teacherSelectedSchoolId = userRole === 'school_admin' ? autoSelectedSchoolId : (teacherForm.schoolId ? parseInt(teacherForm.schoolId, 10) : undefined);
-                  const available = (sortedClasses || []).filter((c: any) => !teacherSelectedSchoolId || isApprovedForSchool(c, teacherSelectedSchoolId));
+                  const available = (sortedClasses || []).filter((c: any) => !teacherSelectedSchoolId || isClassVisibleToSchool(c, teacherSelectedSchoolId));
                   return (
                     <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}
@@ -696,7 +689,7 @@ export default function AdminModal(props: any) {
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                     {(() => {
                       const selectedSchoolId = userRole === 'school_admin' ? autoSelectedSchoolId : (newTeacherForm.schoolId ? parseInt(newTeacherForm.schoolId, 10) : undefined);
-                      const available = (sortedClasses || []).filter((c: any) => !selectedSchoolId || isApprovedForSchool(c, selectedSchoolId));
+                      const available = (sortedClasses || []).filter((c: any) => !selectedSchoolId || isClassVisibleToSchool(c, selectedSchoolId));
                       return (
                         <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}

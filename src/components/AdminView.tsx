@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { sortClasses } from '../lib/classOrdering';
+import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
@@ -608,14 +609,7 @@ export default function AdminView({
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
 
-  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
-    if (schoolId == null) {
-      if (cls.status != null) return cls.status === 'approved';
-      return true;
-    }
-    if (cls.schoolId === schoolId) return true;
-    return cls.schoolId == null && cls.status === 'approved';
-  };
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
   const currentYear = new Date().getFullYear();
   const birthYearRangeStart = currentYear - 60;
@@ -1577,8 +1571,8 @@ export default function AdminView({
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classes déjà assignées</label>
                   <div className="flex flex-wrap gap-2">
-                    {schoolToEdit && Array.from(new Set(classesList.filter((c) => c.schoolId === schoolToEdit.id).map((c) => c.name).filter(Boolean))).length > 0 ? (
-                      Array.from(new Set(classesList.filter((c) => c.schoolId === schoolToEdit.id).map((c) => c.name).filter(Boolean))).map((name) => (
+                      {schoolToEdit && Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).length > 0 ? (
+                      Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).map((name) => (
                         <span key={name} className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-medium">
                           {name}
                         </span>
@@ -1592,7 +1586,7 @@ export default function AdminView({
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des classes à cette école</label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
                     {Array.from(new Set(sortClasses(classesList || []).map((c) => c.name)))
-                      .filter((name) => !classesList.some((c) => c.schoolId === schoolToEdit?.id && c.name === name))
+                      .filter((name) => !classesList.some((c) => isClassVisibleToSchool(c, schoolToEdit?.id) && c.name === name))
                       .map((name) => (
                         <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
                           <input
@@ -2977,23 +2971,22 @@ export default function AdminView({
         {/* Import results panel */}
         {importResult && (
           <div className="p-4 border-b border-slate-100 bg-slate-50 text-sm">
-            <div className="flex items-start gap-3">
-              <div className="flex-1">
-                <div className="font-bold">Import CSV: {importResult.insertedCount ?? 0} insérés</div>
-                {importResult.errors && importResult.errors.length > 0 && (
-                  <div className="text-slate-600 text-xs mt-2">
-                    <div className="font-semibold">Erreurs ({importResult.errors.length}):</div>
-                    <ul className="list-disc list-inside mt-1">
-                      {importResult.errors.slice(0, 20).map((err: any, idx: number) => (
-                        <li key={idx} className="text-rose-700">
-                          Ligne {((typeof err.row === 'number') ? err.row + 1 : '?')}: {err.email ? `${err.email} — ` : ''}{err.error || err.reason || 'Erreur inconnue'}
-                        </li>
-                      ))}
-                    </ul>
-                    {importResult.errors.length > 20 && <div className="text-xs text-slate-400">...seules les 20 premières erreurs sont affichées</div>}
-                  </div>
-                )}
-              </div>
+            <div className="flex items-center gap-3">
+              <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par classe</label>
+              <select
+                className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+                value={teacherClassFilterId ?? ''}
+                onChange={(e) => setTeacherClassFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+              >
+                <option value="">Toutes les classes</option>
+                {classesList
+                  .filter((c) => !superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId))
+                  .map((cls) => (
+                    <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
+                  ))}
+              </select>
+            </div>
+            <div className="mt-2">
               <button onClick={() => { if (typeof window !== 'undefined') window.location.reload(); }} className="text-xs text-indigo-600 font-semibold">Fermer</button>
             </div>
           </div>
@@ -3264,7 +3257,7 @@ export default function AdminView({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {classesList
-                  .filter((c) => (!superAdminSchoolFilterId || c.schoolId === superAdminSchoolFilterId) && filterBySearch(c.name))
+                  .filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name))
                   .map((cls) => (
                     <tr key={cls.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="px-6 py-4 font-bold text-slate-800">{cls.name}</td>
@@ -3311,7 +3304,7 @@ export default function AdminView({
                       </td>
                     </tr>
                   ))}
-                {classesList.filter((c) => (!superAdminSchoolFilterId || c.schoolId === superAdminSchoolFilterId) && filterBySearch(c.name)).length === 0 && (
+                {classesList.filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name)).length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucune classe trouvée.</td>
                   </tr>
@@ -3350,7 +3343,7 @@ export default function AdminView({
                 >
                   <option value="">Toutes les classes</option>
                   {classesList
-                    .filter((c) => !superAdminSchoolFilterId || c.schoolId === superAdminSchoolFilterId)
+                    .filter((c) => !superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId))
                     .map((cls) => (
                       <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
                     ))}
@@ -3462,7 +3455,7 @@ export default function AdminView({
                     >
                       <option value="">Toutes les classes</option>
                       {classesList
-                        .filter((c) => !superAdminSchoolFilterId || c.schoolId === superAdminSchoolFilterId)
+                        .filter((c) => !superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId))
                         .sort((a, b) => a.name.localeCompare(b.name, 'fr'))
                         .map((cls) => (
                           <option key={cls.id} value={String(cls.id)}>{cls.name}</option>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
+import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import {
   Award,
   BookOpen,
@@ -70,14 +71,7 @@ export default function NotesView({
   onAddClass,
 }: NotesViewProps) {
   const sortedClasses = sortClasses(classesList || []);
-  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => {
-    if (schoolId == null) {
-      if (cls.status != null) return cls.status === 'approved';
-      return true;
-    }
-    if (cls.schoolId === schoolId) return true;
-    return cls.schoolId == null && cls.status === 'approved';
-  };
+  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
   const availableClasses = userRole === 'teacher'
     ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
@@ -85,7 +79,11 @@ export default function NotesView({
       ? sortedClasses.filter((c) => isApprovedForSchool(c, currentSchoolId))
       : sortedClasses;
   const filteredClasses = schoolFilterId
-    ? availableClasses.filter((c) => c.schoolId === schoolFilterId)
+    ? (
+      userRole === 'super_admin'
+        ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
+        : availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
+    )
     : availableClasses;
 
   // Use the raw evaluations list here; class-level approval/sync issues

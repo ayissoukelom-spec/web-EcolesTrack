@@ -2267,6 +2267,13 @@ async function startServer() {
           status: statusMap.get(klass.id) ?? (klass.schoolId === targetSchoolId ? 'approved' : 'pending'),
         }));
 
+        // Only return classes that belong to the requested school OR global classes
+        // that have been approved for that school. This keeps the client-side
+        // schoolId-based filters working without frontend changes.
+        result = result.filter((klass) => (
+          klass.schoolId === targetSchoolId || (klass.schoolId == null && klass.status === 'approved')
+        ));
+
         if (approvedOnly) {
           result = result.filter((klass) => klass.status === 'approved');
         }
