@@ -126,17 +126,16 @@ export default function AdminModal(props: any) {
   const uniqueParentOptions = Array.from(
     new Map(parentOptions.map((p: any) => [p.id, p])).values(),
   );
-  const normalizedParentSearchQuery = parentSearchQuery.trim().toLowerCase();
+  const parentQuery = parentSearchQuery.trim();
+  const normalizedParentSearchQuery = parentQuery.toLowerCase();
   const parentOptionLabel = (p: any) => {
     const name = String(p.name || `${p.firstName || ''} ${p.lastName || ''}`.trim()).trim();
     return name || p.email || p.phone || `Parent #${p.id}`;
   };
-  const displayedParentOptions = normalizedParentSearchQuery
+  const displayedParentOptions = parentQuery
     ? uniqueParentOptions.filter((p: any) => {
       const searchableText = [
-        p.name,
-        p.firstName,
-        p.lastName,
+        parentOptionLabel(p),
         p.email,
         p.phone,
         p.studentFirstName,
@@ -148,6 +147,26 @@ export default function AdminModal(props: any) {
       return searchableText.includes(normalizedParentSearchQuery);
     })
     : uniqueParentOptions;
+  const suggestionParentOptions = parentQuery ? displayedParentOptions.slice(0, 10) : [];
+
+  const handleParentSearchInput = (query: string) => {
+    setParentSearchQuery(query);
+    const matchedParent = uniqueParentOptions.find((p: any) => parentOptionLabel(p).toLowerCase() === query.trim().toLowerCase());
+    if (matchedParent) {
+      setStudentForm({ ...studentForm, parentId: String(matchedParent.id) });
+    } else if (query.trim() === '') {
+      setStudentForm({ ...studentForm, parentId: '' });
+    }
+  };
+
+  useEffect(() => {
+    if (studentForm.parentId) {
+      const selectedParent = uniqueParentOptions.find((p: any) => String(p.id) === studentForm.parentId);
+      if (selectedParent) {
+        setParentSearchQuery(parentOptionLabel(selectedParent));
+      }
+    }
+  }, [studentForm.parentId]);
 
   // Reset parent search when class selection changes
   useEffect(() => {
@@ -804,15 +823,45 @@ export default function AdminModal(props: any) {
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Parent rattaché (optionnel)</label>
                     <input
                       type="text"
+                      list="parent-search-options"
                       value={parentSearchQuery}
-                      onChange={(e) => setParentSearchQuery(e.target.value)}
+                      onChange={(e) => handleParentSearchInput(e.target.value)}
                       disabled={!selectedStudentClassId}
-                      placeholder="Rechercher un parent..."
+                      placeholder="Commencez à saisir un nom..."
                       className="w-full mb-2 px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     />
+                    <datalist id="parent-search-options">
+                      {suggestionParentOptions.map((p: any) => (
+                        <option key={p.id} value={parentOptionLabel(p)} />
+                      ))}
+                    </datalist>
+                    {suggestionParentOptions.length > 0 && (
+                      <div className="mb-2 rounded-xl border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                        {suggestionParentOptions.map((p: any) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className="block w-full text-left px-2 py-1 hover:bg-slate-100 rounded"
+                            onClick={() => {
+                              setParentSearchQuery(parentOptionLabel(p));
+                              setStudentForm({ ...studentForm, parentId: String(p.id) });
+                            }}
+                          >
+                            {parentOptionLabel(p)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <select
                       value={studentForm.parentId}
-                      onChange={e => setStudentForm({...studentForm, parentId: e.target.value})}
+                      onChange={(e) => {
+                        const parentId = e.target.value;
+                        const selectedParent = uniqueParentOptions.find((p: any) => String(p.id) === parentId);
+                        setStudentForm({ ...studentForm, parentId });
+                        if (selectedParent) {
+                          setParentSearchQuery(parentOptionLabel(selectedParent));
+                        }
+                      }}
                       disabled={!selectedStudentClassId}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     >
