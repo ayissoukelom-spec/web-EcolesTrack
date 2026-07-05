@@ -94,32 +94,19 @@ export default function AdminModal(props: any) {
     ? sortedClasses.filter((c: any) => isClassVisibleToSchool(c, currentSchoolId))
     : sortedClasses;
 
-  const availableClassNames = Array.from(new Set<string>(availableClassesForSchool.map((c: any) => String(c.name)))).sort((a, b) => {
-    const order = ['4ème','3ème','2nde a4','2nde cd','2nde','1ère a4','1ère d','1ère','tle a4','tle d','tle'];
-    const normalize = (s: string) => s.toLowerCase();
-    const indexOfName = (name: string) => {
-      const n = normalize(name);
-      for (let i = 0; i < order.length; i += 1) {
-        if (n.startsWith(order[i]) || n.includes(order[i])) return i;
-      }
-      return order.length;
-    };
-    const ia = indexOfName(a);
-    const ib = indexOfName(b);
-    if (ia !== ib) return ia - ib;
-    return a.localeCompare(b, 'fr');
-  });
+  const availableClassNames = Array.from(new Set<string>(availableClassesForSchool.map((c: any) => String(c.name)))).sort((a, b) => a.localeCompare(b, 'fr'));
 
   const getGroupClassNames = (groupIds: string[]) => {
-    if (!groupIds || groupIds.length === 0) return [];
+    if (!groupIds || groupIds.length === 0) return [] as string[];
     const normalizedAvailable = new Set(availableClassNames.map((name: string) => name.toLowerCase()));
-    return Array.from(new Set(groupIds.flatMap((groupId) => {
+    const result = Array.from(new Set(groupIds.flatMap((groupId) => {
       const selectedGroup = classGroups.find((group: any) => String(group.id || '') === String(groupId));
       if (!selectedGroup || !Array.isArray(selectedGroup.classNames)) return [] as string[];
       return selectedGroup.classNames
         .map((name: any) => String(name || '').trim())
         .filter((name: string) => name && normalizedAvailable.has(name.toLowerCase()));
     })));
+    return result.sort((a, b) => String(a).localeCompare(String(b), 'fr'));
   };
 
   const availableSubjectNames = Array.from(new Set<string>(
@@ -131,13 +118,14 @@ export default function AdminModal(props: any) {
   const getGroupSubjectNames = (groupIds: string[]) => {
     if (!groupIds || groupIds.length === 0) return [];
     const normalizedAvailable = new Set(availableSubjectNames.map((name: string) => name.toLowerCase()));
-    return Array.from(new Set(groupIds.flatMap((groupId) => {
+    const result = Array.from(new Set(groupIds.flatMap((groupId) => {
       const selectedGroup = subjectGroups.find((group: any) => String(group.id || '') === String(groupId));
       if (!selectedGroup || !Array.isArray(selectedGroup.subjectNames)) return [] as string[];
       return selectedGroup.subjectNames
         .map((name: any) => String(name || '').trim())
         .filter((name: string) => name && normalizedAvailable.has(name.toLowerCase()));
     })));
+    return result.sort((a, b) => a.localeCompare(b, 'fr'));
   };
 
   const visibleClassNames = (schoolForm.selectedClassGroups && schoolForm.selectedClassGroups.length > 0)
@@ -441,21 +429,29 @@ export default function AdminModal(props: any) {
                 </div>
                 <div className="mt-4">
                   <label htmlFor="school-subject-groups" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de matières</label>
-                  <select
-                    id="school-subject-groups"
-                    multiple
-                    value={schoolForm.selectedSubjectGroups || []}
-                    onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value);
-                      const nextSubjectNames = selected.length > 0 ? getGroupSubjectNames(selected) : (schoolForm.selectedSubjectNames || []);
-                      setSchoolForm({ ...schoolForm, selectedSubjectGroups: selected, selectedSubjectNames: nextSubjectNames });
-                    }}
-                    className="w-full min-h-[9rem] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm"
-                  >
-                    {subjectGroups.map((group: any) => (
-                      <option key={group.id} value={String(group.id)}>{group.name}</option>
-                    ))}
-                  </select>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3">
+                    {subjectGroups.map((group: any) => {
+                      const isSelected = (schoolForm.selectedSubjectGroups || []).includes(String(group.id));
+                      return (
+                        <label key={group.id} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const current = schoolForm.selectedSubjectGroups || [];
+                              const next = e.target.checked
+                                ? [...current, String(group.id)]
+                                : current.filter((id: string) => id !== String(group.id));
+                              const nextSubjectNames = next.length > 0 ? getGroupSubjectNames(next) : (schoolForm.selectedSubjectNames || []);
+                              setSchoolForm({ ...schoolForm, selectedSubjectGroups: next, selectedSubjectNames: nextSubjectNames });
+                            }}
+                            className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                          />
+                          <span className="text-sm text-slate-700">{group.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 mt-4">Matières existantes</label>
                   <div className="mb-3">
                     <input

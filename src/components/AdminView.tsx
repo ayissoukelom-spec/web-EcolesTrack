@@ -3459,10 +3459,10 @@ export default function AdminView({
                     <div>
                       <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Classes du groupe</label>
                       <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white p-3">
-                        {classesList.length === 0 ? (
+                          {classesList.length === 0 ? (
                           <p className="text-sm text-slate-500">Aucune classe disponible.</p>
                         ) : (
-                          classesList.map((cls) => (
+                          classesList.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'fr')).map((cls) => (
                             <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
                               <input
                                 type="checkbox"
@@ -3506,7 +3506,7 @@ export default function AdminView({
                         </div>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {(group.classNames || []).map((className: string) => (
+                        {[...(group.classNames || [])].sort((a: string, b: string) => String(a).localeCompare(String(b), 'fr')).map((className: string) => (
                           <span key={`${group.id}-${className}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{className}</span>
                         ))}
                       </div>

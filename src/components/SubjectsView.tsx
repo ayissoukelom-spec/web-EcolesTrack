@@ -54,6 +54,7 @@ export default function SubjectsView({
   const [selectedSchoolId, setSelectedSchoolId] = useState<number | ''>(schoolId ?? '');
   const [filterSchoolId, setFilterSchoolId] = useState<number | ''>('');
   const [subjectSearch, setSubjectSearch] = useState('');
+  const [subjectGroupSearch, setSubjectGroupSearch] = useState('');
 
   const handleOpenForm = (subject?: Subject) => {
     if (subject) {
@@ -107,9 +108,12 @@ export default function SubjectsView({
     return subject.schoolId === Number(filterSchoolId) || (subject as any).status !== undefined;
   });
 
+  // Sort visible subjects alphabetically by name (fr locale)
+  const sortedVisibleSubjects = visibleSubjects.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr'));
+
   const filteredVisibleSubjects = subjectSearch
-    ? visibleSubjects.filter((s) => String(s.name || '').toLowerCase().includes(subjectSearch.trim().toLowerCase()))
-    : visibleSubjects;
+    ? sortedVisibleSubjects.filter((s) => String(s.name || '').toLowerCase().includes(subjectSearch.trim().toLowerCase()))
+    : sortedVisibleSubjects;
 
   const getStatusLabel = (status?: string) => {
     switch (status) {
@@ -197,11 +201,23 @@ export default function SubjectsView({
               </div>
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Matières du groupe</label>
+                <div className="mb-2">
+                  <input
+                    type="search"
+                    value={subjectGroupSearch}
+                    onChange={(e) => setSubjectGroupSearch(e.target.value)}
+                    placeholder="Rechercher une matière..."
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm"
+                  />
+                </div>
                 <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white p-3">
                   {subjectsList.length === 0 ? (
                     <p className="text-sm text-slate-500">Aucune matière disponible.</p>
                   ) : (
-                    subjectsList.map((subject) => (
+                    subjectsList.slice().filter((s) => {
+                      if (!subjectGroupSearch) return true;
+                      return String(s.name || '').toLowerCase().includes(subjectGroupSearch.trim().toLowerCase());
+                    }).sort((a, b) => String(a.name).localeCompare(String(b.name), 'fr')).map((subject) => (
                       <label key={subject.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
                         <input
                           type="checkbox"
@@ -245,7 +261,7 @@ export default function SubjectsView({
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {(group.subjectNames || []).map((subjectName: string) => (
+                  {[...(group.subjectNames || [])].sort((a: string, b: string) => String(a).localeCompare(String(b), 'fr')).map((subjectName: string) => (
                     <span key={`${group.id}-${subjectName}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{subjectName}</span>
                   ))}
                 </div>
