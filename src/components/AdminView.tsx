@@ -2112,10 +2112,23 @@ export default function AdminView({
                     {autoAssignedSchoolName}
                   </div>
                 ) : (
-                  <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds })}>
-                    <option value="">-- Sélectionner une école (optionnel) --</option>
-                    {schoolsList.map((s) => (<option key={s.id} value={String(s.id)}>{s.name}</option>))}
-                  </select>
+                  <div>
+                    <input
+                      type="search"
+                      placeholder="Rechercher une école..."
+                      value={userForm.schoolSearch || ''}
+                      onChange={(e) => setUserForm({ ...userForm, schoolSearch: e.target.value })}
+                      className="w-full mb-2 p-2 border rounded"
+                    />
+                    <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds })}>
+                      <option value="">-- Sélectionner une école (optionnel) --</option>
+                      {(schoolsList || []).filter((s) => {
+                        const q = String(userForm.schoolSearch || '').trim().toLowerCase();
+                        if (!q) return true;
+                        return String(s.name || '').toLowerCase().includes(q);
+                      }).map((s) => (<option key={s.id} value={String(s.id)}>{s.name}</option>))}
+                    </select>
+                  </div>
                 )}
                 {userForm.role === 'teacher' && (
                   <div>
