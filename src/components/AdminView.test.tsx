@@ -107,4 +107,82 @@ describe('AdminView create-user teacher form', () => {
 
     expect(screen.queryByRole('button', { name: /Créer un compte/i })).toBeNull();
   });
+
+  it('hides the edit button for teachers in the teachers list', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [{ id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10] }];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [{ id: 2, uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', role: 'teacher', schoolId: 1 }];
+
+    render(
+      <AdminView
+        userRole="teacher"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+
+    expect(screen.queryByRole('button', { name: /Modifier/i })).toBeNull();
+  });
+
+  it('hides the parents and tutors tab for the teacher role', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    render(
+      <AdminView
+        userRole="teacher"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Parents & Tuteurs/i })).toBeNull();
+  });
 });
