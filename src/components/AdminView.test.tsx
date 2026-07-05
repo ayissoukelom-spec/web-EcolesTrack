@@ -185,4 +185,57 @@ describe('AdminView create-user teacher form', () => {
 
     expect(screen.queryByRole('button', { name: /Parents & Tuteurs/i })).toBeNull();
   });
+
+  it('shows only teachers from the same class for a teacher role', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 }, { id: 20, name: 'CM2', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [
+      { id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10] },
+      { id: 2, userId: 3, name: 'Bob Durand', email: 'bob@example.com', schoolId: 1, classIds: [20] },
+    ];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [
+      { id: 2, uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', role: 'teacher', schoolId: 1 },
+    ];
+
+    const storage = window.localStorage as any;
+    storage.getItem.mockImplementation((key: string) => {
+      if (key === 'ecoletrack_simulated_role') return 'teacher';
+      if (key === 'ecoletrack_simulated_user') return JSON.stringify({ uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', schoolId: 1 });
+      return null;
+    });
+
+    render(
+      <AdminView
+        userRole="teacher"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+
+    expect(screen.getByText('Alice Martin')).toBeTruthy();
+    expect(screen.queryByText('Bob Durand')).toBeNull();
+  });
 });

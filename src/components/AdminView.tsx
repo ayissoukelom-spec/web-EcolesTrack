@@ -555,18 +555,19 @@ export default function AdminView({
     return text.toLowerCase().includes(searchQuery.toLowerCase());
   };
 
-  const filteredTeachersList = teachersList.filter((t) =>
-    (userRole !== 'super_admin' || !superAdminSchoolFilterId || t.schoolId === superAdminSchoolFilterId) &&
-    (!teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId)) &&
-    filterBySearch(t.name)
-  );
-
   const simulatedUser = getSimulatedUser();
   const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid)
     || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
   const currentUserId = currentUser?.id;
   const currentTeacher = findTeacherProfileFromSimulatedUser(userRole, simulatedUser, teachersList, usersList);
   const currentTeacherClassIds = currentTeacher ? (currentTeacher.classIds || []) : [];
+
+  const filteredTeachersList = teachersList.filter((t) => {
+    const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || t.schoolId === superAdminSchoolFilterId;
+    const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
+    const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && (t.classIds || []).some((classId) => currentTeacherClassIds.includes(classId)));
+    return matchesSchool && matchesClassFilter && matchesTeacherScope && filterBySearch(t.name);
+  });
 
   const currentParent = (() => {
     if (userRole !== 'parent') return undefined;
