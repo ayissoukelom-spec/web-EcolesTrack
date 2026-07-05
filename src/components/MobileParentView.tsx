@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Student, Absence, Grade, SystemNotification, UserRole, Parent } from '../types.ts';
 import { getSimulatedUser } from '../lib/api.ts';
+import { getPublicationLabel } from '../lib/dateFormatting';
 import {
   Smartphone,
   GraduationCap,
@@ -473,19 +474,26 @@ export default function MobileParentView({
                         </div>
 
                         <div className="space-y-2">
-                          {childGrades.map((g) => (
-                            <div key={g.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg flex justify-between items-center text-[10px]">
-                              <div className="space-y-0.5">
-                                <p className="font-extrabold text-white">{g.subject}</p>
-                                <p className="text-[9px] text-slate-400 truncate max-w-[160px]">{g.evaluationTitle || 'Devoir'}</p>
+                          {childGrades.map((g) => {
+                            const publishedAtLabel = getPublicationLabel(g.createdAt);
+
+                            return (
+                              <div key={g.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg flex justify-between items-center text-[10px] gap-2">
+                                <div className="space-y-0.5 min-w-0 flex-1">
+                                  <p className="font-extrabold text-white">{g.subject}</p>
+                                  <p className="text-[9px] text-slate-400 truncate max-w-[160px]">{g.evaluationTitle || 'Devoir'}</p>
+                                  {publishedAtLabel && (
+                                    <p className="text-[8px] text-slate-500">{publishedAtLabel}</p>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <span className="font-mono font-black text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded">
+                                    {g.score}/{g.maxScore ?? 20}
+                                  </span>
+                                </div>
                               </div>
-                              <div className="text-right">
-                                <span className="font-mono font-black text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded">
-                                  {g.score}/{g.maxScore ?? 20}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
 
                           {childGrades.length === 0 && (
                             <p className="text-slate-500 py-6 text-center text-[10px]">Aucune note disponible dans le système.</p>
@@ -525,12 +533,19 @@ export default function MobileParentView({
                         </div>
 
                         <div className="space-y-2">
-                          {currentNotifTabList.map((notif) => (
-                            <div key={notif.id} className="p-3 bg-slate-900 border border-slate-850 rounded-lg text-[10px] space-y-1">
-                              <p className="font-bold text-indigo-300">{notif.title}</p>
-                              <p className="text-slate-400 leading-snug">{notif.body}</p>
-                            </div>
-                          ))}
+                          {currentNotifTabList.map((notif) => {
+                            const publishedAtLabel = getPublicationLabel(notif.createdAt);
+
+                            return (
+                              <div key={notif.id} className="p-3 bg-slate-900 border border-slate-850 rounded-lg text-[10px] space-y-1">
+                                <p className="font-bold text-indigo-300">{notif.title}</p>
+                                <p className="text-slate-400 leading-snug">{notif.body}</p>
+                                {publishedAtLabel && (
+                                  <p className="text-[8px] text-slate-500">{publishedAtLabel}</p>
+                                )}
+                              </div>
+                            );
+                          })}
 
                           {currentNotifTabList.length === 0 && (
                             <p className="text-slate-500 text-center py-6 text-[10px]">

@@ -144,6 +144,7 @@ export interface Grade {
   studentId: number;
   studentName?: string;
   score: string; // "14.5", "Abs" etc
+  maxScore?: number;
   remarks?: string;
   editCount?: number;
   createdAt?: string;

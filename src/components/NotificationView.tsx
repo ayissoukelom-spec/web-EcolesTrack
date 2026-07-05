@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
+import { getPublicationLabel } from '../lib/dateFormatting';
 
 interface NotificationViewProps {
   userRole: UserRole;
@@ -103,6 +104,7 @@ export default function NotificationView({
       notif.type === 'absence' ? { bg: 'bg-rose-50 border-rose-100 text-rose-700', bullet: 'bg-rose-500' } :
       notif.type === 'grade' ? { bg: 'bg-amber-50 border-amber-100 text-amber-700', bullet: 'bg-amber-500' } :
       { bg: 'bg-indigo-50 border-indigo-100 text-indigo-700', bullet: 'bg-indigo-500' };
+    const publishedAtLabel = getPublicationLabel(notif.createdAt);
 
     return (
       <div
@@ -120,15 +122,20 @@ export default function NotificationView({
             <span className="text-[10px] text-slate-400 whitespace-nowrap">Instant</span>
           </div>
           <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{notif.body}</p>
-          <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400">
-            <span className={`capitalize font-bold px-2 py-0.5 rounded ${themeColor.bg}`} style={{ fontSize: '9px' }}>
-              Type : {notif.type}
-            </span>
-            {notif.isRead ? (
-              <span className="text-slate-400">Message déjà lu</span>
-            ) : (
-              <span className="text-indigo-600 font-bold">Nouveau Message</span>
+          <div className="pt-1 flex flex-col gap-1 text-[10px] text-slate-400">
+            {publishedAtLabel && (
+              <span className="text-slate-500">{publishedAtLabel}</span>
             )}
+            <div className="flex items-center justify-between">
+              <span className={`capitalize font-bold px-2 py-0.5 rounded ${themeColor.bg}`} style={{ fontSize: '9px' }}>
+                Type : {notif.type}
+              </span>
+              {notif.isRead ? (
+                <span className="text-slate-400">Message déjà lu</span>
+              ) : (
+                <span className="text-indigo-600 font-bold">Nouveau Message</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
