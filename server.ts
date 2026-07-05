@@ -50,6 +50,7 @@ import {
   auditEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
+import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
 
 async function logIfTeacherUserMismatch(userId: number | null | undefined, teacherId: number | null | undefined) {
   try {
@@ -3179,7 +3180,31 @@ async function startServer() {
         .leftJoin(parents, eq(students.parentId, parents.id))
         .leftJoin(users, eq(parents.userId, users.id));
 
-      if (actor.role === 'school_admin') {
+      if (actor.role === 'teacher') {
+        const currentSchoolId = actor.schoolId ?? null;
+        const teacherRows = await db
+          .select({ id: teachers.id, schoolId: teachers.schoolId })
+          .from(teachers)
+          .where(and(eq(teachers.userId, actor.id), currentSchoolId != null ? eq(teachers.schoolId, currentSchoolId) : undefined));
+
+        if (teacherRows.length === 0) {
+          return res.json([]);
+        }
+
+        const teacherId = teacherRows[0].id;
+        const assignmentRows = await db
+          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+          .from(classTeachers)
+          .innerJoin(classes, eq(classTeachers.classId, classes.id))
+          .where(and(eq(classTeachers.teacherId, teacherId), currentSchoolId != null ? eq(classes.schoolId, currentSchoolId) : undefined));
+
+        const teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
+        if (teacherClassIds.length === 0) {
+          return res.json([]);
+        }
+
+        query = query.where(inArray(students.classId, teacherClassIds)) as any;
+      } else if (actor.role === 'school_admin') {
         if (actor.schoolId) {
           query = query.where(eq(students.schoolId, actor.schoolId)) as any;
         } else {
@@ -4331,8 +4356,30 @@ async function startServer() {
       // Build filter condition based on user role
       let schoolFilter: any = undefined;
       let parentChildIds: number[] | null = null;
+      let teacherClassIds: number[] | null = null;
       if (user.role !== 'super_admin' && user.schoolId) {
         schoolFilter = user.schoolId;
+      }
+
+      if (user.role === 'teacher') {
+        const currentSchoolId = user.schoolId ?? null;
+        const teacherRows = await db
+          .select({ id: teachers.id, schoolId: teachers.schoolId })
+          .from(teachers)
+          .where(and(eq(teachers.userId, user.id), currentSchoolId != null ? eq(teachers.schoolId, currentSchoolId) : undefined));
+
+        if (teacherRows.length === 0) {
+          teacherClassIds = [];
+        } else {
+          const teacherId = teacherRows[0].id;
+          const assignmentRows = await db
+            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+            .from(classTeachers)
+            .innerJoin(classes, eq(classTeachers.classId, classes.id))
+            .where(and(eq(classTeachers.teacherId, teacherId), currentSchoolId != null ? eq(classes.schoolId, currentSchoolId) : undefined));
+
+          teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
+        }
       }
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
@@ -4390,6 +4437,27 @@ async function startServer() {
           .select({ count: sql<number>`count(*)::integer` })
           .from(absences)
           .where(inArray(absences.studentId, parentChildIds)) as any;
+      } else if (user.role === 'teacher') {
+        if (!teacherClassIds || teacherClassIds.length === 0) {
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
+        }
+
+        studentCountQuery = studentCountQuery.where(inArray(students.classId, teacherClassIds)) as any;
+        studentGenderQuery = studentGenderQuery.where(inArray(students.classId, teacherClassIds)) as any;
+        chartClassesQuery = chartClassesQuery.where(inArray(classes.id, teacherClassIds)) as any;
+        chartStudentsQuery = chartStudentsQuery.where(inArray(students.classId, teacherClassIds)) as any;
+        classCountQuery = db
+          .select({ count: sql<number>`count(*)::integer` })
+          .from(classes)
+          .where(inArray(classes.id, teacherClassIds)) as any;
+        absenceCountQuery = db
+          .select({ count: sql<number>`count(*)::integer` })
+          .from(absences)
+          .where(inArray(absences.classId, teacherClassIds)) as any;
+        chartAbsencesQuery = db
+          .select({ classId: absences.classId })
+          .from(absences)
+          .where(inArray(absences.classId, teacherClassIds)) as any;
       } else if (schoolFilter) {
         studentCountQuery = studentCountQuery.where(eq(students.schoolId, schoolFilter)) as any;
         studentGenderQuery = studentGenderQuery.where(eq(students.schoolId, schoolFilter)) as any;
@@ -4480,6 +4548,8 @@ async function startServer() {
 
       if (user.role === 'parent') {
         recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, parentChildIds || [])) as any;
+      } else if (user.role === 'teacher') {
+        recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.classId, teacherClassIds || [])) as any;
       } else if (schoolFilter) {
         recentAbsencesQuery = recentAbsencesQuery.where(eq(students.schoolId, schoolFilter)) as any;
       }
@@ -4504,6 +4574,8 @@ async function startServer() {
 
       if (user.role === 'parent') {
         recentGradesQuery = recentGradesQuery.where(inArray(grades.studentId, parentChildIds || [])) as any;
+      } else if (user.role === 'teacher') {
+        recentGradesQuery = recentGradesQuery.where(inArray(evaluations.classId, teacherClassIds || [])) as any;
       } else if (schoolFilter) {
         recentGradesQuery = recentGradesQuery.where(eq(students.schoolId, schoolFilter)) as any;
       }
