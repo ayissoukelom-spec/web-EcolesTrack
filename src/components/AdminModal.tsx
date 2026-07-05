@@ -48,6 +48,8 @@ export default function AdminModal(props: any) {
     userRole,
     currentSchoolId,
     subjectsList = [],
+    classGroups = [],
+    subjectGroups = [],
   } = props;
   const { fieldErrors, setFieldErrors } = props;
 
@@ -62,7 +64,7 @@ export default function AdminModal(props: any) {
 
   const cycleOptions = ['6ème', '5ème', '4ème', '3ème', '2nde', '1ère', 'Tle'];
   const sectionOptions = ['A', 'B', 'C', 'D'];
-  const streamOptions = ['A4', 'C', 'D', 'CD', 'G1', 'G2', 'G3', 'F1', 'F2', 'F3', 'F4'];
+  const streamOptions = ['A4', 'C', 'D', 'CD', 'E', 'TI', 'G1', 'G2', 'G3', 'F1', 'F2', 'F3', 'F4'];
   const groupOptions = ['1', '2', '3', '4'];
   const birthDateDayOptions = Array.from({ length: 31 }, (_, index) => String(index + 1).padStart(2, '0'));
   const birthDateMonthOptions = Array.from({ length: 12 }, (_, index) => ({
@@ -107,11 +109,42 @@ export default function AdminModal(props: any) {
     return a.localeCompare(b, 'fr');
   });
 
+  const getGroupClassNames = (groupIds: string[]) => {
+    if (!groupIds || groupIds.length === 0) return [];
+    const normalizedAvailable = new Set(availableClassNames.map((name: string) => name.toLowerCase()));
+    return Array.from(new Set(groupIds.flatMap((groupId) => {
+      const selectedGroup = classGroups.find((group: any) => String(group.id || '') === String(groupId));
+      if (!selectedGroup || !Array.isArray(selectedGroup.classNames)) return [] as string[];
+      return selectedGroup.classNames
+        .map((name: any) => String(name || '').trim())
+        .filter((name: string) => name && normalizedAvailable.has(name.toLowerCase()));
+    })));
+  };
+
   const availableSubjectNames = Array.from(new Set<string>(
     (subjectsList || [])
       .map((subject: any) => String(subject?.name || '').trim())
       .filter(Boolean)
   )).sort((a, b) => a.localeCompare(b, 'fr'));
+
+  const getGroupSubjectNames = (groupIds: string[]) => {
+    if (!groupIds || groupIds.length === 0) return [];
+    const normalizedAvailable = new Set(availableSubjectNames.map((name: string) => name.toLowerCase()));
+    return Array.from(new Set(groupIds.flatMap((groupId) => {
+      const selectedGroup = subjectGroups.find((group: any) => String(group.id || '') === String(groupId));
+      if (!selectedGroup || !Array.isArray(selectedGroup.subjectNames)) return [] as string[];
+      return selectedGroup.subjectNames
+        .map((name: any) => String(name || '').trim())
+        .filter((name: string) => name && normalizedAvailable.has(name.toLowerCase()));
+    })));
+  };
+
+  const visibleClassNames = (schoolForm.selectedClassGroups && schoolForm.selectedClassGroups.length > 0)
+    ? getGroupClassNames(schoolForm.selectedClassGroups)
+    : availableClassNames;
+  const visibleSubjectNames = (schoolForm.selectedSubjectGroups && schoolForm.selectedSubjectGroups.length > 0)
+    ? getGroupSubjectNames(schoolForm.selectedSubjectGroups)
+    : availableSubjectNames;
 
   const filteredParents = parentsList.filter((p: any) => {
     if (selectedStudentClassId) {
@@ -268,7 +301,7 @@ export default function AdminModal(props: any) {
     );
   }
 
-  function MultiSelect({ options, value, onChange, placeholder }: { options: { value: number; label: string }[]; value: number[]; onChange: (vals: number[]) => void; placeholder?: string }) {
+  function MultiSelect({ id, options, value, onChange, placeholder }: { id?: string; options: { value: string; label: string }[]; value: string[]; onChange: (vals: string[]) => void; placeholder?: string }) {
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
@@ -280,13 +313,23 @@ export default function AdminModal(props: any) {
       return () => document.removeEventListener('mousedown', onDoc);
     }, []);
 
-    const toggle = (v: number) => {
+    const toggle = (v: string) => {
       if (value.includes(v)) onChange(value.filter((x) => x !== v));
       else onChange([...value, v]);
     };
 
     return (
-      <div className="relative" ref={ref}>
+      <div className="relative" ref={ref} role="combobox" aria-expanded={open} aria-haspopup="listbox" aria-owns={id}>
+        {id && (
+          <input
+            id={id}
+            type="text"
+            readOnly
+            value={value.map((v) => options.find((o) => o.value === v)?.label || '').filter(Boolean).join(', ')}
+            className="sr-only"
+            aria-label={placeholder}
+          />
+        )}
         <div className="w-full border border-slate-200 rounded-xl px-2 py-2 bg-white flex items-center gap-2 flex-wrap" onClick={() => setOpen((s) => !s)}>
           {value && value.length > 0 ? (
             options.filter(o => value.includes(o.value)).map((o) => (
@@ -301,7 +344,7 @@ export default function AdminModal(props: any) {
           <div className="ml-auto text-slate-400 text-xs">▾</div>
         </div>
         {open && (
-          <div className="absolute left-0 top-full mt-1 w-full bg-white border border-slate-200 rounded shadow-lg z-50 max-h-56 overflow-auto">
+          <div className="absolute left-0 top-full mt-1 w-full bg-white border border-slate-200 rounded shadow-lg z-50 max-h-56 overflow-auto" role="listbox">
             {options.map((opt) => (
               <button key={opt.value} type="button" onClick={(e) => { e.preventDefault(); toggle(opt.value); }} className={`w-full text-left px-3 py-2 hover:bg-slate-100 ${value.includes(opt.value) ? 'bg-slate-100 font-semibold' : ''}`}>
                 {opt.label}
@@ -332,11 +375,86 @@ export default function AdminModal(props: any) {
                 </label>
                 <input required type="text" value={schoolForm.name} onChange={e => setSchoolForm({...schoolForm, name: e.target.value})} placeholder="Lycée de Lomé" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matières existantes</label>
-                {availableSubjectNames.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto border border-slate-200 rounded-xl bg-white p-3">
-                    {availableSubjectNames.map((name) => (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Adresse</label>
+                <input type="text" value={schoolForm.address} onChange={e => setSchoolForm({...schoolForm, address: e.target.value})} placeholder="Adresse complète" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Téléphone" required />
+                </label>
+                <div className="flex gap-2">
+                  <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
+                  <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de classes</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3">
+                  {classGroups.map((group: any) => {
+                    const isSelected = (schoolForm.selectedClassGroups || []).includes(String(group.id));
+                    return (
+                      <label key={group.id} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            const currentGroupIds = schoolForm.selectedClassGroups || [];
+                            const nextGroups = e.target.checked
+                              ? [...currentGroupIds, String(group.id)]
+                              : currentGroupIds.filter((id: string) => id !== String(group.id));
+                            const nextClassNames = nextGroups.length > 0
+                              ? getGroupClassNames(nextGroups)
+                              : (schoolForm.selectedClassNames || []);
+                            setSchoolForm({ ...schoolForm, selectedClassGroups: nextGroups, selectedClassNames: nextClassNames });
+                          }}
+                          className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                        />
+                        <span className="text-sm text-slate-700">{group.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 mt-4">Classes existantes</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
+                  {visibleClassNames.map((name) => (
+                    <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={(schoolForm.selectedClassNames || []).includes(name)}
+                        onChange={(e) => {
+                          const current = schoolForm.selectedClassNames || [];
+                          const next = e.target.checked
+                            ? [...current, name]
+                            : current.filter((n: string) => n !== name);
+                          setSchoolForm({ ...schoolForm, selectedClassNames: next });
+                        }}
+                        className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                      />
+                      <span className="text-sm text-slate-700">{name}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4">
+                  <label htmlFor="school-subject-groups" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de matières</label>
+                  <select
+                    id="school-subject-groups"
+                    multiple
+                    value={schoolForm.selectedSubjectGroups || []}
+                    onChange={(e) => {
+                      const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value);
+                      const nextSubjectNames = selected.length > 0 ? getGroupSubjectNames(selected) : (schoolForm.selectedSubjectNames || []);
+                      setSchoolForm({ ...schoolForm, selectedSubjectGroups: selected, selectedSubjectNames: nextSubjectNames });
+                    }}
+                    className="w-full min-h-[9rem] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm"
+                  >
+                    {subjectGroups.map((group: any) => (
+                      <option key={group.id} value={String(group.id)}>{group.name}</option>
+                    ))}
+                  </select>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 mt-4">Matières existantes</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
+                    {visibleSubjectNames.map((name) => (
                       <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
                         <input
                           type="checkbox"
@@ -354,44 +472,6 @@ export default function AdminModal(props: any) {
                       </label>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-sm text-slate-500">Aucune matière existante n’est disponible pour le moment.</p>
-                )}
-                <p className="mt-2 text-xs text-slate-500">Cochez les matières déjà présentes pour les réutiliser dans cette école.</p>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Adresse</label>
-                <input type="text" value={schoolForm.address} onChange={e => setSchoolForm({...schoolForm, address: e.target.value})} placeholder="Adresse complète" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                  <RequiredLabel label="Téléphone" required />
-                </label>
-                <div className="flex gap-2">
-                  <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
-                  <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes existantes</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
-                  {availableClassNames.map((name) => (
-                    <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
-                      <input
-                        type="checkbox"
-                        checked={(schoolForm.selectedClassNames || []).includes(name)}
-                        onChange={(e) => {
-                          const current = schoolForm.selectedClassNames || [];
-                          const next = e.target.checked
-                            ? [...current, name]
-                            : current.filter((n: string) => n !== name);
-                          setSchoolForm({ ...schoolForm, selectedClassNames: next });
-                        }}
-                        className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
-                      />
-                      <span className="text-sm text-slate-700">{name}</span>
-                    </label>
-                  ))}
                 </div>
                 <p className="mt-2 text-xs text-slate-500">Cochez les classes existantes à reproduire dans la nouvelle école.</p>
               </div>

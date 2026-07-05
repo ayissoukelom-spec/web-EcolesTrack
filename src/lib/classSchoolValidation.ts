@@ -23,8 +23,8 @@ export function resolveClassCreationSchoolId(args: {
       ? null
       : Number(requestedSchoolId);
 
-    if (parsed == null || Number.isNaN(parsed)) {
-      return { schoolId: null, error: 'schoolId is required to create a class' };
+    if (parsed != null && Number.isNaN(parsed)) {
+      return { schoolId: null, error: 'Invalid schoolId' };
     }
 
     return { schoolId: parsed };

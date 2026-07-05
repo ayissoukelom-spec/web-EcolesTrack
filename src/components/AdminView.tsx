@@ -466,7 +466,60 @@ export default function AdminView({
   const parentFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // New item forms state
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[] });
+  const defaultClassGroups = [
+    { id: 'ceg', name: 'CEG (6ème à 3ème)', classNames: ['6ème', '5ème', '4ème', '3ème'] },
+    { id: 'lycee', name: 'Lycée (2nde à Tle)', classNames: ['2nde', '1ère', 'Tle'] },
+  ];
+  const defaultSubjectGroups: any[] = [];
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[] });
+  const [classGroups, setClassGroups] = useState<any[]>(() => {
+    if (typeof window === 'undefined') return defaultClassGroups;
+    try {
+      const stored = window.localStorage.getItem('ecoletrack-class-groups');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((group: any) => ({
+            id: String(group.id || group.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+            name: String(group.name || '').trim(),
+            classNames: Array.isArray(group.classNames)
+              ? group.classNames.map((name: any) => String(name || '').trim()).filter(Boolean)
+              : [],
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load class groups', err);
+    }
+    return defaultClassGroups;
+  });
+  const [subjectGroups, setSubjectGroups] = useState<any[]>(() => {
+    if (typeof window === 'undefined') return defaultSubjectGroups;
+    try {
+      const stored = window.localStorage.getItem('ecoletrack-subject-groups');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((group: any) => ({
+            id: String(group.id || group.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+            name: String(group.name || '').trim(),
+            subjectNames: Array.isArray(group.subjectNames)
+              ? group.subjectNames.map((name: any) => String(name || '').trim()).filter(Boolean)
+              : [],
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load subject groups', err);
+    }
+    return defaultSubjectGroups;
+  });
+  const [classGroupForm, setClassGroupForm] = useState({ name: '', selectedClassNames: [] as string[] });
+  const [editingClassGroupId, setEditingClassGroupId] = useState<string | null>(null);
+  const [classGroupError, setClassGroupError] = useState<string | null>(null);
+  const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
+  const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
+  const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '2026-2027', isActive: true, schoolId: '' });
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
@@ -502,6 +555,16 @@ export default function AdminView({
     }
     window.localStorage.setItem('ecoletrack-admin-active-tab', activeTab);
   }, [activeTab, userRole]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('ecoletrack-class-groups', JSON.stringify(classGroups));
+  }, [classGroups]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('ecoletrack-subject-groups', JSON.stringify(subjectGroups));
+  }, [subjectGroups]);
 
   const [creationDayOpen, setCreationDayOpen] = useState(false);
   const [creationMonthOpen, setCreationMonthOpen] = useState(false);
@@ -625,6 +688,89 @@ export default function AdminView({
     const [year = '', month = '', day = ''] = value.split('-');
     return { year, month, day };
   };
+
+  const handleSaveClassGroup = () => {
+    const trimmedName = classGroupForm.name.trim();
+    const classNames = (classGroupForm.selectedClassNames || []).map((name) => String(name).trim()).filter(Boolean);
+    if (!trimmedName) {
+      setClassGroupError('Le nom du groupe est obligatoire.');
+      return;
+    }
+    if (classNames.length === 0) {
+      setClassGroupError('Sélectionnez au moins une classe pour le groupe.');
+      return;
+    }
+
+    if (editingClassGroupId) {
+      setClassGroups((prev) => prev.map((group) => group.id === editingClassGroupId ? { ...group, name: trimmedName, classNames } : group));
+    } else {
+      setClassGroups((prev) => [
+        ...prev,
+        { id: `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`, name: trimmedName, classNames },
+      ]);
+    }
+
+    setClassGroupForm({ name: '', selectedClassNames: [] });
+    setEditingClassGroupId(null);
+    setClassGroupError(null);
+  };
+
+  const handleEditClassGroup = (group: any) => {
+    setEditingClassGroupId(group.id);
+    setClassGroupForm({ name: group.name || '', selectedClassNames: [...(group.classNames || [])] });
+    setClassGroupError(null);
+  };
+
+  const handleDeleteClassGroup = (groupId: string) => {
+    setClassGroups((prev) => prev.filter((group) => group.id !== groupId));
+    if (editingClassGroupId === groupId) {
+      setEditingClassGroupId(null);
+      setClassGroupForm({ name: '', selectedClassNames: [] });
+      setClassGroupError(null);
+    }
+  };
+
+  const handleSaveSubjectGroup = () => {
+    const trimmedName = subjectGroupForm.name.trim();
+    const subjectNames = (subjectGroupForm.selectedSubjectNames || []).map((name) => String(name).trim()).filter(Boolean);
+    if (!trimmedName) {
+      setSubjectGroupError('Le nom du groupe est obligatoire.');
+      return;
+    }
+    if (subjectNames.length === 0) {
+      setSubjectGroupError('Sélectionnez au moins une matière pour le groupe.');
+      return;
+    }
+
+    if (editingSubjectGroupId) {
+      setSubjectGroups((prev) => prev.map((group) => group.id === editingSubjectGroupId ? { ...group, name: trimmedName, subjectNames } : group));
+    } else {
+      setSubjectGroups((prev) => [
+        ...prev,
+        { id: `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`, name: trimmedName, subjectNames },
+      ]);
+    }
+
+    setSubjectGroupForm({ name: '', selectedSubjectNames: [] });
+    setEditingSubjectGroupId(null);
+    setSubjectGroupError(null);
+  };
+
+  const handleEditSubjectGroup = (group: any) => {
+    setEditingSubjectGroupId(group.id);
+    setSubjectGroupForm({ name: group.name || '', selectedSubjectNames: [...(group.subjectNames || [])] });
+    setSubjectGroupError(null);
+  };
+
+  const handleDeleteSubjectGroup = (groupId: string) => {
+    setSubjectGroups((prev) => prev.filter((group) => group.id !== groupId));
+    if (editingSubjectGroupId === groupId) {
+      setEditingSubjectGroupId(null);
+      setSubjectGroupForm({ name: '', selectedSubjectNames: [] });
+      setSubjectGroupError(null);
+    }
+  };
+
   const formatDateParts = (day: string, month: string, year: string) => {
     return year && month && day ? `${year}-${month}-${day}` : '';
   };
@@ -3259,8 +3405,8 @@ export default function AdminView({
         {activeTab === 'classes' && (
           <div>
             {['super_admin', 'school_admin'].includes(userRole) && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
+                <div className="w-full sm:w-auto">
                   {userRole === 'super_admin' && (
                     <>
                       <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
@@ -3290,6 +3436,83 @@ export default function AdminView({
                     Créer une classe
                   </button>
                 )}
+              </div>
+            )}
+            {userRole === 'super_admin' && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 mb-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-700">Groupes de classes</h3>
+                    <p className="text-xs text-slate-500">Définissez des groupes réutilisables pour créer rapidement des écoles avec plusieurs classes.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:w-[400px]">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Nom du groupe</label>
+                      <input
+                        type="text"
+                        value={classGroupForm.name}
+                        onChange={(e) => setClassGroupForm((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder="CEG personnalisé"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Classes du groupe</label>
+                      <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white p-3">
+                        {classesList.length === 0 ? (
+                          <p className="text-sm text-slate-500">Aucune classe disponible.</p>
+                        ) : (
+                          classesList.map((cls) => (
+                            <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={classGroupForm.selectedClassNames.includes(cls.name)}
+                                onChange={(e) => {
+                                  const current = classGroupForm.selectedClassNames;
+                                  const next = e.target.checked
+                                    ? [...current, cls.name]
+                                    : current.filter((name) => name !== cls.name);
+                                  setClassGroupForm((prev) => ({ ...prev, selectedClassNames: next }));
+                                }}
+                                className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                              />
+                              <span>{cls.name}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {classGroupError && <div className="mt-3 text-rose-600 text-sm">{classGroupError}</div>}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={handleSaveClassGroup} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">
+                    {editingClassGroupId ? 'Mettre à jour le groupe' : 'Enregistrer le groupe'}
+                  </button>
+                  {editingClassGroupId && (
+                    <button type="button" onClick={() => { setEditingClassGroupId(null); setClassGroupForm({ name: '', selectedClassNames: [] }); setClassGroupError(null); }} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                      Annuler
+                    </button>
+                  )}
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {classGroups.map((group) => (
+                    <div key={group.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold text-slate-800">{group.name}</div>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => handleEditClassGroup(group)} className="text-indigo-600 hover:text-indigo-700">Modifier</button>
+                          <button type="button" onClick={() => handleDeleteClassGroup(group.id)} className="text-rose-500 hover:text-rose-600">Supprimer</button>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {(group.classNames || []).map((className: string) => (
+                          <span key={`${group.id}-${className}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{className}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <div className="overflow-x-auto">
@@ -3855,6 +4078,14 @@ export default function AdminView({
           onDeleteSubject={onDeleteSubject || (() => {})}
           onApproveSubject={onApproveSubject || (() => {})}
           onRejectSubject={onRejectSubject || (() => {})}
+          subjectGroups={subjectGroups}
+          subjectGroupForm={subjectGroupForm}
+          editingSubjectGroupId={editingSubjectGroupId}
+          subjectGroupError={subjectGroupError}
+          setSubjectGroupForm={setSubjectGroupForm}
+          onSaveSubjectGroup={handleSaveSubjectGroup}
+          onEditSubjectGroup={handleEditSubjectGroup}
+          onDeleteSubjectGroup={handleDeleteSubjectGroup}
         />
       )}
       </div>
@@ -3903,6 +4134,8 @@ export default function AdminView({
         handleSaveNewTeacher={handleSaveNewTeacher}
         userRole={userRole}
         currentSchoolId={currentSchoolId}
+        classGroups={classGroups}
+        subjectGroups={subjectGroups}
       />
       {/* Admin modal rendered above */}
     </div>

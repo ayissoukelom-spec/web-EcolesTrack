@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AdminView from './AdminView';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
@@ -65,7 +65,126 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByRole('button', { name: /Refuser/i })).toBeTruthy();
   });
 
-  it('forwards entered subject names when creating a school', async () => {
+  it('shows configured class groups and filters classes when creating a school', async () => {
+    const localStorageMock = window.localStorage as any;
+    localStorageMock.getItem.mockImplementation((key: string) => {
+      if (key === 'ecoletrack-class-groups') {
+        return JSON.stringify([{ id: 'ceg', name: 'CEG', classNames: ['6ème', '5ème', '3ème'] }]);
+      }
+      return null;
+    });
+
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [
+      { id: 10, name: '6ème', schoolId: 1, academicYearId: 1 },
+      { id: 11, name: '5ème', schoolId: 1, academicYearId: 1 },
+      { id: 12, name: '3ème', schoolId: 1, academicYearId: 1 },
+      { id: 13, name: '2nde', schoolId: 1, academicYearId: 1 },
+    ];
+
+    render(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    const groupSelect = screen.getByLabelText(/Groupes de classes/i);
+    const cegOption = screen.getByRole('option', { name: 'CEG' });
+    cegOption.selected = true;
+    fireEvent.change(groupSelect);
+
+    expect(screen.getByLabelText('6ème')).toBeTruthy();
+    expect(screen.getByLabelText('5ème')).toBeTruthy();
+    expect(screen.getByLabelText('3ème')).toBeTruthy();
+    expect(screen.queryByLabelText('2nde')).toBeNull();
+  });
+
+  it('allows selecting multiple class groups at once', async () => {
+    const localStorageMock = window.localStorage as any;
+    localStorageMock.getItem.mockImplementation((key: string) => {
+      if (key === 'ecoletrack-class-groups') {
+        return JSON.stringify([
+          { id: 'ceg', name: 'CEG', classNames: ['6ème', '5ème', '3ème'] },
+          { id: 'lycee', name: 'Lycée', classNames: ['2nde', '1ère', 'Tle'] },
+        ]);
+      }
+      return null;
+    });
+
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [
+      { id: 10, name: '6ème', schoolId: 1, academicYearId: 1 },
+      { id: 11, name: '5ème', schoolId: 1, academicYearId: 1 },
+      { id: 12, name: '3ème', schoolId: 1, academicYearId: 1 },
+      { id: 13, name: '2nde', schoolId: 1, academicYearId: 1 },
+      { id: 14, name: '1ère', schoolId: 1, academicYearId: 1 },
+      { id: 15, name: 'Tle', schoolId: 1, academicYearId: 1 },
+    ];
+
+    render(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    const select = screen.getByLabelText(/Groupes de classes/i);
+    const cegOption = screen.getByRole('option', { name: 'CEG' });
+    const lyceeOption = screen.getByRole('option', { name: 'Lycée' });
+    cegOption.selected = true;
+    lyceeOption.selected = true;
+    fireEvent.change(select);
+
+    expect(screen.getByLabelText('6ème')).toBeTruthy();
+    expect(screen.getByLabelText('2nde')).toBeTruthy();
+    expect(screen.getByLabelText('1ère')).toBeTruthy();
+    expect(screen.getByLabelText('Tle')).toBeTruthy();
+  });
+
+  it('submits a school without requiring manual subject entry', async () => {
     const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
@@ -104,13 +223,12 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
     fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
-    fireEvent.change(screen.getByLabelText(/Matières à créer/i), { target: { value: 'Mathématiques\nPhysique' } });
     fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
 
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
       name: 'École du Lac',
       phone: '+228 90000000',
-      subjectNames: ['Mathématiques', 'Physique'],
+      subjectNames: [],
     }));
   });
 
@@ -155,7 +273,19 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
     fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
-    fireEvent.click(screen.getByLabelText('Mathématiques'));
+    const subjectPanels = screen.getAllByText('Matières existantes');
+    expect(subjectPanels.length).toBeGreaterThan(0);
+    const createSchoolPanel = subjectPanels.find((node) => {
+      return node.parentElement?.parentElement?.parentElement?.querySelector('input[placeholder="90000000"]');
+    });
+    expect(createSchoolPanel).toBeTruthy();
+    if (createSchoolPanel) {
+      const section = createSchoolPanel.closest('div');
+      expect(section).toBeTruthy();
+      if (section) {
+        fireEvent.click(within(section).getByLabelText('Mathématiques'));
+      }
+    }
     fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
 
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({

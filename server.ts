@@ -2447,11 +2447,15 @@ async function startServer() {
 
       const resolvedSchoolId = parsedSchoolId;
 
-      if (!trimmedName || academicYearId == null || resolvedSchoolId == null) {
-        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}, schoolId=${resolvedSchoolId}` });
+      if (user.role === 'school_admin' && resolvedSchoolId == null) {
+        return res.status(400).json({ error: 'schoolId is required to create a class' });
       }
 
-      console.log('Attempting to create class for school', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
+      if (!trimmedName || academicYearId == null) {
+        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}` });
+      }
+
+      console.log('Attempting to create class', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
 
       // Defensive duplicate check to avoid DB unique constraint errors
       try {
@@ -2479,7 +2483,7 @@ async function startServer() {
       try {
         const [newClass] = await db.insert(classes).values({
           name: trimmedName,
-          schoolId: Number(resolvedSchoolId),
+          schoolId: resolvedSchoolId != null ? Number(resolvedSchoolId) : null,
           academicYearId: Number(academicYearId),
           teacherId: teacherId ? Number(teacherId) : null,
         }).returning();
@@ -3721,22 +3725,30 @@ async function startServer() {
         return res.status(400).json({ error: 'Subject name is required' });
       }
 
-      const validation = resolveClassCreationSchoolId({
-        actorRole: user.role,
-        requestedSchoolId: bodySchoolId,
-        actorSchoolId: user.schoolId,
-      });
-
-      if (validation.error) {
-        return res.status(400).json({ error: validation.error });
+      const requestedSchoolId = bodySchoolId == null || bodySchoolId === '' ? null : Number(bodySchoolId);
+      if (bodySchoolId != null && bodySchoolId !== '' && Number.isNaN(requestedSchoolId)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
       }
 
-      const finalSchoolId = validation.schoolId;
+      let finalSchoolId: number | null = null;
+      if (user.role === 'school_admin') {
+        const validation = resolveClassCreationSchoolId({
+          actorRole: user.role,
+          requestedSchoolId: bodySchoolId,
+          actorSchoolId: user.schoolId,
+        });
+        if (validation.error) {
+          return res.status(400).json({ error: validation.error });
+        }
+        finalSchoolId = validation.schoolId;
+      } else {
+        finalSchoolId = requestedSchoolId;
+      }
 
       const [newSubject] = await db
         .insert(subjects)
         .values({
-          schoolId: Number(finalSchoolId),
+          schoolId: finalSchoolId != null ? Number(finalSchoolId) : null,
           name: name.trim(),
           code: code ? code.trim() : undefined,
         })

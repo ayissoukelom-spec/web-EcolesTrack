@@ -18,6 +18,14 @@ interface SubjectsViewProps {
   onDeleteSubject: (id: number) => void;
   onApproveSubject?: (id: number) => void;
   onRejectSubject?: (id: number) => void;
+  subjectGroups?: any[];
+  subjectGroupForm?: { name: string; selectedSubjectNames: string[] };
+  editingSubjectGroupId?: string | null;
+  subjectGroupError?: string | null;
+  setSubjectGroupForm?: (form: { name: string; selectedSubjectNames: string[] }) => void;
+  onSaveSubjectGroup?: () => void;
+  onEditSubjectGroup?: (group: any) => void;
+  onDeleteSubjectGroup?: (groupId: string) => void;
 }
 
 export default function SubjectsView({
@@ -30,6 +38,14 @@ export default function SubjectsView({
   onDeleteSubject,
   onApproveSubject,
   onRejectSubject,
+  subjectGroups = [],
+  subjectGroupForm = { name: '', selectedSubjectNames: [] },
+  editingSubjectGroupId = null,
+  subjectGroupError = null,
+  setSubjectGroupForm = () => {},
+  onSaveSubjectGroup = () => {},
+  onEditSubjectGroup = () => {},
+  onDeleteSubjectGroup = () => {},
 }: SubjectsViewProps) {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -153,6 +169,84 @@ export default function SubjectsView({
             </select>
           </div>
           <p className="text-xs text-slate-500">Affiche uniquement les matières liées à l’établissement sélectionné.</p>
+        </div>
+      )}
+
+      {userRole === 'super_admin' && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-700">Groupes de matières</h3>
+              <p className="text-xs text-slate-500">Créez des ensembles de matières réutilisables pour les écoles techniques, générales, etc.</p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:w-[400px]">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Nom du groupe</label>
+                <input
+                  type="text"
+                  value={subjectGroupForm.name}
+                  onChange={(e) => setSubjectGroupForm({ ...subjectGroupForm, name: e.target.value })}
+                  placeholder="Ex. Lycée techniques"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Matières du groupe</label>
+                <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white p-3">
+                  {subjectsList.length === 0 ? (
+                    <p className="text-sm text-slate-500">Aucune matière disponible.</p>
+                  ) : (
+                    subjectsList.map((subject) => (
+                      <label key={subject.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                        <input
+                          type="checkbox"
+                          checked={subjectGroupForm.selectedSubjectNames.includes(subject.name)}
+                          onChange={(e) => {
+                            const current = subjectGroupForm.selectedSubjectNames;
+                            const next = e.target.checked
+                              ? [...current, subject.name]
+                              : current.filter((name) => name !== subject.name);
+                            setSubjectGroupForm({ ...subjectGroupForm, selectedSubjectNames: next });
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        />
+                        <span>{subject.name}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          {subjectGroupError && <div className="text-rose-600 text-sm">{subjectGroupError}</div>}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onSaveSubjectGroup} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">
+              {editingSubjectGroupId ? 'Mettre à jour le groupe' : 'Enregistrer le groupe'}
+            </button>
+            {editingSubjectGroupId && (
+              <button type="button" onClick={() => setSubjectGroupForm({ name: '', selectedSubjectNames: [] })} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                Annuler
+              </button>
+            )}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {subjectGroups.map((group) => (
+              <div key={group.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold text-slate-800">{group.name}</div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => onEditSubjectGroup(group)} className="text-indigo-600 hover:text-indigo-700">Modifier</button>
+                    <button type="button" onClick={() => onDeleteSubjectGroup(group.id)} className="text-rose-500 hover:text-rose-600">Supprimer</button>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {(group.subjectNames || []).map((subjectName: string) => (
+                    <span key={`${group.id}-${subjectName}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{subjectName}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -286,23 +380,23 @@ export default function SubjectsView({
                 />
               </div>
 
-              {userRole === 'super_admin' && false && (
+              {userRole === 'super_admin' && (
                 <div>
                   <label htmlFor="subject-school-select" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Établissement <span className="text-rose-500">*</span>
+                    Établissement (optionnel)
                   </label>
                   <select
                     id="subject-school-select"
                     value={selectedSchoolId}
                     onChange={(e) => setSelectedSchoolId(e.target.value ? Number(e.target.value) : '')}
                     className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                    required
                   >
-                    <option value="">Sélectionner un établissement</option>
+                    <option value="">Global / Sans établissement</option>
                     {schoolsList.map((school) => (
                       <option key={school.id} value={school.id}>{school.name}</option>
                     ))}
                   </select>
+                  <p className="text-xs text-slate-500 mt-2">Laisser vide pour créer une matière globale disponible pour tous les établissements.</p>
                 </div>
               )}
 
