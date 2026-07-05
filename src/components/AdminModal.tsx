@@ -47,6 +47,7 @@ export default function AdminModal(props: any) {
     handleSaveNewTeacher,
     userRole,
     currentSchoolId,
+    subjectsList = [],
   } = props;
   const { fieldErrors, setFieldErrors } = props;
 
@@ -105,6 +106,12 @@ export default function AdminModal(props: any) {
     if (ia !== ib) return ia - ib;
     return a.localeCompare(b, 'fr');
   });
+
+  const availableSubjectNames = Array.from(new Set<string>(
+    (subjectsList || [])
+      .map((subject: any) => String(subject?.name || '').trim())
+      .filter(Boolean)
+  )).sort((a, b) => a.localeCompare(b, 'fr'));
 
   const filteredParents = parentsList.filter((p: any) => {
     if (selectedStudentClassId) {
@@ -324,6 +331,33 @@ export default function AdminModal(props: any) {
                   <RequiredLabel label="Nom de l’établissement" required />
                 </label>
                 <input required type="text" value={schoolForm.name} onChange={e => setSchoolForm({...schoolForm, name: e.target.value})} placeholder="Lycée de Lomé" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+              </div>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matières existantes</label>
+                {availableSubjectNames.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto border border-slate-200 rounded-xl bg-white p-3">
+                    {availableSubjectNames.map((name) => (
+                      <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={(schoolForm.selectedSubjectNames || []).includes(name)}
+                          onChange={(e) => {
+                            const current = schoolForm.selectedSubjectNames || [];
+                            const next = e.target.checked
+                              ? [...current, name]
+                              : current.filter((n: string) => n !== name);
+                            setSchoolForm({ ...schoolForm, selectedSubjectNames: next });
+                          }}
+                          className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                        />
+                        <span className="text-sm text-slate-700">{name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Aucune matière existante n’est disponible pour le moment.</p>
+                )}
+                <p className="mt-2 text-xs text-slate-500">Cochez les matières déjà présentes pour les réutiliser dans cette école.</p>
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Adresse</label>

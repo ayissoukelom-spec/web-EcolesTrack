@@ -65,6 +65,106 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByRole('button', { name: /Refuser/i })).toBeTruthy();
   });
 
+  it('forwards entered subject names when creating a school', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    render(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.change(screen.getByLabelText(/Matières à créer/i), { target: { value: 'Mathématiques\nPhysique' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
+    expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'École du Lac',
+      phone: '+228 90000000',
+      subjectNames: ['Mathématiques', 'Physique'],
+    }));
+  });
+
+  it('forwards selected existing subjects when creating a school', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+    const subjects = [{ id: 1, name: 'Mathématiques', schoolId: 1 }, { id: 2, name: 'Physique', schoolId: 1 }];
+
+    render(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        subjectsList={subjects}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByLabelText('Mathématiques'));
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
+    expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'École du Lac',
+      phone: '+228 90000000',
+      subjectNames: ['Mathématiques'],
+    }));
+  });
+
   it('does not show the create account button in the accounts tab', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];

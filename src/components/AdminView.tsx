@@ -361,8 +361,8 @@ interface AdminViewProps {
   usersList: User[];
   subjectsList?: any[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
-  onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
@@ -466,7 +466,7 @@ export default function AdminView({
   const parentFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // New item forms state
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[] });
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '2026-2027', isActive: true, schoolId: '' });
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
@@ -740,9 +740,21 @@ export default function AdminView({
       }
       const fullPhone = `+228 ${phoneDigits}`;
       const selectedClassNames = (schoolForm.selectedClassNames || []).filter((name) => name.trim() !== '');
+      const selectedSubjectNames = (schoolForm.selectedSubjectNames || []).filter((name) => name.trim() !== '');
+      const parsedSubjectNames = (schoolForm.subjectNames || '')
+        .split(/\r?\n|,/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const combinedSubjectNames = Array.from(new Set([...selectedSubjectNames, ...parsedSubjectNames]));
       try {
-        await onAddSchool({ name: schoolForm.name, address: schoolForm.address, phone: fullPhone, classNames: selectedClassNames });
-        setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] });
+        await onAddSchool({
+          name: schoolForm.name,
+          address: schoolForm.address,
+          phone: fullPhone,
+          classNames: selectedClassNames,
+          subjectNames: combinedSubjectNames,
+        });
+        setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] });
         setStudentError(null);
         setIsModalOpen(false);
         setSearchQuery('');
@@ -3118,7 +3130,7 @@ export default function AdminView({
               <div className="flex justify-end mb-3">
                 <button
                   onClick={() => {
-                    setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] });
+                    setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] });
                     setActiveTab('schools');
                     setStudentError(null);
                     setIsModalOpen(true);
@@ -3855,6 +3867,7 @@ export default function AdminView({
         handleFormSubmit={handleFormSubmit}
         schoolForm={schoolForm}
         setSchoolForm={setSchoolForm}
+        subjectsList={subjectsList}
         yearForm={yearForm}
         setYearForm={setYearForm}
         classForm={classForm}

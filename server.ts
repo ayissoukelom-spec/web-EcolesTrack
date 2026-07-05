@@ -51,6 +51,7 @@ import {
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
+import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 
 async function logIfTeacherUserMismatch(userId: number | null | undefined, teacherId: number | null | undefined) {
   try {
@@ -1673,7 +1674,7 @@ async function startServer() {
   app.post('/api/schools', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { name, address, phone, classNames } = req.body;
+      const { name, address, phone, classNames, subjectNames } = req.body;
       if (!name) return res.status(400).json({ error: 'Name is required' });
 
       // Load user and validate permission
@@ -1732,6 +1733,25 @@ async function startServer() {
         }
       }
 
+      if (Array.isArray(subjectNames) && subjectNames.length > 0) {
+        try {
+          for (const subjectName of subjectNames) {
+            const trimmedSubjectName = String(subjectName || '').trim();
+            if (!trimmedSubjectName) continue;
+
+            const existingSubject = await db.select().from(subjects).where(and(eq(subjects.schoolId, createdSchool.id), eq(subjects.name, trimmedSubjectName))).limit(1);
+            if (existingSubject.length > 0) continue;
+
+            await db.insert(subjects).values({
+              name: trimmedSubjectName,
+              schoolId: createdSchool.id,
+            });
+          }
+        } catch (subjectCreationErr: any) {
+          console.warn('Warning: Could not create subjects for school:', subjectCreationErr?.message);
+        }
+      }
+
       res.status(201).json(createdSchool);
     } catch (err: any) {
       console.error('Error creating school:', err);
@@ -1743,7 +1763,7 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id);
-      const { name, address, phone, classNames } = req.body;
+      const { name, address, phone, classNames, subjectNames } = req.body;
 
       // Load user and validate school permission
       const user = await resolveActor(req);
@@ -1817,6 +1837,25 @@ async function startServer() {
           }
         } catch (classCreationErr: any) {
           console.warn('Warning: Could not create classes during school update:', classCreationErr?.message);
+        }
+      }
+
+      if (Array.isArray(subjectNames) && subjectNames.length > 0) {
+        try {
+          for (const subjectName of subjectNames) {
+            const trimmedSubjectName = String(subjectName || '').trim();
+            if (!trimmedSubjectName) continue;
+
+            const existingSubject = await db.select().from(subjects).where(and(eq(subjects.schoolId, id), eq(subjects.name, trimmedSubjectName))).limit(1);
+            if (existingSubject.length > 0) continue;
+
+            await db.insert(subjects).values({
+              name: trimmedSubjectName,
+              schoolId: id,
+            });
+          }
+        } catch (subjectCreationErr: any) {
+          console.warn('Warning: Could not create subjects during school update:', subjectCreationErr?.message);
         }
       }
 
@@ -2385,13 +2424,18 @@ async function startServer() {
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      const parsedSchoolId = rawSchoolId != null && rawSchoolId !== '' && rawSchoolId !== 'undefined' && rawSchoolId !== 'null'
-        ? Number(rawSchoolId)
-        : null;
-      console.log('🔥 parsedSchoolId =', parsedSchoolId);
-      if (rawSchoolId != null && rawSchoolId !== '' && rawSchoolId !== 'undefined' && rawSchoolId !== 'null' && Number.isNaN(parsedSchoolId)) {
-        return res.status(400).json({ error: 'Invalid schoolId' });
+      const validation = resolveClassCreationSchoolId({
+        actorRole: user.role,
+        requestedSchoolId: rawSchoolId,
+        actorSchoolId: user.schoolId,
+      });
+
+      if (validation.error) {
+        return res.status(400).json({ error: validation.error });
       }
+
+      const parsedSchoolId = validation.schoolId;
+      console.log('🔥 parsedSchoolId =', parsedSchoolId);
 
       if (user.role !== 'super_admin' && user.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
@@ -2401,15 +2445,13 @@ async function startServer() {
         return res.status(403).json({ error: 'School admin must belong to a school' });
       }
 
-      const resolvedSchoolId = user.role === 'super_admin' ? parsedSchoolId : null;
-      const pendingSchoolId = user.role === 'school_admin' ? user.schoolId : null;
+      const resolvedSchoolId = parsedSchoolId;
 
-      // schoolId may be null for global classes; only name and academicYearId are required
-      if (!trimmedName || academicYearId == null) {
-        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}` });
+      if (!trimmedName || academicYearId == null || resolvedSchoolId == null) {
+        return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}, schoolId=${resolvedSchoolId}` });
       }
 
-      console.log('Attempting to create global class', { name: trimmedName, academicYearId, teacherId });
+      console.log('Attempting to create class for school', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
 
       // Defensive duplicate check to avoid DB unique constraint errors
       try {
@@ -2437,18 +2479,10 @@ async function startServer() {
       try {
         const [newClass] = await db.insert(classes).values({
           name: trimmedName,
-          schoolId: resolvedSchoolId,
+          schoolId: Number(resolvedSchoolId),
           academicYearId: Number(academicYearId),
           teacherId: teacherId ? Number(teacherId) : null,
         }).returning();
-
-        if (pendingSchoolId) {
-          await db.insert(schoolClasses).values({
-            schoolId: pendingSchoolId,
-            classId: newClass.id,
-            status: 'pending',
-          });
-        }
 
         console.log('✅ CLASS CREATED:', newClass);
         console.log('✅ CREATED CLASS ID:', newClass.id);
@@ -2457,7 +2491,7 @@ async function startServer() {
         res.status(201).json({
           ...newClass,
           schoolId: newClass.schoolId ?? null,
-          status: pendingSchoolId ? 'pending' : undefined,
+          status: 'approved',
         });
       } catch (insertErr: any) {
         console.error('ERROR OBJECT:', insertErr);
@@ -2506,6 +2540,21 @@ async function startServer() {
 
       if (user.role === 'school_admin' && user.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const [classRow] = await db.select().from(classes).where(eq(classes.id, classId));
+      if (!classRow) {
+        return res.status(404).json({ error: 'Class not found' });
+      }
+
+      if (classRow.schoolId != null && classRow.schoolId !== schoolId) {
+        return res.status(409).json({ error: 'Class already belongs to another school' });
+      }
+
+      if (classRow.schoolId == null) {
+        await db.update(classes)
+          .set({ schoolId })
+          .where(eq(classes.id, classId));
       }
 
       const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
@@ -3633,7 +3682,7 @@ async function startServer() {
         let result = allSubjects.map((subject) => ({
           ...subject,
           schoolId: subject.schoolId ?? null,
-          status: statusMap.get(subject.id) ?? 'pending',
+          status: subject.schoolId === targetSchoolId ? 'approved' : (statusMap.get(subject.id) ?? 'pending'),
         }));
 
         if (approvedOnly) {
@@ -3672,35 +3721,31 @@ async function startServer() {
         return res.status(400).json({ error: 'Subject name is required' });
       }
 
-      const finalSchoolId = user.role === 'super_admin' && bodySchoolId ? Number(bodySchoolId) : null;
+      const validation = resolveClassCreationSchoolId({
+        actorRole: user.role,
+        requestedSchoolId: bodySchoolId,
+        actorSchoolId: user.schoolId,
+      });
+
+      if (validation.error) {
+        return res.status(400).json({ error: validation.error });
+      }
+
+      const finalSchoolId = validation.schoolId;
 
       const [newSubject] = await db
         .insert(subjects)
         .values({
-          schoolId: finalSchoolId,
+          schoolId: Number(finalSchoolId),
           name: name.trim(),
           code: code ? code.trim() : undefined,
         })
         .returning();
 
-      if (user.role === 'school_admin' && user.schoolId) {
-        await db.insert(schoolSubjects).values({
-          schoolId: user.schoolId,
-          subjectId: newSubject.id,
-          status: 'pending',
-        });
-      } else if (user.role === 'super_admin' && finalSchoolId) {
-        await db.insert(schoolSubjects).values({
-          schoolId: finalSchoolId,
-          subjectId: newSubject.id,
-          status: 'pending',
-        });
-      }
-
       res.status(201).json({
         ...newSubject,
         schoolId: newSubject.schoolId ?? null,
-        status: user.role === 'school_admin' && user.schoolId ? 'pending' : undefined,
+        status: 'approved',
       });
     } catch (err: any) {
       console.error('Error creating subject:', err);
@@ -3805,6 +3850,21 @@ async function startServer() {
 
       if (user.role === 'school_admin' && user.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const [subjectRow] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
+      if (!subjectRow) {
+        return res.status(404).json({ error: 'Subject not found' });
+      }
+
+      if (subjectRow.schoolId != null && subjectRow.schoolId !== schoolId) {
+        return res.status(409).json({ error: 'Subject already belongs to another school' });
+      }
+
+      if (subjectRow.schoolId == null) {
+        await db.update(subjects)
+          .set({ schoolId })
+          .where(eq(subjects.id, subjectId));
       }
 
       const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));

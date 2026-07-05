@@ -344,7 +344,7 @@ export default function App() {
   // HANDLERS FOR CREATIONS (POSTS REST API)
   // ==========================================
 
-  const handleAddSchool = async (data: { name: string; address: string; phone: string; classNames?: string[] }) => {
+  const handleAddSchool = async (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => {
     try {
       const createdSchool = await apiFetch('/api/schools', {
         method: 'POST',

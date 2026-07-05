@@ -196,7 +196,7 @@ export default function AppShell() {
     window.location.replace('/login');
   };
 
-  const handleAddSchool = async (data: { name: string; address: string; phone: string; classNames?: string[] }) => {
+  const handleAddSchool = async (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => {
     const createdSchool = await apiFetch('/api/schools', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData(false);
     return createdSchool;
