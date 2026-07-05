@@ -116,10 +116,8 @@ async function resolveActor(req: AuthRequest) {
     console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
-      if (dbUser.schoolId == null && req.user.schoolId != null) {
-        return { ...dbUser, schoolId: req.user.schoolId };
-      }
-      return dbUser;
+      const activeSchoolId = req.user.schoolId ?? null;
+      return { ...dbUser, schoolId: activeSchoolId ?? dbUser.schoolId ?? null };
     }
 
     return {
@@ -3183,9 +3181,9 @@ async function startServer() {
       if (actor.role === 'teacher') {
         const currentSchoolId = actor.schoolId ?? null;
         const teacherRows = await db
-          .select({ id: teachers.id, schoolId: teachers.schoolId })
+          .select({ id: teachers.id })
           .from(teachers)
-          .where(and(eq(teachers.userId, actor.id), currentSchoolId != null ? eq(teachers.schoolId, currentSchoolId) : undefined));
+          .where(eq(teachers.userId, actor.id));
 
         if (teacherRows.length === 0) {
           return res.json([]);
@@ -3196,14 +3194,14 @@ async function startServer() {
           .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
           .from(classTeachers)
           .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(and(eq(classTeachers.teacherId, teacherId), currentSchoolId != null ? eq(classes.schoolId, currentSchoolId) : undefined));
+          .where(eq(classTeachers.teacherId, teacherId));
 
         const teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
         if (teacherClassIds.length === 0) {
           return res.json([]);
         }
 
-        query = query.where(inArray(students.classId, teacherClassIds)) as any;
+        query = query.where(and(inArray(students.classId, teacherClassIds), currentSchoolId != null ? eq(students.schoolId, currentSchoolId) : undefined)) as any;
       } else if (actor.role === 'school_admin') {
         if (actor.schoolId) {
           query = query.where(eq(students.schoolId, actor.schoolId)) as any;
@@ -4349,24 +4347,24 @@ async function startServer() {
   app.get('/api/dashboard/summary', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Build filter condition based on user role
       let schoolFilter: any = undefined;
       let parentChildIds: number[] | null = null;
       let teacherClassIds: number[] | null = null;
-      if (user.role !== 'super_admin' && user.schoolId) {
-        schoolFilter = user.schoolId;
+      if (actor.role !== 'super_admin' && actor.schoolId) {
+        schoolFilter = actor.schoolId;
       }
 
-      if (user.role === 'teacher') {
-        const currentSchoolId = user.schoolId ?? null;
+      if (actor.role === 'teacher') {
+        const currentSchoolId = actor.schoolId ?? null;
         const teacherRows = await db
-          .select({ id: teachers.id, schoolId: teachers.schoolId })
+          .select({ id: teachers.id })
           .from(teachers)
-          .where(and(eq(teachers.userId, user.id), currentSchoolId != null ? eq(teachers.schoolId, currentSchoolId) : undefined));
+          .where(eq(teachers.userId, actor.id));
 
         if (teacherRows.length === 0) {
           teacherClassIds = [];
@@ -4376,18 +4374,18 @@ async function startServer() {
             .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
             .from(classTeachers)
             .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(and(eq(classTeachers.teacherId, teacherId), currentSchoolId != null ? eq(classes.schoolId, currentSchoolId) : undefined));
+            .where(eq(classTeachers.teacherId, teacherId));
 
           teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
         }
       }
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
-      if (user.role === 'parent') {
+      if (actor.role === 'parent') {
         const parentRows = await db
           .select({ id: parents.id })
           .from(parents)
-          .where(eq(parents.userId, user.id));
+          .where(eq(parents.userId, actor.id));
 
         if (parentRows.length > 0) {
           const parentProfileId = parentRows[0].id;
@@ -4419,7 +4417,7 @@ async function startServer() {
       let chartStudentsQuery = db.select({ classId: students.classId }).from(students);
       let chartAbsencesQuery = db.select({ classId: absences.classId }).from(absences);
 
-      if (user.role === 'parent') {
+      if (actor.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
@@ -4437,7 +4435,7 @@ async function startServer() {
           .select({ count: sql<number>`count(*)::integer` })
           .from(absences)
           .where(inArray(absences.studentId, parentChildIds)) as any;
-      } else if (user.role === 'teacher') {
+      } else if (actor.role === 'teacher') {
         if (!teacherClassIds || teacherClassIds.length === 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
@@ -4546,9 +4544,9 @@ async function startServer() {
         .orderBy(desc(absences.date))
         .limit(5);
 
-      if (user.role === 'parent') {
+      if (actor.role === 'parent') {
         recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, parentChildIds || [])) as any;
-      } else if (user.role === 'teacher') {
+      } else if (actor.role === 'teacher') {
         recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.classId, teacherClassIds || [])) as any;
       } else if (schoolFilter) {
         recentAbsencesQuery = recentAbsencesQuery.where(eq(students.schoolId, schoolFilter)) as any;
@@ -4572,9 +4570,9 @@ async function startServer() {
         .orderBy(desc(evaluations.date))
         .limit(5);
 
-      if (user.role === 'parent') {
+      if (actor.role === 'parent') {
         recentGradesQuery = recentGradesQuery.where(inArray(grades.studentId, parentChildIds || [])) as any;
-      } else if (user.role === 'teacher') {
+      } else if (actor.role === 'teacher') {
         recentGradesQuery = recentGradesQuery.where(inArray(evaluations.classId, teacherClassIds || [])) as any;
       } else if (schoolFilter) {
         recentGradesQuery = recentGradesQuery.where(eq(students.schoolId, schoolFilter)) as any;

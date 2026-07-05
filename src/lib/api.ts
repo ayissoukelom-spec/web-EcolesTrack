@@ -129,14 +129,22 @@ export function findTeacherProfileFromSimulatedUser(
     ? simulatedUser.email.toLowerCase()
     : null;
   const simUid = simulatedUser.uid ? String(simulatedUser.uid) : null;
+  const currentSchoolId = getActiveSchoolId() ?? (simulatedUser?.schoolId != null ? Number(simulatedUser.schoolId) : null);
+  const sameSchoolTeachers = currentSchoolId == null
+    ? teachersList
+    : teachersList.filter((teacher) => {
+        const teacherSchoolId = teacher?.schoolId != null ? Number(teacher.schoolId) : null;
+        return teacherSchoolId == null || teacherSchoolId === currentSchoolId;
+      });
+  const candidates = sameSchoolTeachers.length > 0 ? sameSchoolTeachers : teachersList;
 
   if (simUid) {
-    const byUid = teachersList.find((teacher) => teacher.uid && String(teacher.uid) === simUid);
+    const byUid = candidates.find((teacher) => teacher.uid && String(teacher.uid) === simUid);
     if (byUid) return byUid;
   }
 
   if (simEmail) {
-    const byEmail = teachersList.find((teacher) => teacher.email && teacher.email.toLowerCase() === simEmail);
+    const byEmail = candidates.find((teacher) => teacher.email && teacher.email.toLowerCase() === simEmail);
     if (byEmail) return byEmail;
   }
 
@@ -144,7 +152,7 @@ export function findTeacherProfileFromSimulatedUser(
     ? Number(simUid.split('_')[1])
     : NaN;
   if (!Number.isNaN(userIdFromUid)) {
-    const byUserId = teachersList.find((teacher) => String(teacher.userId) === String(userIdFromUid));
+    const byUserId = candidates.find((teacher) => String(teacher.userId) === String(userIdFromUid));
     if (byUserId) return byUserId;
   }
 
@@ -155,7 +163,7 @@ export function findTeacherProfileFromSimulatedUser(
       return Boolean(matchUid || matchEmail);
     });
     if (matchedUser) {
-      const byUserId = teachersList.find((teacher) => teacher.userId === matchedUser.id);
+      const byUserId = candidates.find((teacher) => teacher.userId === matchedUser.id);
       if (byUserId) return byUserId;
     }
   }
@@ -163,33 +171,34 @@ export function findTeacherProfileFromSimulatedUser(
   return undefined;
 }
 
-function getSimulationHeaders(): Record<string, string> {
+export function getSimulationHeaders(): Record<string, string> {
   const role = getSimulatedRole();
 
   let headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (!role) return headers;
 
   const simulatedUser = getSimulatedUser();
+  const activeSchoolId = getActiveSchoolId();
   let uid = simulatedUser?.uid ?? 'sim_superadmin_123';
   let email = simulatedUser?.email ?? 'superadmin@ecoletrack.fr';
   let name = simulatedUser?.name ?? 'M. Jean-Marc Super-Admin';
-  let schoolId = getActiveSchoolId() != null ? String(getActiveSchoolId()) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
+  let schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
 
   if (role === 'school_admin') {
     uid = simulatedUser?.uid ?? 'sim_schooladmin_123';
     email = simulatedUser?.email ?? 'valerie.admin@ecoletrack.fr';
     name = simulatedUser?.name ?? 'Directrice Valerie Bertrand';
-    schoolId = simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null;
+    schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
   } else if (role === 'teacher') {
     uid = simulatedUser?.uid ?? 'sim_teacher_123';
     email = simulatedUser?.email ?? 'f.martin.prof@ecoletrack.fr';
     name = simulatedUser?.name ?? 'M. Francois Martin';
-    schoolId = simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null;
+    schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
   } else if (role === 'parent') {
     uid = simulatedUser?.uid ?? 'sim_parent_123';
     email = simulatedUser?.email ?? 'marianne.dubois@gmail.com';
     name = simulatedUser?.name ?? 'Mme. Marianne Dubois';
-    schoolId = simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null;
+    schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
   }
 
   headers = {
