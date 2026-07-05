@@ -548,7 +548,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; classIds?: number[] }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => {
     try {
       await apiFetch(`/api/admin/users/${id}`, {
         method: 'PUT',

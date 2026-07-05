@@ -1155,10 +1155,14 @@ async function startServer() {
         const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
         const parentValues: any = {
           phone: phone || '',
-          address: '',
-          schoolId: incomingSchoolId ? (Number.isNaN(Number(incomingSchoolId)) ? null : Number(incomingSchoolId)) : null,
+          address: typeof req.body.address === 'string' ? req.body.address : existingParent[0]?.address || '',
+          schoolId: incomingSchoolId ? (Number.isNaN(Number(incomingSchoolId)) ? null : Number(incomingSchoolId)) : existingParent[0]?.schoolId ?? null,
         };
-        if (resolvedStudentId != null) parentValues.studentId = resolvedStudentId;
+        if (resolvedStudentId != null) {
+          parentValues.studentId = resolvedStudentId;
+        } else if (studentId != null) {
+          parentValues.studentId = null;
+        }
         if (existingParent.length > 0) {
           await db.update(parents).set(parentValues).where(eq(parents.userId, id));
         } else {

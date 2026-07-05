@@ -375,7 +375,7 @@ interface AdminViewProps {
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
   onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
-  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; classIds?: number[] }) => Promise<any>;
+  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => Promise<any>;
   onSetPassword?: (userId: number, password: string) => Promise<any>;
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
@@ -1323,7 +1323,7 @@ export default function AdminView({
   const [multiSchoolSelectedSchoolId, setMultiSchoolSelectedSchoolId] = useState<number | ''>('');
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
-  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', assignedClassIds: [] as number[] });
+  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[] });
   const [editUserPassword, setEditUserPassword] = useState('');
   const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
   const [editUserError, setEditUserError] = useState<string | null>(null);
@@ -2017,6 +2017,35 @@ export default function AdminView({
                     </select>
                   </div>
                 )}
+                {userForm.role === 'parent' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Adresse</label>
+                    <input
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      type="text"
+                      placeholder="Adresse du parent"
+                      value={userForm.address}
+                      onChange={(e) => setUserForm({ ...userForm, address: e.target.value })}
+                    />
+                  </div>
+                )}
+                {userForm.role === 'parent' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Élève associé</label>
+                    <select
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
+                      value={userForm.studentId}
+                      onChange={(e) => setUserForm({ ...userForm, studentId: e.target.value })}
+                    >
+                      <option value="">-- Aucun élève associé --</option>
+                      {studentsList
+                        .filter((st) => !userForm.schoolId || String(st.schoolId) === userForm.schoolId)
+                        .map((st) => (
+                          <option key={st.id} value={String(st.id)}>{`${st.firstName} ${st.lastName}`}</option>
+                        ))}
+                    </select>
+                  </div>
+                )}
                 {userForm.role !== 'parent' ? (
                   <div className="flex items-center border rounded overflow-hidden">
                     <span className="px-3 py-2 bg-slate-100 text-slate-500 text-sm font-medium">+228</span>
@@ -2031,7 +2060,7 @@ export default function AdminView({
                   </div>
                 ) : (
                   <input
-                    className="w-full p-2 border rounded"
+                    className="w-full px-3 py-2 border rounded"
                     type="tel"
                     value={userForm.phone}
                     onChange={(e) => setUserForm({ ...userForm, phone: e.target.value.replace(/\D/g, '').slice(0, 8) })}
@@ -2039,34 +2068,36 @@ export default function AdminView({
                     maxLength={8}
                   />
                 )}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">Matière(s) enseignée(s)</div>
-                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3">
-                    {teacherSpecializations.map((subject) => {
-                      const selectedValues = Array.isArray(userForm.specialization)
-                        ? userForm.specialization
-                        : String(userForm.specialization || '').split(',').map((s) => s.trim()).filter(Boolean);
-                      const isSelected = selectedValues.includes(subject);
+                {userForm.role === 'teacher' && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-slate-500 uppercase mb-2">Matière(s) enseignée(s)</div>
+                    <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3">
+                      {teacherSpecializations.map((subject) => {
+                        const selectedValues = Array.isArray(userForm.specialization)
+                          ? userForm.specialization
+                          : String(userForm.specialization || '').split(',').map((s) => s.trim()).filter(Boolean);
+                        const isSelected = selectedValues.includes(subject);
 
-                      return (
-                        <label key={subject} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={(e) => {
-                              const nextValues = e.target.checked
-                                ? [...selectedValues, subject]
-                                : selectedValues.filter((value) => value !== subject);
-                              setUserForm({ ...userForm, specialization: nextValues });
-                            }}
-                            className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
-                          />
-                          <span className="text-sm">{subject}</span>
-                        </label>
-                      );
-                    })}
+                        return (
+                          <label key={subject} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const nextValues = e.target.checked
+                                  ? [...selectedValues, subject]
+                                  : selectedValues.filter((value) => value !== subject);
+                                setUserForm({ ...userForm, specialization: nextValues });
+                              }}
+                              className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                            />
+                            <span className="text-sm">{subject}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Mot de passe (laissez vide pour ne pas modifier)</label>
                   <input
@@ -2127,6 +2158,8 @@ export default function AdminView({
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
                         phone: userForm.phone ? (updatedRole !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
                         specialization: userForm.specialization,
+                        address: updatedRole === 'parent' ? userForm.address.trim() : undefined,
+                        studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
                         classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
                       });
                       if (editUserPassword && onSetPassword) {
@@ -3572,7 +3605,7 @@ export default function AdminView({
                     <td className="px-6 py-4 text-slate-500">{pt.phone || '—'}</td>
                     <td className="px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentFirstName} ${pt.studentLastName}` : '—'}</td>
                     <td className="px-6 py-4 text-slate-500">{pt.schoolName || (pt.studentSchoolId ? schoolsList.find((s) => s.id === pt.studentSchoolId)?.name : null) || pt.studentSchoolName || schoolsList.find((s) => s.id === studentsList.find((st) => st.id === pt.studentId || st.parentId === pt.id)?.schoolId)?.name || '—'}</td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right space-x-2">
                       <button
                         onClick={() => openParentDetail(pt)}
                         className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
@@ -3581,6 +3614,34 @@ export default function AdminView({
                         <Eye className="h-3.5 w-3.5" />
                         Voir
                       </button>
+                      {['super_admin', 'school_admin'].includes(userRole) && (
+                        <button
+                          onClick={() => {
+                            const user = usersList.find((u) => u.id === pt.userId);
+                            if (!user) return;
+                            const normalizedPhone = String(pt.phone || '').replace(/\D/g, '');
+                            setUserToEdit(user);
+                            setUserForm({
+                              email: user.email,
+                              name: user.name,
+                              role: 'parent',
+                              schoolId: user.schoolId ? String(user.schoolId) : String(pt.schoolId || ''),
+                              academicYearId: '',
+                              phone: normalizedPhone,
+                              address: pt.address || '',
+                              studentId: pt.studentId ? String(pt.studentId) : '',
+                              specialization: '',
+                              gender: user.gender || '',
+                              assignedClassIds: [],
+                            });
+                            setEditUserOpen(true);
+                          }}
+                          className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-700 text-xs font-semibold transition-colors"
+                          title="Modifier le compte parent"
+                        >
+                          Modifier
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
