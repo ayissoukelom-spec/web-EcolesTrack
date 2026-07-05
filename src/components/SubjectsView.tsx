@@ -104,6 +104,9 @@ export default function SubjectsView({
   };
 
   const visibleSubjects = subjectsList.filter((subject) => {
+    if (userRole === 'school_admin') {
+      return typeof (subject as any).status !== 'undefined';
+    }
     if (userRole !== 'super_admin' || !filterSchoolId) return true;
     return subject.schoolId === Number(filterSchoolId) || (subject as any).status !== undefined;
   });

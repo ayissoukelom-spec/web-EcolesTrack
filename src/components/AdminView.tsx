@@ -1304,11 +1304,11 @@ export default function AdminView({
           setShowImportDetails(true);
           return;
         }
-        const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId'];
+        const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'academicYearId', 'schoolAdminId', 'gender'];
         const present = Object.keys(records[0] || {}).map((k) => String(k).trim());
         const missing = required.filter((r) => !present.includes(r));
         if (missing.length > 0) {
-          setImportErrorsList([`Colonnes manquantes: ${missing.join(', ')}`]);
+          setImportErrorsList([`Colonnes obligatoires manquantes dans le template : ${missing.join(', ')}`]);
           setImportPreviewRecords(records.slice(0, 20));
           setImportPreviewHeaders(present);
           setImportRowErrors(null);
@@ -1358,12 +1358,12 @@ export default function AdminView({
             setImportRowErrors(null);
             setShowImportDetails(true);
           } else {
-            const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId'];
+            const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'academicYearId', 'schoolAdminId', 'gender'];
             const present = Object.keys(records[0] || {}).map((k) => String(k).trim());
             const missing = required.filter((r) => !present.includes(r));
             if (missing.length > 0) {
               setValidImportRecords(null);
-              setImportErrorsList([`Colonnes manquantes: ${missing.join(', ')}`]);
+              setImportErrorsList([`Colonnes obligatoires manquantes dans le template : ${missing.join(', ')}`]);
               setImportPreviewRecords(records.slice(0, 20));
               setImportPreviewHeaders(present);
               setImportRowErrors(null);
@@ -1554,6 +1554,29 @@ export default function AdminView({
   const openStudentDetail = (student: Student) => {
     setStudentDetail(student);
     setStudentDetailOpen(true);
+  };
+
+  const openStudentEdit = (student: Student) => {
+    const parsedBirth = parseDateParts(student.birthDate || '');
+    const classAcademicYearId = classesList.find((c) => c.id === student.classId)?.academicYearId;
+    setStudentToEdit(student);
+    setEditStudentForm({
+      firstName: student.firstName || '',
+      lastName: student.lastName || '',
+      birthDate: student.birthDate || '',
+      schoolId: student.schoolId ? String(student.schoolId) : '',
+      classId: student.classId ? String(student.classId) : '',
+      parentId: student.parentId ? String(student.parentId) : '',
+      academicYearId: student.yearId ? String(student.yearId) : (classAcademicYearId ? String(classAcademicYearId) : ''),
+      teacherIds: [],
+      schoolAdminId: student.schoolAdminId ? String(student.schoolAdminId) : '',
+      gender: (student as any).gender || '',
+    });
+    setEditBDay(parsedBirth.day || '');
+    setEditBMonth(parsedBirth.month || '');
+    setEditBYear(parsedBirth.year || '');
+    setEditStudentError(null);
+    setEditStudentOpen(true);
   };
 
   const openTeacherDetail = (teacher: Teacher) => {
@@ -1860,6 +1883,18 @@ export default function AdminView({
                   />
                 </div>
                 <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Sexe</label>
+                  <select
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
+                    value={editStudentForm.gender || ''}
+                    onChange={(e) => setEditStudentForm({ ...editStudentForm, gender: e.target.value })}
+                  >
+                    <option value="">-- Sélectionner un sexe --</option>
+                    <option value="Masculin">Masculin</option>
+                    <option value="Féminin">Féminin</option>
+                  </select>
+                </div>
+                <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date de naissance</label>
                   <div className="grid grid-cols-3 gap-2">
                     <CustomDropdown
@@ -2059,6 +2094,7 @@ export default function AdminView({
                           academicYearId: editStudentForm.academicYearId ? parseInt(editStudentForm.academicYearId) : undefined,
                           teacherIds: editStudentForm.teacherIds && editStudentForm.teacherIds.length > 0 ? editStudentForm.teacherIds : undefined,
                           schoolAdminId: editStudentForm.schoolAdminId ? parseInt(editStudentForm.schoolAdminId) : undefined,
+                          gender: editStudentForm.gender || undefined,
                         });
                         setEditStudentOpen(false);
                         setStudentToEdit(null);
@@ -3795,7 +3831,7 @@ export default function AdminView({
                       <td className="px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name || st.yearName || '—'}</td>
                       <td className="px-6 py-4 text-slate-500">{st.parentName || '—'}</td>
                       <td className="px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === st.schoolId)?.name || '—'}</td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => openStudentDetail(st)}
                           className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
@@ -3804,6 +3840,15 @@ export default function AdminView({
                           <Eye className="h-3.5 w-3.5" />
                           Voir
                         </button>
+                        {['super_admin', 'school_admin'].includes(userRole) && (
+                          <button
+                            onClick={() => openStudentEdit(st)}
+                            className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-700 text-xs font-semibold transition-colors"
+                            title="Modifier l'élève"
+                          >
+                            Modifier
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

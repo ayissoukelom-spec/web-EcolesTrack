@@ -1919,10 +1919,10 @@ async function startServer() {
       const XLSX = await import('xlsx');
       const rows = [
         // Headers: prefer both IDs and helpful parent contact fields for convenience
-        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'teacherId', 'schoolAdminId'],
+        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'teacherId', 'schoolAdminId', 'gender'],
         // Example rows
-        ['Lucas', 'Dubois', '2008-04-12', 1, 1, 1, 'Marie Dubois', 'marie.dubois@example.com', '90000001', 1, 2, 1],
-        ['Chloe', 'Dubois', '2010-09-25', 1, 1, 1, 'Paul Dubois', 'paul.dubois@example.com', '90000002', 1, 3, 1],
+        ['Lucas', 'Dubois', '2008-04-12', 1, 1, 1, 'Marie Dubois', 'marie.dubois@example.com', '90000001', 1, 2, 1, 'Masculin'],
+        ['Chloe', 'Dubois', '2010-09-25', 1, 1, 1, 'Paul Dubois', 'paul.dubois@example.com', '90000002', 1, 3, 1, 'Féminin'],
       ];
       const ws = XLSX.utils.aoa_to_sheet(rows);
       const wb = XLSX.utils.book_new();
@@ -1989,6 +1989,7 @@ async function startServer() {
         const schoolId = resolvedSchoolId ? parseInt(resolvedSchoolId) : null;
         const classId = s.classId ? parseInt(s.classId) : null;
         const parentId = s.parentId ? parseInt(s.parentId) : null;
+        const gender = s.gender != null && s.gender !== '' ? String(s.gender).trim() : null;
 
         if (!firstName || !lastName) {
           errors.push({ row: i, reason: 'Missing firstName or lastName', data: s });
@@ -2057,6 +2058,7 @@ async function startServer() {
             classId,
             parentId,
             schoolAdminId: resolvedSchoolAdminId,
+            gender,
           }).returning();
           inserted.push(result[0]);
         } catch (e: any) {
@@ -3058,6 +3060,41 @@ async function startServer() {
         }
       });
 
+  // Return an Excel template for parents (public - no auth required)
+  app.get('/api/parents/template', async (req, res) => {
+    try {
+      const XLSX = await import('xlsx');
+      const headers = ['name', 'email', 'phone', 'address', 'schoolId', 'studentIds', 'studentNames'];
+      const worksheet = XLSX.utils.aoa_to_sheet([headers]);
+      worksheet['!cols'] = headers.map((_, index) => ({ wch: index === 0 ? 24 : 18 }));
+      worksheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
+      const headerStyle = {
+        font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '2563EB' }, type: 'pattern', patternType: 'solid' },
+        border: {
+          top: { style: 'thin', color: { rgb: 'D1D5DB' } },
+          bottom: { style: 'thin', color: { rgb: 'D1D5DB' } },
+          left: { style: 'thin', color: { rgb: 'D1D5DB' } },
+          right: { style: 'thin', color: { rgb: 'D1D5DB' } },
+        },
+      };
+      headers.forEach((_, index) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 0, c: index });
+        worksheet[cellRef] = { ...worksheet[cellRef], s: headerStyle };
+      });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'parents');
+      const buffer: ArrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="parents_template.xlsx"');
+      res.send(Buffer.from(buffer));
+    } catch (err: any) {
+      console.error('Error generating parents template:', err);
+      res.status(500).json({ error: 'Failed to generate template' });
+    }
+  });
+
   // Get single parent by id (for debugging/details)
   app.get('/api/parents/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -3093,20 +3130,6 @@ async function startServer() {
     } catch (err: any) {
       console.error('Failed to fetch parent by id:', err);
       res.status(500).json({ error: 'Failed to fetch parent' });
-    }
-  });
-
-  // Return CSV template for parents (public - no auth required)
-  app.get('/api/parents/template', async (req, res) => {
-    try {
-      const headers = ['name', 'email', 'phone', 'address', 'schoolId', 'studentEmails'];
-      const csv = headers.join(',') + '\n' + '\n';
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="parents_template.csv"');
-      res.send(csv);
-    } catch (err: any) {
-      console.error('Error generating parents template:', err);
-      res.status(500).json({ error: 'Failed to generate template' });
     }
   });
 
@@ -3382,14 +3405,18 @@ async function startServer() {
       const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin can update students
-      if (user.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Only super_admin can update students' });
+      // Allow super_admin and school_admin to update students
+      if (!['super_admin', 'school_admin'].includes(user.role)) {
+        return res.status(403).json({ error: 'Only super_admin or school_admin can update students' });
       }
 
       // Get existing student
       const [existingStudent] = await db.select().from(students).where(eq(students.id, studentId));
       if (!existingStudent) return res.status(404).json({ error: 'Student not found' });
+
+      if (user.role === 'school_admin' && user.schoolId != null && existingStudent.schoolId != null && user.schoolId !== existingStudent.schoolId) {
+        return res.status(403).json({ error: 'You can only update students from your school' });
+      }
 
       // Normalize incoming numeric values
       const newSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId) !== '' ? parseInt(String(schoolId)) : existingStudent.schoolId;
@@ -3645,6 +3672,49 @@ async function startServer() {
           ...subject,
           schoolId: subject.schoolId ?? null,
         })));
+        return;
+      }
+
+      if (user.role === 'school_admin') {
+        if (!targetSchoolId) {
+          return res.status(403).json({ error: 'School context is required' });
+        }
+
+        const schoolRows = await db
+          .select({
+            id: subjects.id,
+            schoolId: subjects.schoolId,
+            name: subjects.name,
+            code: subjects.code,
+            status: sql`COALESCE(${schoolSubjects.status}, 'approved')`,
+            createdAt: subjects.createdAt,
+            updatedAt: subjects.updatedAt,
+          })
+          .from(subjects)
+          .leftJoin(
+            schoolSubjects,
+            and(
+              eq(subjects.id, schoolSubjects.subjectId),
+              eq(schoolSubjects.schoolId, targetSchoolId)
+            )
+          )
+          .where(
+            or(
+              eq(subjects.schoolId, targetSchoolId),
+              eq(schoolSubjects.schoolId, targetSchoolId)
+            )
+          );
+
+        let result = schoolRows.map((subject) => ({
+          ...subject,
+          schoolId: subject.schoolId ?? null,
+        }));
+
+        if (approvedOnly) {
+          result = result.filter((subject) => subject.status === 'approved');
+        }
+
+        res.json(result);
         return;
       }
 

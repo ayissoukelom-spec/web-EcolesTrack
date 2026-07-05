@@ -57,6 +57,28 @@ describe('SubjectsView', () => {
     expect(screen.getByRole('button', { name: /refuser/i })).toBeDefined();
   });
 
+  it('n’affiche que les matières assignées au school admin', () => {
+    render(
+      <SubjectsView
+        subjectsList={[
+          { id: 1, schoolId: null as any, name: 'Mathématiques', code: 'MATH', status: 'approved' },
+          { id: 2, schoolId: null as any, name: 'Historique', code: 'HIST', status: 'pending' },
+          { id: 3, schoolId: null as any, name: 'Latin', code: 'LAT' },
+        ]}
+        userRole="school_admin"
+        schoolId={54}
+        schoolsList={[]}
+        onAddSubject={vi.fn()}
+        onUpdateSubject={vi.fn()}
+        onDeleteSubject={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Mathématiques')).toBeDefined();
+    expect(screen.getByText('Historique')).toBeDefined();
+    expect(screen.queryByText('Latin')).toBeNull();
+  });
+
   it('permet au super admin de créer une matière globale sans choisir d’établissement', async () => {
     const onAddSubject = vi.fn();
 
