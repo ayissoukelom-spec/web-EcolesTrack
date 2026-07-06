@@ -130,21 +130,42 @@ export default function SimulatorHeader({
     reader.readAsDataURL(file);
   };
 
-  const saveProfileChanges = () => {
+  const saveProfileChanges = async () => {
     if (!simUser) return;
     const firstName = profileFirstName.trim() || simUser.firstName || '';
     const lastName = profileLastName.trim() || simUser.lastName || '';
     const displayName = [firstName, lastName].filter(Boolean).join(' ') || simUser.name;
-    const updatedUser = {
-      ...simUser,
+    const payload = {
       firstName,
       lastName,
       name: displayName,
       phone: profilePhone.trim() || simUser.phone,
-      avatarUrl: profilePhotoPreview || undefined,
-    };
-    setSimUser(updatedUser);
-    setSimulatedUser(updatedUser);
+    } as any;
+
+    try {
+      if (simUser && simUser.id) {
+        const resp = await apiFetch(`/api/users/${simUser.id}`, { method: 'PUT', body: payload });
+        // If API returns the updated user, persist that
+        if (resp && resp.id) {
+          setSimUser(resp);
+          setSimulatedUser(resp);
+        } else {
+          const updatedUser = { ...simUser, ...payload };
+          setSimUser(updatedUser);
+          setSimulatedUser(updatedUser);
+        }
+      } else {
+        const updatedUser = { ...simUser, ...payload };
+        setSimUser(updatedUser);
+        setSimulatedUser(updatedUser);
+      }
+    } catch (err) {
+      console.error('Failed to persist profile changes to server, falling back to local update', err);
+      const updatedUser = { ...simUser, ...payload };
+      setSimUser(updatedUser);
+      setSimulatedUser(updatedUser);
+    }
+
     setProfileEditOpen(false);
     setProfileMenuOpen(false);
   };
