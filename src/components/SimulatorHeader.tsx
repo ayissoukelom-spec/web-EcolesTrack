@@ -175,8 +175,8 @@ export default function SimulatorHeader({
   const [createLastName, setCreateLastName] = useState('');
   const [createPhonePrefix, setCreatePhonePrefix] = useState('+228');
   const [createPhone, setCreatePhone] = useState('');
-  const [createPassword, setCreatePassword] = useState('');
-  const [createPasswordConfirm, setCreatePasswordConfirm] = useState('');
+  const [createPassword, setCreatePassword] = useState('123456');
+  const [createPasswordConfirm, setCreatePasswordConfirm] = useState('123456');
   const [createRole, setCreateRole] = useState('teacher');
   const [createGender, setCreateGender] = useState('');
   const [createSchoolId, setCreateSchoolId] = useState('');
@@ -184,6 +184,14 @@ export default function SimulatorHeader({
   const [createParentSchoolId, setCreateParentSchoolId] = useState('');
   const [createSpecializations, setCreateSpecializations] = useState<string[]>([]);
   const [createAssignedClassIds, setCreateAssignedClassIds] = useState<number[]>([]);
+  
+  // Ensure default password prefilled when open
+  useEffect(() => {
+    if (createAccountOpen) {
+      setCreatePassword('123456');
+      setCreatePasswordConfirm('123456');
+    }
+  }, [createAccountOpen]);
   const [showClassSelection, setShowClassSelection] = useState(true);
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -934,18 +942,18 @@ export default function SimulatorHeader({
               )}
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div>
-                  <label className="block text-xs">
-                    <RequiredLabel label="Mot de passe" required />
-                  </label>
-                  <input className="w-full p-2 border rounded" type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
-                </div>
+                              <div>
+                                <label className="block text-xs">
+                                    <RequiredLabel label="Mot de passe" required />
+                                  </label>
+                                  <input className="w-full p-2 border rounded" type="password" value={createPassword} readOnly aria-readonly="true" onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
+                              </div>
 
                 <div>
                   <label className="block text-xs">
                     <RequiredLabel label="Confirmer le mot de passe" required />
                   </label>
-                  <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
+                  <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} readOnly aria-readonly="true" onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
                 </div>
               </div>
             </div>

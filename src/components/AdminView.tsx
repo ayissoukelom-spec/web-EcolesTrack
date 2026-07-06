@@ -1464,8 +1464,8 @@ export default function AdminView({
   const [showCreateUserForm, setShowCreateUserForm] = useState(false);
   const [newUserForm, setNewUserForm] = useState(getDefaultNewUserForm);
   const [newUserAssignedClassIds, setNewUserAssignedClassIds] = useState<number[]>([]);
-  const [newUserPassword, setNewUserPassword] = useState('');
-  const [newUserPasswordConfirm, setNewUserPasswordConfirm] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('123456');
+  const [newUserPasswordConfirm, setNewUserPasswordConfirm] = useState('123456');
   const [createUserError, setCreateUserError] = useState<string | null>(null);
   const [createdUserPreview, setCreatedUserPreview] = useState<any | null>(null);
   const [showCreatedUserPreview, setShowCreatedUserPreview] = useState(false);
@@ -1531,7 +1531,7 @@ export default function AdminView({
   const closeAllModals = () => {
     // detect unsaved changes in common forms
     const formHasValues = (obj: any) => Object.values(obj || {}).some((v: any) => String(v || '').trim() !== '');
-    const newUserDirty = showCreateUserForm && (formHasValues(newUserForm) || newUserPassword.trim() !== '' || newUserPasswordConfirm.trim() !== '');
+    const newUserDirty = showCreateUserForm && (formHasValues(newUserForm) || (newUserPassword.trim() !== '' && newUserPassword !== '123456') || (newUserPasswordConfirm.trim() !== '' && newUserPasswordConfirm !== '123456'));
     const studentFormDirty = isModalOpen && formHasValues(studentForm);
     const editStudentDirty = editStudentOpen && formHasValues(editStudentForm);
     const yearFormDirty = formHasValues(yearForm);
@@ -1550,6 +1550,14 @@ export default function AdminView({
     setStudentDetail(null);
     performCloseAllModals();
   };
+
+  // Ensure default password is set when opening the create-user modal
+  useEffect(() => {
+    if (showCreateUserForm) {
+      setNewUserPassword('123456');
+      setNewUserPasswordConfirm('123456');
+    }
+  }, [showCreateUserForm]);
 
   const openStudentDetail = (student: Student) => {
     setStudentDetail(student);
@@ -3048,6 +3056,8 @@ export default function AdminView({
                     type="password"
                     placeholder="Min. 6 caractères"
                     value={newUserPassword}
+                    readOnly
+                    aria-readonly="true"
                     onChange={(e) => setNewUserPassword(e.target.value)}
                   />
                 </div>
@@ -3062,6 +3072,8 @@ export default function AdminView({
                   type="password"
                   placeholder="Confirmer"
                   value={newUserPasswordConfirm}
+                  readOnly
+                  aria-readonly="true"
                   onChange={(e) => setNewUserPasswordConfirm(e.target.value)}
                 />
               </div>

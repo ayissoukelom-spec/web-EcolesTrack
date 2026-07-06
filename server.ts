@@ -754,10 +754,8 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for school_admin role' });
       }
 
-      // Ensure teacher and parent accounts have a local password when created through admin APIs
-      if (['teacher', 'parent'].includes(role) && (!password || typeof password !== 'string' || !password.trim())) {
-        return res.status(400).json({ error: 'Password is required for teacher and parent accounts' });
-      }
+      // Do not require an explicit password during creation; a default password will be applied.
+      // The provided `password` field will be ignored to enforce the default.
 
       // Check if school_admin is creating a user for a different school
       if (actor.role === 'school_admin' && schoolId != null && schoolId !== actor.schoolId) {
@@ -912,17 +910,20 @@ async function startServer() {
         }
       }
 
-      // Create local auth credentials when password is provided
-      if (password && typeof password === 'string') {
+      // Create local auth credentials with enforced default password '123456'.
+      try {
+        const passwordToSet = '123456';
         const crypto = await import('node:crypto');
         const salt = crypto.randomBytes(16).toString('hex');
-        const hash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+        const hash = crypto.pbkdf2Sync(passwordToSet, salt, 310000, 64, 'sha512').toString('hex');
         const existingLocal = await db.select().from(localAuths).where(eq(localAuths.userId, createdUser.id));
         if (existingLocal.length > 0) {
           await db.update(localAuths).set({ passwordHash: hash, salt }).where(eq(localAuths.userId, createdUser.id));
         } else {
           await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt }).returning();
         }
+      } catch (e: any) {
+        console.warn('Failed to set default password for new user', { userId: createdUser.id, err: e?.message || e });
       }
 
       await logAuditEvent(actor, 'create', 'user', createdUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created ${role} account ${createdUser.email}`);
