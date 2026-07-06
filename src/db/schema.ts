@@ -63,6 +63,7 @@ export const localAuths = pgTable('local_auths', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   salt: text('salt').notNull(),
+  mustReset: boolean('must_reset').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

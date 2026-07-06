@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { apiFetch, setActiveSchoolId, setSimulatedRole, setSimulatedUser } from '../lib/api.ts';
+import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
 
 interface Props {
@@ -14,6 +15,7 @@ export default function LoginView({ onLogin }: Props) {
   const [schools, setSchools] = useState<Array<{ id: number; name: string }>>([]);
   const [selectedSchoolId, setSelectedSchoolId] = useState<number | ''>('');
   const [loggedInUser, setLoggedInUser] = useState<any | null>(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [schoolsLoading, setSchoolsLoading] = useState(false);
 
@@ -53,6 +55,11 @@ export default function LoginView({ onLogin }: Props) {
 
       const user = await response.json();
       setLoggedInUser(user);
+      if (user.mustReset) {
+        setShowChangePassword(true);
+        setLoading(false);
+        return;
+      }
       // Persist simulation state locally so apiFetch will include headers
       setSimulatedRole(user.role || 'parent');
       // Reset any previously selected school before membership sync
@@ -107,6 +114,25 @@ export default function LoginView({ onLogin }: Props) {
     }
   };
 
+  const finishLoginAfterPasswordChange = async (user: any) => {
+    // called after ChangePasswordView.onSuccess
+    try {
+      setSimulatedRole(user.role || 'parent');
+      setActiveSchoolId(null);
+      setSimulatedUser({ uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
+      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
+      if (user.role === 'super_admin') {
+        window.history.pushState(null, '', '/');
+        onLogin(user.role || 'parent');
+        return;
+      }
+      await loadSchools();
+      setSelectionPending(true);
+    } catch (e) {
+      setError('Erreur après mise à jour du mot de passe');
+    }
+  };
+
   if (selectionPending) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -150,6 +176,10 @@ export default function LoginView({ onLogin }: Props) {
   }
 
   return (
+    <>
+    {showChangePassword && loggedInUser ? (
+      <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
+    ) : (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <form onSubmit={submit} className="bg-white p-6 rounded shadow w-full max-w-sm">
         <h2 className="text-lg font-bold mb-4">Se connecter</h2>
@@ -167,5 +197,7 @@ export default function LoginView({ onLogin }: Props) {
         </button>
       </form>
     </div>
+    )}
+    </>
   );
 }

@@ -12,10 +12,10 @@ import { eq } from 'drizzle-orm';
 
     const exists = await db.select().from(localAuths).where(eq(localAuths.userId, userId));
     if (exists.length > 0) {
-      await db.update(localAuths).set({ passwordHash: hash, salt }).where(eq(localAuths.userId, userId));
+      await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: false }).where(eq(localAuths.userId, userId));
       console.log('Password updated for user', userId);
     } else {
-      await db.insert(localAuths).values({ userId, passwordHash: hash, salt }).returning();
+      await db.insert(localAuths).values({ userId, passwordHash: hash, salt, mustReset: false }).returning();
       console.log('Password set for user', userId);
     }
     console.log('username (email): admin.gestion@ecoletrack.test, password:', password);

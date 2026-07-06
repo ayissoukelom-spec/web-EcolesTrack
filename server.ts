@@ -918,9 +918,9 @@ async function startServer() {
         const hash = crypto.pbkdf2Sync(passwordToSet, salt, 310000, 64, 'sha512').toString('hex');
         const existingLocal = await db.select().from(localAuths).where(eq(localAuths.userId, createdUser.id));
         if (existingLocal.length > 0) {
-          await db.update(localAuths).set({ passwordHash: hash, salt }).where(eq(localAuths.userId, createdUser.id));
+          await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: true }).where(eq(localAuths.userId, createdUser.id));
         } else {
-          await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt }).returning();
+          await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt, mustReset: true }).returning();
         }
       } catch (e: any) {
         console.warn('Failed to set default password for new user', { userId: createdUser.id, err: e?.message || e });
@@ -1281,6 +1281,7 @@ async function startServer() {
       const { userId, password } = req.body;
       console.log('DEBUG /api/admin/set-password body', { userId, passwordPresent: !!password });
       if (!userId || !password) return res.status(400).json({ error: 'Missing userId or password' });
+      if (password === '123456') return res.status(400).json({ error: 'Le mot de passe ne peut pas être le mot de passe par défaut' });
 
       const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
       console.log('DEBUG /api/admin/set-password targetUser', targetUser);
@@ -1303,9 +1304,9 @@ async function startServer() {
 
       const exists = await db.select().from(localAuths).where(eq(localAuths.userId, parseInt(userId)));
       if (exists.length > 0) {
-        await db.update(localAuths).set({ passwordHash: hash, salt }).where(eq(localAuths.userId, parseInt(userId)));
+        await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: false }).where(eq(localAuths.userId, parseInt(userId)));
       } else {
-        await db.insert(localAuths).values({ userId: parseInt(userId), passwordHash: hash, salt }).returning();
+        await db.insert(localAuths).values({ userId: parseInt(userId), passwordHash: hash, salt, mustReset: false }).returning();
       }
 
       res.json({ success: true, userId });
@@ -1329,14 +1330,25 @@ async function startServer() {
 
       const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
       if (authRows.length === 0) return res.status(401).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
-      const { passwordHash, salt } = authRows[0] as any;
+      const { passwordHash, salt, mustReset } = authRows[0] as any;
 
       const crypto = await import('node:crypto');
       const verifyHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
       if (verifyHash !== passwordHash) return res.status(401).json({ error: 'Mot de passe incorrect' });
 
-      // On success return user profile
-      res.json(userRecord);
+      // If DB doesn't have mustReset column (undefined/null), detect whether stored hash equals default '123456' hash for this salt.
+      let localMustReset = !!mustReset;
+      if (typeof mustReset === 'undefined' || mustReset === null) {
+        try {
+          const defaultHash = crypto.pbkdf2Sync('123456', salt, 310000, 64, 'sha512').toString('hex');
+          localMustReset = (passwordHash === defaultHash);
+        } catch (e) {
+          localMustReset = false;
+        }
+      }
+
+      const response = { ...userRecord, mustReset: !!localMustReset } as any;
+      res.json(response);
     } catch (err: any) {
       console.error('Local login error:', err);
       res.status(500).json({ error: err?.message || 'Login failed' });
@@ -1350,6 +1362,39 @@ async function startServer() {
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to logout' });
+    }
+  });
+
+  // Change password for a user (current password required)
+  app.post('/api/auth/change-password', async (req, res) => {
+    try {
+      const { email, currentPassword, newPassword } = req.body;
+      if (!email || !currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+      if (newPassword === '123456') return res.status(400).json({ error: 'Le mot de passe ne peut pas être le mot de passe par défaut' });
+
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
+      if (usersFound.length === 0) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+      const userRecord = usersFound[0];
+
+      const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
+      if (authRows.length === 0) return res.status(400).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
+      const { passwordHash, salt } = authRows[0] as any;
+
+      const crypto = await import('node:crypto');
+      const verifyHash = crypto.pbkdf2Sync(currentPassword, salt, 310000, 64, 'sha512').toString('hex');
+      if (verifyHash !== passwordHash) return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
+
+      // Hash new password and clear mustReset
+      const newSalt = crypto.randomBytes(16).toString('hex');
+      const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 310000, 64, 'sha512').toString('hex');
+
+      await db.update(localAuths).set({ passwordHash: newHash, salt: newSalt, mustReset: false }).where(eq(localAuths.userId, userRecord.id));
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('change-password error:', err);
+      res.status(500).json({ error: err?.message || 'Failed to change password' });
     }
   });
 
