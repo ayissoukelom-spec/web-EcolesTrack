@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { apiFetch } from '../lib/api';
+import { apiFetch, getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api';
 import AdminModal from './AdminModal';
-import { apiFetch } from '../lib/api.ts';
 import SubjectsView from './SubjectsView';
 import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
 import {
@@ -22,7 +21,7 @@ import {
   Eye,
   BookOpen
 } from 'lucide-react';
-import { getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
+
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import * as XLSX from 'xlsx';
