@@ -109,16 +109,48 @@ test('calls onUpdateGrade for school_admin when updating existing grade', async 
   const classSelect = selects.find((s) => within(s).queryByText(/6ème A/));
   const evalSelect = selects.find((s) => !within(s).queryByText(/6ème A/));
   if (!classSelect || !evalSelect) throw new Error('Could not locate selects');
-  // First select the class so evaluation options populate
-    // With initialSelectedEvalId provided the evaluation is pre-selected; click the update button
-    // No need to change selects as the evaluation is already selected
-
-  // Select the class so the students list is populated, then click the update button
   fireEvent.change(classSelect, { target: { value: '85' } });
   const btn = await screen.findByRole('button', { name: /Mettre à jour/i });
   fireEvent.click(btn);
 
   expect(onUpdateGrade).toHaveBeenCalled();
+  expect(onAddGrade).not.toHaveBeenCalled();
+});
+
+test('school_admin can update one existing grade with save all', async () => {
+  const props = {
+    ...baseProps,
+    studentsList: [
+      { id: 201, classId: 85, firstName: 'Jean', lastName: 'Dupont' },
+      { id: 202, classId: 85, firstName: 'Marie', lastName: 'Claire' },
+    ],
+    gradesList: [
+      { id: 11, evaluationId: 2, studentId: 201, score: '15', remarks: '' },
+      { id: 12, evaluationId: 2, studentId: 202, score: '12', remarks: '' },
+    ],
+  };
+  const onAddGrade = vi.fn(() => Promise.resolve());
+  const onUpdateGrade = vi.fn(() => Promise.resolve());
+
+  render(<NotesView {...props} userRole="school_admin" currentSchoolId={1} onAddGrade={onAddGrade} onUpdateGrade={onUpdateGrade} initialSelectedEvalId={2} /> as any);
+
+  const classSelect = screen.getAllByRole('combobox').find((s) => within(s).queryByText(/6ème A/));
+  if (!classSelect) throw new Error('Could not locate class select');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+
+  const input = await screen.findByDisplayValue('12');
+  fireEvent.change(input, { target: { value: '13' } });
+
+  const saveAllBtn = await screen.findByRole('button', { name: /Enregistrer tout/i });
+  fireEvent.click(saveAllBtn);
+
+  expect(onUpdateGrade).toHaveBeenCalledWith({
+    gradeId: 12,
+    evaluationId: 2,
+    studentId: 202,
+    score: '13',
+    remarks: '',
+  });
   expect(onAddGrade).not.toHaveBeenCalled();
 });
 

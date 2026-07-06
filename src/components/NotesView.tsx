@@ -290,7 +290,6 @@ export default function NotesView({
         );
         const input = gradeInputValues[student.id];
         if (!input || input.score === undefined || input.score === '') return null;
-        if (existingGrade) return null;
 
         const validation = validateGradeScore(input.score, currentEvaluation?.maxScore);
         if (!validation.isValid) {
@@ -299,14 +298,37 @@ export default function NotesView({
           return null;
         }
 
+        if (existingGrade) {
+          if (userRole === 'teacher' || (userRole === 'school_admin' && isGradeModified(existingGrade))) {
+            return null;
+          }
+
+          return {
+            gradeId: existingGrade.id,
+            evaluationId: parseInt(selectedEvalId),
+            studentId: student.id,
+            score: input.score,
+            remarks: input.remarks || '',
+            isUpdate: true,
+          };
+        }
+
         return {
           evaluationId: parseInt(selectedEvalId),
           studentId: student.id,
           score: input.score,
           remarks: input.remarks || '',
+          isUpdate: false,
         };
       })
-      .filter(Boolean) as Array<{ evaluationId: number; studentId: number; score: string; remarks: string }>;
+      .filter(Boolean) as Array<{
+        gradeId?: number;
+        evaluationId: number;
+        studentId: number;
+        score: string;
+        remarks: string;
+        isUpdate: boolean;
+      }>;
 
     if (saveableGrades.length === 0) {
       setSaveStatus('Aucune nouvelle note à enregistrer.');
@@ -315,7 +337,24 @@ export default function NotesView({
     }
 
     try {
-      await Promise.all(saveableGrades.map((grade) => onAddGrade(grade)));
+      await Promise.all(saveableGrades.map(async (grade) => {
+        if (grade.isUpdate && grade.gradeId != null && onUpdateGrade) {
+          return onUpdateGrade({
+            gradeId: grade.gradeId,
+            evaluationId: grade.evaluationId,
+            studentId: grade.studentId,
+            score: grade.score,
+            remarks: grade.remarks,
+          });
+        }
+
+        return onAddGrade({
+          evaluationId: grade.evaluationId,
+          studentId: grade.studentId,
+          score: grade.score,
+          remarks: grade.remarks,
+        });
+      }));
       setSaveStatus(`Toutes les notes ont été enregistrées.`);
     } catch (err: any) {
       setSaveStatus('Erreur lors de l’enregistrement de certaines notes.');
