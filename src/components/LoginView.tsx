@@ -64,7 +64,7 @@ export default function LoginView({ onLogin }: Props) {
       setSimulatedRole(user.role || 'parent');
       // Reset any previously selected school before membership sync
       setActiveSchoolId(null);
-      setSimulatedUser({ uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
+      setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
 
       await apiFetch('/api/auth/register-or-login', { method: 'POST' });
 
@@ -99,6 +99,7 @@ export default function LoginView({ onLogin }: Props) {
 
       setActiveSchoolId(Number(selectedSchoolId));
       setSimulatedUser({
+        id: loggedInUser?.id,
         uid: loggedInUser?.uid || `local_${Date.now()}`,
         email: loggedInUser?.email,
         name: loggedInUser?.name,
@@ -119,7 +120,7 @@ export default function LoginView({ onLogin }: Props) {
     try {
       setSimulatedRole(user.role || 'parent');
       setActiveSchoolId(null);
-      setSimulatedUser({ uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
+      setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
       await apiFetch('/api/auth/register-or-login', { method: 'POST' });
       if (user.role === 'super_admin') {
         window.history.pushState(null, '', '/');

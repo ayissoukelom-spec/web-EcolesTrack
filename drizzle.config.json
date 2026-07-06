@@ -1,0 +1,12 @@
+{
+  "schema": "./src/db/schema.ts",
+  "out": "./drizzle",
+  "dialect": "postgresql",
+  "dbCredentials": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "ecole_admin",
+    "password": "EcoleTrack2026!",
+    "database": "ecoletrack"
+  }
+}

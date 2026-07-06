@@ -256,6 +256,64 @@ async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: n
     targetSchoolId,
   });
 
+  // Self: update own profile (or admins updating other users)
+  app.put('/api/users/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      const id = Number(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid user id' });
+
+      // Only allow if actor is the owner, or an admin (super_admin or school_admin)
+      if (!actor) return res.status(403).json({ error: 'Forbidden' });
+      const actorIsOwner = actor.id && Number(actor.id) === id;
+      if (!(actorIsOwner || ['super_admin', 'school_admin'].includes(actor.role))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const { firstName, lastName, name, phone, address } = req.body as any;
+      let displayName = name;
+      if (!displayName && (firstName || lastName)) displayName = [firstName || '', lastName || ''].filter(Boolean).join(' ');
+
+      const updatedFields: any = {};
+      if (displayName) updatedFields.name = displayName;
+
+      console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
+
+      if (Object.keys(updatedFields).length > 0) {
+        console.log('DEBUG updating users table', { id, updatedFields });
+        await db.update(users).set(updatedFields).where(eq(users.id, id));
+      }
+
+      // If the user is a parent, persist phone/address in parents table
+      const [targetUser] = await db.select().from(users).where(eq(users.id, id));
+      if (targetUser && targetUser.role === 'parent') {
+        const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
+        const parentValues: any = {
+          phone: typeof phone === 'string' ? phone : existingParent[0]?.phone || '',
+          address: typeof address === 'string' ? address : existingParent[0]?.address || '',
+        };
+        if (existingParent.length > 0) {
+          console.log('DEBUG updating parents row', { userId: id, parentValues });
+          await db.update(parents).set(parentValues).where(eq(parents.userId, id));
+        } else {
+          console.log('DEBUG inserting parents row', { userId: id, parentValues });
+          await db.insert(parents).values({ userId: id, ...parentValues });
+        }
+      }
+
+      const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
+      console.log('DEBUG /api/users/:id update result', { updatedUser });
+
+      await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : actor.role === 'super_admin' ? 'Super admin' : 'User'} ${actor.email || actor.uid} updated account ${updatedUser.email}`);
+
+      res.json(updatedUser);
+    } catch (err: any) {
+      console.error('Error in self-update user:', err);
+      res.status(500).json({ error: err?.message || 'Failed to update user' });
+    }
+  });
+
   if (!normalizedSubject) {
     console.log('DEBUG isApprovedSubjectForSchool fail empty subject', { subjectName });
     return false;
