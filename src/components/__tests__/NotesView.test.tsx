@@ -61,6 +61,25 @@ test('school_admin sees archived label on completed evaluations in dropdown', ()
   expect(matches.length).toBeGreaterThan(0);
 });
 
+test('school_admin still sees teacher-archived evaluation until it is locked', () => {
+  const props = {
+    ...baseProps,
+    evaluationsList: [
+      { id: 2, classId: 85, teacherId: 10, subject: 'Math', title: 'Eval 2', date: '2026-06-01', maxScore: 20 },
+    ],
+    gradesList: [
+      { id: 21, evaluationId: 2, studentId: 201, score: '15', remarks: '' },
+    ],
+  };
+
+  render(<NotesView {...props} userRole="school_admin" currentSchoolId={1} /> as any);
+
+  const selects = screen.getAllByRole('combobox');
+  const evalSelect = selects[1];
+  within(evalSelect).getByText(/Eval 2/);
+  expect(screen.queryByText(/Archive des devoirs terminés/)).toBeNull();
+});
+
 test('super_admin renders NotesView', () => {
   render(<NotesView {...baseProps} userRole="super_admin" /> as any);
   // basic smoke test: component rendered (allow multiple matches)

@@ -166,3 +166,19 @@ export const hasAnyGrade = (evaluation: Evaluation, grades: Grade[]): boolean =>
 
 export const isEvaluationArchived = (evaluation: Evaluation, grades: Grade[]): boolean =>
   hasAnyGrade(evaluation, grades);
+
+export const isEvaluationLockedBySchoolAdmin = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean => {
+  const classStudents = students.filter((st) => st.classId === evaluation.classId);
+  if (classStudents.length === 0) return false;
+
+  const eligibleStudents = getEligibleStudentsForEvaluationWithGrades(evaluation, classStudents, grades);
+  if (eligibleStudents.length === 0) return false;
+
+  const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
+  const gradesForEval = grades.filter(
+    (grade) => grade.evaluationId === evaluation.id && eligibleStudentIds.has(grade.studentId),
+  );
+  if (gradesForEval.length === 0) return false;
+
+  return gradesForEval.every((grade) => grade.isModified ?? ((grade.editCount ?? 0) > 0));
+};

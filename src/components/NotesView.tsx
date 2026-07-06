@@ -363,19 +363,38 @@ export default function NotesView({
     return !isEvaluationFullyGraded(ev);
   });
 
+  const hasAnyGrade = (ev: Evaluation) =>
+    gradesList.some((g) => g.evaluationId === ev.id);
+
+  const isSchoolAdminEvaluationLocked = (ev: Evaluation) => {
+    const classStudents = studentsList.filter((st) => st.classId === ev.classId);
+    const eligibleStudents = getEligibleStudentsForEvaluationWithGradesUtil(ev, classStudents, gradesList);
+    if (!eligibleStudents.length) return false;
+
+    const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
+    const gradesForEval = gradesList.filter(
+      (g) => g.evaluationId === ev.id && eligibleStudentIds.has(g.studentId)
+    );
+    if (!gradesForEval.length) return false;
+
+    return gradesForEval.every((grade) => isGradeModified(grade));
+  };
+
   const selectableEvaluations = approvedEvaluations.filter((ev) => {
     // class filter (single source of truth)
     if (selectedClassIdNumber === null) return false;
     if (Number(ev.classId) !== selectedClassIdNumber) return false;
 
-    // teacher: see only their own non-completed evaluations
     if (userRole === 'teacher') {
       if (teacherId == null) return false;
       if (ev.teacherId !== teacherId) return false;
       return !isEvaluationCompleted(ev);
     }
 
-    // admins see all evaluations for the selected class
+    if (userRole === 'school_admin') {
+      return !isSchoolAdminEvaluationLocked(ev);
+    }
+
     return true;
   });
 
@@ -455,7 +474,15 @@ export default function NotesView({
     if (selectedClassIdNumber === null) return false;
     if (Number(ev.classId) !== selectedClassIdNumber) return false;
 
-    return isEvaluationCompleted(ev);
+    if (userRole === 'teacher') {
+      return hasAnyGrade(ev);
+    }
+
+    if (userRole === 'school_admin') {
+      return isSchoolAdminEvaluationLocked(ev);
+    }
+
+    return false;
   });
 
   const gradesForSelectedEval = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);

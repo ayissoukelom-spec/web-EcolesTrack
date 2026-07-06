@@ -23,7 +23,7 @@ import {
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
-import { isEvaluationArchived } from './lib/evaluationUtils.ts';
+import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
 import DashboardView from './components/DashboardView.tsx';
@@ -764,8 +764,18 @@ export default function App() {
   }
 
   // Centralized filtering of evaluations: separate active from archived
-  const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationArchived(ev, gradesList));
-  const archivedEvaluations = evaluationsList.filter((ev) => isEvaluationArchived(ev, gradesList));
+  const activeEvaluations = evaluationsList.filter((ev) => {
+    if (currentRole === 'school_admin') {
+      return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+    }
+    return !isEvaluationArchived(ev, gradesList);
+  });
+  const archivedEvaluations = evaluationsList.filter((ev) => {
+    if (currentRole === 'school_admin') {
+      return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+    }
+    return isEvaluationArchived(ev, gradesList);
+  });
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
