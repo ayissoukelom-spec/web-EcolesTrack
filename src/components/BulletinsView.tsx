@@ -10,7 +10,7 @@ import type {
   Student,
   UserRole,
 } from '../types.ts';
-import { fetchBulletinDetail, getSimulatedUser } from '../lib/api.ts';
+import { fetchBulletinDetail, getSimulatedUser, apiFetch } from '../lib/api.ts';
 import { useBulletinsList } from '../hooks/useBulletinsList.ts';
 import { useBulletinDetail } from '../hooks/useBulletinDetail.ts';
 import { useGenerateBulletin } from '../hooks/useGenerateBulletin.ts';
@@ -84,7 +84,25 @@ export default function BulletinsView({
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
 
+  const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string }>>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await apiFetch('/api/school-terms');
+        if (Array.isArray(list)) {
+          setTermsFromApi(list.map((t: any) => ({ id: t.id, name: t.name })));
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
+  }, []);
+
   const termOptions = useMemo<BulletinTermOption[]>(() => {
+    if (termsFromApi && termsFromApi.length > 0) {
+      return termsFromApi.map((t) => ({ id: t.id, name: t.name }));
+    }
     const seen = new Set<number>();
     const options: BulletinTermOption[] = [];
     for (const ev of evaluationsList || []) {
@@ -94,7 +112,7 @@ export default function BulletinsView({
       options.push({ id: termId, name: String(ev?.termName || `Trimestre ${termId}`) });
     }
     return options.sort((a, b) => a.id - b.id);
-  }, [evaluationsList]);
+  }, [evaluationsList, termsFromApi]);
 
   const suggestedParentStudentId = useMemo(() => {
     if (!isParent) return null;
