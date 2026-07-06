@@ -2372,6 +2372,138 @@ async function startServer() {
     }
   });
 
+  // School Terms (Trimestres) - CRUD
+  app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const academicYearId = req.query.academicYearId ? Number(req.query.academicYearId) : undefined;
+      const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+
+      let rows: any[] = [];
+      if (actor.role === 'super_admin') {
+        if (academicYearId != null) {
+          rows = await db.select().from(schoolTerms).where(eq(schoolTerms.academicYearId, academicYearId));
+        } else if (schoolIdParam != null) {
+          rows = await db.select().from(schoolTerms).where(eq(schoolTerms.schoolId, schoolIdParam));
+        } else {
+          rows = await db.select().from(schoolTerms);
+        }
+      } else if (actor.role === 'school_admin') {
+        const targetSchoolId = actor.schoolId ?? schoolIdParam;
+        if (!targetSchoolId) return res.status(403).json({ error: 'School context required' });
+        if (academicYearId != null) {
+          rows = await db.select().from(schoolTerms).where(and(eq(schoolTerms.schoolId, targetSchoolId), eq(schoolTerms.academicYearId, academicYearId)));
+        } else {
+          rows = await db.select().from(schoolTerms).where(eq(schoolTerms.schoolId, targetSchoolId));
+        }
+      } else {
+        // teacher/parent: show global terms plus school-specific ones
+        const schoolId = actor.schoolId ?? schoolIdParam;
+        if (academicYearId != null) {
+          rows = await db.select().from(schoolTerms).where(and(or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, schoolId)), eq(schoolTerms.academicYearId, academicYearId)));
+        } else {
+          rows = await db.select().from(schoolTerms).where(or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, schoolId)));
+        }
+      }
+
+      res.json(rows);
+    } catch (err: any) {
+      console.error('Failed to fetch school terms:', err);
+      res.status(500).json({ error: 'Failed to fetch school terms' });
+    }
+  });
+
+  app.post('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const { academicYearId, name, startDate, endDate, orderIndex, isActive, schoolId: incomingSchoolId } = req.body as any;
+      if (!academicYearId || !name) return res.status(400).json({ error: 'academicYearId and name are required' });
+
+      let targetSchoolId: number | null = null;
+      if (actor.role === 'school_admin') {
+        targetSchoolId = actor.schoolId ?? null;
+      } else if (actor.role === 'super_admin') {
+        targetSchoolId = incomingSchoolId != null ? Number(incomingSchoolId) : null;
+      } else {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const vals: any = {
+        academicYearId: Number(academicYearId),
+        name: String(name),
+        startDate: startDate ?? null,
+        endDate: endDate ?? null,
+        orderIndex: Number(orderIndex) || 1,
+        isActive: isActive != null ? !!isActive : true,
+        schoolId: targetSchoolId,
+      };
+
+      const inserted = await db.insert(schoolTerms).values(vals).returning();
+      res.status(201).json(inserted[0]);
+    } catch (err: any) {
+      console.error('Failed to create school term:', err);
+      res.status(500).json({ error: 'Failed to create school term' });
+    }
+  });
+
+  app.put('/api/school-terms/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const id = Number(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+      const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
+      if (!existing) return res.status(404).json({ error: 'Term not found' });
+
+      if (actor.role === 'school_admin' && existing.schoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const { name, startDate, endDate, orderIndex, isActive } = req.body as any;
+      const updates: any = {};
+      if (name != null) updates.name = String(name);
+      if (startDate != null) updates.startDate = startDate;
+      if (endDate != null) updates.endDate = endDate;
+      if (orderIndex != null) updates.orderIndex = Number(orderIndex);
+      if (isActive != null) updates.isActive = !!isActive;
+
+      await db.update(schoolTerms).set(updates).where(eq(schoolTerms.id, id));
+      const [row] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
+      res.json(row);
+    } catch (err: any) {
+      console.error('Failed to update school term:', err);
+      res.status(500).json({ error: 'Failed to update school term' });
+    }
+  });
+
+  app.delete('/api/school-terms/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const id = Number(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+      const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
+      if (!existing) return res.status(404).json({ error: 'Term not found' });
+      if (actor.role === 'school_admin' && existing.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+
+      await db.delete(schoolTerms).where(eq(schoolTerms.id, id));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Failed to delete school term:', err);
+      res.status(500).json({ error: 'Failed to delete school term' });
+    }
+  });
+
   // 3. Classes - Filtered by school
   app.get('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
