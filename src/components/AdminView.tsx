@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import AdminModal from './AdminModal';
 import { apiFetch } from '../lib/api.ts';
 import SubjectsView from './SubjectsView';
@@ -522,6 +523,8 @@ export default function AdminView({
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '2026-2027', isActive: true, schoolId: '' });
+  const [termsList, setTermsList] = useState<any[]>([]);
+  const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' });
@@ -542,6 +545,18 @@ export default function AdminView({
         schoolId: String(currentSchoolId || ''),
       }));
     }
+    // fetch initial terms for visible year if any
+    (async () => {
+      try {
+        const defaultYear = visibleYearsList.find((y) => y.isActive) ?? visibleYearsList[0];
+        if (defaultYear) {
+          const list = await apiFetch(`/api/school-terms?academicYearId=${defaultYear.id}`);
+          setTermsList(list || []);
+        }
+      } catch (e) {
+        console.warn('Failed to load initial terms', e);
+      }
+    })();
   }, [userRole, currentSchoolId]);
 
   useEffect(() => {
@@ -3458,6 +3473,52 @@ export default function AdminView({
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">Trimestres / Périodes</h3>
+            <div className="flex items-center gap-2 mb-3">
+              <select
+                className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
+                value={termForm.academicYearId}
+                onChange={(e) => setTermForm((p) => ({ ...p, academicYearId: e.target.value }))}
+              >
+                <option value="">Choisir une année</option>
+                {visibleYearsList.map((y) => (
+                  <option key={y.id} value={String(y.id)}>{y.name}</option>
+                ))}
+              </select>
+              <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => setTermForm((p) => ({ ...p, name: e.target.value }))} />
+              <button
+                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
+                onClick={async () => {
+                  try {
+                    if (!termForm.name || !termForm.academicYearId) return;
+                    await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify({ name: termForm.name, academicYearId: Number(termForm.academicYearId) }) });
+                    setTermForm({ name: '', academicYearId: '' });
+                    // refresh list
+                    const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}`);
+                    setTermsList(list || []);
+                  } catch (err) {
+                    console.error('Failed to create term', err);
+                  }
+                }}
+              >Créer</button>
+            </div>
+
+            <div className="rounded-lg border border-slate-100 bg-white p-3">
+              {termsList.length === 0 ? (
+                <p className="text-sm text-slate-500">Aucun trimestre trouvé pour l'année sélectionnée.</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {termsList.map((t) => (
+                    <li key={t.id} className="flex items-center justify-between">
+                      <div>{t.name} {t.start_date ? `(${t.start_date} → ${t.end_date || '…'})` : ''}</div>
+                      <div className="text-slate-400 text-xs">{t.is_active ? 'Actif' : 'Inactif'}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}
