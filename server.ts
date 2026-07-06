@@ -1318,6 +1318,7 @@ async function startServer() {
   });
 
   // Self: update own profile (or admins updating other users)
+  console.log('REGISTER ROUTE: PUT /api/users/:id');
   app.put('/api/users/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
