@@ -497,6 +497,67 @@ export default function AdminModal(props: any) {
           {/* Form 2: ACADEMIC YEAR */}
           {activeTab === 'years' && (
             <div className="space-y-3">
+              {(() => {
+                const currentYear = new Date().getFullYear();
+                const yearOptions = Array.from({ length: 16 }, (_, idx) => String(currentYear - 5 + idx));
+                const yearName = String(yearForm.name || '');
+                const [startPart = '', endPart = ''] = yearName.split('-');
+                const selectedStart = /^\d{4}$/.test(startPart) ? startPart : '';
+                const selectedEnd = /^\d{4}$/.test(endPart) ? endPart : '';
+
+                return (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          <RequiredLabel label="Année de début" required />
+                        </label>
+                        <select
+                          required
+                          value={selectedStart}
+                          onChange={(e) => {
+                            const start = e.target.value;
+                            const end = selectedEnd;
+                            // Keep the selected start year even when end year is not chosen yet.
+                            setYearForm({ ...yearForm, name: start ? `${start}-${end}` : '' });
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                        >
+                          <option value="">Choisir</option>
+                          {yearOptions.map((year) => (
+                            <option key={`start-${year}`} value={year}>{year}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          <RequiredLabel label="Année de fin" required />
+                        </label>
+                        <select
+                          required
+                          value={selectedEnd}
+                          onChange={(e) => {
+                            const end = e.target.value;
+                            const start = selectedStart;
+                            setYearForm({ ...yearForm, name: start ? `${start}-${end}` : '' });
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                        >
+                          <option value="">Choisir</option>
+                          {yearOptions.map((year) => (
+                            <option key={`end-${year}`} value={year}>{year}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {!!selectedStart && !!selectedEnd && Number(selectedEnd) <= Number(selectedStart) && (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700 text-sm">
+                        L'année de fin doit être supérieure à l'année de début.
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                   <RequiredLabel label="Label Année Scolaire" required />

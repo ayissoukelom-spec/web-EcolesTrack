@@ -374,6 +374,30 @@ export default function App() {
     }
   };
 
+  const handleSetActiveYear = async (yearId: number) => {
+    try {
+      await apiFetch(`/api/academic-years/${yearId}/activate`, {
+        method: 'PUT',
+      });
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de définir cette année comme active');
+      throw err;
+    }
+  };
+
+  const handleDeleteYear = async (yearId: number) => {
+    try {
+      await apiFetch(`/api/academic-years/${yearId}`, {
+        method: 'DELETE',
+      });
+      await fetchAllData(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de supprimer cette année scolaire');
+      throw err;
+    }
+  };
+
   const handleAddClass = async (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => {
     try {
       const payload = {
@@ -1020,6 +1044,8 @@ export default function App() {
                   onUpdateSchool={handleUpdateSchool}
                   onUpdateStudent={handleUpdateStudent}
                   onAddYear={handleAddYear}
+                  onSetActiveYear={handleSetActiveYear}
+                  onDeleteYear={handleDeleteYear}
                   onAddClass={handleAddClass}
                   onAddTeacher={handleAddTeacher}
                   onAddParent={handleAddParent}

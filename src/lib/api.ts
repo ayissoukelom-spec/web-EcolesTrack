@@ -238,12 +238,14 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     const method = (mergedOptions.method || 'GET').toString().toUpperCase();
     const contentType = (mergedOptions.headers as any)?.['Content-Type'] || (mergedOptions.headers as any)?.['content-type'] || '';
     const isClassEndpoint = normalizedEndpoint === '/api/classes' || normalizedEndpoint.startsWith('/api/classes/');
+    const isSchoolTermsEndpoint = normalizedEndpoint === '/api/school-terms' || normalizedEndpoint.startsWith('/api/school-terms/');
+    const isAcademicYearsEndpoint = normalizedEndpoint === '/api/academic-years' || normalizedEndpoint.startsWith('/api/academic-years/');
 
     const isJsonBody = ['POST', 'PUT', 'PATCH'].includes(method) && contentType.includes('application/json') && mergedOptions.body && typeof mergedOptions.body === 'string';
     if (isJsonBody) {
       try {
         const parsed = JSON.parse(mergedOptions.body as string);
-        if (!isClassEndpoint) {
+        if (!isClassEndpoint && !isSchoolTermsEndpoint && !isAcademicYearsEndpoint) {
           validateClientNames(parsed);
         }
 

@@ -365,6 +365,8 @@ interface AdminViewProps {
   onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
+  onSetActiveYear?: (id: number) => Promise<any>;
+  onDeleteYear?: (id: number) => Promise<any>;
   onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
@@ -402,6 +404,8 @@ export default function AdminView({
   onUpdateSchool,
   onUpdateStudent,
   onAddYear,
+  onSetActiveYear,
+  onDeleteYear,
   onAddClass,
   onAddTeacher,
   onAddParent,
@@ -521,14 +525,17 @@ export default function AdminView({
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
-  const [yearForm, setYearForm] = useState({ name: '2026-2027', isActive: true, schoolId: '' });
+  const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
+  const [termStartDate, setTermStartDate] = useState<string>('');
+  const [termEndDate, setTermEndDate] = useState<string>('');
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '' });
   const [studentError, setStudentError] = useState<string | null>(null);
+  const [termNotice, setTermNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [newParentMode, setNewParentMode] = useState(false);
   const [newParentForm, setNewParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
   const [newTeacherMode, setNewTeacherMode] = useState(false);
@@ -928,11 +935,24 @@ export default function AdminView({
         return;
       }
 
+      const yearName = String(yearForm.name || '').trim();
+      if (!/^\d{4}-\d{4}$/.test(yearName)) {
+        setStudentError('Veuillez sélectionner une année de début et une année de fin valides.');
+        return;
+      }
+      const [startYearStr, endYearStr] = yearName.split('-');
+      const startYear = Number(startYearStr);
+      const endYear = Number(endYearStr);
+      if (!Number.isFinite(startYear) || !Number.isFinite(endYear) || endYear <= startYear) {
+        setStudentError("L'année de fin doit être supérieure à l'année de début.");
+        return;
+      }
+
       onAddYear({
-        name: yearForm.name,
+        name: yearName,
         isActive: yearForm.isActive,
       });
-      setYearForm({ name: '2026-2027', isActive: true, schoolId: '' });
+      setYearForm({ name: '', isActive: false, schoolId: '' });
     } else if (activeTab === 'classes') {
       const className = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
       if (!className.trim()) {
@@ -3426,7 +3446,10 @@ export default function AdminView({
                   <select
                     className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
                     value={termForm.academicYearId}
-                    onChange={(e) => setTermForm((p) => ({ ...p, academicYearId: e.target.value }))}
+                    onChange={(e) => {
+                      setTermForm((p) => ({ ...p, academicYearId: e.target.value }));
+                      setTermNotice(null);
+                    }}
                   >
                     <option value="">Choisir une année</option>
                     {visibleYearsList.map((y) => (
@@ -3443,25 +3466,82 @@ export default function AdminView({
                       <option key={s.id} value={String(s.id)}>{s.name}</option>
                     ))}
                   </select>
-                  <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => setTermForm((p) => ({ ...p, name: e.target.value }))} />
+                  <input
+                    type="date"
+                    className="px-3 py-2 border border-slate-200 rounded-lg"
+                    value={termStartDate}
+                    onChange={(e) => {
+                      setTermStartDate(e.target.value);
+                      setTermNotice(null);
+                    }}
+                    placeholder="Début (YYYY-MM-DD)"
+                  />
+                  <input
+                    type="date"
+                    className="px-3 py-2 border border-slate-200 rounded-lg"
+                    value={termEndDate}
+                    onChange={(e) => {
+                      setTermEndDate(e.target.value);
+                      setTermNotice(null);
+                    }}
+                    placeholder="Fin (YYYY-MM-DD)"
+                  />
+                  <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => { setTermForm((p) => ({ ...p, name: e.target.value })); setTermNotice(null); }} />
                   <button
                     className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
                     onClick={async () => {
                       try {
-                        if (!termForm.name || !termForm.academicYearId) return;
-                        const payload: any = { name: termForm.name, academicYearId: Number(termForm.academicYearId) };
+                        if (!termForm.name || !termForm.academicYearId) {
+                          setStudentError('Veuillez renseigner le nom du trimestre et l\'année académique.');
+                          setTermNotice({ type: 'error', text: 'Veuillez renseigner le nom du trimestre et l\'année académique.' });
+                          return;
+                        }
+                        const selectedYearId = Number(termForm.academicYearId);
+                        const selectedYearExists = visibleYearsList.some((y) => y.id === selectedYearId);
+                        if (!selectedYearExists) {
+                          setStudentError('L\'année académique sélectionnée est invalide. Rechargez la page et réessayez.');
+                          setTermNotice({ type: 'error', text: 'Année académique invalide. Choisissez une année existante.' });
+                          return;
+                        }
+                        if (!termStartDate || !termEndDate) {
+                          setStudentError('Veuillez choisir la date de début et la date de fin du trimestre.');
+                          setTermNotice({ type: 'error', text: 'Veuillez choisir la date de début et la date de fin du trimestre.' });
+                          return;
+                        }
+                        if (new Date(termEndDate) < new Date(termStartDate)) {
+                          setStudentError('La date de fin doit être supérieure ou égale à la date de début.');
+                          setTermNotice({ type: 'error', text: 'La date de fin doit être supérieure ou égale à la date de début.' });
+                          return;
+                        }
+                        const payload: any = {
+                          name: termForm.name,
+                          academicYearId: selectedYearId,
+                          startDate: termStartDate || null,
+                          endDate: termEndDate || null,
+                        };
                         if (superAdminSchoolFilterId) payload.incomingSchoolId = Number(superAdminSchoolFilterId);
+
                         await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify(payload) });
+                        setStudentError(null);
+                        setTermNotice({ type: 'success', text: 'Trimestre créé avec succès.' });
                         setTermForm({ name: '', academicYearId: '' });
+                        setTermStartDate('');
+                        setTermEndDate('');
                         // refresh list for selected year
                         const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}${superAdminSchoolFilterId ? `&schoolId=${superAdminSchoolFilterId}` : ''}`);
                         setTermsList(list || []);
                       } catch (err) {
                         console.error('Failed to create term', err);
+                        const message = (err as any)?.message || 'Impossible de créer le trimestre. Vérifiez l\'année académique et les dates.';
+                        setStudentError(message);
+                        setTermNotice({ type: 'error', text: message });
                       }
                     }}
                   >Créer</button>
                 </div>
+                {termNotice && (
+                  <p className={`text-sm ${termNotice.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>{termNotice.text}</p>
+                )}
               </div>
             )}
           </div>
@@ -3475,8 +3555,8 @@ export default function AdminView({
                 <button
                   onClick={() => {
                     setYearForm({
-                      name: String(new Date().getFullYear()) + '-' + String(new Date().getFullYear() + 1),
-                      isActive: true,
+                      name: '',
+                      isActive: false,
                       schoolId: '',
                     });
                     setActiveTab('years');
@@ -3514,7 +3594,45 @@ export default function AdminView({
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-right text-slate-400 text-xs">—</td>
+                    <td className="px-6 py-4 text-right text-slate-400 text-xs">
+                      {userRole === 'super_admin' ? (
+                        <div className="inline-flex items-center gap-2">
+                          {!yr.isActive && (
+                            <button
+                              className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-xs font-semibold"
+                              onClick={async () => {
+                                try {
+                                  if (!onSetActiveYear) return;
+                                  await onSetActiveYear(yr.id);
+                                  setStudentError(null);
+                                } catch (err: any) {
+                                  setStudentError(err?.message || "Impossible de définir l'année active.");
+                                }
+                              }}
+                            >
+                              Définir active
+                            </button>
+                          )}
+                          <button
+                            className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold"
+                            onClick={async () => {
+                              try {
+                                if (!onDeleteYear) return;
+                                if (!window.confirm(`Supprimer l'année scolaire ${yr.name} ?`)) return;
+                                await onDeleteYear(yr.id);
+                                setStudentError(null);
+                              } catch (err: any) {
+                                setStudentError(err?.message || "Impossible de supprimer l'année scolaire.");
+                              }
+                            }}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -3526,30 +3644,90 @@ export default function AdminView({
               <select
                 className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
                 value={termForm.academicYearId}
-                onChange={(e) => setTermForm((p) => ({ ...p, academicYearId: e.target.value }))}
+                onChange={(e) => {
+                  setTermForm((p) => ({ ...p, academicYearId: e.target.value }));
+                  setTermNotice(null);
+                }}
               >
                 <option value="">Choisir une année</option>
                 {visibleYearsList.map((y) => (
                   <option key={y.id} value={String(y.id)}>{y.name}</option>
                 ))}
               </select>
-              <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => setTermForm((p) => ({ ...p, name: e.target.value }))} />
+              <input
+                type="date"
+                className="px-3 py-2 border border-slate-200 rounded-lg"
+                value={termStartDate}
+                onChange={(e) => {
+                  setTermStartDate(e.target.value);
+                  setTermNotice(null);
+                }}
+                placeholder="Début (YYYY-MM-DD)"
+              />
+              <input
+                type="date"
+                className="px-3 py-2 border border-slate-200 rounded-lg"
+                value={termEndDate}
+                onChange={(e) => {
+                  setTermEndDate(e.target.value);
+                  setTermNotice(null);
+                }}
+                placeholder="Fin (YYYY-MM-DD)"
+              />
+              <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => { setTermForm((p) => ({ ...p, name: e.target.value })); setTermNotice(null); }} />
               <button
                 className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
                 onClick={async () => {
                   try {
-                    if (!termForm.name || !termForm.academicYearId) return;
-                    await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify({ name: termForm.name, academicYearId: Number(termForm.academicYearId) }) });
+                    if (!termForm.name || !termForm.academicYearId) {
+                      setStudentError('Veuillez renseigner le nom du trimestre et l\'année académique.');
+                      setTermNotice({ type: 'error', text: 'Veuillez renseigner le nom du trimestre et l\'année académique.' });
+                      return;
+                    }
+                    const selectedYearId = Number(termForm.academicYearId);
+                    const selectedYearExists = visibleYearsList.some((y) => y.id === selectedYearId);
+                    if (!selectedYearExists) {
+                      setStudentError('L\'année académique sélectionnée est invalide. Rechargez la page et réessayez.');
+                      setTermNotice({ type: 'error', text: 'Année académique invalide. Choisissez une année existante.' });
+                      return;
+                    }
+                    if (!termStartDate || !termEndDate) {
+                      setStudentError('Veuillez choisir la date de début et la date de fin du trimestre.');
+                      setTermNotice({ type: 'error', text: 'Veuillez choisir la date de début et la date de fin du trimestre.' });
+                      return;
+                    }
+                    if (new Date(termEndDate) < new Date(termStartDate)) {
+                      setStudentError('La date de fin doit être supérieure ou égale à la date de début.');
+                      setTermNotice({ type: 'error', text: 'La date de fin doit être supérieure ou égale à la date de début.' });
+                      return;
+                    }
+                    const payload: any = {
+                      name: termForm.name,
+                      academicYearId: selectedYearId,
+                      startDate: termStartDate || null,
+                      endDate: termEndDate || null,
+                    };
+                    await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify(payload) });
+                    setStudentError(null);
+                    setTermNotice({ type: 'success', text: 'Trimestre créé avec succès.' });
                     setTermForm({ name: '', academicYearId: '' });
+                    setTermStartDate('');
+                    setTermEndDate('');
                     // refresh list
                     const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}`);
                     setTermsList(list || []);
                   } catch (err) {
                     console.error('Failed to create term', err);
+                    const message = (err as any)?.message || 'Impossible de créer le trimestre. Vérifiez l\'année académique et les dates.';
+                    setStudentError(message);
+                    setTermNotice({ type: 'error', text: message });
                   }
                 }}
               >Créer</button>
             </div>
+            {termNotice && (
+              <p className={`text-sm mb-3 ${termNotice.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>{termNotice.text}</p>
+            )}
 
             <div className="rounded-lg border border-slate-100 bg-white p-3">
               {termsList.length === 0 ? (
@@ -3559,7 +3737,24 @@ export default function AdminView({
                   {termsList.map((t) => (
                     <li key={t.id} className="flex items-center justify-between">
                       <div>{t.name} {t.start_date ? `(${t.start_date} → ${t.end_date || '…'})` : ''}</div>
-                      <div className="text-slate-400 text-xs">{t.is_active ? 'Actif' : 'Inactif'}</div>
+                      <div className="inline-flex items-center gap-2">
+                        <div className="text-slate-400 text-xs">{t.is_active ? 'Actif' : 'Inactif'}</div>
+                        <button
+                          className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
+                          onClick={async () => {
+                            try {
+                              if (!window.confirm(`Supprimer le trimestre ${t.name} ?`)) return;
+                              await apiFetch(`/api/school-terms/${t.id}`, { method: 'DELETE' });
+                              setTermsList((prev) => prev.filter((row) => row.id !== t.id));
+                              setTermNotice({ type: 'success', text: 'Trimestre supprimé avec succès.' });
+                            } catch (err: any) {
+                              setTermNotice({ type: 'error', text: err?.message || 'Impossible de supprimer le trimestre.' });
+                            }
+                          }}
+                        >
+                          Supprimer
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>

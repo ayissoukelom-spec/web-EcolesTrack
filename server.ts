@@ -48,6 +48,7 @@ import {
   absences,
   notifications,
   auditEvents,
+  schoolTerms,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
@@ -2372,6 +2373,64 @@ async function startServer() {
     }
   });
 
+  app.put('/api/academic-years/:id/activate', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'Invalid academic year id' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super admin can set active academic year' });
+      }
+
+      const [targetYear] = await db.select().from(academicYears).where(eq(academicYears.id, id));
+      if (!targetYear) return res.status(404).json({ error: 'Academic year not found' });
+
+      await db.update(academicYears).set({ isActive: false });
+      await db.update(academicYears).set({ isActive: true }).where(eq(academicYears.id, id));
+
+      const [updated] = await db.select().from(academicYears).where(eq(academicYears.id, id));
+      res.json(updated);
+    } catch (err: any) {
+      console.error('Failed to activate academic year:', err);
+      res.status(500).json({ error: 'Failed to activate academic year' });
+    }
+  });
+
+  app.delete('/api/academic-years/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'Invalid academic year id' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super admin can delete academic years' });
+      }
+
+      const [targetYear] = await db.select().from(academicYears).where(eq(academicYears.id, id));
+      if (!targetYear) return res.status(404).json({ error: 'Academic year not found' });
+
+      await db.delete(academicYears).where(eq(academicYears.id, id));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Failed to delete academic year:', err);
+      if (err?.code === '23503' || err?.cause?.code === '23503') {
+        return res.status(409).json({ error: 'Impossible de supprimer cette année: elle est utilisée par des classes, trimestres ou utilisateurs.' });
+      }
+      res.status(500).json({ error: 'Failed to delete academic year' });
+    }
+  });
+
   // School Terms (Trimestres) - CRUD
   app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -2448,6 +2507,9 @@ async function startServer() {
       res.status(201).json(inserted[0]);
     } catch (err: any) {
       console.error('Failed to create school term:', err);
+      if (err?.cause?.code === '23503') {
+        return res.status(400).json({ error: 'Année académique introuvable. Choisissez une année valide.' });
+      }
       res.status(500).json({ error: 'Failed to create school term' });
     }
   });
