@@ -3418,6 +3418,52 @@ export default function AdminView({
                 </tbody>
               </table>
             </div>
+            {/* Trimestres quick-create for super_admin inside Schools tab */}
+            {userRole === 'super_admin' && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-2">Trimestres / Périodes (création rapide)</h3>
+                <div className="flex items-center gap-2 mb-3">
+                  <select
+                    className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
+                    value={termForm.academicYearId}
+                    onChange={(e) => setTermForm((p) => ({ ...p, academicYearId: e.target.value }))}
+                  >
+                    <option value="">Choisir une année</option>
+                    {visibleYearsList.map((y) => (
+                      <option key={y.id} value={String(y.id)}>{y.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
+                    value={String(superAdminSchoolFilterId || '')}
+                    onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? Number(e.target.value) : null)}
+                  >
+                    <option value="">Aucune école (global)</option>
+                    {schoolsList.map((s) => (
+                      <option key={s.id} value={String(s.id)}>{s.name}</option>
+                    ))}
+                  </select>
+                  <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => setTermForm((p) => ({ ...p, name: e.target.value }))} />
+                  <button
+                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
+                    onClick={async () => {
+                      try {
+                        if (!termForm.name || !termForm.academicYearId) return;
+                        const payload: any = { name: termForm.name, academicYearId: Number(termForm.academicYearId) };
+                        if (superAdminSchoolFilterId) payload.incomingSchoolId = Number(superAdminSchoolFilterId);
+                        await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify(payload) });
+                        setTermForm({ name: '', academicYearId: '' });
+                        // refresh list for selected year
+                        const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}${superAdminSchoolFilterId ? `&schoolId=${superAdminSchoolFilterId}` : ''}`);
+                        setTermsList(list || []);
+                      } catch (err) {
+                        console.error('Failed to create term', err);
+                      }
+                    }}
+                  >Créer</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
