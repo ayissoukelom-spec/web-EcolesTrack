@@ -160,3 +160,9 @@ export const isEvaluationCompleted = (evaluation: Evaluation, students: Student[
 
 export const getFullyGradedEvaluations = (evaluations: Evaluation[], students: Student[], grades: Grade[]): Evaluation[] =>
   evaluations.filter((evaluation) => isEvaluationFullyGraded(evaluation, students, grades));
+
+export const hasAnyGrade = (evaluation: Evaluation, grades: Grade[]): boolean =>
+  grades.some((grade) => grade.evaluationId === evaluation.id);
+
+export const isEvaluationArchived = (evaluation: Evaluation, grades: Grade[]): boolean =>
+  hasAnyGrade(evaluation, grades);

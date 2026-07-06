@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
-import { isEvaluationCompleted } from '../lib/evaluationUtils.ts';
+import { isEvaluationCompleted, isEvaluationArchived } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
 import DashboardView from './DashboardView.tsx';
@@ -339,9 +339,9 @@ export default function AppShell() {
   };
 
   const content = (() => {
-    // Centralized filtering of evaluations: separate active from completed
-    const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationCompleted(ev, studentsList, gradesList));
-    const completedEvaluations = evaluationsList.filter((ev) => isEvaluationCompleted(ev, studentsList, gradesList));
+    // Centralized filtering of evaluations: separate active from archived
+    const activeEvaluations = evaluationsList.filter((ev) => !isEvaluationArchived(ev, gradesList));
+    const archivedEvaluations = evaluationsList.filter((ev) => isEvaluationArchived(ev, gradesList));
 
     if (activeTab === 'tableau-de-bord') {
       return <DashboardView stats={stats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
@@ -411,7 +411,7 @@ export default function AppShell() {
       return (
         <ArchiveView
           userRole={currentRole}
-          evaluationsList={completedEvaluations}
+          evaluationsList={archivedEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
           classesList={classesList}

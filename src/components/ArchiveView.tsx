@@ -3,7 +3,7 @@ import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
-import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationFullyGraded as isEvaluationFullyGradedUtil, isEvaluationCompleted as isEvaluationCompletedUtil, parseDateValue } from '../lib/evaluationUtils';
+import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationArchived as isEvaluationArchivedUtil, parseDateValue } from '../lib/evaluationUtils';
 
 interface ArchiveViewProps {
   userRole: UserRole;
@@ -72,7 +72,7 @@ export default function ArchiveView({
         if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
       }
       if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
-      if (!isEvaluationCompleted(ev)) return false;
+      if (!isEvaluationArchivedUtil(ev, gradesList)) return false;
 
       const evaluationDateValue = getEvaluationDateValue(ev);
       if (fromDate && (!evaluationDateValue || evaluationDateValue < fromDate)) return false;
