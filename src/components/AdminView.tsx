@@ -545,18 +545,6 @@ export default function AdminView({
         schoolId: String(currentSchoolId || ''),
       }));
     }
-    // fetch initial terms for visible year if any
-    (async () => {
-      try {
-        const defaultYear = visibleYearsList.find((y) => y.isActive) ?? visibleYearsList[0];
-        if (defaultYear) {
-          const list = await apiFetch(`/api/school-terms?academicYearId=${defaultYear.id}`);
-          setTermsList(list || []);
-        }
-      } catch (e) {
-        console.warn('Failed to load initial terms', e);
-      }
-    })();
   }, [userRole, currentSchoolId]);
 
   useEffect(() => {
@@ -684,6 +672,19 @@ export default function AdminView({
     return yearsList.filter((y) => y.schoolId == null || (sid !== undefined && sid !== null && y.schoolId === sid));
   };
   const visibleYearsList = userRole === 'super_admin' ? yearsList : getYearsForSchool(undefined);
+  useEffect(() => {
+    (async () => {
+      try {
+        const defaultYear = visibleYearsList.find((y) => y.isActive) ?? visibleYearsList[0];
+        if (defaultYear) {
+          const list = await apiFetch(`/api/school-terms?academicYearId=${defaultYear.id}`);
+          setTermsList(list || []);
+        }
+      } catch (e) {
+        console.warn('Failed to load initial terms', e);
+      }
+    })();
+  }, [visibleYearsList]);
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
