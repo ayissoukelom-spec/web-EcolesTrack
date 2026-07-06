@@ -341,12 +341,14 @@ export default function AppShell() {
   const content = (() => {
     // Centralized filtering of evaluations: separate active from archived
     const activeEvaluations = evaluationsList.filter((ev) => {
+      if (currentRole === 'super_admin') return true;
       if (currentRole === 'school_admin') {
         return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
       }
       return !isEvaluationArchived(ev, gradesList);
     });
     const archivedEvaluations = evaluationsList.filter((ev) => {
+      if (currentRole === 'super_admin') return false;
       if (currentRole === 'school_admin') {
         return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
       }

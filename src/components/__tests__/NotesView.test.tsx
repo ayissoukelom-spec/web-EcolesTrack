@@ -80,6 +80,19 @@ test('school_admin still sees teacher-archived evaluation until it is locked', (
   expect(screen.queryByText(/Archive des devoirs terminés/)).toBeNull();
 });
 
+test('super_admin sees all evaluations even if archived for teachers', () => {
+  const props = {
+    ...baseProps,
+    gradesList: [{ id: 11, evaluationId: 2, studentId: 201, score: '15', remarks: '' }],
+  };
+
+  render(<NotesView {...props} userRole="super_admin" /> as any);
+
+  const selects = screen.getAllByRole('combobox');
+  const evalSelect = selects[1];
+  within(evalSelect).getByText(/Eval 2/);
+});
+
 test('super_admin renders NotesView', () => {
   render(<NotesView {...baseProps} userRole="super_admin" /> as any);
   // basic smoke test: component rendered (allow multiple matches)
