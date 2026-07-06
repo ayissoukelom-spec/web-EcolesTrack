@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
-import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin } from '../lib/evaluationUtils.ts';
+import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
 import DashboardView from './DashboardView.tsx';
@@ -343,14 +343,16 @@ export default function AppShell() {
     const activeEvaluations = evaluationsList.filter((ev) => {
       if (currentRole === 'super_admin') return true;
       if (currentRole === 'school_admin') {
-        return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+        return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
+          && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
       }
       return !isEvaluationArchived(ev, gradesList);
     });
     const archivedEvaluations = evaluationsList.filter((ev) => {
       if (currentRole === 'super_admin') return false;
       if (currentRole === 'school_admin') {
-        return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+        return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
+          || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
       }
       return isEvaluationArchived(ev, gradesList);
     });

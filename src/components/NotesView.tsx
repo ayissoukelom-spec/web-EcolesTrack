@@ -18,6 +18,7 @@ import {
   getEligibleStudentsForEvaluationWithGrades as getEligibleStudentsForEvaluationWithGradesUtil,
   getEligibleStudentsWithHistoryForEvaluation as getEligibleStudentsWithHistoryForEvaluationUtil,
   getEligibleGradesForEvaluation,
+  isEvaluationArchivedForSchoolAdminByAge,
   isEvaluationFullyGraded as isEvaluationFullyGradedUtil,
   isEvaluationCompleted as isEvaluationCompletedUtil,
   isStudentEligibleForEvaluation,
@@ -392,7 +393,8 @@ export default function NotesView({
     }
 
     if (userRole === 'school_admin') {
-      return !isSchoolAdminEvaluationLocked(ev);
+      return !isSchoolAdminEvaluationLocked(ev)
+        && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
 
     return true;
@@ -479,7 +481,8 @@ export default function NotesView({
     }
 
     if (userRole === 'school_admin') {
-      return isSchoolAdminEvaluationLocked(ev);
+      return isSchoolAdminEvaluationLocked(ev)
+        || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
 
     return false;

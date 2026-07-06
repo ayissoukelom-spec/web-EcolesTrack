@@ -23,7 +23,7 @@ import {
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
-import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin } from './lib/evaluationUtils.ts';
+import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
 import DashboardView from './components/DashboardView.tsx';
@@ -767,14 +767,16 @@ export default function App() {
   const activeEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return true;
     if (currentRole === 'school_admin') {
-      return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+      return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
+        && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
     return !isEvaluationArchived(ev, gradesList);
   });
   const archivedEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return false;
     if (currentRole === 'school_admin') {
-      return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList);
+      return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
+        || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
     return isEvaluationArchived(ev, gradesList);
   });

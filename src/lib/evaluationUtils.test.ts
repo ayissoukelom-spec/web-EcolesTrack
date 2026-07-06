@@ -4,6 +4,7 @@ import {
   getEligibleStudentsForEvaluation,
   getEligibleStudentsForEvaluationWithGrades,
   getFullyGradedEvaluations,
+  isEvaluationArchivedForSchoolAdminByAge,
   isEvaluationFullyGraded,
   isEvaluationCompleted,
   isStudentEligibleForEvaluation,
@@ -202,5 +203,53 @@ describe('evaluation completion status (new business rule)', () => {
       remarks: 'OK',
     })) as Grade[];
     expect(isEvaluationCompleted(evaluation, thirtyStudents, thirtyGrades)).toBe(true);
+  });
+});
+
+describe('school admin archival age rule', () => {
+  const evaluation: Evaluation = {
+    id: 1,
+    classId: 10,
+    teacherId: 100,
+    subject: 'Mathématiques',
+    title: 'Devoir 1',
+    coefficient: 2,
+    maxScore: 20,
+    date: '2026-05-01',
+    createdAt: '2026-05-01T09:00:00Z',
+  };
+
+  const students: Student[] = [
+    { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-04-20T08:00:00Z' },
+  ];
+
+  it('archive une évaluation school_admin si une note existe depuis plus de 30 jours', () => {
+    const oldGrade: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien', createdAt: '2026-05-01T10:00:00Z', updatedAt: '2026-05-01T10:00:00Z' },
+    ];
+
+    const now = new Date('2026-06-05T00:00:00Z').getTime();
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      expect(isEvaluationArchivedForSchoolAdminByAge(evaluation, students, oldGrade)).toBe(true);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it('ne place pas en archive une évaluation school_admin si la note a été modifiée récemment', () => {
+    const recentGrade: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien', createdAt: '2026-06-01T10:00:00Z', updatedAt: '2026-06-01T10:00:00Z' },
+    ];
+
+    const now = new Date('2026-06-05T00:00:00Z').getTime();
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      expect(isEvaluationArchivedForSchoolAdminByAge(evaluation, students, recentGrade)).toBe(false);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 });
