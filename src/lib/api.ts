@@ -35,6 +35,9 @@ export function validateClientNames(payload: any) {
 const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
 const LOCAL_STORAGE_ACTIVE_SCHOOL_KEY = 'ecoletrack_active_school_id';
+const API_BASE_URL = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL
+  ? String(import.meta.env.VITE_API_BASE_URL)
+  : '';
 
 function isSuppressedSystemError(message: string): boolean {
   return /Unauthorized:\s*Missing token/i.test(message);
@@ -221,6 +224,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
   const headers = getSimulationHeaders();
 
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const apiUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
   const mergedOptions = {
     ...options,
     headers: {
@@ -257,7 +261,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     throw e;
   }
 
-  const response = await fetch(normalizedEndpoint, mergedOptions);
+  const response = await fetch(apiUrl, mergedOptions);
   
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
@@ -272,6 +276,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
 export async function apiFetchBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const headers = getSimulationHeaders();
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const apiUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
   const mergedHeaders = {
     ...headers,
     ...(options.headers || {}),
@@ -281,7 +286,7 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     delete mergedHeaders['Content-Type'];
   }
 
-  const response = await fetch(normalizedEndpoint, {
+  const response = await fetch(apiUrl, {
     ...options,
     headers: mergedHeaders,
   });

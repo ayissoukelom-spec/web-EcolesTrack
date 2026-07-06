@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ÉcoleTrack Mobile</title>
+    <!-- Use relative asset paths so WebView loads from app package -->
+    <script type="module" crossorigin src="./assets/index-vZTb3jwW.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-H42hBkYN.css">
+    <!-- Load Inter font and ensure dark theme in WebView -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style>
+      /* Force dark background and font for the packaged WebView */
+      html,body,#root{height:100%;}
+      body{margin:0;background:#0b1220;color:#e6eefc;font-family:Inter,system-ui,sans-serif;}
+      /* tweak main containers for mobile look */
+      .app-shell{max-width:420px;margin:0 auto;padding:12px}
+    </style>
+    <script>
+      // Ensure dark class exists for any dark-mode styles
+      try{document.documentElement.classList.add('dark');}catch(e){}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+  </body>
+</html>
