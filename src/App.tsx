@@ -111,7 +111,10 @@ export default function App() {
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
     ? Array.isArray(currentTeacherProfile.specialization)
       ? currentTeacherProfile.specialization
-      : String(currentTeacherProfile.specialization).split(',').map((item) => item.trim()).filter(Boolean)
+      : String(currentTeacherProfile.specialization)
+          .split(/[,;&|\/\+]/)
+          .map((item) => item.trim())
+          .filter(Boolean)
     : [];
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 

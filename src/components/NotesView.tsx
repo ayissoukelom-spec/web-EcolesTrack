@@ -112,15 +112,31 @@ export default function NotesView({
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
 
+  const normalizeSubjectName = (value: string) =>
+    String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .replace(/[^a-z0-9 ]+/g, '')
+      .replace(/\s+/g, ' ');
+
   const approvedSubjectNames = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
     : [];
 
   const availableSubjects = userRole === 'teacher'
-    ? approvedSubjectNames.filter((subjectName) => {
-      const assigned = teacherSpecializations.map((value) => String(value || '').trim());
-      return assigned.includes(subjectName);
-    })
+    ? (() => {
+      const assigned = teacherSpecializations
+        .map((value) => normalizeSubjectName(String(value || '')))
+        .filter(Boolean);
+
+      const filteredByAssigned = approvedSubjectNames.filter((subjectName) =>
+        assigned.some((assignedName) => normalizeSubjectName(subjectName) === assignedName)
+      );
+
+      return filteredByAssigned.length > 0 ? filteredByAssigned : approvedSubjectNames;
+    })()
     : approvedSubjectNames;
 
   const currentEvaluation = approvedEvaluations.find((ev) => String(ev.id) === selectedEvalId) || null;

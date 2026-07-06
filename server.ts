@@ -3648,30 +3648,41 @@ async function startServer() {
           return res.status(403).json({ error: 'Teacher school context is required' });
         }
 
-        const approvedRows = await db
+        const schoolRows = await db
           .select({
             id: subjects.id,
             schoolId: subjects.schoolId,
             name: subjects.name,
             code: subjects.code,
-            status: schoolSubjects.status,
+            status: sql`COALESCE(${schoolSubjects.status}, 'approved')`,
             createdAt: subjects.createdAt,
             updatedAt: subjects.updatedAt,
           })
           .from(subjects)
-          .innerJoin(
+          .leftJoin(
             schoolSubjects,
             and(
               eq(subjects.id, schoolSubjects.subjectId),
-              eq(schoolSubjects.schoolId, targetSchoolId),
-              eq(schoolSubjects.status, 'approved')
+              eq(schoolSubjects.schoolId, targetSchoolId)
+            )
+          )
+          .where(
+            or(
+              eq(subjects.schoolId, targetSchoolId),
+              eq(schoolSubjects.schoolId, targetSchoolId)
             )
           );
 
-        res.json(approvedRows.map((subject) => ({
+        let result = schoolRows.map((subject) => ({
           ...subject,
           schoolId: subject.schoolId ?? null,
-        })));
+        }));
+
+        if (approvedOnly) {
+          result = result.filter((subject) => subject.status === 'approved');
+        }
+
+        res.json(result);
         return;
       }
 
