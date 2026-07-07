@@ -4332,6 +4332,7 @@ async function startServer() {
           className: classes.name,
           teacherId: evaluations.teacherId,
           teacherName: users.name,
+          termId: evaluations.termId,
           subject: evaluations.subject,
           title: evaluations.title,
           coefficient: evaluations.coefficient,
@@ -4395,7 +4396,7 @@ async function startServer() {
       if (requestingUser && requestingUser.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, subject, title, coefficient, maxScore, date } = req.body;
+      const { classId, teacherId, termId, subject, title, coefficient, maxScore, date } = req.body;
       if (!classId || !subject || !title || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
@@ -4451,6 +4452,68 @@ async function startServer() {
 
       if (!resolvedTeacherId) {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
+      }
+
+      const evaluationDate = String(date).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(evaluationDate)) {
+        return res.status(400).json({ error: 'Invalid evaluation date format. Expected YYYY-MM-DD' });
+      }
+
+      let resolvedTermId: number | null = null;
+      if (termId != null && termId !== '') {
+        const parsedTermId = Number(termId);
+        if (!Number.isInteger(parsedTermId) || parsedTermId <= 0) {
+          return res.status(400).json({ error: 'Invalid termId' });
+        }
+
+        const [selectedTerm] = await db
+          .select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId })
+          .from(schoolTerms)
+          .where(eq(schoolTerms.id, parsedTermId));
+
+        if (!selectedTerm) {
+          return res.status(400).json({ error: 'Selected term not found' });
+        }
+
+        if (selectedTerm.academicYearId !== classRecord.academicYearId) {
+          return res.status(400).json({ error: 'Selected term does not belong to class academic year' });
+        }
+
+        resolvedTermId = selectedTerm.id;
+      } else {
+        const termsForYear = await db
+          .select({
+            id: schoolTerms.id,
+            startDate: schoolTerms.startDate,
+            endDate: schoolTerms.endDate,
+            orderIndex: schoolTerms.orderIndex,
+            isActive: schoolTerms.isActive,
+          })
+          .from(schoolTerms)
+          .where(eq(schoolTerms.academicYearId, classRecord.academicYearId))
+          .orderBy(schoolTerms.orderIndex);
+
+        const matchedByRange = termsForYear.find((term) =>
+          !!term.startDate
+          && !!term.endDate
+          && evaluationDate >= term.startDate
+          && evaluationDate <= term.endDate,
+        );
+
+        if (matchedByRange) {
+          resolvedTermId = matchedByRange.id;
+        } else {
+          const activeTerm = termsForYear.find((term) => term.isActive);
+          if (activeTerm) {
+            resolvedTermId = activeTerm.id;
+          } else if (termsForYear.length === 1) {
+            resolvedTermId = termsForYear[0].id;
+          }
+        }
+      }
+
+      if (!resolvedTermId) {
+        return res.status(400).json({ error: 'Unable to resolve term for this evaluation. Please select a term explicitly.' });
       }
 
       const normalizedSubject = String(subject).trim();
@@ -4527,6 +4590,7 @@ async function startServer() {
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
+        termId: resolvedTermId,
         subject: normalizedSubject,
         title,
         coefficient: coefficient ? parseInt(coefficient) : 1,

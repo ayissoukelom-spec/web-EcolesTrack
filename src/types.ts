@@ -243,4 +243,6 @@ export interface BulletinListResponse {
 export interface BulletinTermOption {
   id: number;
   name: string;
+  startDate?: string | null;
+  endDate?: string | null;
 }

@@ -1124,6 +1124,7 @@ export default function App() {
                   classesList={classesList}
                   studentsList={studentsList}
                   evaluationsList={activeEvaluations}
+                  gradesList={gradesList}
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                 />
               )}

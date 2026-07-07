@@ -10,6 +10,8 @@ import {
   bulletinLines,
   bulletins,
   classes,
+  evaluations,
+  grades,
   schools,
   schoolTerms,
   students,
@@ -111,6 +113,45 @@ const parseNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parseNumericScore = (score: string): number | null => {
+  const normalized = String(score || '').trim().replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildFallbackLinesFromGrades = (
+  rows: Array<{ subject: string; coefficient: number; maxScore: number; score: string }>,
+): BulletinPdfLine[] => {
+  const bySubject = new Map<string, { coefficient: number; weighted: number; weightedCoefficient: number }>();
+
+  for (const row of rows) {
+    const coefficient = Number(row.coefficient || 0);
+    const maxScore = Number(row.maxScore || 0);
+    const rawScore = parseNumericScore(row.score);
+    if (!(coefficient > 0) || !(maxScore > 0) || rawScore == null) continue;
+
+    const normalizedScore = (rawScore / maxScore) * 20;
+    const current = bySubject.get(row.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0 };
+    current.coefficient += coefficient;
+    current.weighted += normalizedScore * coefficient;
+    current.weightedCoefficient += coefficient;
+    bySubject.set(row.subject, current);
+  }
+
+  let runningId = 1;
+  return Array.from(bySubject.entries()).map(([subjectName, agg]) => ({
+    id: runningId++,
+    bulletinId: 0,
+    subjectId: null,
+    subjectName,
+    coefficient: agg.coefficient,
+    average: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
+    teacherComment: null,
+    rank: null,
+  }));
+};
+
 const hexToRgb = (hexColor: string) => {
   const normalized = hexColor.replace('#', '').trim();
   const value = normalized.length === 3
@@ -129,6 +170,18 @@ const toDateLabel = (iso: string | null): string => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return new Date().toLocaleDateString('fr-FR');
   return date.toLocaleDateString('fr-FR');
+};
+
+const sanitizePdfText = (value: string): string => {
+  const raw = String(value ?? '');
+  // Keep PDF generation stable with StandardFonts by removing unsupported glyphs.
+  return raw
+    .normalize('NFKD')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 };
 
 const buildConditions = (actor: BulletinPdfActor): SQL[] => {
@@ -162,6 +215,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         schoolYearName: academicYears.name,
         termId: bulletins.termId,
         termName: schoolTerms.name,
+        termStartDate: schoolTerms.startDate,
+        termEndDate: schoolTerms.endDate,
         average: bulletins.average,
         totalPoints: bulletins.totalPoints,
         totalCoefficients: bulletins.totalCoefficients,
@@ -195,6 +250,51 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .where(eq(bulletinLines.bulletinId, bulletinId))
       .orderBy(bulletinLines.id);
 
+    let resolvedLines = lines.map((line) => ({
+      id: line.id,
+      bulletinId: line.bulletinId,
+      subjectId: line.subjectId,
+      subjectName: line.subjectName,
+      coefficient: line.coefficient,
+      average: parseNumber(line.average),
+      teacherComment: line.teacherComment,
+      rank: line.rank,
+    }));
+
+    if (resolvedLines.length === 0) {
+      const termScopeCondition: SQL = (header.termStartDate && header.termEndDate)
+        ? sql`(
+            ${evaluations.termId} = ${header.termId}
+            or (
+              ${evaluations.termId} is null
+              and ${evaluations.date} >= ${header.termStartDate}
+              and ${evaluations.date} <= ${header.termEndDate}
+            )
+          )`
+        : sql`${evaluations.termId} = ${header.termId}`;
+
+      const gradeRows = await db
+        .select({
+          subject: evaluations.subject,
+          coefficient: evaluations.coefficient,
+          maxScore: evaluations.maxScore,
+          score: grades.score,
+        })
+        .from(grades)
+        .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
+        .where(and(
+          eq(grades.studentId, header.studentId),
+          eq(evaluations.classId, header.classId),
+          eq(evaluations.countInBulletin, true),
+          termScopeCondition,
+        ));
+
+      resolvedLines = buildFallbackLinesFromGrades(gradeRows).map((line) => ({
+        ...line,
+        bulletinId: bulletinId,
+      }));
+    }
+
     return {
       id: header.id,
       studentId: header.studentId,
@@ -213,16 +313,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       mention: header.mention,
       appreciation: header.appreciation,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
-      lines: lines.map((line) => ({
-        id: line.id,
-        bulletinId: line.bulletinId,
-        subjectId: line.subjectId,
-        subjectName: line.subjectName,
-        coefficient: line.coefficient,
-        average: parseNumber(line.average),
-        teacherComment: line.teacherComment,
-        rank: line.rank,
-      })),
+      lines: resolvedLines,
     };
   },
 });
@@ -236,7 +327,8 @@ const drawText = (
   color: any,
   font: any,
 ) => {
-  page.drawText(text, {
+  const safeText = sanitizePdfText(text);
+  page.drawText(safeText, {
     x,
     y,
     size,
@@ -401,7 +493,10 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
       res.status(200).send(Buffer.from(pdfBytes));
     } catch (err) {
       console.error('Failed to generate bulletin PDF:', err);
-      res.status(500).json({ error: 'Failed to generate bulletin PDF' });
+      const message = err instanceof Error && err.message
+        ? `Failed to generate bulletin PDF: ${err.message}`
+        : 'Failed to generate bulletin PDF';
+      res.status(500).json({ error: message });
     }
   });
 };

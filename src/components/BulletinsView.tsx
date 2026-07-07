@@ -7,6 +7,7 @@ import type {
   BulletinTermOption,
   Class,
   Evaluation,
+  Grade,
   Student,
   UserRole,
 } from '../types.ts';
@@ -24,6 +25,7 @@ interface BulletinsViewProps {
   classesList: Class[];
   studentsList: Student[];
   evaluationsList: Evaluation[];
+  gradesList: Grade[];
   teacherClassIds?: number[];
 }
 
@@ -53,6 +55,7 @@ export default function BulletinsView({
   classesList,
   studentsList,
   evaluationsList,
+  gradesList,
   teacherClassIds = [],
 }: BulletinsViewProps) {
   const canGenerate = currentRole === 'school_admin' || currentRole === 'super_admin';
@@ -84,14 +87,19 @@ export default function BulletinsView({
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
 
-  const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string }>>([]);
+  const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string; startDate?: string | null; endDate?: string | null }>>([]);
 
   useEffect(() => {
     (async () => {
       try {
         const list = await apiFetch('/api/school-terms');
         if (Array.isArray(list)) {
-          setTermsFromApi(list.map((t: any) => ({ id: t.id, name: t.name })));
+          setTermsFromApi(list.map((t: any) => ({
+            id: t.id,
+            name: t.name,
+            startDate: t.startDate ?? null,
+            endDate: t.endDate ?? null,
+          })));
         }
       } catch (e) {
         // ignore
@@ -161,6 +169,43 @@ export default function BulletinsView({
   const detailHook = useBulletinDetail();
   const generateHook = useGenerateBulletin();
   const pdfHook = useDownloadBulletinPDF();
+
+  const liveNotesForDetail = useMemo(() => {
+    const detail = detailHook.detail;
+    if (!detail) return [] as Array<{ id: string; subject: string; title: string; score: string; maxScore: number | null; date: string | null }>;
+
+    const selectedTerm = termsFromApi.find((t) => t.id === detail.termId);
+    const startDate = selectedTerm?.startDate ?? null;
+    const endDate = selectedTerm?.endDate ?? null;
+
+    const notes = evaluationsList
+      .filter((ev) => {
+        if (ev.classId !== detail.classId) return false;
+
+        if (ev.termId != null) return ev.termId === detail.termId;
+
+        if (!startDate || !endDate || !ev.date) return false;
+        const evalDate = String(ev.date).slice(0, 10);
+        return evalDate >= startDate && evalDate <= endDate;
+      })
+      .map((ev) => {
+        const grade = gradesList.find((g) => g.evaluationId === ev.id && g.studentId === detail.studentId);
+        if (!grade) return null;
+
+        return {
+          id: `${ev.id}-${detail.studentId}`,
+          subject: ev.subject,
+          title: ev.title,
+          score: String(grade.score ?? '-'),
+          maxScore: ev.maxScore ?? null,
+          date: ev.date ?? null,
+        };
+      })
+      .filter((row): row is { id: string; subject: string; title: string; score: string; maxScore: number | null; date: string | null } => !!row)
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+
+    return notes;
+  }, [detailHook.detail, evaluationsList, gradesList, termsFromApi]);
 
   useEffect(() => {
     if (listHook.error && isParent) {
@@ -338,6 +383,7 @@ export default function BulletinsView({
           loading={detailHook.loading}
           error={detailHook.error || pdfHook.error}
           selectedId={selectedId}
+          liveNotes={liveNotesForDetail}
           pdfLoading={pdfHook.loading}
           onDownloadPdf={handleDownloadPdf}
         />
