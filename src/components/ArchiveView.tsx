@@ -4,6 +4,7 @@ import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
 import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationArchived as isEvaluationArchivedUtil, parseDateValue } from '../lib/evaluationUtils';
+import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 
 interface ArchiveViewProps {
   userRole: UserRole;
@@ -192,6 +193,8 @@ export default function ArchiveView({
                   <div className="grid gap-3 sm:grid-cols-2">
                     {gradesForEval.map((grade) => {
                       const student = studentsList.find((st) => st.id === grade.studentId);
+                      const gradeBand = getGradeBand(grade.score, ev.maxScore ?? 20);
+                      const gradeClass = getGradeBadgeClass(gradeBand);
                       return (
                         <div key={grade.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -203,7 +206,12 @@ export default function ArchiveView({
                             )}
                           </div>
                           <div className="mt-2 text-slate-600 text-xs">
-                            <div>Note : <span className="font-bold text-slate-900">{grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></div>
+                            <div>
+                              Note :
+                              <span className={`ml-1 font-bold px-2 py-0.5 rounded-lg ${gradeClass}`}>
+                                {grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}
+                              </span>
+                            </div>
                             <div>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></div>
                           </div>
                         </div>

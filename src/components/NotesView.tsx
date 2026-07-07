@@ -25,6 +25,7 @@ import {
   parseDateValue,
 } from '../lib/evaluationUtils';
 import { validateGradeScore } from '../lib/gradeValidation';
+import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 
 interface NotesViewProps {
   userRole: UserRole;
@@ -873,11 +874,18 @@ export default function NotesView({
                       <div className="space-y-2 text-[13px] text-slate-700">
                         {gradesForEval.map((grade) => {
                           const student = studentsList.find((st) => st.id === grade.studentId);
+                          const archivedGradeBand = getGradeBand(grade.score, ev.maxScore ?? 20);
+                          const archivedGradeClass = getGradeBadgeClass(archivedGradeBand);
                           return (
                             <div key={grade.id} className="rounded-xl border border-slate-200 bg-white p-3">
                               <div className="font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
                               <div className="flex flex-col gap-1 mt-1 text-slate-600">
-                                <span>Note : <span className="font-bold text-slate-900">{grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}</span></span>
+                                <span>
+                                  Note :
+                                  <span className={`ml-1 font-bold px-2 py-0.5 rounded-lg ${archivedGradeClass}`}>
+                                    {grade.score}{ev.maxScore != null ? `/${ev.maxScore}` : '/20'}
+                                  </span>
+                                </span>
                                 <span>Remarque : <span className="text-slate-700">{grade.remarks || '—'}</span></span>
                               </div>
                             </div>
@@ -952,6 +960,8 @@ export default function NotesView({
                       const isLockedBySchoolAdmin = userRole === 'school_admin' ? (existingGrade ? isGradeModified(existingGrade) : false) : false;
                       const isEligible = eligibleStudentsForSelectedEval.some((s) => s.id === st.id);
                       const isIneligibleWithGrade = !isEligible && existingGrade;
+                      const existingGradeBand = existingGrade ? getGradeBand(existingGrade.score, currentEvaluation?.maxScore ?? 20) : 'unknown';
+                      const existingGradeClass = getGradeBadgeClass(existingGradeBand);
 
                     return (
                       <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
@@ -969,7 +979,9 @@ export default function NotesView({
                               {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
                                 existingGrade && userRole === 'teacher' ? (
                                   <div className="text-xs space-y-1">
-                                    <div className="font-mono font-bold text-indigo-700">{existingGrade.score} {scoreScaleSuffix}</div>
+                                    <div className={`inline-block font-mono font-bold px-2 py-1 rounded-lg ${existingGradeClass}`}>
+                                      {existingGrade.score} {scoreScaleSuffix}
+                                    </div>
                                     <div className="text-slate-400 text-[10px]">Note déjà enregistrée</div>
                                   </div>
                                 ) : isEligible ? (

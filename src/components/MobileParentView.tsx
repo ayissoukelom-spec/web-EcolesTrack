@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Student, Absence, Grade, SystemNotification, UserRole, Parent } from '../types.ts';
 import { getSimulatedUser } from '../lib/api.ts';
 import { getPublicationLabel } from '../lib/dateFormatting';
+import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import {
   Smartphone,
   GraduationCap,
@@ -476,6 +477,8 @@ export default function MobileParentView({
                         <div className="space-y-2">
                           {childGrades.map((g) => {
                             const publishedAtLabel = getPublicationLabel(g.createdAt);
+                            const gradeBand = getGradeBand(g.score, g.maxScore ?? 20);
+                            const gradeBadgeClass = getGradeBadgeClass(gradeBand);
 
                             return (
                               <div key={g.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg flex justify-between items-center text-[10px] gap-2">
@@ -487,7 +490,7 @@ export default function MobileParentView({
                                   )}
                                 </div>
                                 <div className="text-right shrink-0">
-                                  <span className="font-mono font-black text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded">
+                                  <span className={`font-mono font-black px-2 py-1 rounded ${gradeBadgeClass}`}>
                                     {g.score}/{g.maxScore ?? 20}
                                   </span>
                                 </div>

@@ -58,9 +58,15 @@ export default function DashboardView({
   stats,
   recentAbsences,
   recentGrades,
+  import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
   userRole,
   chartData = [],
 }: DashboardViewProps) {
+                  (() => {
+                    const maxScore = grade.maxScore != null ? Number(grade.maxScore) : 20;
+                    const gradeBand = getGradeBand(grade.score, maxScore);
+                    const gradeBadgeClass = getGradeBadgeClass(gradeBand);
+                    return (
   console.log('Statistiques reçues par DashboardView :', stats);
   console.log('Graphique reçu :', chartData);
   console.log('TYPE chartData:', typeof chartData);
@@ -69,11 +75,13 @@ export default function DashboardView({
 
   const attendanceData = normalizeDashboardChartData(chartData);
 
-  // Pie chart data for justified vs unjustified absences
+                      <span className={`text-sm font-bold px-3 py-1.5 rounded-xl inline-block font-mono ${gradeBadgeClass}`}>
   const justifiedCount = recentAbsences.filter((a) => a.isJustified).length;
   const unjustifiedCount = recentAbsences.filter((a) => !a.isJustified).length;
   const totalAbsenceCount = justifiedCount + unjustifiedCount;
   const pieData = [
+                    );
+                  })()
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
   ];

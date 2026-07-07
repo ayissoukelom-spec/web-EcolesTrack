@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Award, BarChart3, BookOpen, UserRound } from 'lucide-react';
 import { Evaluation, Grade, Parent, Student, UserRole } from '../types.ts';
 import { getSimulatedUser } from '../lib/api.ts';
+import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor.ts';
 
 interface ParentNotesViewProps {
   studentsList: Student[];
@@ -382,12 +383,18 @@ export default function ParentNotesView({
                       const scoreValue = toScoreValue(grade.score);
                       const mention = scoreValue == null ? '-' : toMention(scoreValue, maxScore);
                       const publishedDate = formatDate(getBestGradeDateValue(grade, evaluation));
+                      const gradeBand = getGradeBand(grade.score, maxScore);
+                      const gradeBadgeClass = getGradeBadgeClass(gradeBand);
 
                       return (
                         <tr key={grade.id} className="border-t border-slate-100">
                           <td className="px-4 py-3 text-slate-700">{grade.subject || evaluation?.subject || '-'}</td>
                           <td className="px-4 py-3 text-slate-700">{grade.evaluationTitle || evaluation?.title || '-'}</td>
-                          <td className="px-4 py-3 font-semibold text-slate-900">{grade.score} / {maxScore}</td>
+                          <td className="px-4 py-3">
+                            <span className={`font-semibold px-2 py-1 rounded-lg ${gradeBadgeClass}`}>
+                              {grade.score} / {maxScore}
+                            </span>
+                          </td>
                           <td className="px-4 py-3 text-slate-600">{publishedDate}</td>
                           <td className="px-4 py-3 text-slate-700">{mention}</td>
                         </tr>

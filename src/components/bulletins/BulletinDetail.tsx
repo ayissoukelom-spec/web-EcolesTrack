@@ -1,6 +1,7 @@
 import React from 'react';
 import { Download, Eye } from 'lucide-react';
 import type { BulletinDetail as BulletinDetailType } from '../../types.ts';
+import { getGradeBadgeClass, getGradeBand } from '../../lib/gradeColor';
 
 interface BulletinDetailProps {
   detail: BulletinDetailType | null;
@@ -110,12 +111,22 @@ export default function BulletinDetail({
                   </tr>
                 )}
                 {liveNotes.map((note) => (
-                  <tr key={note.id} className="border-t border-slate-100">
-                    <td className="px-3 py-2">{note.subject}</td>
-                    <td className="px-3 py-2">{note.title}</td>
-                    <td className="px-3 py-2">{note.date || '-'}</td>
-                    <td className="px-3 py-2">{note.maxScore == null ? note.score : `${note.score} / ${note.maxScore}`}</td>
-                  </tr>
+                  (() => {
+                    const band = getGradeBand(note.score, note.maxScore ?? 20);
+                    const gradeClass = getGradeBadgeClass(band);
+                    return (
+                      <tr key={note.id} className="border-t border-slate-100">
+                        <td className="px-3 py-2">{note.subject}</td>
+                        <td className="px-3 py-2">{note.title}</td>
+                        <td className="px-3 py-2">{note.date || '-'}</td>
+                        <td className="px-3 py-2">
+                          <span className={`font-semibold px-2 py-0.5 rounded-lg ${gradeClass}`}>
+                            {note.maxScore == null ? note.score : `${note.score} / ${note.maxScore}`}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })()
                 ))}
               </tbody>
             </table>
