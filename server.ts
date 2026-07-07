@@ -2454,9 +2454,16 @@ async function startServer() {
         const targetSchoolId = actor.schoolId ?? schoolIdParam;
         if (!targetSchoolId) return res.status(403).json({ error: 'School context required' });
         if (academicYearId != null) {
-          rows = await db.select().from(schoolTerms).where(and(eq(schoolTerms.schoolId, targetSchoolId), eq(schoolTerms.academicYearId, academicYearId)));
+          rows = await db.select().from(schoolTerms).where(
+            and(
+              or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, targetSchoolId)),
+              eq(schoolTerms.academicYearId, academicYearId),
+            ),
+          );
         } else {
-          rows = await db.select().from(schoolTerms).where(eq(schoolTerms.schoolId, targetSchoolId));
+          rows = await db.select().from(schoolTerms).where(
+            or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, targetSchoolId)),
+          );
         }
       } else {
         // teacher/parent: show global terms plus school-specific ones
