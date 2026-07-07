@@ -1,21 +1,30 @@
 import React from 'react';
 import { FileText, Search } from 'lucide-react';
-import type { BulletinTermOption, Student } from '../../types.ts';
+import type { BulletinTermOption, Class, School, Student } from '../../types.ts';
 import RequiredLabel from '../RequiredLabel';
 
 interface BulletinActionsProps {
   canGenerate: boolean;
   isParent: boolean;
+  schoolsList: School[];
+  classesList: Class[];
   studentsList: Student[];
   termOptions: BulletinTermOption[];
+  generateSchoolId: string;
+  generateClassId: string;
   generateStudentId: string;
   generateTermId: string;
   lookupIdInput: string;
   isGenerateLoading: boolean;
   generateError: string | null;
   generateSuccess: string | null;
+  canGenerateClassBulk: boolean;
+  generateClassStudentsCount: number;
+  onGenerateSchoolChange: (value: string) => void;
+  onGenerateClassChange: (value: string) => void;
   onGenerateStudentChange: (value: string) => void;
   onGenerateTermChange: (value: string) => void;
+  onGenerateClassSubmit: () => void;
   onLookupIdInputChange: (value: string) => void;
   onGenerateSubmit: (e: React.FormEvent) => void;
   onParentLookupSubmit: (e: React.FormEvent) => void;
@@ -25,16 +34,25 @@ interface BulletinActionsProps {
 export default function BulletinActions({
   canGenerate,
   isParent,
+  schoolsList,
+  classesList,
   studentsList,
   termOptions,
+  generateSchoolId,
+  generateClassId,
   generateStudentId,
   generateTermId,
   lookupIdInput,
   isGenerateLoading,
   generateError,
   generateSuccess,
+  canGenerateClassBulk,
+  generateClassStudentsCount,
+  onGenerateSchoolChange,
+  onGenerateClassChange,
   onGenerateStudentChange,
   onGenerateTermChange,
+  onGenerateClassSubmit,
   onLookupIdInputChange,
   onGenerateSubmit,
   onParentLookupSubmit,
@@ -49,7 +67,39 @@ export default function BulletinActions({
             Generation de bulletin (admin)
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Ecole
+              </label>
+              <select
+                value={generateSchoolId}
+                onChange={(e) => onGenerateSchoolChange(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+              >
+                <option value="">Toutes les ecoles</option>
+                {schoolsList.map((school) => (
+                  <option key={school.id} value={school.id}>{school.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Classe
+              </label>
+              <select
+                value={generateClassId}
+                onChange={(e) => onGenerateClassChange(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+              >
+                <option value="">Toutes les classes</option>
+                {classesList.map((klass) => (
+                  <option key={klass.id} value={klass.id}>{klass.name}</option>
+                ))}
+              </select>
+            </div>
+
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
                 <RequiredLabel label="Élève cible" required />
@@ -90,6 +140,15 @@ export default function BulletinActions({
               className="rounded-xl px-4 py-2 bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-60"
             >
               {isGenerateLoading ? 'Generation...' : 'Generer le bulletin'}
+            </button>
+
+            <button
+              type="button"
+              disabled={isGenerateLoading || !canGenerateClassBulk}
+              onClick={onGenerateClassSubmit}
+              className="rounded-xl px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 font-semibold text-sm hover:bg-emerald-100 disabled:opacity-60"
+            >
+              {isGenerateLoading ? 'Generation...' : `Generer la classe (${generateClassStudentsCount})`}
             </button>
           </div>
 

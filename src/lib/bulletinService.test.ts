@@ -141,4 +141,21 @@ describe('bulletinService', () => {
     expect(missingSnapshot?.countedInAverage).toBe(false);
     expect(missingSnapshot?.excludedReason).toBe('missing-grade');
   });
+
+  it('inclut les évaluations sans termId lorsqu elles sont pré-filtrées pour le trimestre', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: null, subject: 'Math', title: 'DS 1', coefficient: 2, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: null, subject: 'Français', title: 'DS 2', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '10' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '16' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+
+    expect(result.average).toBeCloseTo(12, 5);
+    expect(result.totalCoefficient).toBe(3);
+    expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1, 2]);
+  });
 });

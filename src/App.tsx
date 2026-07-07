@@ -1121,6 +1121,7 @@ export default function App() {
               {activeTab === 'bulletins' && (currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher') && (
                 <BulletinsView
                   currentRole={currentRole}
+                  schoolsList={schoolsList}
                   classesList={classesList}
                   studentsList={studentsList}
                   evaluationsList={activeEvaluations}

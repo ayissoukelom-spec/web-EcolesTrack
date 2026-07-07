@@ -3,7 +3,7 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import { db } from '../db/index.ts';
-import { requireOwnership, verifyToken } from '../middleware/auth.ts';
+import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import {
   academicYears,
@@ -456,6 +456,7 @@ interface RegisterBulletinPdfRouteOptions {
   template?: Partial<BulletinPdfTemplate>;
   verifyMiddleware?: express.RequestHandler;
   detailAccessMiddleware?: express.RequestHandler;
+  batchAccessMiddleware?: express.RequestHandler;
 }
 
 export const registerBulletinPdfRoute = (app: express.Express, options: RegisterBulletinPdfRouteOptions) => {
@@ -466,9 +467,58 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
     template,
     verifyMiddleware = verifyToken as any,
     detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser, { bypassRoles: ['admin', 'teacher'] }) as any,
+    batchAccessMiddleware = requireRole(['admin', 'teacher']) as any,
   } = options;
 
   const buildPdf = pdfGenerator ?? ((data: BulletinPdfData) => createBulletinPdfDocument(data, template));
+
+  app.get('/api/bulletins/pdf/batch', verifyMiddleware, batchAccessMiddleware, async (req: any, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const rawIds = String(req.query.ids || '')
+        .split(',')
+        .map((value: string) => Number(value.trim()))
+        .filter((value: number) => Number.isInteger(value) && value > 0);
+
+      const bulletinIds = Array.from(new Set(rawIds));
+      if (bulletinIds.length === 0) {
+        return res.status(400).json({ error: 'At least one valid bulletin id is required' });
+      }
+
+      const mergedPdf = await PDFDocument.create();
+      let mergedCount = 0;
+
+      for (const bulletinId of bulletinIds) {
+        const bulletin = await dataProvider.getById(actor, bulletinId);
+        if (!bulletin) continue;
+
+        const pdfBytes = await buildPdf(bulletin);
+        const sourcePdf = await PDFDocument.load(pdfBytes);
+        const copiedPages = await mergedPdf.copyPages(sourcePdf, sourcePdf.getPageIndices());
+        copiedPages.forEach((page) => mergedPdf.addPage(page));
+        mergedCount += 1;
+      }
+
+      if (mergedCount === 0) {
+        return res.status(404).json({ error: 'No accessible bulletins found for provided ids' });
+      }
+
+      const mergedBytes = await mergedPdf.save({ useObjectStreams: false });
+      const fileName = `bulletins-batch-${Date.now()}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+      return res.status(200).send(Buffer.from(mergedBytes));
+    } catch (err) {
+      console.error('Failed to generate batch bulletin PDF:', err);
+      const message = err instanceof Error && err.message
+        ? `Failed to generate batch bulletin PDF: ${err.message}`
+        : 'Failed to generate batch bulletin PDF';
+      return res.status(500).json({ error: message });
+    }
+  });
 
   app.get('/api/bulletins/:id/pdf', verifyMiddleware, detailAccessMiddleware, async (req: any, res) => {
     try {

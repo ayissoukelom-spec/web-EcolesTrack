@@ -94,9 +94,12 @@ const resolveCoefficient = (evaluation: BulletinEvaluationLike): number => {
 };
 
 export const calculateStudentTermAverage = ({ term, student, evaluations, grades }: BulletinAverageInput): BulletinTermAverageResult => {
-  const selectedEvaluations = selectBulletinEvaluationsForTerm(term.id, evaluations).filter(
-    (evaluation) => evaluation.classId === student.classId,
-  );
+  const selectedEvaluations = evaluations.filter((evaluation) => {
+    if (evaluation.classId !== student.classId) return false;
+    if (evaluation.countInBulletin === false) return false;
+    // Term-less evaluations are allowed here because callers may pre-scope by term dates.
+    return evaluation.termId === term.id || evaluation.termId == null;
+  });
 
   const snapshots: BulletinEvaluationSnapshot[] = [];
   let totalWeightedScore = 0;

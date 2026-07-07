@@ -13,13 +13,13 @@ export function useBulletinsList({ enabled, filters }: UseBulletinsListOptions) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (overrideFilters?: BulletinListFilters) => {
     if (!enabled) return;
 
     setLoading(true);
     setError(null);
     try {
-      const payload = await fetchBulletinsList(filters);
+      const payload = await fetchBulletinsList(overrideFilters ?? filters);
       setItems(Array.isArray(payload?.items) ? payload.items : []);
       setTotal(Number(payload?.total || 0));
     } catch (err: any) {

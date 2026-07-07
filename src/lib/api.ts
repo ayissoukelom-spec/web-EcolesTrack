@@ -329,6 +329,14 @@ export async function downloadBulletinPdf(id: number): Promise<Blob> {
   return apiFetchBlob(`/api/bulletins/${id}/pdf`);
 }
 
+export async function downloadBulletinsPdfBatch(ids: number[]): Promise<Blob> {
+  const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniqueIds.length === 0) throw new Error('Aucun bulletin sélectionné');
+  const params = new URLSearchParams();
+  params.set('ids', uniqueIds.join(','));
+  return apiFetchBlob(`/api/bulletins/pdf/batch?${params.toString()}`);
+}
+
 // Expose a small helper so UI components can read the simulated school id
 // (used in the sandbox to default selects for school_admin/teacher/parent)
 export function getSimulatedSchoolId(): number | null {

@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type {
-  BulletinDetail,
   BulletinListFilters,
   BulletinListItem,
   BulletinTermOption,
   Class,
   Evaluation,
   Grade,
+  School,
   Student,
   UserRole,
 } from '../types.ts';
@@ -22,6 +22,7 @@ import BulletinActions from './bulletins/BulletinActions.tsx';
 
 interface BulletinsViewProps {
   currentRole: UserRole;
+  schoolsList: School[];
   classesList: Class[];
   studentsList: Student[];
   evaluationsList: Evaluation[];
@@ -52,6 +53,7 @@ const toParentListItem = (detail: BulletinDetail): BulletinListItem => ({
 
 export default function BulletinsView({
   currentRole,
+  schoolsList,
   classesList,
   studentsList,
   evaluationsList,
@@ -68,10 +70,15 @@ export default function BulletinsView({
   const pageSize = 20;
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([]);
+  const [generateSchoolId, setGenerateSchoolId] = useState<string>('');
+  const [generateClassId, setGenerateClassId] = useState<string>('');
   const [generateStudentId, setGenerateStudentId] = useState<string>('');
   const [generateTermId, setGenerateTermId] = useState<string>('');
   const [lookupIdInput, setLookupIdInput] = useState('');
   const [parentKnownItems, setParentKnownItems] = useState<BulletinListItem[]>([]);
+  const [lastGeneratedClassSummary, setLastGeneratedClassSummary] = useState<Array<{ id: number; studentName: string; className: string; termName: string }>>([]);
+  const [lastGeneratedClassIds, setLastGeneratedClassIds] = useState<number[]>([]);
 
   const visibleClasses = useMemo(() => {
     if (!isTeacher) return classesList;
@@ -86,6 +93,32 @@ export default function BulletinsView({
     if (!isTeacher) return scopedByClass;
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
+
+  const generateSchools = useMemo(() => {
+    const classSchoolIds = new Set(
+      classesList
+        .map((klass) => klass.schoolId)
+        .filter((schoolId): schoolId is number => schoolId != null),
+    );
+    return schoolsList.filter((school) => classSchoolIds.has(school.id));
+  }, [classesList, schoolsList]);
+
+  const generateClasses = useMemo(() => {
+    const schoolId = generateSchoolId ? Number(generateSchoolId) : null;
+    if (schoolId == null) return classesList;
+    return classesList.filter((klass) => klass.schoolId === schoolId);
+  }, [classesList, generateSchoolId]);
+
+  const generateStudents = useMemo(() => {
+    const classId = generateClassId ? Number(generateClassId) : null;
+    const schoolId = generateSchoolId ? Number(generateSchoolId) : null;
+
+    return studentsList.filter((student) => {
+      if (classId != null && student.classId !== classId) return false;
+      if (schoolId != null && student.schoolId !== schoolId) return false;
+      return true;
+    });
+  }, [generateClassId, generateSchoolId, studentsList]);
 
   const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string; startDate?: string | null; endDate?: string | null }>>([]);
 
@@ -140,10 +173,22 @@ export default function BulletinsView({
   }, [isParent, studentsList]);
 
   useEffect(() => {
-    if (canGenerate && studentsList.length > 0 && !generateStudentId) {
-      setGenerateStudentId(String(studentsList[0].id));
+    if (!canGenerate) return;
+
+    if (generateClassId) {
+      const classExists = generateClasses.some((klass) => String(klass.id) === generateClassId);
+      if (!classExists) {
+        setGenerateClassId('');
+      }
     }
-  }, [canGenerate, generateStudentId, studentsList]);
+
+    if (generateStudentId) {
+      const studentExists = generateStudents.some((student) => String(student.id) === generateStudentId);
+      if (!studentExists) {
+        setGenerateStudentId('');
+      }
+    }
+  }, [canGenerate, generateClassId, generateClasses, generateStudentId, generateStudents]);
 
   useEffect(() => {
     if (canGenerate && termOptions.length > 0 && !generateTermId) {
@@ -285,10 +330,80 @@ export default function BulletinsView({
     }
 
     const created = await generateHook.run(studentId, termId);
+    setLastGeneratedClassSummary([]);
+    setLastGeneratedClassIds([]);
     await listHook.refresh();
     if (created?.id) {
       await loadDetailAndMaybeCache(Number(created.id));
     }
+  };
+
+  const handleGenerateClassSubmit = async () => {
+    const classId = Number(generateClassId);
+    const termId = Number(generateTermId);
+
+    if (!Number.isInteger(classId) || classId <= 0) {
+      generateHook.setError('Selectionnez une classe valide pour la generation en lot.');
+      return;
+    }
+
+    if (!Number.isInteger(termId) || termId <= 0) {
+      generateHook.setError('Selectionnez un trimestre valide pour la generation en lot.');
+      return;
+    }
+
+    const classStudentIds = generateStudents
+      .filter((student) => student.classId === classId)
+      .map((student) => student.id);
+
+    if (classStudentIds.length === 0) {
+      generateHook.setError('Aucun eleve trouve dans cette classe.');
+      return;
+    }
+
+    const createdList = await generateHook.runMany(classStudentIds, termId);
+
+    setFilters((prev) => ({
+      ...prev,
+      classId,
+      termId,
+      studentId: undefined,
+    }));
+    setPage(1);
+    setSelectedBatchIds([]);
+
+    const createdIds = createdList
+      .map((entry) => entry.id)
+      .filter((id): id is number => Number.isInteger(id) && Number(id) > 0);
+
+    const className = classesList.find((klass) => klass.id === classId)?.name || `Classe ${classId}`;
+    const termName = termOptions.find((term) => term.id === termId)?.name || `Trimestre ${termId}`;
+    const summary = createdList
+      .map((entry) => {
+        const id = Number(entry.id);
+        if (!Number.isInteger(id) || id <= 0) return null;
+        const student = studentsList.find((s) => s.id === entry.studentId);
+        return {
+          id,
+          studentName: student ? `${student.firstName} ${student.lastName}`.trim() : `Eleve ${entry.studentId}`,
+          className,
+          termName,
+        };
+      })
+      .filter((item): item is { id: number; studentName: string; className: string; termName: string } => !!item);
+
+    setLastGeneratedClassSummary(summary);
+    setLastGeneratedClassIds(summary.map((item) => item.id));
+    setSelectedBatchIds(summary.map((item) => item.id));
+    setSelectedId(null);
+
+    await listHook.refresh({
+      page: 1,
+      pageSize,
+      classId,
+      termId,
+      studentId: undefined,
+    });
   };
 
   const handleParentLookupSubmit = async (e: React.FormEvent) => {
@@ -306,6 +421,11 @@ export default function BulletinsView({
     await pdfHook.run(selectedId);
   };
 
+  const handleDownloadBatch = async () => {
+    if (selectedBatchIds.length === 0) return;
+    await pdfHook.runMany(selectedBatchIds);
+  };
+
   const renderedItems = canList ? listHook.items : parentKnownItems;
   const total = canList ? listHook.total : parentKnownItems.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -317,30 +437,88 @@ export default function BulletinsView({
           <h2 className="text-2xl font-bold text-slate-800">Bulletins scolaires</h2>
           <p className="text-sm text-slate-500">Liste, detail et telechargement PDF via APIs backend existantes.</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-xl">
-          <ShieldCheck className="h-4 w-4" />
-          <span>Securise par role et ownership</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDownloadBatch}
+            disabled={pdfHook.loading || selectedBatchIds.length === 0}
+            className="text-xs px-3 py-2 rounded-xl border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {pdfHook.loading ? 'Telechargement...' : `Telecharger la selection (${selectedBatchIds.length})`}
+          </button>
+          <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-xl">
+            <ShieldCheck className="h-4 w-4" />
+            <span>Securise par role et ownership</span>
+          </div>
         </div>
       </div>
 
       <BulletinActions
         canGenerate={canGenerate}
         isParent={isParent}
-        studentsList={studentsList}
+        schoolsList={generateSchools}
+        classesList={generateClasses}
+        studentsList={generateStudents}
         termOptions={termOptions}
+        generateSchoolId={generateSchoolId}
+        generateClassId={generateClassId}
         generateStudentId={generateStudentId}
         generateTermId={generateTermId}
         lookupIdInput={lookupIdInput}
         isGenerateLoading={generateHook.loading}
         generateError={generateHook.error}
         generateSuccess={generateHook.success}
+        canGenerateClassBulk={Boolean(generateClassId) && Boolean(generateTermId) && generateStudents.some((student) => String(student.classId) === generateClassId)}
+        generateClassStudentsCount={generateStudents.filter((student) => String(student.classId) === generateClassId).length}
+        onGenerateSchoolChange={(value) => {
+          setGenerateSchoolId(value);
+          setGenerateClassId('');
+          setGenerateStudentId('');
+        }}
+        onGenerateClassChange={(value) => {
+          setGenerateClassId(value);
+          setGenerateStudentId('');
+        }}
         onGenerateStudentChange={setGenerateStudentId}
         onGenerateTermChange={setGenerateTermId}
+        onGenerateClassSubmit={handleGenerateClassSubmit}
         onLookupIdInputChange={setLookupIdInput}
         onGenerateSubmit={handleGenerateSubmit}
         onParentLookupSubmit={handleParentLookupSubmit}
         onReloadParentKnown={loadParentCached}
       />
+
+      {lastGeneratedClassSummary.length > 0 && (
+        <section className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-semibold text-emerald-800">
+              Generation de classe terminee: {lastGeneratedClassSummary.length} bulletin(s) cree(s).
+            </p>
+            <button
+              type="button"
+              onClick={() => pdfHook.runMany(lastGeneratedClassIds)}
+              disabled={pdfHook.loading || lastGeneratedClassIds.length === 0}
+              className="text-xs px-3 py-2 rounded-xl border border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {pdfHook.loading ? 'Telechargement...' : `Telecharger les ${lastGeneratedClassIds.length} bulletins`}
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+            {lastGeneratedClassSummary.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => loadDetailAndMaybeCache(item.id)}
+                className="text-left rounded-xl border border-emerald-200 bg-white/90 hover:bg-white px-3 py-2"
+              >
+                <p className="text-sm font-semibold text-slate-800">{item.studentName}</p>
+                <p className="text-xs text-slate-600">{item.className} • {item.termName}</p>
+                <p className="text-[11px] text-emerald-700">Bulletin ID {item.id}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <BulletinsList
@@ -356,25 +534,53 @@ export default function BulletinsView({
           visibleStudents={visibleStudents}
           termOptions={termOptions}
           filters={filters}
-          onRefresh={listHook.refresh}
+          onRefresh={() => {
+            setLastGeneratedClassSummary([]);
+            setLastGeneratedClassIds([]);
+            listHook.refresh();
+          }}
           onSelect={loadDetailAndMaybeCache}
           onPrevPage={() => setPage((prev) => Math.max(1, prev - 1))}
           onNextPage={() => setPage((prev) => Math.min(totalPages, prev + 1))}
           onResetFilters={() => {
+            setLastGeneratedClassSummary([]);
+            setLastGeneratedClassIds([]);
             setFilters({});
             setPage(1);
           }}
           onFilterClassChange={(value) => {
+            setLastGeneratedClassSummary([]);
+            setLastGeneratedClassIds([]);
             setFilters((prev) => ({ ...prev, classId: value ? Number(value) : undefined, studentId: undefined }));
             setPage(1);
           }}
           onFilterStudentChange={(value) => {
+            setLastGeneratedClassSummary([]);
+            setLastGeneratedClassIds([]);
             setFilters((prev) => ({ ...prev, studentId: value ? Number(value) : undefined }));
             setPage(1);
           }}
           onFilterTermChange={(value) => {
+            setLastGeneratedClassSummary([]);
+            setLastGeneratedClassIds([]);
             setFilters((prev) => ({ ...prev, termId: value ? Number(value) : undefined }));
             setPage(1);
+          }}
+          selectedForBatchIds={selectedBatchIds}
+          onToggleBatchSelection={(id, checked) => {
+            setSelectedBatchIds((prev) => {
+              if (checked) return prev.includes(id) ? prev : [...prev, id];
+              return prev.filter((value) => value !== id);
+            });
+          }}
+          onToggleSelectAllVisible={(checked) => {
+            setSelectedBatchIds((prev) => {
+              const visibleIds = renderedItems.map((item) => item.id);
+              if (checked) {
+                return Array.from(new Set([...prev, ...visibleIds]));
+              }
+              return prev.filter((id) => !visibleIds.includes(id));
+            });
           }}
         />
 
