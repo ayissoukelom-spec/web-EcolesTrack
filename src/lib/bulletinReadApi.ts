@@ -1,18 +1,22 @@
 import type express from 'express';
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
+import { getTeacherClassIdSet } from './teacherScope.ts';
 import {
   academicYears,
   bulletinLines,
   bulletins,
+  classTeachers,
   classes,
   schoolTerms,
   students,
+  teachers,
 } from '../db/schema.ts';
 
 export interface BulletinReadActor {
+  id?: number | null;
   role: string;
   schoolId?: number | null;
 }
@@ -102,10 +106,40 @@ const toIso = (value: Date | null): string | null => {
   return value.toISOString();
 };
 
-const buildConditions = (actor: BulletinReadActor, filters?: Partial<BulletinListFilters>): SQL[] => {
+const buildConditions = async (actor: BulletinReadActor, filters?: Partial<BulletinListFilters>): Promise<SQL[]> => {
   const conditions: SQL[] = [];
 
-  if (actor.role !== 'super_admin') {
+  if (actor.role === 'teacher') {
+    if (actor.id == null || actor.schoolId == null) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    const teacherRows = await db
+      .select({ id: teachers.id })
+      .from(teachers)
+      .where(eq(teachers.userId, actor.id));
+
+    if (teacherRows.length === 0) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    const assignmentRows = await db
+      .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+      .from(classTeachers)
+      .innerJoin(classes, eq(classTeachers.classId, classes.id))
+      .where(eq(classTeachers.teacherId, teacherRows[0].id));
+
+    const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+    if (teacherClassIds.length === 0) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    conditions.push(eq(students.schoolId, actor.schoolId));
+    conditions.push(inArray(bulletins.classId, teacherClassIds));
+  } else if (actor.role !== 'super_admin') {
     if (actor.schoolId == null) {
       conditions.push(sql`1 = 0`);
       return conditions;
@@ -126,7 +160,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
     const page = Math.max(1, filters.page || 1);
     const pageSize = Math.min(100, Math.max(1, filters.pageSize || 20));
     const offset = (page - 1) * pageSize;
-    const conditions = buildConditions(actor, filters);
+    const conditions = await buildConditions(actor, filters);
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     let totalQuery = db
@@ -193,7 +227,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
   },
 
   async getById(actor, id) {
-    const conditions = buildConditions(actor);
+    const conditions = await buildConditions(actor);
     conditions.push(eq(bulletins.id, id));
     const whereClause = and(...conditions);
 

@@ -94,6 +94,8 @@ export default function BulletinsView({
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
   }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
 
+  const visibleStudentIds = useMemo(() => new Set(visibleStudents.map((student) => student.id)), [visibleStudents]);
+
   const generateSchools = useMemo(() => {
     const classSchoolIds = new Set(
       classesList
@@ -426,7 +428,11 @@ export default function BulletinsView({
     await pdfHook.runMany(selectedBatchIds);
   };
 
-  const renderedItems = canList ? listHook.items : parentKnownItems;
+  const renderedItems = canList
+    ? (isTeacher
+      ? listHook.items.filter((item) => teacherClassIds.includes(item.classId) && visibleStudentIds.has(item.studentId))
+      : listHook.items)
+    : parentKnownItems;
   const total = canList ? listHook.total : parentKnownItems.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
