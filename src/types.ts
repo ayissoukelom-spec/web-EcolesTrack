@@ -140,6 +140,7 @@ export interface Grade {
   id: number;
   evaluationId: number;
   evaluationTitle?: string;
+  evaluationDate?: string;
   subject?: string;
   studentId: number;
   studentName?: string;

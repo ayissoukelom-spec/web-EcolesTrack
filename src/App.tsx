@@ -34,6 +34,7 @@ import NotesView from './components/NotesView.tsx';
 import NotificationView from './components/NotificationView.tsx';
 import AuditView from './components/AuditView.tsx';
 import MobileParentView from './components/MobileParentView.tsx';
+import ParentNotesView from './components/ParentNotesView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
 import BulletinsView from './components/BulletinsView.tsx';
 
@@ -879,6 +880,21 @@ export default function App() {
                 <span>Absences</span>
               </button>
 
+              {currentRole === 'parent' && (
+                <button
+                  onClick={() => setActiveTab('notes')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'notes'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-parent-grades"
+                >
+                  <Award className="h-4.5 w-4.5" />
+                  <span>Notes</span>
+                </button>
+              )}
+
               {/* Tab 4: Notes et bulletins (hidden for parents) */}
               {currentRole !== 'parent' && (
                 <>
@@ -1083,24 +1099,34 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'notes' && currentRole !== 'parent' && (
-                <NotesView
-                  userRole={currentRole}
-                  evaluationsList={activeEvaluations}
-                  gradesList={gradesList}
-                  studentsList={studentsList}
-                  classesList={classesList}
-                  schoolsList={schoolsList}
-                  schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
-                  teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
-                  teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
-                  approvedSubjectsList={approvedSubjectsList}
-                  teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
-                  currentSchoolId={currentSchoolId}
-                  onAddEvaluation={handleAddEvaluation}
-                  onAddGrade={handleAddGrade}
-                />
+              {activeTab === 'notes' && (
+                currentRole === 'parent' ? (
+                  <ParentNotesView
+                    currentRole={currentRole}
+                    studentsList={studentsList}
+                    parentsList={parentsList}
+                    gradesList={gradesList}
+                    evaluationsList={activeEvaluations}
+                  />
+                ) : (
+                  <NotesView
+                    userRole={currentRole}
+                    evaluationsList={activeEvaluations}
+                    gradesList={gradesList}
+                    studentsList={studentsList}
+                    classesList={classesList}
+                    schoolsList={schoolsList}
+                    schoolFilterId={superAdminSchoolFilterId}
+                    onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                    teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
+                    teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
+                    approvedSubjectsList={approvedSubjectsList}
+                    teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
+                    currentSchoolId={currentSchoolId}
+                    onAddEvaluation={handleAddEvaluation}
+                    onAddGrade={handleAddGrade}
+                  />
+                )
               )}
 
               {activeTab === 'archive' && currentRole !== 'parent' && (

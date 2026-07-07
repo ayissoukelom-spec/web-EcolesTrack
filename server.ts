@@ -144,6 +144,38 @@ async function resolveActor(req: AuthRequest) {
   return null;
 }
 
+async function getParentChildStudentIds(userId: number | null | undefined) {
+  if (!userId) return [] as number[];
+
+  const parentRows = await db
+    .select({ id: parents.id, studentId: parents.studentId })
+    .from(parents)
+    .where(eq(parents.userId, userId));
+
+  if (parentRows.length === 0) return [] as number[];
+
+  const childIds = new Set<number>();
+
+  for (const parentRow of parentRows) {
+    if (parentRow.studentId != null) {
+      childIds.add(parentRow.studentId);
+    }
+
+    const ownedStudents = await db
+      .select({ id: students.id })
+      .from(students)
+      .where(eq(students.parentId, parentRow.id));
+
+    for (const studentRow of ownedStudents) {
+      if (studentRow.id != null) {
+        childIds.add(studentRow.id);
+      }
+    }
+  }
+
+  return Array.from(childIds);
+}
+
 async function getUserSchoolMemberships(userId: number | null | undefined) {
   if (!userId) return [];
 
@@ -3592,7 +3624,13 @@ async function startServer() {
           return res.json([]);
         }
       } else if (actor.role !== 'super_admin') {
-        if (actor.schoolId) {
+        if (actor.role === 'parent') {
+          const childStudentIds = await getParentChildStudentIds(actor.id);
+          if (childStudentIds.length === 0) {
+            return res.json([]);
+          }
+          query = query.where(inArray(students.id, childStudentIds)) as any;
+        } else if (actor.schoolId) {
           query = query.where(eq(students.schoolId, actor.schoolId)) as any;
         } else {
           return res.json([]);
@@ -3804,13 +3842,7 @@ async function startServer() {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const [parentProfile] = await db.select().from(parents).where(eq(parents.userId, actor.id));
-          if (!parentProfile) {
-            return res.json([]);
-          }
-
-          const ownedStudents = await db.select({ id: students.id }).from(students).where(eq(students.parentId, parentProfile.id));
-          const childStudentIds = ownedStudents.map((s) => s.id).filter((id): id is number => id != null);
+          const childStudentIds = await getParentChildStudentIds(actor.id);
 
           if (childStudentIds.length === 0) {
             return res.json([]);
@@ -4357,7 +4389,24 @@ async function startServer() {
         // School admin, teacher, and others see only their school's evaluations.
         // Also allow global classes (classes.schoolId IS NULL) that have been
         // explicitly approved for this school via `school_classes`.
-        if (actor.schoolId) {
+        if (actor.role === 'parent') {
+          const childStudentIds = await getParentChildStudentIds(actor.id);
+          if (childStudentIds.length === 0) {
+            return res.json([]);
+          }
+
+          const childClassRows = await db
+            .selectDistinct({ classId: students.classId })
+            .from(students)
+            .where(inArray(students.id, childStudentIds));
+
+          const childClassIds = childClassRows.map((row) => row.classId).filter((id): id is number => id != null);
+          if (childClassIds.length === 0) {
+            return res.json([]);
+          }
+
+          query = query.where(inArray(evaluations.classId, childClassIds)) as any;
+        } else if (actor.schoolId) {
           query = query.where(or(
             eq(classes.schoolId, actor.schoolId),
             and(
@@ -4650,12 +4699,15 @@ async function startServer() {
           id: grades.id,
           evaluationId: grades.evaluationId,
           evaluationTitle: evaluations.title,
+          evaluationDate: evaluations.date,
           subject: evaluations.subject,
           studentId: grades.studentId,
           studentName: sql<string>`concat(${students.firstName}, ' ', ${students.lastName})`,
           score: grades.score,
           remarks: grades.remarks,
           editCount: grades.editCount,
+          createdAt: grades.createdAt,
+          updatedAt: grades.updatedAt,
           parentId: students.parentId,
           schoolId: students.schoolId,
         })
@@ -4665,12 +4717,12 @@ async function startServer() {
 
       if (user.role !== 'super_admin') {
         if (user.role === 'parent') {
-          const [parentProfile] = await db.select().from(parents).where(eq(parents.userId, user.id));
-          if (!parentProfile) {
+          const childStudentIds = await getParentChildStudentIds(user.id);
+          if (childStudentIds.length === 0) {
             return res.json([]);
           }
 
-          query = query.where(eq(students.parentId, parentProfile.id)) as any;
+          query = query.where(inArray(grades.studentId, childStudentIds)) as any;
         } else {
           // School admin and other staff see only their school's grades
           if (user.schoolId) {
@@ -4906,22 +4958,7 @@ async function startServer() {
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
       if (actor.role === 'parent') {
-        const parentRows = await db
-          .select({ id: parents.id })
-          .from(parents)
-          .where(eq(parents.userId, actor.id));
-
-        if (parentRows.length > 0) {
-          const parentProfileId = parentRows[0].id;
-          const ownedStudents = await db
-            .select({ id: students.id })
-            .from(students)
-            .where(eq(students.parentId, parentProfileId));
-
-          parentChildIds = ownedStudents.map((studentRow) => studentRow.id).filter((id): id is number => id != null);
-        } else {
-          parentChildIds = [];
-        }
+        parentChildIds = await getParentChildStudentIds(actor.id);
       }
 
       const normalizeGenderValue = (value: unknown): 'male' | 'female' | 'unknown' => {
