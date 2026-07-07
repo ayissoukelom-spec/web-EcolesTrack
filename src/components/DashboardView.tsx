@@ -3,6 +3,7 @@ import { Users, AlertTriangle, Percent, GraduationCap, Clock, CheckCircle, XCirc
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, PieChart, Pie, Cell } from 'recharts';
 
 import { UserRole } from '../types.ts';
+import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 
 export function normalizeDashboardChartData(rawData: unknown): Array<{ name: string; taux: number }> {
   if (!Array.isArray(rawData)) return [];
@@ -58,15 +59,9 @@ export default function DashboardView({
   stats,
   recentAbsences,
   recentGrades,
-  import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
   userRole,
   chartData = [],
 }: DashboardViewProps) {
-                  (() => {
-                    const maxScore = grade.maxScore != null ? Number(grade.maxScore) : 20;
-                    const gradeBand = getGradeBand(grade.score, maxScore);
-                    const gradeBadgeClass = getGradeBadgeClass(gradeBand);
-                    return (
   console.log('Statistiques reçues par DashboardView :', stats);
   console.log('Graphique reçu :', chartData);
   console.log('TYPE chartData:', typeof chartData);
@@ -74,14 +69,10 @@ export default function DashboardView({
   console.log('CONTENT SAMPLE:', chartData?.slice?.(0, 5));
 
   const attendanceData = normalizeDashboardChartData(chartData);
-
-                      <span className={`text-sm font-bold px-3 py-1.5 rounded-xl inline-block font-mono ${gradeBadgeClass}`}>
   const justifiedCount = recentAbsences.filter((a) => a.isJustified).length;
   const unjustifiedCount = recentAbsences.filter((a) => !a.isJustified).length;
   const totalAbsenceCount = justifiedCount + unjustifiedCount;
   const pieData = [
-                    );
-                  })()
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
   ];
@@ -294,19 +285,27 @@ export default function DashboardView({
           <div className="divide-y divide-slate-50">
             {recentGrades && recentGrades.length > 0 ? (
               recentGrades.map((grade, i) => (
-                <div key={grade.id || i} className="py-3 flex items-center justify-between text-xs sm:text-sm">
-                  <div>
-                    <p className="font-bold text-slate-800">{grade.studentName}</p>
-                    <p className="text-xs text-slate-400">
-                      {grade.subject} • {grade.evaluationTitle || 'Devoir'}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100/60 inline-block font-mono">
-                      {grade.score}{grade.maxScore != null ? `/${grade.maxScore}` : '/20'}
-                    </span>
-                  </div>
-                </div>
+                (() => {
+                  const maxScore = grade.maxScore != null ? Number(grade.maxScore) : 20;
+                  const gradeBand = getGradeBand(grade.score, maxScore);
+                  const gradeBadgeClass = getGradeBadgeClass(gradeBand);
+
+                  return (
+                    <div key={grade.id || i} className="py-3 flex items-center justify-between text-xs sm:text-sm">
+                      <div>
+                        <p className="font-bold text-slate-800">{grade.studentName}</p>
+                        <p className="text-xs text-slate-400">
+                          {grade.subject} • {grade.evaluationTitle || 'Devoir'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-sm font-bold px-3 py-1.5 rounded-xl inline-block font-mono ${gradeBadgeClass}`}>
+                          {grade.score}{grade.maxScore != null ? `/${grade.maxScore}` : '/20'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()
               ))
             ) : (
               <p className="text-slate-400 py-4 text-center text-xs">Aucune note saisie récemment.</p>
