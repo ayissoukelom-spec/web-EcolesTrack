@@ -65,6 +65,7 @@ export interface Teacher {
   phone?: string;
   specialization?: string | string[];
   schoolId: number;
+  schoolIds?: number[];
   classIds?: number[];
   gender?: string;
 }

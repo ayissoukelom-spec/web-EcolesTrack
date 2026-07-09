@@ -2982,12 +2982,84 @@ async function startServer() {
     }
   });
 
+  // PUT /api/classes/:id - Update class principal teacher
+  app.put('/api/classes/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id);
+      const { teacherId } = req.body;
+
+      // Load user and validate school permission
+      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // Load the class to check its school
+      const [classToUpdate] = await db.select().from(classes).where(eq(classes.id, id));
+      if (!classToUpdate) return res.status(404).json({ error: 'Class not found' });
+
+      // School admin can only update classes in their own school
+      if (user.role !== 'super_admin') {
+        if (user.role !== 'school_admin') {
+          return res.status(403).json({ error: 'Only super_admin or school_admin can update classes' });
+        }
+        if (user.schoolId && classToUpdate.schoolId !== user.schoolId) {
+          return res.status(403).json({ error: 'Cannot update class in another school' });
+        }
+      }
+
+      // If teacherId is provided, validate it exists and belongs to the same school
+      if (teacherId != null) {
+        const parsedTeacherId = parseInt(String(teacherId), 10);
+        if (Number.isNaN(parsedTeacherId)) {
+          return res.status(400).json({ error: 'Invalid teacherId' });
+        }
+
+        const [teacher] = await db.select().from(teachers).where(eq(teachers.id, parsedTeacherId));
+        if (!teacher) {
+          return res.status(404).json({ error: 'Teacher not found' });
+        }
+
+        // Verify teacher belongs to the same school through either teachers.schoolId or user_schools membership.
+        let teacherMatchesSchool = classToUpdate.schoolId != null && teacher.schoolId === classToUpdate.schoolId;
+        if (!teacherMatchesSchool && classToUpdate.schoolId != null) {
+          const [membership] = await db.select().from(userSchools).where(
+            and(
+              eq(userSchools.userId, teacher.userId),
+              eq(userSchools.role, 'teacher'),
+              eq(userSchools.schoolId, classToUpdate.schoolId),
+            ),
+          );
+          teacherMatchesSchool = Boolean(membership);
+        }
+        if (classToUpdate.schoolId != null && !teacherMatchesSchool) {
+          return res.status(400).json({ error: 'Teacher does not belong to the same school as the class' });
+        }
+
+        // Update class with new teacher
+        const [updated] = await db.update(classes).set({ teacherId: parsedTeacherId }).where(eq(classes.id, id)).returning();
+        return res.json(updated);
+      } else {
+        // Clear the teacher assignment if teacherId is null/undefined
+        const [updated] = await db.update(classes).set({ teacherId: null }).where(eq(classes.id, id)).returning();
+        return res.json(updated);
+      }
+    } catch (err: any) {
+      console.error('Error updating class:', err);
+      res.status(500).json({ error: 'Failed to update class' });
+    }
+  });
+
   // 4. Teachers - Filtered by school
   app.get('/api/teachers', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const filterSchoolId = req.query.schoolId ? parseInt(String(req.query.schoolId), 10) : null;
+      if (actor.role !== 'super_admin' && filterSchoolId && actor.schoolId && filterSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot request teachers for another school' });
+      }
 
       const teacherProjection = {
         id: teachers.id,
@@ -3018,6 +3090,11 @@ async function startServer() {
       let oldModelQuery = baseOldModel;
       let newModelQuery = baseNewModel;
 
+      if (filterSchoolId) {
+        oldModelQuery = oldModelQuery.where(eq(teachers.schoolId, filterSchoolId)) as any;
+        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, filterSchoolId)) as any;
+      }
+
       if (actor.role !== 'super_admin') {
         if (!actor.schoolId) {
           return res.json([]);
@@ -3033,11 +3110,26 @@ async function startServer() {
 
       const teacherById = new Map<number, any>();
       for (const teacher of oldTeachers) {
-        teacherById.set(teacher.id, teacher);
+        teacherById.set(teacher.id, {
+          ...teacher,
+          schoolIds: teacher.schoolId != null ? [teacher.schoolId] : [],
+        });
       }
       for (const teacher of newTeachers) {
-        if (!teacherById.has(teacher.id)) {
-          teacherById.set(teacher.id, teacher);
+        const existing = teacherById.get(teacher.id);
+        if (existing) {
+          const mergedSchoolIds = Array.from(new Set([...(existing.schoolIds || []), teacher.schoolId].filter((id) => id != null)));
+          teacherById.set(teacher.id, {
+            ...existing,
+            ...teacher,
+            schoolId: existing.schoolId ?? teacher.schoolId,
+            schoolIds: mergedSchoolIds,
+          });
+        } else {
+          teacherById.set(teacher.id, {
+            ...teacher,
+            schoolIds: teacher.schoolId != null ? [teacher.schoolId] : [],
+          });
         }
       }
 

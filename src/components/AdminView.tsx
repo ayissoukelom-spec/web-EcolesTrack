@@ -464,6 +464,14 @@ export default function AdminView({
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
   
+  // Teacher assignment state
+  const [assignmentMode, setAssignmentMode] = useState<'list' | 'assign'>('list');
+  const [assignmentSchoolFilter, setAssignmentSchoolFilter] = useState<number | null>(null);
+  const [assignmentClassAssignments, setAssignmentClassAssignments] = useState<Map<number, number | null>>(new Map());
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null);
+  
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -634,8 +642,14 @@ export default function AdminView({
   const currentTeacher = findTeacherProfileFromSimulatedUser(userRole, simulatedUser, teachersList, usersList);
   const currentTeacherClassIds = currentTeacher ? (currentTeacher.classIds || []) : [];
 
+  const teacherBelongsToSchool = (teacher: Teacher, schoolId: number | null | undefined) => {
+    if (!schoolId) return true;
+    if (teacher.schoolId === schoolId) return true;
+    return Array.isArray(teacher.schoolIds) && teacher.schoolIds.includes(schoolId);
+  };
+
   const filteredTeachersList = teachersList.filter((t) => {
-    const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || t.schoolId === superAdminSchoolFilterId;
+    const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || teacherBelongsToSchool(t, superAdminSchoolFilterId);
     const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
     const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && (t.classIds || []).some((classId) => currentTeacherClassIds.includes(classId)));
     return matchesSchool && matchesClassFilter && matchesTeacherScope && filterBySearch(t.name);
@@ -3984,76 +3998,234 @@ export default function AdminView({
                 </select>
               </div>
             </div>
-            <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm text-slate-600">
-              <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
-                <tr>
-                  <th className="px-6 py-4">Nom complet</th>
-                  <th className="px-6 py-4">Adresse Email</th>
-                  <th className="px-6 py-4">École</th>
-                  <th className="px-6 py-4">Spécialité enseignée</th>
-                  <th className="px-6 py-4">Téléphone</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredTeachersList.map((tc) => (
-                  <tr key={tc.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-800">{tc.name}</td>
-                    <td className="px-6 py-4 text-slate-500 font-mono text-xs">{tc.email}</td>
-                    <td className="px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
-                    <td className="px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
-                    <td className="px-6 py-4 text-slate-500">{tc.phone || '—'}</td>
-                    <td className="px-6 py-4 text-right space-x-2">
-                      <button
-                        onClick={() => openTeacherDetail(tc)}
-                        className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
-                        title="Voir le détail de l'enseignant"
+            
+            {/* Mode toggle buttons for teachers (list vs assign) */}
+            {['super_admin', 'school_admin'].includes(userRole) && (
+              <div className="mb-4 flex flex-col sm:flex-row gap-2">
+                <button
+                  onClick={() => setAssignmentMode('list')}
+                  className={`flex-1 sm:flex-none px-4 py-2 rounded-lg font-semibold text-xs transition-colors ${
+                    assignmentMode === 'list'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  📋 Voir les enseignants
+                </button>
+                <button
+                  onClick={() => setAssignmentMode('assign')}
+                  className={`flex-1 sm:flex-none px-4 py-2 rounded-lg font-semibold text-xs transition-colors ${
+                    assignmentMode === 'assign'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  👨‍🏫 Assigner enseignants principaux
+                </button>
+              </div>
+            )}
+            
+            {/* List view - teachers table */}
+            {!['super_admin', 'school_admin'].includes(userRole) || assignmentMode === 'list' ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs sm:text-sm text-slate-600">
+                  <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
+                    <tr>
+                      <th className="px-6 py-4">Nom complet</th>
+                      <th className="px-6 py-4">Adresse Email</th>
+                      <th className="px-6 py-4">École</th>
+                      <th className="px-6 py-4">Spécialité enseignée</th>
+                      <th className="px-6 py-4">Téléphone</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredTeachersList.map((tc) => (
+                      <tr key={tc.id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="px-6 py-4 font-bold text-slate-800">{tc.name}</td>
+                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{tc.email}</td>
+                        <td className="px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
+                        <td className="px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
+                        <td className="px-6 py-4 text-slate-500">{tc.phone || '—'}</td>
+                        <td className="px-6 py-4 text-right space-x-2">
+                          <button
+                            onClick={() => openTeacherDetail(tc)}
+                            className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
+                            title="Voir le détail de l'enseignant"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            Voir
+                          </button>
+                          {['super_admin', 'school_admin'].includes(userRole) && (
+                            <button
+                              onClick={() => {
+                                const user = usersList.find((u) => u.id === tc.userId);
+                                if (!user) return;
+                                const assignedClassIds = tc.classIds || [];
+                                setUserToEdit(user);
+                                setUserForm({
+                                  email: user.email,
+                                  name: user.name,
+                                  role: 'teacher',
+                                  schoolId: user.schoolId ? String(user.schoolId) : '',
+                                  academicYearId: '',
+                                  phone: (user as any).phone || '',
+                                  specialization: Array.isArray((user as any).specialization)
+                                    ? (user as any).specialization
+                                    : String((user as any).specialization || '')
+                                        .split(',')
+                                        .map((s) => s.trim())
+                                        .filter(Boolean),
+                                  gender: (user as any).gender || '',
+                                  assignedClassIds,
+                                });
+                                setEditUserOpen(true);
+                              }}
+                              className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-700 text-xs font-semibold transition-colors"
+                              title="Modifier l\'enseignant"
+                            >
+                              Modifier
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredTeachersList.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucun enseignant trouvé.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* Assignment view - assign principal teachers to classes */
+              <div className="space-y-4">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                  <h3 className="font-bold text-emerald-900 mb-2">📌 Assigner des enseignants principaux</h3>
+                  <p className="text-xs sm:text-sm text-emerald-800 mb-4">
+                    Sélectionnez une classe et l'enseignant principal à y affecter. Les modifications seront enregistrées dans la base de données.
+                  </p>
+                  
+                  {userRole === 'super_admin' && (
+                    <div className="mb-4">
+                      <label className="text-emerald-700 text-xs sm:text-sm font-semibold block mb-2">Filtrer par école</label>
+                      <select
+                        value={assignmentSchoolFilter ?? ''}
+                        onChange={(e) => setAssignmentSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
+                        className="w-full px-3 py-2 border border-emerald-300 rounded-lg bg-white text-xs sm:text-sm"
                       >
-                        <Eye className="h-3.5 w-3.5" />
-                        Voir
+                        <option value="">Toutes les écoles</option>
+                        {schoolsList.map((school) => (
+                          <option key={school.id} value={String(school.id)}>{school.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
+                  {assignmentError && (
+                    <div className="bg-red-50 border border-red-200 rounded p-2 mb-3 text-red-700 text-xs">{assignmentError}</div>
+                  )}
+                  {assignmentSuccess && (
+                    <div className="bg-green-50 border border-green-200 rounded p-2 mb-3 text-green-700 text-xs">{assignmentSuccess}</div>
+                  )}
+                  
+                  <div className="bg-white rounded p-3 mb-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 text-xs">
+                      <div>
+                        <span className="font-semibold text-emerald-700">Nombre de classes:</span>
+                        <span className="ml-2">
+                          {classesList.filter((c) => !assignmentSchoolFilter || isClassVisibleToSchool(c, assignmentSchoolFilter)).length}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="font-semibold text-emerald-700">Enseignants disponibles:</span>
+                        <span className="ml-2">
+                          {teachersList.filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter)).length}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      {classesList
+                        .filter((c) => !assignmentSchoolFilter || isClassVisibleToSchool(c, assignmentSchoolFilter))
+                        .map((cls) => (
+                          <div key={cls.id} className="flex items-center gap-2">
+                            <label className="text-xs sm:text-sm font-semibold text-slate-700 flex-1">
+                              {cls.name}
+                            </label>
+                            <select
+                              value={assignmentClassAssignments.get(cls.id) ?? ''}
+                              onChange={(e) => {
+                                const newMap = new Map(assignmentClassAssignments);
+                                const value = e.target.value ? parseInt(e.target.value, 10) : null;
+                                if (value === null) {
+                                  newMap.delete(cls.id);
+                                } else {
+                                  newMap.set(cls.id, value);
+                                }
+                                setAssignmentClassAssignments(newMap);
+                              }}
+                              className="px-3 py-1 border border-emerald-200 rounded bg-white text-xs sm:text-sm"
+                            >
+                              <option value="">—Aucun—</option>
+                              {teachersList
+                                .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter))
+                                .map((teacher) => (
+                                  <option key={teacher.id} value={String(teacher.id)}>
+                                    {teacher.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        ))}
+                    </div>
+                    
+                    <div className="flex gap-2 mt-4">
+                      <button
+                        onClick={async () => {
+                          try {
+                            setAssignmentSaving(true);
+                            setAssignmentError(null);
+                            setAssignmentSuccess(null);
+                            let updatedCount = 0;
+                            for (const [classId, teacherId] of assignmentClassAssignments.entries()) {
+                              const response = await apiFetch(`/api/classes/${classId}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ teacherId }),
+                              });
+                              if (!response.ok) {
+                                throw new Error(`Erreur lors de la mise à jour de la classe ${classId}`);
+                              }
+                              updatedCount++;
+                            }
+                            setAssignmentSaving(false);
+                            if (updatedCount > 0) {
+                              setAssignmentSuccess(`✅ ${updatedCount} classe(s) mise(s) à jour avec succès`);
+                              setAssignmentClassAssignments(new Map());
+                            }
+                          } catch (err: any) {
+                            setAssignmentSaving(false);
+                            setAssignmentError(err?.message || 'Erreur lors de la sauvegarde');
+                          }
+                        }}
+                        disabled={assignmentSaving || assignmentClassAssignments.size === 0}
+                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-semibold text-xs sm:text-sm rounded-lg transition-colors"
+                      >
+                        {assignmentSaving ? '⏳ Enregistrement...' : '✅ Enregistrer'}
                       </button>
-                      {['super_admin', 'school_admin'].includes(userRole) && (
-                        <button
-                          onClick={() => {
-                            const user = usersList.find((u) => u.id === tc.userId);
-                            if (!user) return;
-                            const assignedClassIds = tc.classIds || [];
-                            setUserToEdit(user);
-                            setUserForm({
-                              email: user.email,
-                              name: user.name,
-                              role: 'teacher',
-                              schoolId: user.schoolId ? String(user.schoolId) : '',
-                              academicYearId: '',
-                              phone: (user as any).phone || '',
-                              specialization: Array.isArray((user as any).specialization)
-                                ? (user as any).specialization
-                                : String((user as any).specialization || '')
-                                    .split(',')
-                                    .map((s) => s.trim())
-                                    .filter(Boolean),
-                              gender: (user as any).gender || '',
-                              assignedClassIds,
-                            });
-                            setEditUserOpen(true);
-                          }}
-                          className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-700 text-xs font-semibold transition-colors"
-                          title="Modifier l\'enseignant"
-                        >
-                          Modifier
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {filteredTeachersList.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucun enseignant trouvé.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            </div>
+                      <button
+                        onClick={() => setAssignmentClassAssignments(new Map())}
+                        disabled={assignmentClassAssignments.size === 0}
+                        className="px-4 py-2 bg-slate-200 hover:bg-slate-300 disabled:bg-slate-100 text-slate-700 font-semibold text-xs sm:text-sm rounded-lg transition-colors"
+                      >
+                        🔄 Réinitialiser
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
