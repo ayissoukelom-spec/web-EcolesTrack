@@ -45,6 +45,7 @@ export interface User {
   name: string;
   role: UserRole;
   schoolId?: number;
+  schoolIds?: number[];
   academicYearId?: number;
   gender?: string;
   phone?: string;

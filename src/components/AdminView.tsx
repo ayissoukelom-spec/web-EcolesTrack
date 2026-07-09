@@ -648,6 +648,12 @@ export default function AdminView({
     return Array.isArray(teacher.schoolIds) && teacher.schoolIds.includes(schoolId);
   };
 
+  const parentBelongsToSchool = (parent: Parent, schoolId: number | null | undefined) => {
+    if (!schoolId) return true;
+    if (parent.schoolId === schoolId) return true;
+    return Array.isArray(parent.schoolIds) && parent.schoolIds.includes(schoolId);
+  };
+
   const filteredTeachersList = teachersList.filter((t) => {
     const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || teacherBelongsToSchool(t, superAdminSchoolFilterId);
     const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
@@ -671,11 +677,17 @@ export default function AdminView({
     filterBySearch(`${st.firstName} ${st.lastName} ${st.className || ''} ${st.parentName || ''} ${st.yearName || ''}`)
   );
 
+  const accountBelongsToSchool = (user: User, schoolId: number | null | undefined) => {
+    if (!schoolId) return true;
+    if (user.schoolId === schoolId) return true;
+    return Array.isArray(user.schoolIds) && user.schoolIds.includes(schoolId);
+  };
+
   const filteredAccountsList = usersList.filter((u) => {
     if (userRole === 'school_admin' && ['super_admin', 'school_admin'].includes(u.role)) {
       return false;
     }
-    if (userRole === 'super_admin' && superAdminSchoolFilterId && u.schoolId !== superAdminSchoolFilterId) {
+    if (userRole === 'super_admin' && superAdminSchoolFilterId && !accountBelongsToSchool(u, superAdminSchoolFilterId)) {
       return false;
     }
     if (userRole === 'super_admin' && accountRoleFilter && u.role !== accountRoleFilter) {
@@ -4380,7 +4392,7 @@ export default function AdminView({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {parentsList.filter((p) => 
-                  (userRole !== 'super_admin' || !superAdminSchoolFilterId || (p as any).schoolId === superAdminSchoolFilterId) &&
+                  (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
                   (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
                   filterBySearch(p.name)
                 ).map((pt) => (

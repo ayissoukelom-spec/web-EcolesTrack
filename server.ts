@@ -627,6 +627,7 @@ async function startServer() {
           teacherPhone: teachers.phone,
           teacherSpecialization: teachers.specialization,
           parentPhone: parents.phone,
+          userSchoolId: userSchools.schoolId,
         })
         .from(users)
         .leftJoin(teachers, eq(teachers.userId, users.id))
@@ -643,6 +644,7 @@ async function startServer() {
             name: user.name,
             role: user.role,
             schoolId: user.schoolId,
+            schoolIds: user.schoolId != null ? [user.schoolId] : [],
             academicYearId: user.academicYearId,
             isDeleted: user.isDeleted,
             createdAt: user.createdAt,
@@ -651,6 +653,13 @@ async function startServer() {
             classIds: [],
             _teacherId: user.teacherId,
           };
+        }
+        if (user.userSchoolId != null) {
+          const existingSchoolIds = acc[user.id].schoolIds || [];
+          if (!existingSchoolIds.includes(user.userSchoolId)) {
+            existingSchoolIds.push(user.userSchoolId);
+            acc[user.id].schoolIds = existingSchoolIds;
+          }
         }
         return acc;
       }, {});
@@ -3380,11 +3389,28 @@ async function startServer() {
 
       const parentById = new Map<number, any>();
       for (const parent of oldParents) {
-        parentById.set(parent.id, parent);
+        parentById.set(parent.id, {
+          ...parent,
+          schoolIds: parent.schoolId != null ? [parent.schoolId] : [],
+        });
       }
       for (const parent of newParents) {
-        if (!parentById.has(parent.id)) {
-          parentById.set(parent.id, parent);
+        const existing = parentById.get(parent.id);
+        if (existing) {
+          const mergedSchoolIds = Array.from(
+            new Set([...(existing.schoolIds || []), parent.schoolId].filter((id) => id != null)),
+          );
+          parentById.set(parent.id, {
+            ...existing,
+            ...parent,
+            schoolId: existing.schoolId ?? parent.schoolId,
+            schoolIds: mergedSchoolIds,
+          });
+        } else {
+          parentById.set(parent.id, {
+            ...parent,
+            schoolIds: parent.schoolId != null ? [parent.schoolId] : [],
+          });
         }
       }
 
