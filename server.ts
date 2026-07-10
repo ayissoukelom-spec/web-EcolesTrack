@@ -53,6 +53,7 @@ import {
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
+import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 
 async function logIfTeacherUserMismatch(userId: number | null | undefined, teacherId: number | null | undefined) {
   try {
@@ -1506,39 +1507,33 @@ async function startServer() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Get user school memberships from database (single source of truth)
-      const memberships = await getUserSchoolMemberships(actor.id ?? null);
-      
+      let memberships = await getUserSchoolMemberships(actor.id ?? null);
       let schoolsList = [] as any[];
+
       if (actor.role === 'super_admin') {
-        // Super admins can access all schools
         schoolsList = await db.select().from(schools);
       } else {
         const schoolIds = memberships.map((membership) => membership.schoolId).filter((id): id is number => id != null);
         if (schoolIds.length > 0) {
           schoolsList = await db.select().from(schools).where(inArray(schools.id, schoolIds));
-        } else if (actor.schoolId != null) {
-          schoolsList = await db.select().from(schools).where(eq(schools.id, actor.schoolId));
-        } else if (actor.role === 'parent' && actor.id) {
-          const parentRows = await db.select({ schoolId: parents.schoolId, studentId: parents.studentId })
-            .from(parents)
-            .where(eq(parents.userId, actor.id));
+        } else {
+          const fallbackIds = getFallbackSchoolIdsForActor(actor, {
+            teacherSchoolId: actor.role === 'teacher' ? (actor as any).teacherSchoolId ?? null : null,
+            parentSchoolIds: actor.role === 'parent' ? [] : [],
+          });
 
-          const fallbackIds = new Set<number>();
-          for (const row of parentRows) {
-            if (row.schoolId != null) fallbackIds.add(row.schoolId);
-            if (row.studentId != null) {
-              const [studentRow] = await db.select({ schoolId: students.schoolId })
-                .from(students)
-                .where(eq(students.id, row.studentId));
-              if (studentRow?.schoolId != null) {
-                fallbackIds.add(studentRow.schoolId);
+          if (fallbackIds.length > 0) {
+            for (const fallbackSchoolId of fallbackIds) {
+              const hasMembership = await ensureUserSchoolMembership(actor.id ?? null, fallbackSchoolId, actor.role === 'school_admin' ? 'school_admin' : undefined);
+              if (!hasMembership) {
+                await upsertUserSchoolMembership(actor.id ?? null, fallbackSchoolId, actor.role === 'school_admin' ? 'school_admin' : (actor.role || 'teacher'), true);
               }
             }
-          }
-
-          if (fallbackIds.size > 0) {
-            schoolsList = await db.select().from(schools).where(inArray(schools.id, Array.from(fallbackIds)));
+            memberships = await getUserSchoolMemberships(actor.id ?? null);
+            const refreshedSchoolIds = memberships.map((membership) => membership.schoolId).filter((id): id is number => id != null);
+            if (refreshedSchoolIds.length > 0) {
+              schoolsList = await db.select().from(schools).where(inArray(schools.id, refreshedSchoolIds));
+            }
           }
         }
       }
@@ -1549,10 +1544,10 @@ async function startServer() {
           ?? actor.schoolId
           ?? schoolsList[0]?.id
           ?? null;
-      
-      res.json({ 
-        schools: schoolsList.map((school) => ({ id: school.id, name: school.name })), 
-        activeSchoolId 
+
+      res.json({
+        schools: schoolsList.map((school) => ({ id: school.id, name: school.name })),
+        activeSchoolId,
       });
     } catch (err: any) {
       console.error('Error fetching user schools:', err);
@@ -1580,6 +1575,23 @@ async function startServer() {
       let membership = actor.role === 'school_admin'
         ? await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId, 'school_admin')
         : await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId);
+
+      if (!membership && actor.id) {
+        try {
+          const fallbackIds = getFallbackSchoolIdsForActor(actor, {
+            teacherSchoolId: actor.role === 'teacher' ? (actor as any).teacherSchoolId ?? null : null,
+            parentSchoolIds: actor.role === 'parent' ? [] : [],
+          });
+
+          if (fallbackIds.includes(parsedSchoolId)) {
+            await upsertUserSchoolMembership(actor.id, parsedSchoolId, actor.role === 'school_admin' ? 'school_admin' : (actor.role || 'teacher'), true);
+            membership = await ensureUserSchoolMembership(actor.id, parsedSchoolId);
+            console.log('Auto-created user_schools membership from fallback school context', { userId: actor.id, schoolId: parsedSchoolId, role: actor.role });
+          }
+        } catch (e: any) {
+          console.warn('Failed to auto-create fallback membership:', e?.message || e);
+        }
+      }
 
       // If membership not found, try to auto-create it for parent from fallback sources
       if (!membership && actor.role === 'parent' && actor.id) {

@@ -565,6 +565,51 @@ export default function NotesView({
     .filter((ev) => userRole !== 'teacher' || (teacherId != null && ev.teacherId === teacherId));
 
   const overdueCount = overdueEvaluations.length;
+  const overdueEvaluationRows = overdueEvaluations
+    .map((ev) => {
+      const classInfo = classesList.find((cls) => cls.id === ev.classId);
+      const schoolInfo = classInfo?.schoolId != null
+        ? schoolsList.find((school) => school.id === classInfo.schoolId)
+        : undefined;
+      const classStudents = studentsList.filter((st) => st.classId === ev.classId);
+      const evaluationTimestamp = parseDateValue(ev.createdAt || ev.date);
+      const eligibleStudents = classStudents.filter((st) => {
+        if (!st.enrolledAt || !evaluationTimestamp) return true;
+        const enrollmentDate = parseDateValue(st.enrolledAt);
+        return enrollmentDate ? enrollmentDate.getTime() <= evaluationTimestamp.getTime() : true;
+      });
+      const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
+      const gradesForEval = gradesList.filter(
+        (g) => g.evaluationId === ev.id && eligibleStudentIds.has(g.studentId)
+      );
+      const missingCount = eligibleStudents.length - gradesForEval.length;
+      const evalDate = parseDateValue(ev.date);
+      const daysOld = evalDate
+        ? Math.max(1, Math.ceil((today.getTime() - evalDate.getTime()) / (1000 * 60 * 60 * 24)))
+        : 0;
+
+      return {
+        ...ev,
+        className: classInfo?.name || '—',
+        schoolName: schoolInfo?.name || '—',
+        missingCount,
+        daysOld,
+      };
+    })
+    .sort((a, b) => {
+      const schoolCompare = (a.schoolName || '').localeCompare(b.schoolName || '');
+      if (schoolCompare !== 0) return schoolCompare;
+      const classCompare = (a.className || '').localeCompare(b.className || '');
+      if (classCompare !== 0) return classCompare;
+      return (a.title || '').localeCompare(b.title || '');
+    });
+
+  const handleOpenOverdueEvaluation = (evaluation: Evaluation) => {
+    setSelectedClassId(String(evaluation.classId));
+    setSelectedEvalId(String(evaluation.id));
+    populateGradeInputsForEvaluation(String(evaluation.id));
+    setIsNewEvalFormOpen(false);
+  };
 
   // Calculate averages
   const getStudentAverage = (studentId: number) => {
@@ -651,6 +696,62 @@ export default function NotesView({
             {userRole === 'teacher'
               ? 'Veuillez compléter les notes manquantes ou demander à un administrateur de le faire pour vous.'
               : 'Les administrateurs peuvent consulter et compléter ces devoirs en retard.'}
+          </div>
+        </div>
+      )}
+
+      {['super_admin', 'school_admin', 'teacher'].includes(userRole) && overdueEvaluationRows.length > 0 && (
+        <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Devoirs en retard</h3>
+              <p className="text-xs text-slate-500">Liste rapide des devoirs publiés depuis plus de 7 jours avec notes encore incomplètes.</p>
+            </div>
+            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-semibold">
+              {overdueEvaluationRows.length} à traiter
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-2 pr-3">École</th>
+                  <th className="py-2 pr-3">Classe</th>
+                  <th className="py-2 pr-3">Matière</th>
+                  <th className="py-2 pr-3">Devoir</th>
+                  <th className="py-2 pr-3">Date</th>
+                  <th className="py-2 pr-3">Manquantes</th>
+                  <th className="py-2 pr-3">Âge</th>
+                  <th className="py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overdueEvaluationRows.map((ev) => (
+                  <tr key={ev.id} className="border-b border-slate-100 last:border-b-0">
+                    <td className="py-2 pr-3 text-slate-700">{ev.schoolName}</td>
+                    <td className="py-2 pr-3 text-slate-700">{ev.className}</td>
+                    <td className="py-2 pr-3 text-slate-700">{ev.subject}</td>
+                    <td className="py-2 pr-3 text-slate-700">
+                      <div className="font-medium">{ev.title}</div>
+                    </td>
+                    <td className="py-2 pr-3 text-slate-700">{ev.date}</td>
+                    <td className="py-2 pr-3 text-amber-700 font-semibold">{ev.missingCount}</td>
+                    <td className="py-2 pr-3 text-slate-700">{ev.daysOld} j</td>
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenOverdueEvaluation(ev)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                        Ouvrir
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

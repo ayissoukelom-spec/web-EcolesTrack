@@ -11,6 +11,7 @@ vi.mock('../../lib/evaluationUtils', () => ({
   getEligibleGradesForEvaluation: (ev: any, classStudents: any[]) => classStudents.map((st) => ({ evaluationId: ev?.id ?? 0, studentId: st.id, score: '0', remarks: '' })),
   isEvaluationFullyGraded: (ev: any) => ev.id === 2,
   isEvaluationCompleted: (ev: any) => ev.id === 2,
+  isEvaluationArchivedForSchoolAdminByAge: () => false,
   isStudentEligibleForEvaluation: () => true,
   parseDateValue: (v: any) => new Date(v),
 }));
@@ -98,6 +99,26 @@ test('super_admin renders NotesView', () => {
   // basic smoke test: component rendered (allow multiple matches)
   const headers = screen.getAllByText(/Gestion des Notes & Évaluations/);
   expect(headers.length).toBeGreaterThan(0);
+});
+
+test('super_admin sees overdue evaluations list with school, class and assignment details', () => {
+  const props = {
+    ...baseProps,
+    evaluationsList: [
+      { id: 3, classId: 85, teacherId: 10, subject: 'Math', title: 'Devoir retard', date: '2024-01-01', maxScore: 20 },
+    ],
+    gradesList: [],
+    studentsList: [
+      { id: 201, classId: 85, firstName: 'Jean', lastName: 'Dupont' },
+      { id: 202, classId: 85, firstName: 'Marie', lastName: 'Durand' },
+    ],
+  };
+
+  render(<NotesView {...props} userRole="super_admin" /> as any);
+
+  expect(screen.getAllByText(/Devoirs en retard/i).length).toBeGreaterThan(0);
+  expect(screen.getByText(/Devoir retard/i)).toBeInTheDocument();
+  expect(screen.getByText(/6ème A/i)).toBeInTheDocument();
 });
 
 test('calls onUpdateGrade for school_admin when updating existing grade', async () => {
