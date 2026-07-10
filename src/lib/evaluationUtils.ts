@@ -1,4 +1,4 @@
-import { Evaluation, Grade, Student } from '../types.ts';
+import { Evaluation, Grade, Student, UserRole } from '../types.ts';
 
 export const parseDateValue = (value: string | Date | undefined | null): Date | null => {
   if (!value) return null;
@@ -141,6 +141,57 @@ export const isEvaluationFullyGraded = (evaluation: Evaluation, students: Studen
 
   return gradesForEval.length > 0;
 };
+
+export const getOverdueEvaluations = (
+  evaluations: Evaluation[],
+  students: Student[],
+  grades: Grade[],
+  userRole: UserRole,
+  teacherId?: number | null,
+  options?: { overdueDays?: number; nowMs?: number },
+): Evaluation[] => {
+  const nowMs = options?.nowMs ?? Date.now();
+  const overdueThresholdMs = (options?.overdueDays ?? 7) * 24 * 60 * 60 * 1000;
+
+  return evaluations.filter((ev) => {
+    const evaluationTimestamp = parseDateValue(ev.createdAt || ev.date);
+    if (!evaluationTimestamp) return false;
+
+    const ageMs = nowMs - evaluationTimestamp.getTime();
+    if (ageMs < overdueThresholdMs) return false;
+
+    const classStudents = students.filter((st) => st.classId === ev.classId);
+    if (classStudents.length === 0) return false;
+
+    const eligibleStudents = classStudents.filter((st) => {
+      if (!st.enrolledAt || !evaluationTimestamp) return true;
+      const enrollmentDate = parseDateValue(st.enrolledAt);
+      return enrollmentDate ? enrollmentDate.getTime() <= evaluationTimestamp.getTime() : true;
+    });
+    if (eligibleStudents.length === 0) return false;
+
+    const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
+    const gradesForEval = grades.filter(
+      (g) => g.evaluationId === ev.id && eligibleStudentIds.has(g.studentId),
+    );
+    if (gradesForEval.length >= eligibleStudents.length) return false;
+
+    if (userRole === 'teacher') {
+      return teacherId != null ? ev.teacherId === teacherId : true;
+    }
+
+    return true;
+  });
+};
+
+export const countOverdueEvaluations = (
+  evaluations: Evaluation[],
+  students: Student[],
+  grades: Grade[],
+  userRole: UserRole,
+  teacherId?: number | null,
+  options?: { overdueDays?: number; nowMs?: number },
+): number => getOverdueEvaluations(evaluations, students, grades, userRole, teacherId, options).length;
 
 export const isEvaluationCompleted = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean => {
   const classStudents = students.filter((st) => st.classId === evaluation.classId);

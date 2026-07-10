@@ -18,6 +18,7 @@ import {
   getEligibleStudentsForEvaluationWithGrades as getEligibleStudentsForEvaluationWithGradesUtil,
   getEligibleStudentsWithHistoryForEvaluation as getEligibleStudentsWithHistoryForEvaluationUtil,
   getEligibleGradesForEvaluation,
+  getOverdueEvaluations,
   isEvaluationArchivedForSchoolAdminByAge,
   isEvaluationFullyGraded as isEvaluationFullyGradedUtil,
   isEvaluationCompleted as isEvaluationCompletedUtil,
@@ -548,33 +549,7 @@ export default function NotesView({
   }).length;
 
   const today = new Date();
-  const overdueThresholdMs = 7 * 24 * 60 * 60 * 1000;
-  const overdueEvaluations = evaluationsList
-    .filter((ev) => {
-      if (!ev.date) return false;
-      const evalDate = parseDateValue(ev.date);
-      if (!evalDate) return false;
-      const ageMs = today.getTime() - evalDate.getTime();
-      if (ageMs < overdueThresholdMs) return false;
-      const classStudents = studentsList.filter((st) => st.classId === ev.classId);
-      if (classStudents.length === 0) return false;
-
-      const evaluationTimestamp = parseDateValue(ev.createdAt || ev.date);
-      const eligibleStudents = classStudents.filter((st) => {
-        if (!st.enrolledAt || !evaluationTimestamp) return true;
-        const enrollmentDate = parseDateValue(st.enrolledAt);
-        return enrollmentDate ? enrollmentDate.getTime() <= evaluationTimestamp.getTime() : true;
-      });
-      if (eligibleStudents.length === 0) return false;
-
-      const eligibleStudentIds = new Set(eligibleStudents.map((st) => st.id));
-      const gradesForEval = gradesList.filter(
-        (g) => g.evaluationId === ev.id && eligibleStudentIds.has(g.studentId)
-      );
-      return gradesForEval.length < eligibleStudents.length;
-    })
-    .filter((ev) => userRole !== 'teacher' || (teacherId != null && ev.teacherId === teacherId));
-
+  const overdueEvaluations = getOverdueEvaluations(evaluationsList, studentsList, gradesList, userRole, teacherId);
   const overdueCount = overdueEvaluations.length;
   const overdueEvaluationRows = overdueEvaluations
     .map((ev) => {

@@ -23,7 +23,7 @@ import {
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
-import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
+import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
 import DashboardView from './components/DashboardView.tsx';
@@ -118,6 +118,16 @@ export default function App() {
           .filter(Boolean)
     : [];
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
+
+  const noteOverdueCount = currentRole === 'parent'
+    ? 0
+    : countOverdueEvaluations(
+      evaluationsList,
+      studentsList,
+      gradesList,
+      currentRole,
+      currentRole === 'teacher' ? currentTeacherProfile?.id : undefined,
+    );
 
   const normalizeStudentsPayload = (payload: unknown): Student[] => {
     if (Array.isArray(payload)) return payload as Student[];
@@ -900,15 +910,24 @@ export default function App() {
                 <>
                   <button
                     onClick={() => setActiveTab('notes')}
-                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                       activeTab === 'notes'
                         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                         : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                     }`}
                     id="sidebar-nav-grades"
                   >
-                    <Award className="h-4.5 w-4.5" />
-                    <span>Notes & Bulletins</span>
+                    <div className="flex items-center gap-3">
+                      <Award className="h-4.5 w-4.5" />
+                      <span>Notes & Bulletins</span>
+                    </div>
+                    {noteOverdueCount > 0 && (
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        activeTab === 'notes' ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                      }`}>
+                        {noteOverdueCount}
+                      </span>
+                    )}
                   </button>
 
                   <button
@@ -929,15 +948,24 @@ export default function App() {
               {(currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher') && (
                 <button
                   onClick={() => setActiveTab('bulletins')}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                     activeTab === 'bulletins'
                       ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                       : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                   id="sidebar-nav-bulletins"
                 >
-                  <FileText className="h-4.5 w-4.5" />
-                  <span>Bulletins</span>
+                  <div className="flex items-center gap-3">
+                    <FileText className="h-4.5 w-4.5" />
+                    <span>Bulletins</span>
+                  </div>
+                  {noteOverdueCount > 0 && (
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      activeTab === 'bulletins' ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                    }`}>
+                      {noteOverdueCount}
+                    </span>
+                  )}
                 </button>
               )}
 

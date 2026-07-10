@@ -4,6 +4,7 @@ import {
   getEligibleStudentsForEvaluation,
   getEligibleStudentsForEvaluationWithGrades,
   getFullyGradedEvaluations,
+  getOverdueEvaluations,
   isEvaluationArchivedForSchoolAdminByAge,
   isEvaluationFullyGraded,
   isEvaluationCompleted,
@@ -84,6 +85,30 @@ describe('evaluation eligibility and grading rules', () => {
       { id: 3, evaluationId: 1, studentId: 2, score: '12', remarks: 'OK' },
     ];
     expect(isEvaluationFullyGraded(evaluation, students, ineligibleGrades)).toBe(false);
+  });
+
+  it('détecte un devoir en retard quand seul createdAt est renseigné', () => {
+    const evaluationWithoutDate: Evaluation = {
+      ...evaluation,
+      id: 2,
+      date: undefined,
+      createdAt: '2026-06-01T09:00:00Z',
+    } as Evaluation;
+
+    const eligibleStudents: Student[] = [
+      { id: 1, schoolId: 1, classId: 10, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2026-05-31T08:00:00Z' },
+    ];
+
+    const overdue = getOverdueEvaluations(
+      [evaluationWithoutDate],
+      eligibleStudents,
+      [],
+      'school_admin',
+      undefined,
+      { overdueDays: 7, nowMs: new Date('2026-07-10T00:00:00Z').getTime() },
+    );
+
+    expect(overdue.map((ev) => ev.id)).toEqual([2]);
   });
 
   it('garde valide un élève historique déjà noté sur une ancienne évaluation', () => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
-import { isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from '../lib/evaluationUtils.ts';
+import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
 import DashboardView from './DashboardView.tsx';
@@ -338,6 +338,16 @@ export default function AppShell() {
     await fetchAllData();
   };
 
+  const noteOverdueCount = currentRole === 'parent'
+    ? 0
+    : countOverdueEvaluations(
+      evaluationsList,
+      studentsList,
+      gradesList,
+      currentRole,
+      currentRole === 'teacher' ? currentTeacherProfile?.id : undefined,
+    );
+
   const content = (() => {
     // Centralized filtering of evaluations: separate active from archived
     const activeEvaluations = evaluationsList.filter((ev) => {
@@ -474,6 +484,7 @@ export default function AppShell() {
       activeTab={activeTab}
       isSyncing={isSyncing}
       errorMsg={visibleErrorMsg}
+      noteOverdueCount={noteOverdueCount}
       onRoleChange={handleRoleChange}
       onLogout={handleLogout}
       onRefreshData={fetchAllData}

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.tsx';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
+const mockCountOverdueEvaluations = vi.hoisted(() => vi.fn());
 
 vi.mock('./lib/api.ts', () => ({
   apiFetch: mockApiFetch,
@@ -18,6 +19,10 @@ vi.mock('./lib/api.ts', () => ({
 }));
 
 vi.mock('./lib/evaluationUtils.ts', () => ({
+  countOverdueEvaluations: mockCountOverdueEvaluations,
+  isEvaluationArchived: () => false,
+  isEvaluationLockedBySchoolAdmin: () => false,
+  isEvaluationArchivedForSchoolAdminByAge: () => false,
   isEvaluationCompleted: () => false,
 }));
 
@@ -53,6 +58,8 @@ vi.mock('./components/BulletinsView.tsx', () => ({ default: () => <div>Bulletins
 describe('App bulletin navigation', () => {
   beforeEach(() => {
     mockApiFetch.mockReset();
+    mockCountOverdueEvaluations.mockReset();
+    mockCountOverdueEvaluations.mockReturnValue(0);
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
       if (url === '/api/schools') return Promise.resolve([]);
@@ -74,5 +81,13 @@ describe('App bulletin navigation', () => {
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('shows a sidebar badge when overdue evaluations exist', async () => {
+    mockCountOverdueEvaluations.mockReturnValue(2);
+
+    render(<App />);
+
+    expect(await screen.findAllByText('2')).toHaveLength(2);
   });
 });

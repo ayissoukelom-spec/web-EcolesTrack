@@ -34,6 +34,7 @@ interface AppLayoutProps {
   onManageAccounts: () => void;
   onTabChange: (tab: string) => void;
   onClearError: () => void;
+  noteOverdueCount?: number;
   children: ReactNode;
 }
 
@@ -55,6 +56,7 @@ export default function AppLayout({
   onManageAccounts,
   onTabChange,
   onClearError,
+  noteOverdueCount,
   children,
 }: AppLayoutProps) {
   const unreadNotifications = notificationsList.filter((notification) => !notification.isRead).length;
@@ -129,15 +131,24 @@ export default function AppLayout({
                 <>
                   <button
                     onClick={() => onTabChange('notes')}
-                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                       activeTab === 'notes'
                         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                         : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                     }`}
                     id="sidebar-nav-grades"
                   >
-                    <Award className="h-4.5 w-4.5" />
-                    <span>Notes & Bulletins</span>
+                    <div className="flex items-center gap-3">
+                      <Award className="h-4.5 w-4.5" />
+                      <span>Notes & Bulletins</span>
+                    </div>
+                    {noteOverdueCount && noteOverdueCount > 0 && (
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        activeTab === 'notes' ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                      }`}>
+                        {noteOverdueCount}
+                      </span>
+                    )}
                   </button>
 
                   <button
@@ -157,15 +168,24 @@ export default function AppLayout({
 
               <button
                 onClick={() => onTabChange('bulletins')}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'bulletins'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                     : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                 }`}
                 id="sidebar-nav-bulletins"
               >
-                <FileText className="h-4.5 w-4.5" />
-                <span>Bulletins</span>
+                <div className="flex items-center gap-3">
+                  <FileText className="h-4.5 w-4.5" />
+                  <span>Bulletins</span>
+                </div>
+                {noteOverdueCount && noteOverdueCount > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    activeTab === 'bulletins' ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                  }`}>
+                    {noteOverdueCount}
+                  </span>
+                )}
               </button>
 
               {currentRole === 'super_admin' && (
