@@ -724,7 +724,7 @@ export default function AdminView({
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
   const currentYear = new Date().getFullYear();
-  const birthYearRangeStart = currentYear - 60;
+  const birthYearRangeStart = 1970;
   const birthYearRangeEnd = currentYear - 3;
   const birthDateYearOptions = Array.from({ length: birthYearRangeEnd - birthYearRangeStart + 1 }, (_, index) => String(birthYearRangeStart + index));
   const birthDateMonthOptions = Array.from({ length: 12 }, (_, index) => ({

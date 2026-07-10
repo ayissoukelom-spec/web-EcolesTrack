@@ -22,6 +22,69 @@ describe('AdminView create-user teacher form', () => {
     });
   });
 
+  it('renders birth date options in a portal so they stay visible inside the student modal', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    render(
+      <AdminModal
+        isModalOpen
+        onClose={() => undefined}
+        activeTab="students"
+        handleFormSubmit={() => undefined}
+        schoolForm={{ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] }}
+        setSchoolForm={() => undefined}
+        yearForm={{ name: '', isActive: false, schoolId: '' }}
+        setYearForm={() => undefined}
+        classForm={{ cycle: '', stream: '', section: '', group: '', schoolId: '' }}
+        setClassForm={() => undefined}
+        teacherForm={{ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' }}
+        setTeacherForm={() => undefined}
+        parentForm={{ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' }}
+        setParentForm={() => undefined}
+        studentForm={{ firstName: '', lastName: '', birthDate: '', schoolId: '1', classId: '10', parentId: '', academicYearId: '1', teacherIds: [], schoolAdminId: '', gender: '' }}
+        setStudentForm={() => undefined}
+        studentError={null}
+        newParentMode={false}
+        setNewParentMode={() => undefined}
+        newParentForm={{ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '1', gender: '' }}
+        setNewParentForm={() => undefined}
+        newTeacherMode={false}
+        setNewTeacherMode={() => undefined}
+        newTeacherForm={{ name: '', email: '', phone: '', specializations: [], schoolId: '1', assignedClassIds: [], gender: '' }}
+        setNewTeacherForm={() => undefined}
+        allowSelectOverflow={false}
+        setAllowSelectOverflow={() => undefined}
+        sortedParentPhonePrefixes={['+228']}
+        teacherSpecializations={[]}
+        schoolsList={schools}
+        yearsList={years}
+        teachersList={teachers}
+        parentsList={parents}
+        studentsList={students}
+        availableSchoolAdmins={users}
+        sortedClasses={classes}
+        defaultAcademicYearId={1}
+        handleSaveNewParent={() => undefined}
+        handleSaveNewTeacher={() => undefined}
+        userRole="school_admin"
+        currentSchoolId={1}
+      />
+    );
+
+    const dialog = document.querySelector('[role="dialog"]');
+    fireEvent.click(screen.getByRole('button', { name: /Jour/i }));
+    const dayOption = screen.getByText('01');
+
+    expect(dialog?.contains(dayOption)).toBe(false);
+    expect(document.body.contains(dayOption)).toBe(true);
+  });
+
   it('shows school-level parents even when they are not attached to the selected class', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];

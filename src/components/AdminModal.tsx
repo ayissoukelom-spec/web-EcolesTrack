@@ -3,6 +3,7 @@ import { getSimulatedSchoolId, apiFetch } from '../lib/api.ts';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+import PortalCustomDropdown from './CustomDropdown';
 
 export default function AdminModal(props: any) {
   const {
@@ -71,7 +72,12 @@ export default function AdminModal(props: any) {
     value: String(index + 1).padStart(2, '0'),
     label: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'][index],
   }));
-  const birthDateYearOptions = Array.from({ length: 25 }, (_, index) => String(new Date().getFullYear() - index));
+  const birthYearRangeStart = 1970;
+  const birthYearRangeEnd = new Date().getFullYear() - 3;
+  const birthDateYearOptions = Array.from(
+    { length: birthYearRangeEnd - birthYearRangeStart + 1 },
+    (_, index) => String(birthYearRangeStart + index),
+  );
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId, 10) : undefined;
   const currentStudentSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? selectedStudentSchoolId) : selectedStudentSchoolId;
@@ -909,7 +915,7 @@ export default function AdminModal(props: any) {
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Date de Naissance</label>
                     <div className="grid grid-cols-3 gap-2">
-                      <CustomDropdown
+                      <PortalCustomDropdown
                         value={studentForm.birthDate ? studentForm.birthDate.split('-')[2] : ''}
                         options={birthDateDayOptions.map((d) => ({ value: d, label: d }))}
                         placeholder="Jour"
@@ -918,7 +924,7 @@ export default function AdminModal(props: any) {
                           setStudentForm({ ...studentForm, birthDate: `${year || ''}-${month || ''}-${v}` });
                         }}
                       />
-                      <CustomDropdown
+                      <PortalCustomDropdown
                         value={studentForm.birthDate ? studentForm.birthDate.split('-')[1] : ''}
                         options={birthDateMonthOptions}
                         placeholder="Mois"
@@ -927,7 +933,7 @@ export default function AdminModal(props: any) {
                           setStudentForm({ ...studentForm, birthDate: `${year || ''}-${v}-${day || ''}` });
                         }}
                       />
-                      <CustomDropdown
+                      <PortalCustomDropdown
                         value={studentForm.birthDate ? studentForm.birthDate.split('-')[0] : ''}
                         options={birthDateYearOptions.map((y) => ({ value: y, label: y }))}
                         placeholder="Année"
