@@ -98,6 +98,7 @@ export default function NotesView({
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
   const [gradeInputValues, setGradeInputValues] = useState<{ [studentId: number]: { score: string; remarks: string } }>({});
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
 
   // New Eval form states
   const formatLocalDatetime = (value = new Date()) => {
@@ -441,6 +442,16 @@ export default function NotesView({
   });
 
   useEffect(() => {
+    if (pendingScrollTarget) {
+      const target = document.getElementById(pendingScrollTarget);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      setPendingScrollTarget(null);
+    }
+  }, [pendingScrollTarget, selectedClassId, selectedEvalId]);
+
+  useEffect(() => {
     if (!filteredClasses.length) {
       setSelectedClassId('');
       setSelectedEvalId('');
@@ -609,6 +620,7 @@ export default function NotesView({
     setSelectedEvalId(String(evaluation.id));
     populateGradeInputsForEvaluation(String(evaluation.id));
     setIsNewEvalFormOpen(false);
+    setPendingScrollTarget('grades-table-container');
   };
 
   // Calculate averages
