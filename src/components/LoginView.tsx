@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { apiFetch, setActiveSchoolId, setSimulatedRole, setSimulatedUser } from '../lib/api.ts';
 import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
+import logoImage from '../assets/logo.png';
 
 interface Props {
   onLogin: (role: string) => void;
@@ -136,21 +137,21 @@ export default function LoginView({ onLogin }: Props) {
 
   if (selectionPending) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="bg-white p-6 rounded shadow w-full max-w-sm">
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+        <div className="bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
           <h2 className="text-lg font-bold mb-2">Choisir votre école</h2>
-          <p className="text-sm text-slate-600 mb-4">Sélectionnez l’école à utiliser pour cette session.</p>
-          {error && <div className="text-rose-600 mb-2">{error}</div>}
+          <p className="text-sm text-slate-400 mb-4">Sélectionnez l’école à utiliser pour cette session.</p>
+          {error && <div className="text-rose-400 mb-2">{error}</div>}
           {schoolsLoading ? (
-            <div className="text-sm text-slate-600">Chargement des écoles...</div>
+            <div className="text-sm text-slate-400">Chargement des écoles...</div>
           ) : schools.length === 0 ? (
-            <div className="text-sm text-slate-600">Aucune école n’est encore disponible pour ce compte.</div>
+            <div className="text-sm text-slate-400">Aucune école n’est encore disponible pour ce compte.</div>
           ) : (
             <>
               <label className="block text-sm mb-2">
                 <RequiredLabel label="École" required />
                 <select
-                  className="w-full mt-1 p-2 border rounded"
+                  className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100"
                   value={selectedSchoolId}
                   onChange={(e) => setSelectedSchoolId(Number(e.target.value))}
                 >
@@ -181,17 +182,20 @@ export default function LoginView({ onLogin }: Props) {
     {showChangePassword && loggedInUser ? (
       <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
     ) : (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-      <form onSubmit={submit} className="bg-white p-6 rounded shadow w-full max-w-sm">
-        <h2 className="text-lg font-bold mb-4">Se connecter</h2>
-        {error && <div className="text-rose-600 mb-2">{error}</div>}
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+      <form onSubmit={submit} className="bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
+        <div className="flex justify-center mb-6">
+          <img src={logoImage} alt="ET Ecoles Track" className="w-24 h-24 object-contain" />
+        </div>
+        <h2 className="text-lg font-bold mb-4 text-center">Se connecter</h2>
+        {error && <div className="text-rose-400 mb-2">{error}</div>}
         <label className="block text-sm mb-2">
           <RequiredLabel label="Email" required />
-          <input className="w-full mt-1 p-2 border rounded" value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+          <input className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
         </label>
         <label className="block text-sm mb-4">
           <RequiredLabel label="Mot de passe" required />
-          <input className="w-full mt-1 p-2 border rounded" value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+          <input className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
         </label>
         <button type="submit" disabled={loading} className="w-full px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
           {loading ? 'Connexion...' : 'Se connecter'}

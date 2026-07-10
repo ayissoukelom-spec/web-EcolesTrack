@@ -2648,7 +2648,7 @@ async function startServer() {
         const localClasses = await db
           .select(baseSelect)
           .from(classes)
-          .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+          .leftJoin(teachers, eq(classes.teacherId, teachers.id))
           .leftJoin(users, eq(teachers.userId, users.id))
           .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
           .where(eq(classes.schoolId, targetSchoolId));
@@ -2664,7 +2664,7 @@ async function startServer() {
               eq(schoolClasses.status, 'approved')
             )
           )
-          .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+          .leftJoin(teachers, eq(classes.teacherId, teachers.id))
           .leftJoin(users, eq(teachers.userId, users.id))
           .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
           .where(sql`${classes.schoolId} IS NULL`);
@@ -2689,7 +2689,7 @@ async function startServer() {
                 eq(schoolClasses.status, 'approved')
               )
             )
-            .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+            .leftJoin(teachers, eq(classes.teacherId, teachers.id))
             .leftJoin(users, eq(teachers.userId, users.id))
             .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
 
@@ -2703,7 +2703,7 @@ async function startServer() {
       let query = db
         .select(baseSelect)
         .from(classes)
-        .leftJoin(teachers, and(eq(classes.teacherId, teachers.id), eq(teachers.schoolId, classes.schoolId)))
+        .leftJoin(teachers, eq(classes.teacherId, teachers.id))
         .leftJoin(users, eq(teachers.userId, users.id))
         .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
 
@@ -2716,6 +2716,32 @@ async function startServer() {
       }
 
       const allClasses = await query;
+
+      // Fill missing teacherName values by querying teachers->users for teacherIds
+      try {
+        const missingTeacherIds = Array.from(new Set(allClasses.filter((c: any) => c.teacherId != null && !c.teacherName).map((c: any) => c.teacherId)));
+        if (missingTeacherIds.length > 0) {
+          const teacherRows = await db
+            .select({ id: teachers.id, userId: teachers.userId, name: users.name })
+            .from(teachers)
+            .leftJoin(users, eq(teachers.userId, users.id))
+            .where(inArray(teachers.id, missingTeacherIds as number[]));
+
+          const nameByTeacherId = new Map<number, string>();
+          for (const tr of teacherRows) {
+            if (tr.id != null && tr.name) nameByTeacherId.set(tr.id, tr.name);
+          }
+
+          for (const cls of allClasses) {
+            if (cls.teacherId != null && !cls.teacherName) {
+              const n = nameByTeacherId.get(cls.teacherId as number);
+              if (n) cls.teacherName = n;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn('Failed to fill missing teacher names', e?.message || e);
+      }
 
       if (targetSchoolId) {
         const statusRows = await db.select().from(schoolClasses).where(eq(schoolClasses.schoolId, targetSchoolId));
