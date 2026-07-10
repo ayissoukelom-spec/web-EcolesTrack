@@ -1,8 +1,7 @@
 import type { BulletinDetail, BulletinListFilters, BulletinListResponse } from '../types.ts';
 
 // Client-side name validation utils
-const LETTERS_AND_SPACES_REGEX = /^[\p{L} ]+$/u;
-const DIGITS_REGEX = /\d+/g;
+const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/\-]+$/u;
 
 export function validateClientNames(payload: any) {
   if (!payload || typeof payload !== 'object') return null;
@@ -14,16 +13,8 @@ export function validateClientNames(payload: any) {
     if (typeof v !== 'string') continue;
     const trimmed = v.trim();
     if (trimmed.length === 0) continue;
-    const digits = trimmed.match(DIGITS_REGEX);
-    if (digits && digits.length > 0) {
-      const unique = Array.from(new Set(digits.join('').split(''))).slice(0, 10).join('');
-      const err: any = new Error(`Le champ '${field}' contient des chiffres (${unique}). Seules les lettres et espaces sont autorisés.`);
-      err.field = field;
-      err.foundDigits = unique;
-      throw err;
-    }
-    if (!LETTERS_AND_SPACES_REGEX.test(trimmed)) {
-      const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres et les espaces sont autorisés.`);
+    if (!NAME_CHARACTERS_REGEX.test(trimmed)) {
+      const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres, les chiffres et les espaces sont autorisés.`);
       err.field = field;
       throw err;
     }

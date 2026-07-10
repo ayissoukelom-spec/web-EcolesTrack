@@ -139,11 +139,10 @@ export default function AdminModal(props: any) {
     : visibleSubjectNames;
 
   const filteredParents = parentsList.filter((p: any) => {
-    if (selectedStudentClassId) {
-      return Number(p.studentClassId) === Number(selectedStudentClassId)
-        && (!currentStudentSchoolId || Number(p.studentSchoolId) === Number(currentStudentSchoolId));
+    if (currentStudentSchoolId) {
+      const parentSchoolId = Number(p.studentSchoolId ?? p.schoolId ?? 0);
+      return parentSchoolId === Number(currentStudentSchoolId);
     }
-    if (currentStudentSchoolId && Number(p.studentSchoolId) !== Number(currentStudentSchoolId)) return false;
     return true;
   });
 
@@ -201,8 +200,7 @@ export default function AdminModal(props: any) {
   // Load parents from API by school/class when either changes (debug logs included)
   useEffect(() => {
     const schoolId = currentStudentSchoolId;
-    const classId = selectedStudentClassId;
-    if (!schoolId || !classId) {
+    if (!schoolId) {
       setLocalParents(null);
       return;
     }
@@ -211,19 +209,16 @@ export default function AdminModal(props: any) {
       try {
         const q = new URLSearchParams();
         q.set('schoolId', String(schoolId));
-        q.set('classId', String(classId));
         const json = await apiFetch(`/api/parents?${q.toString()}`);
         if (!mounted) return;
-        // replace local filtered parents with fetched list limited to same school/class
-        // Note: keep parentsList intact; update a local state for parents for this modal
-        setLocalParents(json || []);
+        setLocalParents(Array.isArray(json) && json.length > 0 ? json : null);
       } catch (err: any) {
-        console.error('Error loading parents for school/class', err?.message || err);
-        if (mounted) setLocalParents([]);
+        console.error('Error loading parents for school', err?.message || err);
+        if (mounted) setLocalParents(null);
       }
     })();
     return () => { mounted = false; };
-  }, [currentStudentSchoolId, selectedStudentClassId]);
+  }, [currentStudentSchoolId]);
 
   // When the global parentsList prop updates (for example after creating a new parent),
   // clear localParents so the component falls back to the refreshed `parentsList`.

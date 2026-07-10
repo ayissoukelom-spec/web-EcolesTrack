@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AdminView from './AdminView';
+import AdminModal from './AdminModal';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
 
 describe('AdminView create-user teacher form', () => {
@@ -19,6 +20,64 @@ describe('AdminView create-user teacher form', () => {
       },
       configurable: true,
     });
+  });
+
+  it('shows school-level parents even when they are not attached to the selected class', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 }, { id: 20, name: 'CM2', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [{ id: 55, userId: 6, name: 'Jean Attiogbe', email: 'jean@example.com', phone: '+228 90000000', schoolId: 1, studentSchoolId: 1, studentClassId: 20 }];
+    const users: User[] = [];
+
+    render(
+      <AdminModal
+        isModalOpen
+        onClose={() => undefined}
+        activeTab="students"
+        handleFormSubmit={() => undefined}
+        schoolForm={{ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] }}
+        setSchoolForm={() => undefined}
+        yearForm={{ name: '', isActive: false, schoolId: '' }}
+        setYearForm={() => undefined}
+        classForm={{ cycle: '', stream: '', section: '', group: '', schoolId: '' }}
+        setClassForm={() => undefined}
+        teacherForm={{ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' }}
+        setTeacherForm={() => undefined}
+        parentForm={{ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' }}
+        setParentForm={() => undefined}
+        studentForm={{ firstName: '', lastName: '', birthDate: '', schoolId: '1', classId: '10', parentId: '', academicYearId: '1', teacherIds: [], schoolAdminId: '', gender: '' }}
+        setStudentForm={() => undefined}
+        studentError={null}
+        newParentMode={false}
+        setNewParentMode={() => undefined}
+        newParentForm={{ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '1', gender: '' }}
+        setNewParentForm={() => undefined}
+        newTeacherMode={false}
+        setNewTeacherMode={() => undefined}
+        newTeacherForm={{ name: '', email: '', phone: '', specializations: [], schoolId: '1', assignedClassIds: [], gender: '' }}
+        setNewTeacherForm={() => undefined}
+        allowSelectOverflow={false}
+        setAllowSelectOverflow={() => undefined}
+        sortedParentPhonePrefixes={['+228']}
+        teacherSpecializations={[]}
+        schoolsList={schools}
+        yearsList={years}
+        teachersList={teachers}
+        parentsList={parents}
+        studentsList={students}
+        availableSchoolAdmins={users}
+        sortedClasses={classes}
+        defaultAcademicYearId={1}
+        handleSaveNewParent={() => undefined}
+        handleSaveNewTeacher={() => undefined}
+        userRole="super_admin"
+        currentSchoolId={1}
+      />
+    );
+
+    expect(screen.getByText('Jean Attiogbe')).toBeTruthy();
   });
 
   it('keeps the reject action available for approved classes', () => {

@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 
-// Allow only Unicode letters and spaces. Reject if any digit is present.
-const LETTERS_AND_SPACES_REGEX = /^[\p{L} ]+$/u;
-const DIGITS_REGEX = /\d+/g;
+// Allow Unicode letters, digits and common punctuation used in school/class names.
+const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/\-]+$/u;
 
 export default function validateNames(req: Request, res: Response, next: NextFunction) {
   if (!req.body || typeof req.body !== 'object') return next();
@@ -19,19 +18,9 @@ export default function validateNames(req: Request, res: Response, next: NextFun
     const trimmed = v.trim();
     if (trimmed.length === 0) continue;
 
-    const digits = trimmed.match(DIGITS_REGEX);
-    if (digits && digits.length > 0) {
-      const unique = Array.from(new Set(digits.join('').split(''))).slice(0, 10).join('');
+    if (!NAME_CHARACTERS_REGEX.test(trimmed)) {
       return res.status(400).json({
-        error: `Le champ '${check.field}' contient des chiffres (${unique}). Seules les lettres (avec accents) et les espaces sont autorisés.`,
-        field: check.field,
-        foundDigits: unique,
-      });
-    }
-
-    if (!LETTERS_AND_SPACES_REGEX.test(trimmed)) {
-      return res.status(400).json({
-        error: `Le champ '${check.field}' contient des caractères invalides. Seules les lettres (avec accents) et les espaces sont autorisés.`,
+        error: `Le champ '${check.field}' contient des caractères invalides. Seules les lettres, les chiffres et les espaces sont autorisés.`,
         field: check.field,
       });
     }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getSimulationHeaders, setActiveSchoolId, setSimulatedRole, setSimulatedUser } from './api';
+import { getSimulationHeaders, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -8,6 +8,18 @@ class MemoryStorage {
   setItem(key: string, value: string) { this.store.set(key, value); }
   removeItem(key: string) { this.store.delete(key); }
 }
+
+describe('validateClientNames', () => {
+  it('accepts class-like names containing digits and accents', () => {
+    expect(() => validateClientNames({ name: '6ème A' })).not.toThrow();
+    expect(() => validateClientNames({ name: 'CP1 A' })).not.toThrow();
+  });
+
+  it('accepts school and class names with common punctuation', () => {
+    expect(() => validateClientNames({ name: "École Notre-Dame" })).not.toThrow();
+    expect(() => validateClientNames({ name: 'CP1-B' })).not.toThrow();
+  });
+});
 
 describe('getSimulationHeaders', () => {
   beforeEach(() => {
