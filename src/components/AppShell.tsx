@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
-import { apiFetch, clearSimulatedRole, clearSimulatedUser, getSimulatedRole, getSimulatedSchoolId, getSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
+import { apiFetch, clearSimulatedRole, clearSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
 import LoginView from './LoginView.tsx';
@@ -21,8 +22,11 @@ import { useClasses } from '../hooks/useClasses.ts';
 import { useAbsences } from '../hooks/useAbsences.ts';
 
 export default function AppShell() {
-  const [currentRole, setCurrentRole] = useState<UserRole>('' as UserRole);
-  const [currentSchoolId, setCurrentSchoolId] = useState<number | null>(getSimulatedSchoolId());
+  const { user, role, activeSchoolId: currentSchoolId } = useAuth();
+  
+  // Type narrowing: after the guard below, currentRole is guaranteed to be UserRole (not "")
+  const currentRole: UserRole = role as UserRole;
+
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -49,7 +53,7 @@ export default function AppShell() {
   const { students: studentsList, refresh: refreshStudents, addStudent: addStudentApi, updateStudent: updateStudentApi, batchCreateStudents } = useStudents();
   const { absences: absencesList, refresh: refreshAbsences, addAbsence: addAbsenceApi, justifyAbsence } = useAbsences();
 
-  const simulatedUser = getSimulatedUser();
+  const simulatedUser = user;
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
 
   const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
@@ -123,12 +127,8 @@ export default function AppShell() {
   };
 
   useEffect(() => {
-    const savedRole = getSimulatedRole();
-    setCurrentRole(savedRole ? (savedRole as UserRole) : ('' as UserRole));
-
     const onPopState = () => {
-      const newRole = getSimulatedRole();
-      setCurrentRole(newRole ? (newRole as UserRole) : ('' as UserRole));
+      window.dispatchEvent(new Event('simulatedUserChanged'));
     };
 
     window.addEventListener('popstate', onPopState);
@@ -136,7 +136,6 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
-    setCurrentSchoolId(getSimulatedSchoolId());
     if (currentRole !== 'super_admin') {
       setSuperAdminSchoolFilterId(null);
     }
@@ -155,13 +154,11 @@ export default function AppShell() {
     if (!newRole) {
       clearSimulatedRole();
       clearSimulatedUser();
-      setCurrentRole('' as UserRole);
-      setCurrentSchoolId(null);
       window.history.replaceState(null, '', '/login');
       return;
     }
 
-    const existingSimUser = getSimulatedUser();
+    const existingSimUser = user;
     if (!existingSimUser) {
       if (newRole === 'teacher') {
         const preferred = teachersList.find((teacher) => teacher.schoolId === currentSchoolId) || teachersList[0];
@@ -178,16 +175,12 @@ export default function AppShell() {
     }
 
     setSimulatedRole(newRole);
-    setCurrentRole(newRole as UserRole);
-    setCurrentSchoolId(getSimulatedSchoolId());
     window.history.replaceState(null, '', '/');
   };
 
   const handleLogout = async () => {
     clearSimulatedRole();
     clearSimulatedUser();
-    setCurrentRole('' as UserRole);
-    setCurrentSchoolId(null);
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (error) {
@@ -413,7 +406,6 @@ export default function AppShell() {
     if (activeTab === 'notes' && currentRole !== 'parent') {
       return (
         <NotesView
-          userRole={currentRole}
           evaluationsList={activeEvaluations}
           gradesList={gradesList}
           studentsList={studentsList}
@@ -424,7 +416,6 @@ export default function AppShell() {
           teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
           teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
           teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
-          currentSchoolId={currentSchoolId}
           onAddEvaluation={handleAddEvaluation}
           onAddGrade={handleAddGrade}
         />
@@ -467,6 +458,7 @@ export default function AppShell() {
     return null;
   })();
 
+  // Guard: if no valid role, redirect to login
   if (!currentRole) {
     return <LoginView onLogin={handleRoleChange} />;
   }

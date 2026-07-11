@@ -1114,7 +1114,6 @@ export default function App() {
                   />
                 ) : (
                   <NotesView
-                    userRole={currentRole}
                     evaluationsList={activeEvaluations}
                     gradesList={gradesList}
                     studentsList={studentsList}
@@ -1126,7 +1125,6 @@ export default function App() {
                     teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
                     approvedSubjectsList={approvedSubjectsList}
                     teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
-                    currentSchoolId={currentSchoolId}
                     onAddEvaluation={handleAddEvaluation}
                     onAddGrade={handleAddGrade}
                   />

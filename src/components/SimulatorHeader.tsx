@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Shield, Settings, BookOpen, Users, Bell, Smartphone, RefreshCw } from 'lucide-react';
-import { getSimulatedRole, getSimulatedUser, setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
-import { School, AcademicYear, Class, Teacher, Student, Parent, User } from '../types';
+import { setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { School, AcademicYear, Class, Teacher, Student, Parent, User, UserRole } from '../types';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import CustomDropdown from './CustomDropdown';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
@@ -25,7 +26,7 @@ interface SimulatorHeaderProps {
 }
 
 export default function SimulatorHeader({
-  currentRole,
+  currentRole: _unusedCurrentRole,
   schoolsList,
   classesList = [],
   teachersList = [],
@@ -40,7 +41,12 @@ export default function SimulatorHeader({
   onManageAccounts,
   onLogout,
 }: SimulatorHeaderProps) {
-  const [simUser, setSimUser] = useState<any | null>(getSimulatedUser());
+  // Use AuthContext for role and user (ignoring prop currentRole for source of truth)
+  const { user, role } = useAuth();
+  const simUser = user as any; // Keep as any for flexible field access (backward compatible)
+  // Type assertion: role is UserRole | '' (empty string when no active role)
+  const currentRole: UserRole = role as UserRole;
+
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [profileFirstName, setProfileFirstName] = useState(simUser?.firstName || '');
@@ -50,39 +56,8 @@ export default function SimulatorHeader({
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
 
-  // Sync simUser with localStorage when it changes (e.g., after login or school selection)
-  useEffect(() => {
-    const onStorageChange = () => {
-      const updatedUser = getSimulatedUser();
-      setSimUser(updatedUser);
-    };
-
-    // Listen for custom event when setSimulatedUser is called in same tab
-    const onSimulatedUserChanged = (event: Event) => {
-      if (event instanceof CustomEvent) {
-        setSimUser(event.detail);
-      }
-    };
-
-    // Listen for storage changes (from other tabs)
-    window.addEventListener('storage', onStorageChange);
-    window.addEventListener('simulatedUserChanged', onSimulatedUserChanged);
-    
-    // Also sync on visibility change since the user might have switched tabs
-    const onVisibilityChange = () => {
-      if (!document.hidden) {
-        const updatedUser = getSimulatedUser();
-        setSimUser(updatedUser);
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      window.removeEventListener('storage', onStorageChange);
-      window.removeEventListener('simulatedUserChanged', onSimulatedUserChanged);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, []);
+  // No longer need to sync simUser with localStorage - AuthContext handles this
+  // via storage event listeners and 'simulatedUserChanged' custom event
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -145,24 +120,20 @@ export default function SimulatorHeader({
     try {
       if (simUser && simUser.id) {
         const resp = await apiFetch(`/api/users/${simUser.id}`, { method: 'PUT', body: payload });
-        // If API returns the updated user, persist that
+        // If API returns the updated user, persist that via setSimulatedUser
         if (resp && resp.id) {
-          setSimUser(resp);
           setSimulatedUser(resp);
         } else {
           const updatedUser = { ...simUser, ...payload };
-          setSimUser(updatedUser);
           setSimulatedUser(updatedUser);
         }
       } else {
         const updatedUser = { ...simUser, ...payload };
-        setSimUser(updatedUser);
         setSimulatedUser(updatedUser);
       }
     } catch (err) {
       console.error('Failed to persist profile changes to server, falling back to local update', err);
       const updatedUser = { ...simUser, ...payload };
-      setSimUser(updatedUser);
       setSimulatedUser(updatedUser);
     }
 
@@ -576,7 +547,7 @@ export default function SimulatorHeader({
                   className="w-full p-2 border rounded"
                   value={loginRole}
                   onChange={(e) => {
-                    const nextRole = e.target.value;
+                    const nextRole = e.target.value as 'super_admin' | 'school_admin' | 'teacher' | 'parent';
                     setLoginRole(nextRole);
                     if (nextRole !== 'super_admin') {
                       setLoginSchoolId(defaultSchoolId);
@@ -659,7 +630,7 @@ export default function SimulatorHeader({
                       // Persist simulation headers
                       setSimulatedRole(loginRole as any);
                       setSimulatedUser({ uid, email, name, schoolId: resolvedSchoolId });
-                      setSimUser({ uid, email, name, schoolId: resolvedSchoolId });
+                      // setSimulatedUser will trigger AuthContext update via 'simulatedUserChanged' event
                       // Trigger backend register-or-login to ensure user profile exists
                       try {
                         await apiFetch('/api/auth/register-or-login', { method: 'POST' });

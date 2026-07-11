@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
+import { useAuth } from '../contexts/AuthContext';
+import { Evaluation, Grade, Student, Class, UserRole } from '../types';
 import { sortClasses } from '../lib/classOrdering';
-import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
+import { isClassVisibleToSchool } from '../lib/classVisibility';
 import {
   Award,
   BookOpen,
@@ -29,7 +30,6 @@ import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 
 interface NotesViewProps {
-  userRole: UserRole;
   evaluationsList: Evaluation[];
   gradesList: Grade[];
   studentsList: Student[];
@@ -41,7 +41,6 @@ interface NotesViewProps {
   teacherSpecializations?: string[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
-  currentSchoolId?: number | null;
   onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
   onUpdateGrade?: (data: { gradeId: number; evaluationId: number; studentId: number; score: string; remarks: string }) => void | Promise<void>;
@@ -53,7 +52,6 @@ interface NotesViewProps {
 }
 
 export default function NotesView({
-  userRole,
   evaluationsList,
   gradesList,
   studentsList,
@@ -65,7 +63,6 @@ export default function NotesView({
   teacherSpecializations = [],
   approvedSubjectsList = [],
   teacherId,
-  currentSchoolId,
   onAddEvaluation,
   onAddGrade,
   onUpdateGrade,
@@ -73,6 +70,9 @@ export default function NotesView({
   testTriggerSaveForStudentId,
   onAddClass,
 }: NotesViewProps) {
+  const { role, activeSchoolId } = useAuth();
+  const userRole = role as UserRole;
+  const currentSchoolId = activeSchoolId;
   const sortedClasses = sortClasses(classesList || []);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
