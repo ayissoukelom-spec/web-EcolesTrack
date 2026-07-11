@@ -26,6 +26,7 @@ export function validateClientNames(payload: any) {
 const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
 const LOCAL_STORAGE_ACTIVE_SCHOOL_KEY = 'ecoletrack_active_school_id';
+const LOCAL_STORAGE_ACCESS_TOKEN_KEY = 'ecoletrack_jwt_access';
 const API_BASE_URL = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL
   ? String(import.meta.env.VITE_API_BASE_URL)
   : '';
@@ -56,6 +57,14 @@ export function getUiErrorMessage(error: unknown, fallback?: string): string | n
   }
 
   return fallback ?? null;
+}
+
+export function isUnauthorizedError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    ((error as any).status === 401 || (error as any).isUnauthorized === true)
+  );
 }
 
 export function getSimulatedRole(): string | null {
@@ -213,6 +222,10 @@ export function getSimulationHeaders(): Record<string, string> {
 // Global api fetcher that transparently injects simulation headers
 export async function apiFetch(endpoint: string, options: RequestInit = {}): Promise<any> {
   const headers = getSimulationHeaders();
+  const storedAccessToken = localStorage.getItem(LOCAL_STORAGE_ACCESS_TOKEN_KEY);
+  if (storedAccessToken) {
+    headers.Authorization = `Bearer ${storedAccessToken}`;
+  }
 
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const apiUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
@@ -260,6 +273,9 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     const errBody = await response.json().catch(() => ({}));
     const error = new Error(errBody.error || `HTTP error! status: ${response.status}`);
     (error as any).status = response.status;
+    if (response.status === 401) {
+      (error as any).isUnauthorized = true;
+    }
     throw error;
   }
 
@@ -288,6 +304,9 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     const errBody = await response.json().catch(() => ({}));
     const error = new Error(errBody.error || `HTTP error! status: ${response.status}`);
     (error as any).status = response.status;
+    if (response.status === 401) {
+      (error as any).isUnauthorized = true;
+    }
     throw error;
   }
 

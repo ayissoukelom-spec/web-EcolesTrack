@@ -21,9 +21,11 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
@@ -440,18 +442,22 @@ async function startServer() {
   // Global debug middleware for request/response tracing
   app.use((req, res, next) => {
     try {
-      console.log('📡 REQUEST:', req.method, req.url);
-      console.log('📦 BODY:', req.body);
+      console.log('📡 REQUEST:', req.method, req.url, {
+        hasBody: Boolean(req.body),
+        contentType: req.headers['content-type'] || null,
+      });
     } catch (err) {
       console.error('Failed to log request debug data:', err);
     }
 
     const originalJson = res.json.bind(res);
-    const originalSend = res.send.bind(res);
 
     (res as any).json = function (data: any) {
       try {
-        console.log('📤 RESPONSE:', res.statusCode, data);
+        console.log('📤 RESPONSE:', res.statusCode, req.method, req.url, {
+          hasBody: data != null,
+          bodyType: typeof data,
+        });
       } catch (err) {
         console.error('Failed to log response JSON debug data:', err);
       }
@@ -484,6 +490,9 @@ async function startServer() {
   // CORS or Security Headers can be set if needed
   app.use((req, res, next) => {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN'); // Allow embedding inside Google AI Studio
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
     next();
   });
 
@@ -1420,43 +1429,14 @@ async function startServer() {
   });
 
   // Local login with email + password
-  app.post('/api/auth/local-login', async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) return res.status(400).json({ error: 'Missing email or password' });
-
-      const normalizedEmail = email.trim().toLowerCase();
-      const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
-      if (usersFound.length === 0) return res.status(401).json({ error: 'Email ou mot de passe invalide' });
-      const userRecord = usersFound[0];
-      if (userRecord.role === 'student') return res.status(401).json({ error: 'Connexion non autorisée pour un compte élève' });
-
-      const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
-      if (authRows.length === 0) return res.status(401).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
-      const { passwordHash, salt, mustReset } = authRows[0] as any;
-
-      const crypto = await import('node:crypto');
-      const verifyHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
-      if (verifyHash !== passwordHash) return res.status(401).json({ error: 'Mot de passe incorrect' });
-
-      // If DB doesn't have mustReset column (undefined/null), detect whether stored hash equals default '123456' hash for this salt.
-      let localMustReset = !!mustReset;
-      if (typeof mustReset === 'undefined' || mustReset === null) {
-        try {
-          const defaultHash = crypto.pbkdf2Sync('123456', salt, 310000, 64, 'sha512').toString('hex');
-          localMustReset = (passwordHash === defaultHash);
-        } catch (e) {
-          localMustReset = false;
-        }
-      }
-
-      const response = { ...userRecord, mustReset: !!localMustReset } as any;
-      res.json(response);
-    } catch (err: any) {
-      console.error('Local login error:', err);
-      res.status(500).json({ error: err?.message || 'Login failed' });
-    }
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5, // max 5 attempts
+    message: { error: 'Too many login attempts, please try again later' },
+    standardHeaders: false,
+    legacyHeaders: false,
   });
+  app.post('/api/auth/local-login', loginLimiter, handleLocalLogin);
 
   // Local logout (no-op server-side for stateless simulation, returns success)
   app.post('/api/auth/logout', async (req, res) => {

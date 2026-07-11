@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
 import { users } from '../db/schema.ts';
 import { eq } from 'drizzle-orm';
@@ -33,6 +33,7 @@ export const verifyToken = async (
   res: Response,
   next: NextFunction
 ) => {
+  const isProduction = process.env.NODE_ENV === 'production';
   const authHeader = req.headers.authorization;
   const simulatedRoleHeader = req.headers['x-simulated-role'];
   const simulatedRole = typeof simulatedRoleHeader === 'string'
@@ -66,6 +67,10 @@ export const verifyToken = async (
       : null;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (isProduction) {
+      return res.status(401).json({ error: 'Unauthorized: Missing token' });
+    }
+
     if (simulatedRole) {
       req.user = {
         uid: simulatedUid || `sim_${simulatedRole}_123`,
@@ -84,16 +89,26 @@ export const verifyToken = async (
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const secret = process.env.JWT_SECRET || 'dev-jwt-secret';
-    const decoded: any = jwt.verify(token, secret);
+    const secret = process.env.JWT_SECRET ?? (isProduction ? undefined : 'dev-jwt-secret');
+    if (!secret) {
+      console.error('JWT_SECRET is not configured');
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+
+    const decoded = verifyJwt(token, secret);
     const uid = decoded?.uid;
-    if (!uid) {
+    const tokenType = decoded?.type;
+    const jti = decoded?.jti;
+
+    if (!uid || tokenType !== 'access' || !jti) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
+
     const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
     if (!dbUser) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
+
     req.user = {
       id: dbUser.id,
       uid: dbUser.uid,

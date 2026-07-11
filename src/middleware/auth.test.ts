@@ -1,5 +1,31 @@
-import { describe, expect, it, vi } from 'vitest';
-import { requireOwnership, requireRole, type AuthRequest } from './auth';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+var mockVerifyJwt: ReturnType<typeof vi.fn>;
+var mockWhere: ReturnType<typeof vi.fn>;
+var mockDb: { select: ReturnType<typeof vi.fn> };
+
+vi.mock('../db/index.ts', () => {
+  mockWhere = vi.fn();
+  mockDb = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: (...args: any[]) => mockWhere(...args),
+      })),
+    })),
+  };
+  return {
+    db: mockDb,
+  };
+});
+
+vi.mock('../lib/jwt.ts', () => {
+  mockVerifyJwt = vi.fn();
+  return {
+    verifyJwt: mockVerifyJwt,
+  };
+});
+
+import { requireOwnership, requireRole, type AuthRequest, verifyToken } from './auth';
 
 const createMockRes = () => {
   const res: any = {};
@@ -9,6 +35,142 @@ const createMockRes = () => {
 };
 
 describe('auth middleware access control', () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'test-jwt-secret';
+    mockDb.select.mockClear();
+    mockWhere.mockClear();
+    mockVerifyJwt.mockClear();
+  });
+
+  it('rejects simulated auth headers in production', async () => {
+    const req = { headers: { 'x-simulated-role': 'super_admin' } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('authorizes a valid JWT access token and populates req.user', async () => {
+    const token = 'valid-token';
+    const userRecord = {
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    };
+
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: userRecord.uid,
+      type: 'access',
+      jti: 'jti-99',
+    });
+    mockWhere.mockResolvedValueOnce([userRecord]);
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toMatchObject({
+      id: userRecord.id,
+      uid: userRecord.uid,
+      email: userRecord.email,
+      name: userRecord.name,
+      role: userRecord.role,
+      appRole: 'teacher',
+      schoolId: userRecord.schoolId,
+    });
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid JWT signature without falling back to simulated auth', async () => {
+    const token = 'invalid-token';
+    mockVerifyJwt.mockImplementationOnce(() => {
+      throw new Error('invalid signature');
+    });
+
+    const req = { headers: { authorization: `Bearer ${token}`, 'x-simulated-role': 'teacher' } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('rejects a non-access token type', async () => {
+    const token = 'wrong-type-token';
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: 'user_99',
+      type: 'refresh',
+      jti: 'jti-99',
+    });
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('rejects an expired JWT token', async () => {
+    const token = 'expired-token';
+    mockVerifyJwt.mockImplementationOnce(() => {
+      throw new Error('jwt expired');
+    });
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('authorizes simulated auth headers in development when no token is present', async () => {
+    process.env.NODE_ENV = 'development';
+    delete process.env.JWT_SECRET;
+
+    const req = {
+      headers: {
+        'x-simulated-role': 'teacher',
+        'x-simulated-uid': 'sim_teacher_1',
+        'x-simulated-email': 'teacher@sim.local',
+        'x-simulated-name': 'Sim Teacher',
+        'x-simulated-school-id': '7',
+      },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toMatchObject({
+      uid: 'sim_teacher_1',
+      email: 'teacher@sim.local',
+      name: 'Sim Teacher',
+      role: 'teacher',
+      appRole: 'teacher',
+      schoolId: 7,
+      simulated: true,
+    });
+  });
+
   it('autorise un role admin sur requireRole', () => {
     const req = { user: { appRole: 'admin' } } as any as AuthRequest;
     const res = createMockRes();

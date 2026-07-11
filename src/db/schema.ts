@@ -67,6 +67,28 @@ export const localAuths = pgTable('local_auths', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// 3c. Blacklisted tokens to support revocation and token invalidation
+export const tokenBlacklist = pgTable('token_blacklist', {
+  id: serial('id').primaryKey(),
+  token: text('token').notNull().unique(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  blacklistedAt: timestamp('blacklisted_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+});
+
+// 3d. Refresh token session metadata for future rotation and revocation support
+export const tokenSessions = pgTable('token_sessions', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  refreshTokenId: text('refresh_token_id').notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  lastUsedAt: timestamp('last_used_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  revokedAt: timestamp('revoked_at'),
+});
+
 // 4. Teachers
 export const teachers = pgTable('teachers', {
   id: serial('id').primaryKey(),

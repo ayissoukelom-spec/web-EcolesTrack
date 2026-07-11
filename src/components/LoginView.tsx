@@ -4,8 +4,18 @@ import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
 import logoImage from '../assets/logo.png';
 
+const ACCESS_TOKEN_STORAGE_KEY = 'ecoletrack_jwt_access';
+
 interface Props {
   onLogin: (role: string) => void;
+}
+
+function persistAccessToken(token: unknown) {
+  if (typeof token === 'string' && token.trim()) {
+    localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+    return;
+  }
+  localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
 }
 
 export default function LoginView({ onLogin }: Props) {
@@ -56,11 +66,14 @@ export default function LoginView({ onLogin }: Props) {
 
       const user = await response.json();
       setLoggedInUser(user);
+      persistAccessToken(user.token);
+
       if (user.mustReset) {
         setShowChangePassword(true);
         setLoading(false);
         return;
       }
+
       // Persist simulation state locally so apiFetch will include headers
       setSimulatedRole(user.role || 'parent');
       // Reset any previously selected school before membership sync
