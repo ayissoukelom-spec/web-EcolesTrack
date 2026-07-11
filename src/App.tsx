@@ -13,16 +13,14 @@ import {
 } from './types.ts';
 import {
   apiFetch,
-  getSimulatedRole,
   getUiErrorMessage,
   setSimulatedRole,
   clearSimulatedRole,
   clearSimulatedUser,
-  getSimulatedSchoolId,
-  getSimulatedUser,
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
+import { useAuth } from './contexts/AuthContext.tsx';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
@@ -54,8 +52,9 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [currentRole, setCurrentRole] = useState<UserRole>('' as UserRole);
-  const [currentSchoolId, setCurrentSchoolId] = useState<number | null>(getSimulatedSchoolId());
+  const { user: authenticatedUser, role, activeSchoolId } = useAuth();
+  const currentRole = role as UserRole;
+  const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -105,8 +104,7 @@ export default function App() {
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
 
-  const simulatedUser = getSimulatedUser();
-  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
+  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
   const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
@@ -119,15 +117,15 @@ export default function App() {
     : [];
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
-  const noteOverdueCount = currentRole === 'parent'
-    ? 0
-    : countOverdueEvaluations(
+  const noteOverdueCount = currentRole === 'teacher' || currentRole === 'school_admin' || currentRole === 'super_admin'
+    ? countOverdueEvaluations(
       evaluationsList,
       studentsList,
       gradesList,
-      currentRole,
+      currentRole as UserRole,
       currentRole === 'teacher' ? currentTeacherProfile?.id : undefined,
-    );
+    )
+    : 0;
 
   const normalizeStudentsPayload = (payload: unknown): Student[] => {
     if (Array.isArray(payload)) return payload as Student[];
@@ -259,20 +257,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    // Read cached role
-    const savedRole = getSimulatedRole();
-    setCurrentRole(savedRole ? (savedRole as UserRole) : ('' as UserRole));
-
-    // Handle browser back/forward (popstate)
-    const onPopState = () => {
-      const newRole = getSimulatedRole();
-      setCurrentRole(newRole ? (newRole as UserRole) : ('' as UserRole));
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-
   // When Super Admin selects a school filter, fetch classes annotated for that school
   // so that global classes approved for the school have their `status` populated.
   useEffect(() => {
@@ -294,12 +278,11 @@ export default function App() {
   }, [teachersList]);
 
   useEffect(() => {
-    setCurrentSchoolId(getSimulatedSchoolId());
-    if (currentRole !== 'super_admin') {
+    if (role !== 'super_admin') {
       setSuperAdminSchoolFilterId(null);
     }
-    if (currentRole) fetchAllData();
-  }, [currentRole]);
+    if (role) fetchAllData();
+  }, [role]);
 
   useEffect(() => {
     if (activeTab === 'audit' && currentRole === 'super_admin') {
@@ -311,13 +294,11 @@ export default function App() {
     if (!newRole) {
       clearSimulatedRole();
       clearSimulatedUser();
-      setCurrentRole('' as UserRole);
-      setCurrentSchoolId(null);
       window.history.replaceState(null, '', '/login');
       return;
     }
     // Ensure there's a simulated user set when switching roles quickly.
-    const existingSimUser = getSimulatedUser();
+    const existingSimUser = authenticatedUser;
     if (!existingSimUser) {
       if (newRole === 'teacher') {
         // pick a teacher in the current school if available, otherwise a generic teacher
@@ -335,17 +316,12 @@ export default function App() {
     }
 
     setSimulatedRole(newRole);
-    const simulatedSchoolId = getSimulatedSchoolId();
-    setCurrentRole(newRole as UserRole);
-    setCurrentSchoolId(simulatedSchoolId);
     window.history.replaceState(null, '', '/');
   };
 
   const handleLogout = async () => {
     clearSimulatedRole();
     clearSimulatedUser();
-    setCurrentRole('' as UserRole);
-    setCurrentSchoolId(null);
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (e) {
@@ -437,7 +413,7 @@ export default function App() {
 
   const handleApproveClass = async (id: number) => {
     try {
-      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné pour approuver la classe');
       await apiFetch(`/api/schools/${schoolId}/classes/${id}/approve`, { method: 'POST' });
       setClassesList((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'approved' } : c)));
@@ -450,7 +426,7 @@ export default function App() {
 
   const handleRejectClass = async (id: number) => {
     try {
-      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné pour refuser la classe');
       await apiFetch(`/api/schools/${schoolId}/classes/${id}/reject`, { method: 'POST' });
       setClassesList((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'rejected' } : c)));
@@ -748,7 +724,7 @@ export default function App() {
 
   const handleApproveSubject = async (id: number) => {
     try {
-      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/approve`, { method: 'POST' });
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'approved' } : s)));
@@ -761,7 +737,7 @@ export default function App() {
 
   const handleRejectSubject = async (id: number) => {
     try {
-      const schoolId = currentSchoolId ?? getSimulatedSchoolId();
+      const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/reject`, { method: 'POST' });
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'rejected' } : s)));
@@ -795,7 +771,7 @@ export default function App() {
 
   // If not authenticated, render SPA login view
   if (!currentRole) {
-    return <LoginView onLogin={(role) => { setSimulatedRole(role); setCurrentSchoolId(getSimulatedSchoolId()); setCurrentRole(role as UserRole); }} />;
+    return <LoginView onLogin={(role) => { setSimulatedRole(role); }} />;
   }
 
   // Centralized filtering of evaluations: separate active from archived
