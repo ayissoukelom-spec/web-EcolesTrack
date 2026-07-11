@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext.tsx';
 
@@ -141,15 +141,18 @@ describe('AuthContext', () => {
   });
 
   it('updates user and role when simulatedUserChanged event fires', () => {
+    const listeners: Record<string, Function[]> = {};
+
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       value: {
         addEventListener: vi.fn((event, callback) => {
-          if (event === 'simulatedUserChanged') {
-            setTimeout(() => callback(new CustomEvent('simulatedUserChanged', { detail: { uid: 'sim_parent_456', email: 'parent@example.test', name: 'Parent', schoolId: 7 } } as any)), 0);
-          }
+          listeners[event] = listeners[event] || [];
+          listeners[event].push(callback);
         }),
-        removeEventListener: vi.fn(),
+        removeEventListener: vi.fn((event, callback) => {
+          listeners[event] = (listeners[event] || []).filter((listener) => listener !== callback);
+        }),
       },
     });
 
@@ -168,6 +171,9 @@ describe('AuthContext', () => {
       removeItem(key: string) {
         this.store.delete(key);
       },
+      clear() {
+        this.store.clear();
+      },
     };
 
     Object.defineProperty(globalThis, 'localStorage', {
@@ -183,6 +189,88 @@ describe('AuthContext', () => {
 
     render(<Wrapper />);
 
+    expect(screen.getByTestId('role').textContent).toBe('parent');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('7');
+
+    listeners.simulatedUserChanged?.forEach((callback) => callback(new Event('simulatedUserChanged')));
+
+    expect(screen.getByTestId('isSimulated').textContent).toBe('true');
+    expect(screen.getByTestId('user').textContent).toContain('sim_parent_456');
+    expect(screen.getByTestId('role').textContent).toBe('parent');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('7');
+  });
+
+  it('refreshes all auth fields when storage event updates simulated role or active school id', async () => {
+    const listeners: Record<string, Function[]> = {};
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        addEventListener: vi.fn((event, callback) => {
+          listeners[event] = listeners[event] || [];
+          listeners[event].push(callback);
+        }),
+        removeEventListener: vi.fn((event, callback) => {
+          listeners[event] = (listeners[event] || []).filter((listener) => listener !== callback);
+        }),
+      },
+    });
+
+    const localStorageMock = {
+      store: new Map<string, string>([
+        ['ecoletrack_simulated_role', 'teacher'],
+        ['ecoletrack_simulated_user', JSON.stringify({ uid: 'sim_teacher_123', email: 'teacher@example.test', name: 'Teacher', schoolId: 12 })],
+        ['ecoletrack_active_school_id', '12'],
+      ]),
+      getItem(key: string) {
+        return this.store.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        this.store.set(key, value);
+      },
+      removeItem(key: string) {
+        this.store.delete(key);
+      },
+      clear() {
+        this.store.clear();
+      },
+    };
+
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: localStorageMock,
+    });
+
+    const Wrapper = () => (
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>
+    );
+
+    render(<Wrapper />);
+
+    expect(screen.getByTestId('role').textContent).toBe('teacher');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('12');
+    expect(screen.getByTestId('isSimulated').textContent).toBe('true');
+
+    localStorageMock.setItem('ecoletrack_simulated_role', 'parent');
+    localStorageMock.setItem('ecoletrack_active_school_id', '7');
+    localStorageMock.setItem('ecoletrack_simulated_user', JSON.stringify({ uid: 'sim_parent_456', email: 'parent@example.test', name: 'Parent', schoolId: 7 }));
+
+    const storageEvent = {
+      key: 'ecoletrack_simulated_role',
+      newValue: 'parent',
+      oldValue: 'teacher',
+      storageArea: localStorageMock as unknown as Storage,
+      url: 'http://localhost',
+    } as StorageEvent;
+
+    act(() => {
+      listeners.storage?.forEach((callback) => callback(storageEvent));
+    });
+
+    expect(screen.getByTestId('isSimulated').textContent).toBe('true');
+    expect(screen.getByTestId('user').textContent).toContain('sim_parent_456');
     expect(screen.getByTestId('role').textContent).toBe('parent');
     expect(screen.getByTestId('activeSchoolId').textContent).toBe('7');
   });

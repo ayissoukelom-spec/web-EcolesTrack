@@ -51,6 +51,18 @@ function readRole(): UserRole | '' {
   return (user?.role ?? '') as UserRole;
 }
 
+const ACTIVE_SCHOOL_ID_KEY = 'ecoletrack_active_school_id';
+
+function readAuthState() {
+  return {
+    token: readAuthToken(),
+    user: readSimulatedUser(),
+    isSimulated: readIsSimulated(),
+    role: readRole(),
+    activeSchoolId: readActiveSchoolId(),
+  };
+}
+
 function readActiveSchoolId(): number | null {
   if (typeof window === 'undefined') return null;
   return getActiveSchoolId();
@@ -64,22 +76,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeSchoolId, setActiveSchoolId] = useState<number | null>(() => readActiveSchoolId());
 
   useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === ACCESS_TOKEN_STORAGE_KEY) {
-        setToken(event.newValue || null);
-      }
+    const updateAuthState = () => {
+      const authState = readAuthState();
+      setToken(authState.token);
+      setUser(authState.user);
+      setIsSimulated(authState.isSimulated);
+      setRole(authState.role);
+      setActiveSchoolId(authState.activeSchoolId);
+    };
 
-      if (event.key === SIMULATED_ROLE_KEY || event.key === SIMULATED_USER_KEY) {
-        setUser(readSimulatedUser());
-        setIsSimulated(readIsSimulated());
+    const onStorage = (event: StorageEvent) => {
+      const shouldRefresh =
+        event.key === ACCESS_TOKEN_STORAGE_KEY ||
+        event.key === SIMULATED_ROLE_KEY ||
+        event.key === SIMULATED_USER_KEY ||
+        event.key === ACTIVE_SCHOOL_ID_KEY ||
+        event.key === null;
+
+      if (shouldRefresh) {
+        updateAuthState();
       }
     };
 
     const onSimulatedUserChanged = () => {
-      setUser(readSimulatedUser());
-      setIsSimulated(readIsSimulated());
-      setRole(readRole());
-      setActiveSchoolId(readActiveSchoolId());
+      updateAuthState();
     };
 
     window.addEventListener('storage', onStorage);
