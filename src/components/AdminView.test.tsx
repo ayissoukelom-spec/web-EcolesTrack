@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthProvider } from '../contexts/AuthContext.tsx';
 import AdminView from './AdminView';
 import AdminModal from './AdminModal';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
+
+const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 
 describe('AdminView create-user teacher form', () => {
   afterEach(() => {
@@ -154,7 +157,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [];
     const users: User[] = [];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="school_admin"
         schoolsList={schools}
@@ -205,7 +208,7 @@ describe('AdminView create-user teacher form', () => {
       { id: 13, name: '2nde', schoolId: 1, academicYearId: 1 },
     ];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="super_admin"
         schoolsList={schools}
@@ -266,7 +269,7 @@ describe('AdminView create-user teacher form', () => {
       { id: 15, name: 'Tle', schoolId: 1, academicYearId: 1 },
     ];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="super_admin"
         schoolsList={schools}
@@ -316,7 +319,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [];
     const users: User[] = [];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="super_admin"
         schoolsList={schools}
@@ -365,7 +368,7 @@ describe('AdminView create-user teacher form', () => {
     const users: User[] = [];
     const subjects = [{ id: 1, name: 'Mathématiques', schoolId: 1 }, { id: 2, name: 'Physique', schoolId: 1 }];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="super_admin"
         schoolsList={schools}
@@ -429,7 +432,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [];
     const users: User[] = [];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="super_admin"
         schoolsList={schools}
@@ -469,7 +472,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [];
     const users: User[] = [{ id: 2, uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', role: 'teacher', schoolId: 1 }];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="teacher"
         schoolsList={schools}
@@ -509,7 +512,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [];
     const users: User[] = [];
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="teacher"
         schoolsList={schools}
@@ -559,7 +562,7 @@ describe('AdminView create-user teacher form', () => {
       return null;
     });
 
-    render(
+    renderWithAuth(
       <AdminView
         userRole="teacher"
         schoolsList={schools}

@@ -11,7 +11,8 @@ import type {
   Student,
   UserRole,
 } from '../types.ts';
-import { fetchBulletinDetail, getSimulatedUser, apiFetch } from '../lib/api.ts';
+import { fetchBulletinDetail, apiFetch } from '../lib/api.ts';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import { useBulletinsList } from '../hooks/useBulletinsList.ts';
 import { useBulletinDetail } from '../hooks/useBulletinDetail.ts';
 import { useGenerateBulletin } from '../hooks/useGenerateBulletin.ts';
@@ -64,6 +65,7 @@ export default function BulletinsView({
   const canList = currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher' || currentRole === 'parent';
   const isTeacher = currentRole === 'teacher';
   const isParent = currentRole === 'parent';
+  const { user: simulated } = useAuth();
 
   const [filters, setFilters] = useState<{ classId?: number; studentId?: number; termId?: number }>({});
   const [page, setPage] = useState(1);
@@ -159,7 +161,6 @@ export default function BulletinsView({
 
   const suggestedParentStudentId = useMemo(() => {
     if (!isParent) return null;
-    const simulated = getSimulatedUser();
     const parentName = String(simulated?.name || '').trim().toLowerCase();
     const parentEmail = String(simulated?.email || '').trim().toLowerCase();
 
@@ -265,7 +266,6 @@ export default function BulletinsView({
     const detail = await detailHook.loadDetail(id);
     if (!detail || !isParent) return;
 
-    const simulated = getSimulatedUser();
     const uid = simulated?.uid;
     if (!uid) return;
 
@@ -277,7 +277,6 @@ export default function BulletinsView({
   const loadParentCached = async () => {
     if (!isParent) return;
 
-    const simulated = getSimulatedUser();
     const uid = simulated?.uid;
     if (!uid) return;
 

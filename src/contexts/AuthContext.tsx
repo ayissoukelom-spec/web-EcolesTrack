@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UserRole } from '../types.ts';
-import { getSimulatedRole, getSimulatedUser } from '../lib/api.ts';
+import { getActiveSchoolId, getSimulatedRole, getSimulatedUser } from '../lib/api.ts';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'ecoletrack_jwt_access';
 const SIMULATED_ROLE_KEY = 'ecoletrack_simulated_role';
@@ -22,6 +22,8 @@ export interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   isSimulated: boolean;
+  role: UserRole | '';
+  activeSchoolId: number | null;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -41,10 +43,25 @@ function readIsSimulated(): boolean {
   return Boolean(getSimulatedRole());
 }
 
+function readRole(): UserRole | '' {
+  if (typeof window === 'undefined') return '' as UserRole;
+  const simulatedRole = getSimulatedRole();
+  if (simulatedRole) return simulatedRole as UserRole;
+  const user = getSimulatedUser();
+  return (user?.role ?? '') as UserRole;
+}
+
+function readActiveSchoolId(): number | null {
+  if (typeof window === 'undefined') return null;
+  return getActiveSchoolId();
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => readAuthToken());
   const [user, setUser] = useState<AuthUser | null>(() => readSimulatedUser());
   const [isSimulated, setIsSimulated] = useState<boolean>(() => readIsSimulated());
+  const [role, setRole] = useState<UserRole | ''>(() => readRole());
+  const [activeSchoolId, setActiveSchoolId] = useState<number | null>(() => readActiveSchoolId());
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -61,6 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onSimulatedUserChanged = () => {
       setUser(readSimulatedUser());
       setIsSimulated(readIsSimulated());
+      setRole(readRole());
+      setActiveSchoolId(readActiveSchoolId());
     };
 
     window.addEventListener('storage', onStorage);
@@ -78,8 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       isAuthenticated: Boolean(token),
       isSimulated,
+      role,
+      activeSchoolId,
     }),
-    [token, user, isSimulated],
+    [token, user, isSimulated, role, activeSchoolId],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

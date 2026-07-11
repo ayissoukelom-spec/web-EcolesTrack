@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Student, Absence, Grade, SystemNotification, UserRole, Parent } from '../types.ts';
-import { getSimulatedUser } from '../lib/api.ts';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import { getPublicationLabel } from '../lib/dateFormatting';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import {
@@ -48,7 +48,7 @@ export default function MobileParentView({
   // States for live alerts inside simulator
   const [pushedAlert, setPushedAlert] = useState<SystemNotification | null>(null);
 
-  const simulatedUser = getSimulatedUser();
+  const { user: simulatedUser } = useAuth();
   const parentEmail = simulatedUser?.email || 'marianne.dubois@gmail.com';
 
   const currentEmail = simulatedUser?.email?.toLowerCase();

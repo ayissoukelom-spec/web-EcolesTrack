@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Award, BarChart3, BookOpen, UserRound } from 'lucide-react';
 import { Evaluation, Grade, Parent, Student, UserRole } from '../types.ts';
-import { getSimulatedUser } from '../lib/api.ts';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor.ts';
 
 interface ParentNotesViewProps {
@@ -62,7 +62,7 @@ export default function ParentNotesView({
   const [selectedSubjectKey, setSelectedSubjectKey] = useState<string>('all');
   const [sortMode, setSortMode] = useState<'recent' | 'subject-asc' | 'subject-desc'>('recent');
 
-  const simulatedUser = getSimulatedUser();
+  const { user: simulatedUser } = useAuth();
   const currentEmail = simulatedUser?.email?.toLowerCase();
   const currentUid = simulatedUser?.uid || '';
   const parsedUidSuffix = currentUid ? Number(currentUid.split('_').pop()) : NaN;

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext.tsx';
 
 function TestConsumer() {
-  const { user, token, isAuthenticated, isSimulated } = useAuth();
+  const { user, token, isAuthenticated, isSimulated, role, activeSchoolId } = useAuth();
 
   return (
     <div>
@@ -12,6 +12,8 @@ function TestConsumer() {
       <div data-testid="token">{token ?? 'no-token'}</div>
       <div data-testid="isAuthenticated">{isAuthenticated ? 'true' : 'false'}</div>
       <div data-testid="isSimulated">{isSimulated ? 'true' : 'false'}</div>
+      <div data-testid="role">{role || 'no-role'}</div>
+      <div data-testid="activeSchoolId">{activeSchoolId !== null ? String(activeSchoolId) : 'no-school'}</div>
     </div>
   );
 }
@@ -61,6 +63,8 @@ describe('AuthContext', () => {
     expect(screen.getByTestId('token').textContent).toBe('jwt-token');
     expect(screen.getByTestId('isAuthenticated').textContent).toBe('true');
     expect(screen.getByTestId('user').textContent).toBe('no-user');
+    expect(screen.getByTestId('role').textContent).toBe('no-role');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('no-school');
   });
 
   it('exposes unauthenticated state when JWT is absent', () => {
@@ -93,28 +97,15 @@ describe('AuthContext', () => {
         store: new Map<string, string>(),
         getItem(key: string) {
           if (key === 'ecoletrack_simulated_role') return 'teacher';
-          if (key === 'ecoletrack_simulated_user') return JSON.stringify({ uid: 'sim_teacher_123', email: 'teacher@example.test', name: 'Teacher' });
+          if (key === 'ecoletrack_simulated_user') return JSON.stringify({ uid: 'sim_teacher_123', email: 'teacher@example.test', name: 'Teacher', schoolId: 12 });
+          if (key === 'ecoletrack_active_school_id') return '12';
           return null;
         },
-      },
-    });
-
-    Object.defineProperty(globalThis, 'window', {
-      configurable: true,
-      value: {
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      },
-    });
-
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        store: new Map<string, string>(),
-        getItem(key: string) {
-          if (key === 'ecoletrack_simulated_role') return 'teacher';
-          if (key === 'ecoletrack_simulated_user') return JSON.stringify({ uid: 'sim_teacher_123', email: 'teacher@example.test', name: 'Teacher' });
-          return null;
+        setItem(key: string, value: string) {
+          this.store.set(key, value);
+        },
+        removeItem(key: string) {
+          this.store.delete(key);
         },
       },
     });
@@ -127,9 +118,11 @@ describe('AuthContext', () => {
 
     render(<Wrapper />);
 
-    expect(screen.getAllByTestId('isAuthenticated').pop()?.textContent).toBe('false');
-    expect(screen.getAllByTestId('isSimulated').pop()?.textContent).toBe('true');
-    expect(screen.getAllByTestId('user').pop()?.textContent).toContain('sim_teacher_123');
+    expect(screen.getByTestId('isAuthenticated').textContent).toBe('false');
+    expect(screen.getByTestId('isSimulated').textContent).toBe('true');
+    expect(screen.getByTestId('user').textContent).toContain('sim_teacher_123');
+    expect(screen.getByTestId('role').textContent).toBe('teacher');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('12');
   });
 
   it('renders a component that does not use useAuth without error', () => {
@@ -145,5 +138,52 @@ describe('AuthContext', () => {
 
     render(<Wrapper />);
     expect(screen.getByText('hello world')).toBeTruthy();
+  });
+
+  it('updates user and role when simulatedUserChanged event fires', () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        addEventListener: vi.fn((event, callback) => {
+          if (event === 'simulatedUserChanged') {
+            setTimeout(() => callback(new CustomEvent('simulatedUserChanged', { detail: { uid: 'sim_parent_456', email: 'parent@example.test', name: 'Parent', schoolId: 7 } } as any)), 0);
+          }
+        }),
+        removeEventListener: vi.fn(),
+      },
+    });
+
+    const localStorageMock = {
+      store: new Map<string, string>([
+        ['ecoletrack_simulated_role', 'parent'],
+        ['ecoletrack_simulated_user', JSON.stringify({ uid: 'sim_parent_456', email: 'parent@example.test', name: 'Parent', schoolId: 7 })],
+        ['ecoletrack_active_school_id', '7'],
+      ]),
+      getItem(key: string) {
+        return this.store.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        this.store.set(key, value);
+      },
+      removeItem(key: string) {
+        this.store.delete(key);
+      },
+    };
+
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: localStorageMock,
+    });
+
+    const Wrapper = () => (
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>
+    );
+
+    render(<Wrapper />);
+
+    expect(screen.getByTestId('role').textContent).toBe('parent');
+    expect(screen.getByTestId('activeSchoolId').textContent).toBe('7');
   });
 });

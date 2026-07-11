@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { apiFetch, getSimulatedSchoolId, getSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { apiFetch, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
 import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
@@ -635,7 +636,7 @@ export default function AdminView({
     return text.toLowerCase().includes(searchQuery.toLowerCase());
   };
 
-  const simulatedUser = getSimulatedUser();
+  const { user: simulatedUser } = useAuth();
   const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid)
     || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
   const currentUserId = currentUser?.id;
