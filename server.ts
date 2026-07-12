@@ -4586,7 +4586,15 @@ export async function createApp() {
 
     try {
       const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!actor) {
+        if (req.user && req.user.role !== 'super_admin') {
+          return res.status(403).json({ error: 'Forbidden: missing or invalid school context' });
+        }
+        return res.status(404).json({ error: 'User not found' });
+      }
+      if (actor.role !== 'super_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'Forbidden: missing or invalid school context' });
+      }
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
