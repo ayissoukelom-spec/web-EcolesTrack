@@ -375,8 +375,8 @@ function createMockDb() {
     },
     update(table?: any) {
       return {
-        set: (values: any) => ({
-          where: async (cond: any) => {
+        set: (values: any) => {
+          const executeUpdate = async (cond: any) => {
             const conditions = extractConditions(cond);
             const tableName = resolveTableName(table);
             if (conditions.id != null) {
@@ -396,8 +396,32 @@ function createMockDb() {
               }
             }
             return [];
-          },
-        }),
+          };
+
+          const createWhereResult = (cond: any) => {
+            let promise: Promise<any> | null = null;
+            const response: any = {
+              returning: async () => {
+                promise = promise || executeUpdate(cond);
+                return promise;
+              },
+              then(onfulfilled: any, onrejected: any) {
+                promise = promise || executeUpdate(cond);
+                return promise.then(onfulfilled, onrejected);
+              },
+            };
+            return response;
+          };
+
+          return {
+            where: (cond: any) => createWhereResult(cond),
+            returning: () => ({
+              where: async (cond: any) => {
+                return executeUpdate(cond);
+              },
+            }),
+          };
+        },
       };
     },
     delete(table?: any) {
@@ -804,6 +828,81 @@ describe('E2E security: auth & privilege checks', () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toHaveProperty('error');
+  });
+
+  describe('PUT /api/classes/:id', () => {
+    it('super_admin can update the teacher for a class in any school', async () => {
+      const res = await request(app)
+        .put('/api/classes/1')
+        .set('Authorization', 'Bearer token-super')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: 1, teacherId: 88 });
+    });
+
+    it('school_admin with schoolId can update the teacher for a class in their own school', async () => {
+      const res = await request(app)
+        .put('/api/classes/1')
+        .set('Authorization', 'Bearer token-school')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: 1, teacherId: 88 });
+    });
+
+    it('school_admin with schoolId cannot update a class in another school', async () => {
+      const res = await request(app)
+        .put('/api/classes/3')
+        .set('Authorization', 'Bearer token-school')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('teacher cannot update a class', async () => {
+      const res = await request(app)
+        .put('/api/classes/1')
+        .set('Authorization', 'Bearer token-teacher')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('parent cannot update a class', async () => {
+      const res = await request(app)
+        .put('/api/classes/1')
+        .set('x-simulated-role', 'parent')
+        .set('x-simulated-uid', 'sim-parent')
+        .set('x-simulated-email', 'parent@x.test')
+        .set('x-simulated-school-id', '10')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('returns 400 for invalid teacherId', async () => {
+      const res = await request(app)
+        .put('/api/classes/1')
+        .set('Authorization', 'Bearer token-super')
+        .send({ teacherId: 'not-a-number' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('returns 404 when class does not exist', async () => {
+      const res = await request(app)
+        .put('/api/classes/999')
+        .set('Authorization', 'Bearer token-super')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error');
+    });
   });
 
   describe('DELETE /api/classes/:id', () => {
