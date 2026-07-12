@@ -68,18 +68,22 @@ export function isUnauthorizedError(error: unknown): boolean {
 }
 
 export function getSimulatedRole(): string | null {
+  if (typeof localStorage === 'undefined') return null;
   return localStorage.getItem(LOCAL_STORAGE_ROLE_KEY) || null;
 }
 
 export function setSimulatedRole(role: string) {
+  if (typeof localStorage === 'undefined') return;
   localStorage.setItem(LOCAL_STORAGE_ROLE_KEY, role);
 }
 
 export function clearSimulatedRole() {
+  if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(LOCAL_STORAGE_ROLE_KEY);
 }
 
 export function getSimulatedUser() {
+  if (typeof localStorage === 'undefined') return null;
   try {
     const user = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
     return user ? JSON.parse(user) : null;
@@ -89,6 +93,7 @@ export function getSimulatedUser() {
 }
 
 export function setSimulatedUser(user: any) {
+  if (typeof localStorage === 'undefined') return;
   localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(user));
   // Emit custom event so all components can sync without props drilling
   try {
@@ -99,11 +104,13 @@ export function setSimulatedUser(user: any) {
 }
 
 export function clearSimulatedUser() {
+  if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
   localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
 }
 
 export function getActiveSchoolId(): number | null {
+  if (typeof localStorage === 'undefined') return null;
   const value = localStorage.getItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
   if (!value) return null;
   const parsed = Number(value);
@@ -111,6 +118,7 @@ export function getActiveSchoolId(): number | null {
 }
 
 export function setActiveSchoolId(schoolId: number | null) {
+  if (typeof localStorage === 'undefined') return;
   if (schoolId == null) {
     localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
     return;

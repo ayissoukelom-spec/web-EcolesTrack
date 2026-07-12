@@ -381,8 +381,8 @@ export default function AdminModal(props: any) {
                   <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de classes</label>
+              <fieldset className="space-y-3">
+                <legend className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de classes</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3">
                   {classGroups.map((group: any) => {
                     const isSelected = (schoolForm.selectedClassGroups || []).includes(String(group.id));
@@ -408,6 +408,7 @@ export default function AdminModal(props: any) {
                     );
                   })}
                 </div>
+              </fieldset>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 mt-4">Classes existantes</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
                   {visibleClassNames.map((name) => (
@@ -485,7 +486,6 @@ export default function AdminModal(props: any) {
                 </div>
                 <p className="mt-2 text-xs text-slate-500">Cochez les classes existantes à reproduire dans la nouvelle école.</p>
               </div>
-            </div>
           )}
 
           {studentError && (

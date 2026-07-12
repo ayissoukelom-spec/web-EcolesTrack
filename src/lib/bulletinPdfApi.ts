@@ -466,7 +466,7 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
     pdfGenerator,
     template,
     verifyMiddleware = verifyToken as any,
-    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser, { bypassRoles: ['admin', 'teacher'] }) as any,
+    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser(resolveActor), { bypassRoles: ['admin', 'teacher'] }) as any,
     batchAccessMiddleware = requireRole(['admin', 'teacher']) as any,
   } = options;
 

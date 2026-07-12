@@ -332,7 +332,7 @@ export const registerBulletinReadRoutes = (app: express.Express, options: Regist
     readService = createDbBulletinReadService(),
     verifyMiddleware = verifyToken as any,
     listAccessMiddleware = requireRole(['admin', 'teacher']) as any,
-    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser, { bypassRoles: ['admin', 'teacher'] }) as any,
+    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser(resolveActor), { bypassRoles: ['admin', 'teacher'] }) as any,
   } = options;
 
   app.get('/api/bulletins', verifyMiddleware, listAccessMiddleware, async (req: any, res) => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import SubjectsView from './SubjectsView';
 
 afterEach(() => {
@@ -25,15 +25,16 @@ describe('SubjectsView', () => {
       />
     );
 
-    expect(screen.getByText('Mathématiques')).toBeDefined();
-    expect(screen.getByText('Français')).toBeDefined();
+    const subjectsTable = screen.getByRole('table');
+    expect(within(subjectsTable).getByText('Mathématiques')).toBeDefined();
+    expect(within(subjectsTable).getByText('Français')).toBeDefined();
 
     fireEvent.change(screen.getByLabelText(/filtrer par établissement/i), {
       target: { value: '2' },
     });
 
-    expect(screen.queryByText('Mathématiques')).toBeNull();
-    expect(screen.getByText('Français')).toBeDefined();
+    expect(within(subjectsTable).queryByText('Mathématiques')).toBeNull();
+    expect(within(subjectsTable).getByText('Français')).toBeDefined();
   });
 
   it('affiche les actions d’approbation pour un school admin', () => {

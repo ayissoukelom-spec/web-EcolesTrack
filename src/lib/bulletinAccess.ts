@@ -3,11 +3,11 @@ import { db } from '../db/index.ts';
 import { bulletins, parents, students } from '../db/schema.ts';
 import { and, eq } from 'drizzle-orm';
 
-export const isBulletinOwnedByCurrentUser = async (req: AuthRequest): Promise<boolean> => {
-  const userId = req.user?.id;
+// Core ownership check that does NOT read from `req.user`.
+// Accepts an already-resolved `actor` (may be null) and a bulletinId.
+export const checkBulletinOwnership = async (actor: { id?: number } | null, bulletinId: number): Promise<boolean> => {
+  const userId = actor?.id;
   if (!userId) return false;
-
-  const bulletinId = Number((req.params as any)?.id);
   if (!Number.isInteger(bulletinId) || bulletinId <= 0) return false;
 
   const [row] = await db
@@ -29,4 +29,14 @@ export const isBulletinOwnedByCurrentUser = async (req: AuthRequest): Promise<bo
     .where(and(eq(parents.userId, userId), eq(parents.studentId, row.studentId)));
 
   return !!parentLink;
+};
+
+// Compatibility wrapper: given a resolveActor(req) function, return a resolver
+// compatible with `requireOwnership(resolver)` which expects `(req) => Promise<boolean>`.
+export const isBulletinOwnedByCurrentUser = (resolveActor: (req: AuthRequest) => Promise<any>) => {
+  return async (req: AuthRequest): Promise<boolean> => {
+    const bulletinId = Number((req.params as any)?.id);
+    const actor = await resolveActor(req);
+    return checkBulletinOwnership(actor, bulletinId);
+  };
 };

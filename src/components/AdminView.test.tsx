@@ -235,10 +235,8 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
-    const groupSelect = screen.getByLabelText(/Groupes de classes/i);
-    const cegOption = screen.getByRole('option', { name: 'CEG' });
-    cegOption.selected = true;
-    fireEvent.change(groupSelect);
+    const cegCheckbox = screen.getByRole('checkbox', { name: 'CEG' });
+    fireEvent.click(cegCheckbox);
 
     expect(screen.getByLabelText('6ème')).toBeTruthy();
     expect(screen.getByLabelText('5ème')).toBeTruthy();
@@ -296,12 +294,10 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
-    const select = screen.getByLabelText(/Groupes de classes/i);
-    const cegOption = screen.getByRole('option', { name: 'CEG' });
-    const lyceeOption = screen.getByRole('option', { name: 'Lycée' });
-    cegOption.selected = true;
-    lyceeOption.selected = true;
-    fireEvent.change(select);
+    const cegCheckbox = screen.getByRole('checkbox', { name: 'CEG' });
+    const lyceeCheckbox = screen.getByRole('checkbox', { name: 'Lycée' });
+    fireEvent.click(cegCheckbox);
+    fireEvent.click(lyceeCheckbox);
 
     expect(screen.getByLabelText('6ème')).toBeTruthy();
     expect(screen.getByLabelText('2nde')).toBeTruthy();

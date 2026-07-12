@@ -1,0 +1,323 @@
+﻿diff --git a/server.ts b/server.ts
+index 49423f8..4cc1d1b 100644
+--- a/server.ts
++++ b/server.ts
+@@ -547,10 +547,6 @@ export async function createApp() {
+       const parsedSchoolId = typeof schoolId === 'number' ? schoolId : parseInt(String(schoolId), 10);
+       if (!Number.isFinite(parsedSchoolId)) return res.status(400).json({ error: 'Invalid schoolId' });
+ 
+-      if (actorRole !== 'super_admin') {
+-        return res.status(403).json({ error: 'Forbidden: only super_admin can manage multi-school memberships' });
+-      }
+-
+       const [targetUser] = await db.select().from(users).where(eq(users.id, userIdParam)).limit(1);
+       if (!targetUser) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+ 
+@@ -720,12 +716,6 @@ export async function createApp() {
+       let dbUser: any = null;
+       if (resolved && (resolved as any).id) {
+         dbUser = resolved;
+-      } else if (req.user && req.user.email) {
+-        const rows = await db.select().from(users).where(eq(users.email, req.user.email));
+-        dbUser = rows.length > 0 ? rows[0] : null;
+-      } else if (req.user && req.user.uid) {
+-        const rows = await db.select().from(users).where(eq(users.uid, req.user.uid));
+-        dbUser = rows.length > 0 ? rows[0] : null;
+       }
+ 
+       let teacherRow: any = null;
+@@ -761,17 +751,11 @@ export async function createApp() {
+       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+       let actor = await resolveActor(req);
+       console.log('DEBUG /api/admin/users create request', {
+-        reqUser: req.user,
+         actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role, schoolId: actor.schoolId, email: actor.email } : null,
+         body: req.body,
+       });
+       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+ 
+-      // If the simulated actor exists in DB without a schoolId, fall back to header schoolId.
+-      if (actor.role === 'school_admin' && actor.schoolId == null && req.user?.simulated && req.user.schoolId != null) {
+-        actor = { ...actor, schoolId: req.user.schoolId } as any;
+-      }
+-
+       const { uid, email, name, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, gender, password, classIds, studentId } = req.body;
+       console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
+       const normalizedEmail = normalizeEmail(email);
+@@ -1788,19 +1772,19 @@ export async function createApp() {
+     try {
+       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+       
+-      // Load user from database to get school_id (with simulated fallback)
+-      const user = await resolveActor(req);
+-      if (!user) return res.status(401).json({ error: 'Unauthenticated' });
++      // Load actor from database to get school_id (with simulated fallback)
++      const actor = await resolveActor(req);
++      if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
+ 
+       let list;
+-      if (user.role === 'super_admin') {
++      if (actor.role === 'super_admin') {
+         // Super admin can see all schools
+         list = await db.select().from(schools);
+-      } else if ((user.role === 'school_admin' || user.role === 'parent' || user.role === 'teacher') && user.schoolId) {
++      } else if ((actor.role === 'school_admin' || actor.role === 'parent' || actor.role === 'teacher') && actor.schoolId) {
+         // School admin and parent see only their assigned school
+-        list = await db.select().from(schools).where(eq(schools.id, user.schoolId));
++        list = await db.select().from(schools).where(eq(schools.id, actor.schoolId));
+       } else {
+-        // Other roles cannot access schools list, or user without assigned school
++        // Other roles cannot access schools list, or actor without assigned school
+         return res.status(403).json({ error: 'Forbidden' });
+       }
+ 
+@@ -1816,15 +1800,15 @@ export async function createApp() {
+       const { name, address, phone, classNames, subjectNames } = req.body;
+       if (!name) return res.status(400).json({ error: 'Name is required' });
+ 
+-      // Load user and validate permission
+-      const user = await resolveActor(req);
+-      if (!user) {
+-        console.log('TRACE /api/evaluations about to return 404 after resolveActor', { reqUser: req.user });
++      // Load actor and validate permission
++      const actor = await resolveActor(req);
++      if (!actor) {
++        console.log('TRACE /api/evaluations about to return 404 after resolveActor', { actor: null });
+         return res.status(404).json({ error: 'User not found' });
+       }
+ 
+       // Only super_admin can create schools
+-      if (user.role !== 'super_admin') {
++      if (actor.role !== 'super_admin') {
+         return res.status(403).json({ error: 'Only super admin can create schools' });
+       }
+ 
+@@ -1904,12 +1888,12 @@ export async function createApp() {
+       const id = parseInt(req.params.id);
+       const { name, address, phone, classNames, subjectNames } = req.body;
+ 
+-      // Load user and validate school permission
+-      const user = await resolveActor(req);
+-      if (!user) return res.status(404).json({ error: 'User not found' });
++      // Load actor and validate school permission
++      const actor = await resolveActor(req);
++      if (!actor) return res.status(404).json({ error: 'User not found' });
+ 
+       // Only super_admin can modify schools (school_admin should not be able to modify school info)
+-      if (user.role !== 'super_admin') {
++      if (actor.role !== 'super_admin') {
+         return res.status(403).json({ error: 'Only super admin can modify school information' });
+       }
+ 
+@@ -2033,13 +2017,13 @@ export async function createApp() {
+       const id = parseInt(req.params.id);
+       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid school id' });
+ 
+-      const user = await resolveActor(req);
+-      if (!user) return res.status(401).json({ error: 'Unauthenticated' });
++      const actor = await resolveActor(req);
++      if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
+ 
+       const [schoolRow] = await db.select().from(schools).where(eq(schools.id, id));
+       if (!schoolRow) return res.status(404).json({ error: '├ëcole introuvable' });
+ 
+-      if (user.role === 'super_admin' || (user.schoolId && Number(user.schoolId) === id)) {
++      if (actor.role === 'super_admin' || (actor.schoolId && Number(actor.schoolId) === id)) {
+         return res.json(schoolRow);
+       }
+ 
+@@ -2220,12 +2204,12 @@ export async function createApp() {
+         return res.status(401).json({ error: 'Utilisateur non authentifi├®.' });
+       }
+ 
+-      const user = await resolveActor(req);
+-      if (!user) {
++      const actor = await resolveActor(req);
++      if (!actor) {
+         return res.status(404).json({ error: 'Profil utilisateur introuvable.' });
+       }
+ 
+-      if (user.role !== 'super_admin') {
++      if (actor.role !== 'super_admin') {
+         return res.status(403).json({ error: 'Seul un super administrateur peut supprimer un ├®tablissement.' });
+       }
+ 
+@@ -2351,8 +2335,8 @@ export async function createApp() {
+         list = await db.select().from(academicYears);
+       } else if (actor.role === 'school_admin') {
+         // School admin sees ONLY their assigned academic year
+-        if (user.academicYearId) {
+-          list = await db.select().from(academicYears).where(eq(academicYears.id, user.academicYearId));
++        if (actor.academicYearId) {
++          list = await db.select().from(academicYears).where(eq(academicYears.id, actor.academicYearId));
+         } else {
+           // If no assigned year, return empty list (admin must have an assigned year)
+           list = [];
+@@ -2362,7 +2346,7 @@ export async function createApp() {
+         list = await db.select().from(academicYears).where(
+           or(
+             sql`${academicYears.schoolId} IS NULL`,
+-            eq(academicYears.schoolId, user.schoolId)
++            eq(academicYears.schoolId, actor.schoolId)
+           )
+         );
+       }
+@@ -2810,7 +2794,7 @@ export async function createApp() {
+ 
+       const resolvedSchoolId = parsedSchoolId;
+ 
+-      if (user.role === 'school_admin' && resolvedSchoolId == null) {
++      if (actor.role === 'school_admin' && resolvedSchoolId == null) {
+         return res.status(400).json({ error: 'schoolId is required to create a class' });
+       }
+ 
+@@ -4097,18 +4081,18 @@ export async function createApp() {
+     try {
+       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+ 
+-      const user = await resolveActor(req);
+-      if (!user) return res.status(404).json({ error: 'User not found' });
++      const actor = await resolveActor(req);
++      if (!actor) return res.status(404).json({ error: 'User not found' });
+ 
+       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
+-      const targetSchoolId = user.role === 'school_admin'
+-        ? user.schoolId
+-        : user.role === 'teacher'
+-          ? user.schoolId
++      const targetSchoolId = actor.role === 'school_admin'
++        ? actor.schoolId
++        : actor.role === 'teacher'
++          ? actor.schoolId
+           : schoolIdParam;
+ 
+-      if (user.role === 'teacher') {
++      if (actor.role === 'teacher') {
+         if (!targetSchoolId) {
+           return res.status(403).json({ error: 'Teacher school context is required' });
+         }
+@@ -4151,7 +4135,7 @@ export async function createApp() {
+         return;
+       }
+ 
+-      if (user.role === 'school_admin') {
++      if (actor.role === 'school_admin') {
+         if (!targetSchoolId) {
+           return res.status(403).json({ error: 'School context is required' });
+         }
+@@ -4195,7 +4179,7 @@ export async function createApp() {
+       }
+ 
+       if (approvedOnly && !targetSchoolId) {
+-        if (user.role === 'super_admin') {
++        if (actor.role === 'super_admin') {
+           const approvedRows = await db
+             .select({
+               id: subjects.id,
+@@ -4406,7 +4390,7 @@ export async function createApp() {
+       const subjectId = Number(req.params.subjectId);
+       if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
+ 
+-      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
++      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+         return res.status(403).json({ error: 'Forbidden' });
+       }
+ 
+@@ -4457,7 +4441,7 @@ export async function createApp() {
+       const subjectId = Number(req.params.subjectId);
+       if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
+ 
+-      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
++      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+         return res.status(403).json({ error: 'Forbidden' });
+       }
+ 
+@@ -4605,7 +4589,7 @@ export async function createApp() {
+         return res.status(404).json({ error: 'User not found' });
+       }
+ 
+-      if (user.role === 'teacher') {
++      if (actor.role === 'teacher') {
+         const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, dbUser.id));
+         if (!teacherProfile) {
+           return res.status(403).json({ error: 'Teacher profile not found for the current user' });
+@@ -4699,23 +4683,23 @@ export async function createApp() {
+ 
+       if (approvalSchoolId == null) {
+         approvalSource = 'request';
+-        if (user.schoolId != null) {
++        if (actor.schoolId != null) {
+           const [approvedClass] = await db.select().from(schoolClasses).where(
+             and(
+               eq(schoolClasses.classId, parseInt(classId)),
+-              eq(schoolClasses.schoolId, user.schoolId),
++              eq(schoolClasses.schoolId, actor.schoolId),
+               eq(schoolClasses.status, 'approved')
+             )
+           );
+           if (!approvedClass) {
+             console.error('ERROR /api/evaluations invalid school context for class', {
+               classId: parseInt(classId),
+-              userSchoolId: user.schoolId,
++              userSchoolId: actor.schoolId,
+               note: 'No approved school_classes entry found for the current user school',
+             });
+             return res.status(403).json({ error: 'Invalid school context for this class' });
+           }
+-          approvalSchoolId = user.schoolId;
++          approvalSchoolId = actor.schoolId;
+           resolvedSchoolClassId = approvedClass.id;
+           resolvedSchoolClassSchoolId = approvedClass.schoolId;
+         } else {
+@@ -4751,7 +4735,7 @@ export async function createApp() {
+         classSchoolId: classRecord.schoolId,
+         resolvedSchoolClassId,
+         resolvedSchoolClassSchoolId,
+-        userSchoolId: user.schoolId,
++        userSchoolId: actor.schoolId,
+         approvalSchoolId,
+         approvalSource,
+       });
+@@ -4834,9 +4818,9 @@ export async function createApp() {
+         .innerJoin(students, eq(grades.studentId, students.id))
+         .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id));
+ 
+-      if (user.role !== 'super_admin') {
+-        if (user.role === 'parent') {
+-          const childStudentIds = await getParentChildStudentIds(user.id);
++      if (actor.role !== 'super_admin') {
++        if (actor.role === 'parent') {
++          const childStudentIds = await getParentChildStudentIds(actor.id);
+           if (childStudentIds.length === 0) {
+             return res.json([]);
+           }
+@@ -4844,8 +4828,8 @@ export async function createApp() {
+           query = query.where(inArray(grades.studentId, childStudentIds)) as any;
+         } else {
+           // School admin and other staff see only their school's grades
+-          if (user.schoolId) {
+-            query = query.where(eq(students.schoolId, user.schoolId)) as any;
++          if (actor.schoolId) {
++            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+           } else {
+             return res.json([]);
+           }
+@@ -4895,7 +4879,7 @@ export async function createApp() {
+         score,
+         remarks,
+         studentSchoolId: student.schoolId,
+-        userSchoolId: user.schoolId,
++        userSchoolId: actor.schoolId,
+         evaluationSchoolId: evaluation.schoolId,
+       });
+ 
+@@ -4949,7 +4933,7 @@ export async function createApp() {
+ 
+       let savedGrade;
+       if (existing.length > 0) {
+-        if (user.role === 'teacher') {
++        if (actor.role === 'teacher') {
+           const message = 'Cette note a d├®j├á ├®t├® saisie. Pour toute modification, veuillez contacter le school admin.';
+           return res.status(403).json({ error: message });
+         }

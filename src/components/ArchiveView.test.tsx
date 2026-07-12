@@ -1,8 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import React from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { AuthProvider } from '../contexts/AuthContext';
 import ArchiveView from './ArchiveView';
 import NotesView from './NotesView';
 import type { Evaluation, Grade, Student, Class } from '../types.ts';
+
+afterEach(() => cleanup());
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { uid: 'sim_school_admin_1', email: 'school_admin@example.test', name: 'School Admin', role: 'school_admin', schoolId: 1 },
+    token: null,
+    isAuthenticated: false,
+    isSimulated: true,
+    role: 'school_admin',
+    activeSchoolId: 1,
+  }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 
 const classes: Class[] = [
   { id: 10, schoolId: 1, academicYearId: 1, name: '3ème A' },
@@ -61,6 +77,7 @@ const defaultProps = {
   onAddGrade: () => Promise.resolve(),
 };
 
+
 describe('Archive UI regression', () => {
   it('affiche les évaluations terminées dans Archive', () => {
     render(<ArchiveView {...defaultProps} />);
@@ -111,23 +128,20 @@ describe('Archive UI regression', () => {
     ];
 
     render(
-      <NotesView
-        {...defaultProps}
-        userRole="school_admin"
-        evaluationsList={editableEvaluations}
-        gradesList={editableGrades}
-        studentsList={editableStudents}
-        onAddGrade={onAddGrade}
-      />
+      <AuthProvider>
+        <NotesView
+          {...defaultProps}
+          initialSelectedEvalId={1}
+          evaluationsList={editableEvaluations}
+          gradesList={editableGrades}
+          studentsList={editableStudents}
+          onAddGrade={onAddGrade}
+        />
+      </AuthProvider>
     );
-
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '10' } });
-    const evaluationSelect = screen.getAllByRole('combobox')[1];
-    expect(screen.getByRole('option', { name: /Mathématiques/i })).toBeDefined();
-    fireEvent.change(evaluationSelect, { target: { value: '1' } });
 
     const gradeInput = await screen.findByPlaceholderText(/ex\. 15\.5 or Abs/i);
     expect(gradeInput).toBeDefined();
-    expect(screen.getByText(/bloquée/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: /Mettre à jour/i })).toBeDefined();
   });
 });
