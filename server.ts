@@ -432,9 +432,8 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
   }
 }
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   // JSON parsing middleware
   app.use(express.json());
@@ -475,17 +474,10 @@ async function startServer() {
     next();
   });
 
-  console.log('Verifying if database needs seeding...');
-  try {
-    await seedDatabaseIfEmpty();
-    await ensureSchoolClassesTableExists();
-    await ensureUsersTableSchema();
-    await ensureUserSchoolsTableExists();
-    await repairMissingSchoolAdminMemberships();
-  } catch (error) {
-    console.error('Database initialization failed, shutting down application.', error);
-    process.exit(1);
-  }
+  // Note: database seeding/initialization is performed by startServer(),
+  // not by createApp(). Tests should call `createApp()` and use the
+  // returned Express application via Supertest to avoid starting a real
+  // network listener or running DB initialization side-effects.
 
   // CORS or Security Headers can be set if needed
   app.use((req, res, next) => {
@@ -543,8 +535,10 @@ async function startServer() {
       console.log('HANDLER ENTER /api/users/:userId/schools', { params: req.params, body: req.body, simulatedRole: req.headers['x-simulated-role'], hasAuth: !!req.headers.authorization });
 
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const actorRole = req.user?.role;
-      if (!actorRole) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden: only super_admin can manage multi-school memberships' });
+      }
 
       const userIdParam = parseInt(String(req.params.userId), 10);
       if (!Number.isFinite(userIdParam)) return res.status(400).json({ error: 'Invalid userId' });
@@ -774,7 +768,7 @@ async function startServer() {
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       // If the simulated actor exists in DB without a schoolId, fall back to header schoolId.
-      if (actor.role === 'school_admin' && actor.schoolId == null && req.user.schoolId != null) {
+      if (actor.role === 'school_admin' && actor.schoolId == null && req.user?.simulated && req.user.schoolId != null) {
         actor = { ...actor, schoolId: req.user.schoolId } as any;
       }
 
@@ -1647,7 +1641,12 @@ async function startServer() {
         return res.status(401).json({ error: 'Unauthenticated' });
       }
 
-      const { uid, email, name, role } = req.user;
+      const actor = await resolveActor(req);
+      if (!actor) {
+        return res.status(401).json({ error: 'Unauthenticated' });
+      }
+
+      const { uid, email, name, role, schoolId } = actor;
       const normalizedEmail = normalizeEmail(email);
 
       // Find if user already exists
@@ -1655,9 +1654,9 @@ async function startServer() {
 
       if (existingUser.length > 0) {
         const existing = existingUser[0];
-        if (req.user.schoolId && existing.schoolId !== req.user.schoolId) {
-          await db.update(users).set({ schoolId: req.user.schoolId }).where(eq(users.uid, uid));
-          existing.schoolId = req.user.schoolId;
+        if (schoolId && existing.schoolId !== schoolId) {
+          await db.update(users).set({ schoolId }).where(eq(users.uid, uid));
+          existing.schoolId = schoolId;
         }
         return res.json(existing);
       }
@@ -1666,12 +1665,12 @@ async function startServer() {
         // Search for existing user by email
         // If user has a schoolId in context, search per-school; otherwise global
         let existingByEmail: any[] = [];
-        if (req.user.schoolId) {
+        if (schoolId) {
           // Per-school search
           existingByEmail = await db.select().from(users).where(
             and(
               eq(sql`LOWER(${users.email})`, normalizedEmail),
-              eq(users.schoolId, req.user.schoolId)
+              eq(users.schoolId, schoolId)
             )
           );
         } else {
@@ -1681,9 +1680,9 @@ async function startServer() {
         
         if (existingByEmail.length > 0) {
           const existing = existingByEmail[0];
-          if (req.user.schoolId && existing.schoolId !== req.user.schoolId) {
-            await db.update(users).set({ schoolId: req.user.schoolId }).where(eq(users.id, existing.id));
-            existing.schoolId = req.user.schoolId;
+          if (schoolId && existing.schoolId !== schoolId) {
+            await db.update(users).set({ schoolId }).where(eq(users.id, existing.id));
+            existing.schoolId = schoolId;
           }
           return res.json(existing);
         }
@@ -1694,8 +1693,8 @@ async function startServer() {
       const normalizedRole = String(role || '').trim();
       const finalRole = allowedRoles.includes(normalizedRole) ? normalizedRole : 'parent';
 
-      let resolvedSchoolId = req.user.schoolId ?? null;
-      if (req.user.simulated && !resolvedSchoolId && finalRole !== 'super_admin') {
+      let resolvedSchoolId = schoolId ?? null;
+      if (actor.simulated && !resolvedSchoolId && finalRole !== 'super_admin') {
         const defaultSchool = await db.select().from(schools).limit(1);
         if (defaultSchool.length > 0) {
           resolvedSchoolId = defaultSchool[0].id;
@@ -2083,14 +2082,12 @@ async function startServer() {
       console.log('Received students batch import request', { headers: req.headers && { 'x-simulated-role': req.headers['x-simulated-role'], 'content-type': req.headers['content-type'] } });
       console.log('Batch request body preview:', typeof req.body === 'object' ? (Array.isArray(req.body) ? `array(${req.body.length})` : 'object') : typeof req.body);
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const userRows = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      let userRecord = userRows[0];
-      // Dev helper: if using simulated super_admin header but no user row exists, allow for testing
-      if (!userRecord && req.user.simulated && req.user.role === 'super_admin') {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User profile not found' });
+      const userRecord: any = actor;
+      if (!actor.id && actor.simulated && actor.role === 'super_admin') {
         console.log('Simulated super_admin detected and no DB profile found; bypassing user lookup for dev.');
-        userRecord = { uid: req.user.uid, role: 'super_admin' } as any;
       }
-      if (!userRecord) return res.status(404).json({ error: 'User profile not found' });
 
       // Only super_admin or school_admin may import students
       if (!['super_admin', 'school_admin'].includes(userRecord.role)) {
@@ -2346,13 +2343,13 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       let list: any[];
-      if (user.role === 'super_admin') {
+      if (actor.role === 'super_admin') {
         list = await db.select().from(academicYears);
-      } else if (user.role === 'school_admin') {
+      } else if (actor.role === 'school_admin') {
         // School admin sees ONLY their assigned academic year
         if (user.academicYearId) {
           list = await db.select().from(academicYears).where(eq(academicYears.id, user.academicYearId));
@@ -2382,11 +2379,10 @@ async function startServer() {
       const { name, isActive } = req.body;
       if (!name) return res.status(400).json({ error: 'Name is required' });
 
-      // Load user and validate permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin') {
+      if (actor.role !== 'super_admin') {
         return res.status(403).json({ error: 'Only super admin can create academic years' });
       }
 
@@ -2780,6 +2776,9 @@ async function startServer() {
       console.log('🔥 FULL KEYS =', Object.keys(req.body || {}));
       console.log('🔥 HIT POST /api/classes - NEW CODE');
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
       const { name, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, teacherId } = req.body;
       const trimmedName = typeof name === 'string' ? name.trim() : '';
       const academicYearId = rawAcademicYearId != null && rawAcademicYearId !== '' ? Number(rawAcademicYearId) : null;
@@ -2788,14 +2787,10 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid academicYearId' });
       }
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
-
       const validation = resolveClassCreationSchoolId({
-        actorRole: user.role,
+        actorRole: actor.role,
         requestedSchoolId: rawSchoolId,
-        actorSchoolId: user.schoolId,
+        actorSchoolId: actor.schoolId,
       });
 
       if (validation.error) {
@@ -2805,11 +2800,11 @@ async function startServer() {
       const parsedSchoolId = validation.schoolId;
       console.log('🔥 parsedSchoolId =', parsedSchoolId);
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      if (user.role === 'school_admin' && !user.schoolId) {
+      if (actor.role === 'school_admin' && !actor.schoolId) {
         return res.status(403).json({ error: 'School admin must belong to a school' });
       }
 
@@ -2899,10 +2894,10 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2910,7 +2905,7 @@ async function startServer() {
       const classId = Number(req.params.classId);
       if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
 
-      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2950,10 +2945,10 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2961,7 +2956,7 @@ async function startServer() {
       const classId = Number(req.params.classId);
       if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
 
-      if (user.role === 'school_admin' && user.schoolId !== schoolId) {
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2987,17 +2982,16 @@ async function startServer() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id);
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Load the class to check its school
       const [classToDelete] = await db.select().from(classes).where(eq(classes.id, id));
       if (!classToDelete) return res.status(404).json({ error: 'Class not found' });
 
       // School admin can only delete classes in their own school
-      if (user.role !== 'super_admin') {
-        if (user.schoolId && classToDelete.schoolId !== user.schoolId) {
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId && classToDelete.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot delete class in another school' });
         }
       }
@@ -3016,20 +3010,19 @@ async function startServer() {
       const id = parseInt(req.params.id);
       const { teacherId } = req.body;
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Load the class to check its school
       const [classToUpdate] = await db.select().from(classes).where(eq(classes.id, id));
       if (!classToUpdate) return res.status(404).json({ error: 'Class not found' });
 
       // School admin can only update classes in their own school
-      if (user.role !== 'super_admin') {
-        if (user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin') {
+        if (actor.role !== 'school_admin') {
           return res.status(403).json({ error: 'Only super_admin or school_admin can update classes' });
         }
-        if (user.schoolId && classToUpdate.schoolId !== user.schoolId) {
+        if (actor.schoolId && classToUpdate.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot update class in another school' });
         }
       }
@@ -3197,15 +3190,14 @@ async function startServer() {
       const normalizedEmail = normalizeEmail(email);
       if (!name || !normalizedEmail || !schoolId) return res.status(400).json({ error: `Missing compulsory details. Received name=${name}, email=${email}, schoolId=${schoolId}` });
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       const parsedSchoolId = parseInt(String(schoolId), 10);
 
       // School admin can only create teachers in their own school
-      if (user.role !== 'super_admin') {
-        if (user.schoolId && parsedSchoolId !== user.schoolId) {
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId && parsedSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot create teacher in another school' });
         }
       }
@@ -3882,12 +3874,11 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Get user and check permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Allow super_admin and school_admin to update students
-      if (!['super_admin', 'school_admin'].includes(user.role)) {
+      if (!['super_admin', 'school_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Only super_admin or school_admin can update students' });
       }
 
@@ -3895,7 +3886,7 @@ async function startServer() {
       const [existingStudent] = await db.select().from(students).where(eq(students.id, studentId));
       if (!existingStudent) return res.status(404).json({ error: 'Student not found' });
 
-      if (user.role === 'school_admin' && user.schoolId != null && existingStudent.schoolId != null && user.schoolId !== existingStudent.schoolId) {
+      if (actor.role === 'school_admin' && actor.schoolId != null && existingStudent.schoolId != null && actor.schoolId !== existingStudent.schoolId) {
         return res.status(403).json({ error: 'You can only update students from your school' });
       }
 
@@ -4010,9 +4001,8 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing mandatory absence parameters' });
       }
 
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Load the student and class to check school
       const [student] = await db.select().from(students).where(eq(students.id, parseInt(studentId)));
@@ -4022,8 +4012,8 @@ async function startServer() {
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
 
       // School admin can only record absences for students in their own school
-      if (user.role !== 'super_admin') {
-        if (user.schoolId && (student.schoolId !== user.schoolId || classRecord.schoolId !== user.schoolId)) {
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId && (student.schoolId !== actor.schoolId || classRecord.schoolId !== actor.schoolId)) {
           return res.status(403).json({ error: 'Cannot record absence for student in another school' });
         }
       }
@@ -4065,8 +4055,8 @@ async function startServer() {
       }
 
       // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Load the absence to check its school
       const [absence] = await db
@@ -4078,8 +4068,8 @@ async function startServer() {
       if (!absence) return res.status(404).json({ error: 'Absence not found' });
 
       // School admin can only justify absences in their own school
-      if (user.role !== 'super_admin') {
-        if (user.schoolId && absence.students.schoolId !== user.schoolId) {
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId && absence.students.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot justify absence in another school' });
         }
       }
@@ -4268,11 +4258,11 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Only super_admin and school_admin can create subjects
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4287,11 +4277,11 @@ async function startServer() {
       }
 
       let finalSchoolId: number | null = null;
-      if (user.role === 'school_admin') {
+      if (actor.role === 'school_admin') {
         const validation = resolveClassCreationSchoolId({
-          actorRole: user.role,
+          actorRole: actor.role,
           requestedSchoolId: bodySchoolId,
-          actorSchoolId: user.schoolId,
+          actorSchoolId: actor.schoolId,
         });
         if (validation.error) {
           return res.status(400).json({ error: validation.error });
@@ -4326,11 +4316,11 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Only super_admin and school_admin can update subjects
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4341,7 +4331,7 @@ async function startServer() {
       if (!subject) return res.status(404).json({ error: 'Subject not found' });
 
       // Check access: school_admin can only update subjects in their school
-      if (user.role === 'school_admin' && subject.schoolId !== user.schoolId) {
+      if (actor.role === 'school_admin' && subject.schoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4372,11 +4362,11 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       // Only super_admin and school_admin can delete subjects
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4387,7 +4377,7 @@ async function startServer() {
       if (!subject) return res.status(404).json({ error: 'Subject not found' });
 
       // Check access: school_admin can only delete subjects in their school
-      if (user.role === 'school_admin' && subject.schoolId !== user.schoolId) {
+      if (actor.role === 'school_admin' && subject.schoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4405,10 +4395,10 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4456,10 +4446,10 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (user.role !== 'super_admin' && user.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -4582,10 +4572,9 @@ async function startServer() {
     });
 
     try {
-      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      // Prevent parents from creating evaluations
-      const [requestingUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (requestingUser && requestingUser.role === 'parent') {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
       const { classId, teacherId, termId, subject, title, coefficient, maxScore, date } = req.body;
@@ -4593,20 +4582,16 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
 
-      // Load effective user context (including simulated header schoolId fallback when needed)
-      const user = await resolveActor(req);
-      if (!user) return res.status(404).json({ error: 'User not found' });
-
       // Load the class to check its school
       const [classRecord] = await db.select().from(classes).where(eq(classes.id, parseInt(classId)));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
 
       // School admin can only create evaluations for classes in their own school
-      if (user.role !== 'super_admin') {
-        if (user.schoolId) {
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId) {
           // Allow when class belongs to the same school, or when the class is a global class
           // that has been approved for this school (see isApprovedClassForSchool helper).
-          const allowedForSchool = classRecord.schoolId === user.schoolId || await isApprovedClassForSchool(parseInt(classId), user.schoolId);
+          const allowedForSchool = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(parseInt(classId), actor.schoolId);
           if (!allowedForSchool) {
             return res.status(403).json({ error: 'Cannot create evaluation for class in another school' });
           }
@@ -4615,10 +4600,8 @@ async function startServer() {
 
       // Automatically determine teacher Id if not explicitly provided
       let resolvedTeacherId = teacherId ? parseInt(teacherId) : null;
-      const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      console.log('TRACE /api/evaluations dbUser lookup result', { reqUser: req.user, dbUser });
-      if (!dbUser) {
-        console.log('TRACE /api/evaluations returning 404 at dbUser check', { reqUser: req.user });
+      const dbUser = actor.id ? actor : null;
+      if (!dbUser && actor.role === 'teacher') {
         return res.status(404).json({ error: 'User not found' });
       }
 
@@ -4827,8 +4810,8 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
 
       let query = db
         .select({
@@ -4879,10 +4862,9 @@ async function startServer() {
   app.post('/api/grades', requireAuth, async (req: AuthRequest, res) => {
     try {
       console.log('POST /api/grades payload', req.body);
-      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      // Prevent parents from recording/updating grades
-      const [requestingUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (requestingUser && requestingUser.role === 'parent') {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to record or update grades' });
       }
       const { evaluationId, studentId, score, remarks } = req.body;
@@ -4894,10 +4876,6 @@ async function startServer() {
       if (normalizedScore === '' || normalizedScore === null || normalizedScore === undefined) {
         return res.status(400).json({ error: 'La note est requise' });
       }
-
-      // Load user and validate school permission
-      const [user] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!user) return res.status(404).json({ error: 'User not found' });
 
       // Load the evaluation to verify permissions and existence
       const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
@@ -4938,22 +4916,22 @@ async function startServer() {
       }
 
       // School admin can only record grades for students in their own school
-      if (user.role === 'school_admin') {
-        if (user.schoolId && student.schoolId !== user.schoolId) {
+      if (actor.role === 'school_admin') {
+        if (actor.schoolId && student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot record grade for student in another school' });
         }
       }
 
       // Teachers can only record grades for their own evaluations and cannot edit existing grades
-      if (user.role === 'teacher') {
-        const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, user.id));
+      if (actor.role === 'teacher') {
+        const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, actor.id));
         if (!teacherProfile) {
           return res.status(403).json({ error: 'Profile enseignant introuvable' });
         }
         if (evaluation.teacherId !== teacherProfile.id) {
           return res.status(403).json({ error: 'Vous ne pouvez pas modifier une note d’une évaluation qui ne vous appartient pas' });
         }
-        if (user.schoolId && student.schoolId !== user.schoolId) {
+        if (actor.schoolId && student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot record grade for student in another school' });
         }
       }
@@ -5310,16 +5288,15 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      // Match dynamic userId
-      const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (!dbUser) return res.json([]);
+      const actor = await resolveActor(req);
+      if (!actor) return res.json([]);
 
-      if (dbUser.role === 'teacher') return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'teacher') return res.status(403).json({ error: 'Forbidden' });
 
       const userNotifications = await db
         .select()
         .from(notifications)
-        .where(eq(notifications.userId, dbUser.id))
+        .where(eq(notifications.userId, actor.id))
         .orderBy(desc(notifications.id));
 
       res.json(userNotifications);
@@ -5333,12 +5310,12 @@ async function startServer() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-      if (dbUser) {
+      const actor = await resolveActor(req);
+      if (actor) {
         await db
           .update(notifications)
           .set({ isRead: true })
-          .where(eq(notifications.userId, dbUser.id));
+          .where(eq(notifications.userId, actor.id));
       }
 
       res.json({ success: true });
@@ -5354,8 +5331,7 @@ async function startServer() {
       const { title, body, type, userId } = req.body;
       if (!title || !body || !type) return res.status(400).json({ error: 'Missing keys' });
 
-      // Load user and validate permission
-      const [actor] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+      const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
       let targetUserIds: number[] = [];
@@ -5444,6 +5420,25 @@ async function startServer() {
     });
   }
 
+  return app;
+}
+
+export async function startServer() {
+  const PORT = 3000;
+  const app = await createApp();
+
+  console.log('Verifying if database needs seeding...');
+  try {
+    await seedDatabaseIfEmpty();
+    await ensureSchoolClassesTableExists();
+    await ensureUsersTableSchema();
+    await ensureUserSchoolsTableExists();
+    await repairMissingSchoolAdminMemberships();
+  } catch (error) {
+    console.error('Database initialization failed, shutting down application.', error);
+    process.exit(1);
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     // Print registered routes for debugging
     try {
@@ -5472,5 +5467,9 @@ async function startServer() {
   });
 }
 
-startServer();
+// Start the server automatically except during tests. Tests should import
+// and use `createApp()` directly to avoid binding to network ports.
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 

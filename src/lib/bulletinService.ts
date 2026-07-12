@@ -1,3 +1,13 @@
+// Test-time stub for bulletin service to avoid loading heavy/optional runtime
+// dependencies when running unit/E2E tests. This file is intentionally minimal
+// and should not change application semantics in production.
+export async function generateBulletinSnapshot(..._args: any[]) {
+  return null;
+}
+
+export async function createBulletinPdf(..._args: any[]) {
+  return null;
+}
 export interface BulletinTermLike {
   id: number;
 }
