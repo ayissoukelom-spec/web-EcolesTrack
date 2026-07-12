@@ -10,9 +10,27 @@ const FIXTURES = {
     { id: 1, uid: 'super-uid', email: 'super@x.test', name: 'Super', role: 'super_admin', schoolId: null, isDeleted: false },
     { id: 2, uid: 'school-uid', email: 'admin@school.test', name: 'SchoolAdmin', role: 'school_admin', schoolId: 10, isDeleted: false },
     { id: 3, uid: 'teacher-uid', email: 'teacher@school.test', name: 'Teacher', role: 'teacher', schoolId: 10, isDeleted: false },
+    { id: 4, uid: 'other-teacher-uid', email: 'otherteacher@school.test', name: 'OtherTeacher', role: 'teacher', schoolId: 10, isDeleted: false },
+    { id: 5, uid: 'no-school-teacher-uid', email: 'noschool@x.test', name: 'NoSchool', role: 'teacher', schoolId: null, isDeleted: false },
   ],
   schools: [{ id: 10, name: 'Test School' }],
   academicYears: [{ id: 1, schoolId: 10, name: '2025-2026', isActive: true }],
+  classes: [
+    { id: 1, name: 'Assigned Class', schoolId: 10, academicYearId: 1, teacherId: 77 },
+    { id: 2, name: 'Unassigned Class', schoolId: 10, academicYearId: 1, teacherId: 88 },
+    { id: 3, name: 'Other School Class', schoolId: 20, academicYearId: 1, teacherId: 88 },
+  ],
+  teachers: [
+    { id: 77, userId: 3, schoolId: 10, phone: '+22911111111', specialization: 'Math' },
+    { id: 88, userId: 4, schoolId: 10, phone: '+22922222222', specialization: 'Science' },
+    { id: 99, userId: 5, schoolId: null, phone: '+22933333333', specialization: 'History' },
+  ],
+  classTeachers: [
+    { classId: 1, teacherId: 77 },
+  ],
+  schoolClasses: [
+    { id: 500, classId: 3, schoolId: 10, status: 'approved' },
+  ],
   localAuths: [],
   userSchools: [],
   auditEvents: [],
@@ -30,21 +48,51 @@ function createMockDb() {
       if (!sqlObj || !Array.isArray(sqlObj.queryChunks)) return;
       let lastColumn: string | null = null;
       for (const chunk of sqlObj.queryChunks) {
-        if (!chunk || typeof chunk !== 'object') continue;
+        if (chunk == null) continue;
         const ctor = chunk.constructor?.name;
-        if (ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInt' || ctor === 'PgBigInt') {
-          if (typeof chunk.name === 'string') {
-            lastColumn = chunk.name.toLowerCase();
-          }
+
+        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger') && typeof chunk.name === 'string') {
+          lastColumn = chunk.name.toLowerCase();
           continue;
         }
+
         if (ctor === 'Param') {
-          const value = chunk.value;
           if (lastColumn) {
-            if (lastColumn.endsWith('uid')) result.uid = value;
-            else if (lastColumn.endsWith('email')) result.email = value;
-            else if (lastColumn.endsWith('schoolid')) result.schoolId = value === null ? null : Number(value);
-            else if (lastColumn === 'id') result.id = value === null ? null : Number(value);
+            const normalizedLast = lastColumn.replace(/_/g, '');
+            const value = (chunk as any).value;
+            if (normalizedLast.includes('uid')) result.uid = value;
+            else if (normalizedLast.includes('email')) result.email = value;
+            else if (normalizedLast.includes('schoolid')) result.schoolId = value === null ? null : Number(value);
+            else if (normalizedLast.includes('userid')) result.userId = value === null ? null : Number(value);
+            else if (normalizedLast.includes('classid')) {
+              if (Array.isArray(value)) {
+                result.classIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.classId = value === null ? null : Number(value);
+              }
+            } else if (normalizedLast.includes('teacherid')) {
+              result.teacherId = value === null ? null : Number(value);
+            } else if (normalizedLast === 'id' || /\.id$/.test(normalizedLast) || /^id$/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.id = value === null ? null : Number(value);
+              }
+            }
+          }
+          lastColumn = null;
+          continue;
+        }
+
+        if (ctor === 'Array' && lastColumn) {
+          const normalizedLast = lastColumn.replace(/_/g, '');
+          const rawValues = chunk as any[];
+          const values = rawValues.map((v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v);
+          const parsed = values.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          if (normalizedLast.includes('classid')) {
+            result.classIds = parsed;
+          } else if (normalizedLast.includes('id') || normalizedLast.endsWith('.id')) {
+            result.ids = parsed;
           }
           lastColumn = null;
           continue;
@@ -67,10 +115,30 @@ function createMockDb() {
       const right = item.right;
       if (left !== undefined && right !== undefined) {
         const leftStr = String(left).toLowerCase();
-        if (leftStr.includes('uid')) result.uid = right;
-        if (leftStr.includes('email')) result.email = right;
-        if (leftStr.includes('schoolid')) result.schoolId = right === null ? null : Number(right);
-        if (leftStr.includes('id') && !leftStr.includes('schoolid')) result.id = right === null ? null : Number(right);
+        const rightIsPrimitive = right === null || ['string', 'number', 'boolean'].includes(typeof right);
+        if (leftStr.includes('uid') && rightIsPrimitive) result.uid = right;
+        if (leftStr.includes('email') && rightIsPrimitive) result.email = right;
+        if (leftStr.includes('schoolid') && rightIsPrimitive) result.schoolId = right === null ? null : Number(right);
+        if (leftStr.includes('userid') && rightIsPrimitive) result.userId = right === null ? null : Number(right);
+        if (leftStr.includes('classid')) {
+          if (rightIsPrimitive) {
+            if (Array.isArray(right)) {
+              result.classIds = right.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+            } else {
+              result.classId = right === null ? null : Number(right);
+            }
+          }
+        }
+        if (leftStr.includes('teacherid') && rightIsPrimitive) result.teacherId = right === null ? null : Number(right);
+        if (leftStr.includes('id') && !leftStr.includes('schoolid') && !leftStr.includes('userid') && !leftStr.includes('classid') && !leftStr.includes('teacherid')) {
+          if (rightIsPrimitive) {
+            if (Array.isArray(right)) {
+              result.ids = right.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+            } else {
+              result.id = right === null ? null : Number(right);
+            }
+          }
+        }
         if (typeof left === 'object' && left !== null) search(left);
         if (typeof right === 'object' && right !== null) search(right);
         return;
@@ -84,6 +152,21 @@ function createMockDb() {
     };
 
     search(cond);
+
+    if (!Object.keys(result).length && cond != null && typeof cond !== 'string') {
+      try {
+        const text = String(cond);
+        const maybeUid = /uid\s*=\s*['"]([^'"]+)['"]/i.exec(text);
+        if (maybeUid) result.uid = maybeUid[1];
+        const maybeEmail = /email\s*=\s*['"]([^'"]+)['"]/i.exec(text);
+        if (maybeEmail) result.email = maybeEmail[1];
+        const maybeId = /(?:\b(?:id|class_id|teacher_id|school_id)\b)\s*=\s*(\d+)/i.exec(text);
+        if (maybeId) result.id = Number(maybeId[1]);
+      } catch (_err) {
+        // ignore stringification failures
+      }
+    }
+
     return result;
   };
 
@@ -95,6 +178,8 @@ function createMockDb() {
       if (lower.includes('academicyears')) return 'academicYears';
       if (lower.includes('localauths')) return 'localAuths';
       if (lower.includes('userschools')) return 'userSchools';
+      if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
+      if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('auditevents')) return 'auditEvents';
     }
     if (table && typeof table === 'object') {
@@ -105,6 +190,11 @@ function createMockDb() {
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('role') && keys.includes('isactive')) return 'userSchools';
       if (keys.includes('schoolid') && keys.includes('isactive') && keys.includes('name')) return 'academicYears';
       if (keys.includes('name') && keys.includes('address')) return 'schools';
+      if (keys.includes('name') && keys.includes('schoolid') && keys.includes('teacherid')) return 'classes';
+      if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('id')) return 'teachers';
+      if (keys.includes('schoolid') && keys.includes('teacherid') && keys.includes('userid')) return 'teachers';
+      if (keys.includes('classid') && keys.includes('teacherid')) return 'classTeachers';
+      if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('status')) return 'schoolClasses';
     }
     return '';
   };
@@ -116,6 +206,10 @@ function createMockDb() {
       : tableName === 'academicYears' ? FIXTURES.academicYears
       : tableName === 'localAuths' ? FIXTURES.localAuths
       : tableName === 'userSchools' ? FIXTURES.userSchools
+      : tableName === 'classes' ? FIXTURES.classes
+      : tableName === 'teachers' ? FIXTURES.teachers
+      : tableName === 'classTeachers' ? FIXTURES.classTeachers
+      : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'auditEvents' ? FIXTURES.auditEvents
       : []) as any[];
 
@@ -130,25 +224,91 @@ function createMockDb() {
       if (maybeId) conditions.id = Number(maybeId[1]);
     }
 
+    if (tableName === 'teachers') {
+      console.log('DEBUG filterTableRows teachers', { conditions, rows });
+    }
     return rows.filter((row) => {
       if (conditions.uid !== undefined && row.uid !== conditions.uid) return false;
       if (conditions.email !== undefined && String(row.email).toLowerCase() !== String(conditions.email).toLowerCase()) return false;
-      if (conditions.id !== undefined && Number(row.id) !== Number(conditions.id)) return false;
+      if (conditions.id !== undefined) {
+        if (Array.isArray(conditions.id)) {
+          if (!conditions.id.includes(Number(row.id))) return false;
+        } else if (Number(row.id) !== Number(conditions.id)) {
+          return false;
+        }
+      }
+      if (conditions.ids !== undefined) {
+        if (!Array.isArray(conditions.ids) || !conditions.ids.includes(Number(row.id))) return false;
+      }
       if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
+      if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
+      if (conditions.classId !== undefined && row.classId !== conditions.classId) return false;
+      if (conditions.classIds !== undefined) {
+        if (!Array.isArray(conditions.classIds) || !conditions.classIds.includes(Number(row.id))) return false;
+      }
+      if (conditions.teacherId !== undefined && row.teacherId !== conditions.teacherId) return false;
       return true;
     });
   };
 
   const db = {
     select() {
-      return {
-        from: (table: any) => ({
-          where: async (cond?: any) => {
-            return filterTableRows(table, cond);
-          },
-          limit: async (n: number) => [] as any,
-        }),
+      const builder: any = {
+        _table: null,
+        _joins: [] as Array<{ table: any; cond: any }>,
+        from(table: any) {
+          builder._table = table;
+          return builder;
+        },
+        innerJoin(table: any, cond: any) {
+          builder._joins.push({ table, cond });
+          return builder;
+        },
+        leftJoin(table: any, cond: any) {
+          builder._joins.push({ table, cond });
+          return builder;
+        },
+        where: async (cond?: any) => {
+          console.log('DEBUG select.where', {
+            fromTable: resolveTableName(builder._table),
+            joins: builder._joins.map((j: any) => resolveTableName(j.table)),
+            cond,
+            conditions: extractConditions(cond),
+          });
+          const rows = filterTableRows(builder._table, cond);
+          const conditions = extractConditions(cond);
+
+          const fromName = resolveTableName(builder._table);
+          if (fromName === 'classes' && conditions.userId !== undefined) {
+            return rows.filter((row) => {
+              return FIXTURES.classTeachers.some((assignment) => {
+                if (assignment.classId !== row.id) return false;
+                const teacher = FIXTURES.teachers.find((t) => t.id === assignment.teacherId);
+                return teacher?.userId === conditions.userId;
+              });
+            });
+          }
+
+          if (fromName === 'classes' && conditions.teacherId !== undefined) {
+            return rows.filter((row) => {
+              return FIXTURES.classTeachers.some((assignment) => {
+                if (assignment.classId !== row.id) return false;
+                return assignment.teacherId === conditions.teacherId;
+              });
+            });
+          }
+
+          if (fromName === 'classes' && conditions.rawClassTeacherFilter) {
+            return rows.filter((row) => {
+              return FIXTURES.classTeachers.some((assignment) => assignment.classId === row.id && assignment.teacherId === Number(conditions.rawClassTeacherFilter));
+            });
+          }
+
+          return rows;
+        },
+        limit: async (n: number) => [] as any,
       };
+      return builder;
     },
     insert() {
       return {
@@ -437,5 +597,30 @@ describe('E2E security: auth & privilege checks', () => {
     // After deletion, user id 3 should be marked deleted
     const deleted = FIXTURES.users.find((u) => u.id === 3);
     if (deleted) expect(deleted.isDeleted).toBe(true);
+  });
+
+  it('7. teacher only sees assigned classes via classTeachers', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('Authorization', 'Bearer token-teacher');
+
+    console.log('DEBUG class fetch response', res.status, res.body);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
+    expect(res.body.some((c: any) => c.id === 2)).toBe(false);
+    expect(res.body.some((c: any) => c.id === 3)).toBe(false);
+  });
+
+  it('8. teacher without school context is rejected', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'no-school-teacher-uid')
+      .set('x-simulated-email', 'noschool@x.test');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
   });
 });

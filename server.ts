@@ -2637,40 +2637,45 @@ export async function createApp() {
         teacherName: users.name,
       };
 
+      console.log('DEBUG GET /api/classes actor', { role: actor.role, id: actor.id, schoolId: actor.schoolId, targetSchoolId });
       if (actor.role === 'teacher') {
+        console.log('DEBUG teacher branch entered', { actorRole: actor.role, actorId: actor.id, targetSchoolId });
         if (!targetSchoolId) {
           return res.status(403).json({ error: 'Teacher school context is required' });
         }
+        if (!actor.id) {
+          return res.status(403).json({ error: 'Teacher identity is required' });
+        }
 
-        const localClasses = await db
+        const [teacherProfile] = await db
+          .select()
+          .from(teachers)
+          .where(eq(teachers.userId, actor.id));
+
+        if (!teacherProfile) {
+          return res.status(403).json({ error: 'Teacher profile not found for the current user' });
+        }
+
+        const classAssignments = await db
+          .select({ classId: classTeachers.classId })
+          .from(classTeachers)
+          .where(eq(classTeachers.teacherId, teacherProfile.id));
+
+        const classIds = classAssignments.map((row: any) => row.classId).filter((id: any) => id != null);
+        if (classIds.length === 0) {
+          res.json([]);
+          return;
+        }
+
+        const assignedClasses = await db
           .select(baseSelect)
           .from(classes)
           .leftJoin(teachers, eq(classes.teacherId, teachers.id))
           .leftJoin(users, eq(teachers.userId, users.id))
           .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
-          .where(eq(classes.schoolId, targetSchoolId));
+          .where(inArray(classes.id, classIds));
 
-        const approvedGlobalClasses = await db
-          .select(baseSelect)
-          .from(classes)
-          .innerJoin(
-            schoolClasses,
-            and(
-              eq(classes.id, schoolClasses.classId),
-              eq(schoolClasses.schoolId, targetSchoolId),
-              eq(schoolClasses.status, 'approved')
-            )
-          )
-          .leftJoin(teachers, eq(classes.teacherId, teachers.id))
-          .leftJoin(users, eq(teachers.userId, users.id))
-          .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
-          .where(sql`${classes.schoolId} IS NULL`);
-
-        const combined = [...localClasses, ...approvedGlobalClasses];
-        const uniqueMap = new Map<number, typeof combined[number]>();
-        combined.forEach((row) => uniqueMap.set(row.id, row));
-
-        res.json(Array.from(uniqueMap.values()));
+        res.json(assignedClasses);
         return;
       }
 
