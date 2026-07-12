@@ -1,30 +1,42 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
+import request from 'supertest';
 
-const BASE = 'http://localhost:3000';
+let app: any;
+
+beforeAll(async () => {
+  process.env.NODE_ENV = 'test';
+  const serverModule = await import('../../server.ts');
+  app = await serverModule.createApp();
+});
 
 function uniqueEmail() {
   return `e2e-parent-${Date.now()}@test.local`;
 }
 
 async function post(path: string, body: any, headers: Record<string,string> = {}) {
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
-  const json = await res.json().catch(() => null);
-  return { status: res.status, json };
+  const res = await request(app)
+    .post(path)
+    .set({ 'Content-Type': 'application/json', ...headers })
+    .send(body);
+  return { status: res.status, json: res.body };
 }
 
 async function put(path: string, body: any, headers: Record<string,string> = {}) {
-  const res = await fetch(`${BASE}${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
-  const json = await res.json().catch(() => null);
-  return { status: res.status, json };
+  const res = await request(app)
+    .put(path)
+    .set({ 'Content-Type': 'application/json', ...headers })
+    .send(body);
+  return { status: res.status, json: res.body };
 }
 
 async function get(path: string, headers: Record<string,string> = {}) {
-  const res = await fetch(`${BASE}${path}`, { method: 'GET', headers });
-  const json = await res.json().catch(() => null);
-  return { status: res.status, json };
+  const res = await request(app)
+    .get(path)
+    .set(headers);
+  return { status: res.status, json: res.body };
 }
 
-describe('E2E: create → force password change → update profile → re-login', async () => {
+describe('E2E: create → force password change → update profile → re-login', () => {
   it('should create parent, force reset, change password, update profile and verify on re-login', async () => {
     const email = uniqueEmail();
     const name = 'E2E Parent';

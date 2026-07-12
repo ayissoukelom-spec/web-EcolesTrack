@@ -97,19 +97,35 @@ async function findExistingUsersByEmailAndSchool(email: string | null | undefine
   );
 }
 
+// Resolved actor shape used by business routes.
+type ResolvedActorRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | string;
+
+interface ResolvedActor {
+  id?: number | null;
+  uid: string;
+  email?: string | null;
+  name?: string | null;
+  role: ResolvedActorRole;
+  schoolId: number | null;
+  simulated?: boolean;
+}
+
 // Helper to resolve actor with fallback to simulated profile in dev
-async function resolveActor(req: AuthRequest) {
+export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | null> {
   console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
+
+  const activeSchoolId = req.user.schoolId ?? null;
+  const role = req.user.role;
+  if (!role) return null;
+  const uid = req.user.uid;
 
   // In simulated mode, resolve a matching DB user first. If none exists yet,
   // fall back to the simulated profile so tokenless development flows still work.
   if (req.user.simulated) {
-    // First try to resolve by uid. If not found, try to match by email (useful when
-    // simulated uid differs from the DB uid for pre-existing seeded accounts).
     let dbUser: any = null;
-    const rowsByUid = await db.select().from(users).where(eq(users.uid, req.user.uid));
-    console.log('TRACE resolveActor lookup by uid', { uid: req.user.uid, rowsByUidLength: rowsByUid.length });
+    const rowsByUid = await db.select().from(users).where(eq(users.uid, uid));
+    console.log('TRACE resolveActor lookup by uid', { uid, rowsByUidLength: rowsByUid.length });
     if (rowsByUid.length > 0) dbUser = rowsByUid[0];
 
     if (!dbUser && req.user.email) {
@@ -121,27 +137,36 @@ async function resolveActor(req: AuthRequest) {
     console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
-      const activeSchoolId = req.user.schoolId ?? null;
-      return { ...dbUser, schoolId: activeSchoolId ?? dbUser.schoolId ?? null };
+      const resolvedSchoolId = activeSchoolId ?? dbUser.schoolId ?? null;
+      if (role === 'school_admin' && resolvedSchoolId == null) {
+        return null;
+      }
+      return { ...dbUser, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
     }
 
-    return {
-      uid: req.user.uid,
-      role: req.user.role,
-      schoolId: req.user.schoolId,
-      email: req.user.email,
-      name: req.user.name,
-    } as any;
+    const simulatedActor: ResolvedActor = {
+      uid,
+      role,
+      email: req.user.email ?? null,
+      name: req.user.name ?? null,
+      schoolId: activeSchoolId,
+      simulated: true,
+    };
+
+    if (simulatedActor.role === 'school_admin' && simulatedActor.schoolId == null) {
+      return null;
+    }
+
+    return simulatedActor;
   }
 
-  // Otherwise, load from DB for real authenticated users.
-  const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
+  const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
   if (dbUser) {
-    const activeSchoolId = req.user.schoolId ?? null;
-    if (activeSchoolId != null) {
-      return { ...dbUser, schoolId: activeSchoolId };
+    const resolvedSchoolId = activeSchoolId ?? dbUser.schoolId ?? null;
+    if (role === 'school_admin' && resolvedSchoolId == null) {
+      return null;
     }
-    return dbUser;
+    return { ...dbUser, schoolId: resolvedSchoolId } as ResolvedActor;
   }
 
   return null;
@@ -3706,29 +3731,33 @@ export async function createApp() {
         .leftJoin(users, eq(parents.userId, users.id));
 
       if (actor.role === 'teacher') {
-        const currentSchoolId = actor.schoolId ?? null;
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
+          // Robust checks: teacher must have an id and belong to a school to access students
+          if (!actor.id) return res.json([]);
+          if (actor.schoolId == null) return res.json([]);
 
-        if (teacherRows.length === 0) {
-          return res.json([]);
-        }
+          const currentSchoolId = actor.schoolId as number;
 
-        const teacherId = teacherRows[0].id;
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherId));
+          const teacherRows = await db
+            .select({ id: teachers.id })
+            .from(teachers)
+            .where(eq(teachers.userId, actor.id));
 
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
-        if (teacherClassIds.length === 0) {
-          return res.json([]);
-        }
+          if (teacherRows.length === 0) return res.json([]);
 
-        query = query.where(and(inArray(students.classId, teacherClassIds), currentSchoolId != null ? eq(students.schoolId, currentSchoolId) : undefined)) as any;
+          const teacherId = teacherRows[0].id;
+          const assignmentRows = await db
+            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+            .from(classTeachers)
+            .innerJoin(classes, eq(classTeachers.classId, classes.id))
+            .where(eq(classTeachers.teacherId, teacherId));
+
+          // Ensure getTeacherClassIdSet receives a defined school context
+          const teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
+          if (teacherClassIds.length === 0) return res.json([]);
+
+          // Build explicit conditions to avoid passing undefined into and(...)
+          const conditions: any[] = [inArray(students.classId, teacherClassIds), eq(students.schoolId, currentSchoolId)];
+          query = query.where(and(...conditions)) as any;
       } else if (actor.role === 'school_admin') {
         if (actor.schoolId) {
           query = query.where(eq(students.schoolId, actor.schoolId)) as any;
