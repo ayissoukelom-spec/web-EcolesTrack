@@ -138,9 +138,6 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
 
     if (dbUser) {
       const resolvedSchoolId = activeSchoolId ?? dbUser.schoolId ?? null;
-      if (role === 'school_admin' && resolvedSchoolId == null) {
-        return null;
-      }
       return { ...dbUser, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
     }
 

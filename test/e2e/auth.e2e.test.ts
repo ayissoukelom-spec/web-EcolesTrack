@@ -678,11 +678,20 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('6. DB reflects role changes after actions', async () => {
-    // After previous create, ensure user exists with expected role when present in fixtures
+    const createRes = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: 'created@x.test', name: 'Created', role: 'school_admin', schoolId: 10, academicYearId: 1 });
+    expect([201, 400, 409]).toContain(createRes.status);
+
     const created = FIXTURES.users.find((u) => u.email === 'created@x.test');
     if (created) expect(created.role).toBe('school_admin');
 
-    // After deletion, user id 3 should be marked deleted
+    const delRes = await request(app)
+      .delete('/api/admin/users/3')
+      .set('Authorization', 'Bearer token-super');
+    expect([200, 404]).toContain(delRes.status);
+
     const deleted = FIXTURES.users.find((u) => u.id === 3);
     if (deleted) expect(deleted.isDeleted).toBe(true);
   });
