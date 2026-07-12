@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
+import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 
 // Mock DB and Auth middleware before importing the server so the real server
@@ -12,6 +12,10 @@ const FIXTURES = {
     { id: 3, uid: 'teacher-uid', email: 'teacher@school.test', name: 'Teacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 4, uid: 'other-teacher-uid', email: 'otherteacher@school.test', name: 'OtherTeacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 5, uid: 'no-school-teacher-uid', email: 'noschool@x.test', name: 'NoSchool', role: 'teacher', schoolId: null, isDeleted: false },
+    { id: 6, uid: 'sim-parent', email: 'parent@x.test', name: 'Parent', role: 'parent', schoolId: 10, isDeleted: false },
+    { id: 7, uid: 'sim-parent-no-school', email: 'parent-noschool@x.test', name: 'ParentNoSchool', role: 'parent', schoolId: null, isDeleted: false },
+    { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
+    { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
   ],
   schools: [{ id: 10, name: 'Test School' }],
   academicYears: [{ id: 1, schoolId: 10, name: '2025-2026', isActive: true }],
@@ -25,6 +29,14 @@ const FIXTURES = {
     { id: 88, userId: 4, schoolId: 10, phone: '+22922222222', specialization: 'Science' },
     { id: 99, userId: 5, schoolId: null, phone: '+22933333333', specialization: 'History' },
   ],
+  parents: [
+    { id: 1, userId: 6, studentId: 11, schoolId: 10 },
+    { id: 2, userId: 7, studentId: 11, schoolId: 10 },
+    { id: 3, userId: 8, studentId: 11, schoolId: 10 },
+  ],
+  students: [
+    { id: 11, schoolId: 10, classId: 1, firstName: 'Child', lastName: 'One', birthDate: '2010-01-01', gender: 'female', parentId: 1, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' },
+  ],
   classTeachers: [
     { classId: 1, teacherId: 77 },
   ],
@@ -35,6 +47,14 @@ const FIXTURES = {
   userSchools: [],
   auditEvents: [],
 };
+
+const FIXTURES_TEMPLATE = JSON.parse(JSON.stringify(FIXTURES));
+function resetFixtures() {
+  Object.keys(FIXTURES).forEach((key) => {
+    // @ts-ignore
+    FIXTURES[key] = JSON.parse(JSON.stringify(FIXTURES_TEMPLATE[key]));
+  });
+}
 
 function createMockDb() {
   // Minimal mock that supports the select/insert/update/delete chains used
@@ -178,6 +198,8 @@ function createMockDb() {
       if (lower.includes('academicyears')) return 'academicYears';
       if (lower.includes('localauths')) return 'localAuths';
       if (lower.includes('userschools')) return 'userSchools';
+      if (lower.includes('parents')) return 'parents';
+      if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('auditevents')) return 'auditEvents';
@@ -190,6 +212,8 @@ function createMockDb() {
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('role') && keys.includes('isactive')) return 'userSchools';
       if (keys.includes('schoolid') && keys.includes('isactive') && keys.includes('name')) return 'academicYears';
       if (keys.includes('name') && keys.includes('address')) return 'schools';
+      if (keys.includes('userid') && keys.includes('studentid') && keys.includes('address')) return 'parents';
+      if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('parentid')) return 'students';
       if (keys.includes('name') && keys.includes('schoolid') && keys.includes('teacherid')) return 'classes';
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('id')) return 'teachers';
       if (keys.includes('schoolid') && keys.includes('teacherid') && keys.includes('userid')) return 'teachers';
@@ -206,11 +230,12 @@ function createMockDb() {
       : tableName === 'academicYears' ? FIXTURES.academicYears
       : tableName === 'localAuths' ? FIXTURES.localAuths
       : tableName === 'userSchools' ? FIXTURES.userSchools
+      : tableName === 'parents' ? FIXTURES.parents
+      : tableName === 'students' ? FIXTURES.students
       : tableName === 'classes' ? FIXTURES.classes
       : tableName === 'teachers' ? FIXTURES.teachers
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
-      : tableName === 'auditEvents' ? FIXTURES.auditEvents
       : []) as any[];
 
     if (!cond) return rows;
@@ -242,7 +267,11 @@ function createMockDb() {
       }
       if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
       if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
+      if (conditions.parentId !== undefined && row.parentId !== conditions.parentId) return false;
       if (conditions.classId !== undefined && row.classId !== conditions.classId) return false;
+      if (conditions.ids !== undefined) {
+        if (!Array.isArray(conditions.ids) || !conditions.ids.includes(Number(row.id))) return false;
+      }
       if (conditions.classIds !== undefined) {
         if (!Array.isArray(conditions.classIds) || !conditions.classIds.includes(Number(row.id))) return false;
       }
@@ -286,6 +315,12 @@ function createMockDb() {
                 const teacher = FIXTURES.teachers.find((t) => t.id === assignment.teacherId);
                 return teacher?.userId === conditions.userId;
               });
+            });
+          }
+
+          if (fromName === 'classes' && conditions.ids !== undefined) {
+            return rows.filter((row) => {
+              return Array.isArray(conditions.ids) && conditions.ids.includes(Number(row.id));
             });
           }
 
@@ -338,16 +373,26 @@ function createMockDb() {
         }),
       };
     },
-    update() {
+    update(table?: any) {
       return {
         set: (values: any) => ({
           where: async (cond: any) => {
             const conditions = extractConditions(cond);
+            const tableName = resolveTableName(table);
             if (conditions.id != null) {
-              const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
-              if (idx >= 0) {
-                FIXTURES.users[idx] = { ...FIXTURES.users[idx], ...values };
-                return [FIXTURES.users[idx]];
+              if (tableName === 'users') {
+                const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
+                if (idx >= 0) {
+                  FIXTURES.users[idx] = { ...FIXTURES.users[idx], ...values };
+                  return [FIXTURES.users[idx]];
+                }
+              }
+              if (tableName === 'classes') {
+                const idx = FIXTURES.classes.findIndex((c) => c.id === Number(conditions.id));
+                if (idx >= 0) {
+                  FIXTURES.classes[idx] = { ...FIXTURES.classes[idx], ...values };
+                  return [FIXTURES.classes[idx]];
+                }
               }
             }
             return [];
@@ -355,15 +400,30 @@ function createMockDb() {
         }),
       };
     },
-    delete() {
+    delete(table?: any) {
       return {
         where: async (cond: any) => {
           const conditions = extractConditions(cond);
+          const tableName = resolveTableName(table);
           if (conditions.id != null) {
-            const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
-            if (idx >= 0) {
-              FIXTURES.users[idx].isDeleted = true;
-              return [FIXTURES.users[idx]];
+            if (tableName === 'users') {
+              const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
+              if (idx >= 0) {
+                FIXTURES.users[idx].isDeleted = true;
+                return [FIXTURES.users[idx]];
+              }
+            }
+            if (tableName === 'classes') {
+              const idx = FIXTURES.classes.findIndex((c) => c.id === Number(conditions.id));
+              if (idx >= 0) {
+                const row = FIXTURES.classes[idx];
+                if ('isDeleted' in row) {
+                  row.isDeleted = true;
+                } else {
+                  FIXTURES.classes.splice(idx, 1);
+                }
+                return [row];
+              }
             }
           }
           return [];
@@ -521,6 +581,10 @@ describe('E2E security: auth & privilege checks', () => {
     // nothing to close - server started in module init
   });
 
+  beforeEach(() => {
+    resetFixtures();
+  });
+
   it('1. rejects x-simulated-* headers in production', async () => {
     process.env.NODE_ENV = 'production';
     const res = await request(app)
@@ -613,7 +677,37 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.some((c: any) => c.id === 3)).toBe(false);
   });
 
-  it('8. teacher without school context is rejected', async () => {
+  it('8. school_admin with schoolId can fetch classes', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('9. school_admin without schoolId is rejected', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim-school-admin')
+      .set('x-simulated-email', 'simschool@x.test');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('10. school_admin cannot force another schoolId via query param', async () => {
+    const res = await request(app)
+      .get('/api/classes?schoolId=20')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.every((c: any) => c.schoolId === 10 || c.schoolId == null)).toBe(true);
+  });
+
+  it('11. teacher without school context is rejected', async () => {
     const res = await request(app)
       .get('/api/classes')
       .set('x-simulated-role', 'teacher')
@@ -622,5 +716,153 @@ describe('E2E security: auth & privilege checks', () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toHaveProperty('error');
+  });
+
+  it('12. parent with children only sees their child classes', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
+    expect(res.body.some((c: any) => c.id === 2)).toBe(false);
+    expect(res.body.some((c: any) => c.id === 3)).toBe(false);
+  });
+
+  it('13. parent without schoolId can still fetch their children classes', async () => {
+    const res = await request(app)
+      .get('/api/classes')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent-no-school')
+      .set('x-simulated-email', 'parent-noschool@x.test');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
+  });
+
+  it('14. parent cannot bypass schoolId query param and still sees only their child classes', async () => {
+    const res = await request(app)
+      .get('/api/classes?schoolId=10')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent-query-bypass')
+      .set('x-simulated-email', 'parent-query@x.test');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
+    expect(res.body.some((c: any) => c.id === 2)).toBe(false);
+    expect(res.body.some((c: any) => c.id === 3)).toBe(false);
+  });
+
+  it('15. teacher cannot delete a class even in their school', async () => {
+    const res = await request(app)
+      .delete('/api/classes/1')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('16. parent cannot delete a class even in their school', async () => {
+    const res = await request(app)
+      .delete('/api/classes/2')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('17. school_admin without schoolId can update a class in another school', async () => {
+    const res = await request(app)
+      .put('/api/classes/3')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim-school-admin-no-school')
+      .set('x-simulated-email', 'admin-noschool@x.test')
+      .send({ teacherId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 3, teacherId: null });
+  });
+
+  it('18. school_admin without schoolId cannot delete a class', async () => {
+    const res = await request(app)
+      .delete('/api/classes/3')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim-school-admin-no-school')
+      .set('x-simulated-email', 'admin-noschool@x.test');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  describe('DELETE /api/classes/:id', () => {
+    it('super_admin can delete a class in any school', async () => {
+      const res = await request(app)
+        .delete('/api/classes/3')
+        .set('Authorization', 'Bearer token-super');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ message: 'Class deleted successfully' });
+    });
+
+    it('school_admin with schoolId cannot delete a class in another school', async () => {
+      const res = await request(app)
+        .delete('/api/classes/3')
+        .set('Authorization', 'Bearer token-school');
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('teacher with schoolId cannot delete a class in another school', async () => {
+      const res = await request(app)
+        .delete('/api/classes/3')
+        .set('Authorization', 'Bearer token-teacher');
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('teacher without schoolId cannot delete a class', async () => {
+      const res = await request(app)
+        .delete('/api/classes/3')
+        .set('x-simulated-role', 'teacher')
+        .set('x-simulated-uid', 'no-school-teacher-uid')
+        .set('x-simulated-email', 'noschool@x.test');
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('parent without schoolId cannot delete a class', async () => {
+      const res = await request(app)
+        .delete('/api/classes/3')
+        .set('x-simulated-role', 'parent')
+        .set('x-simulated-uid', 'sim-parent-no-school')
+        .set('x-simulated-email', 'parent-noschool@x.test');
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('returns 404 when class does not exist', async () => {
+      const res = await request(app)
+        .delete('/api/classes/999')
+        .set('Authorization', 'Bearer token-super');
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error');
+    });
   });
 });

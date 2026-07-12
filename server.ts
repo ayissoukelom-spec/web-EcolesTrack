@@ -2615,9 +2615,15 @@ export async function createApp() {
   app.get('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      if (req.user.role === 'school_admin' && req.user.schoolId == null) {
+        return res.status(403).json({ error: 'School admin school context is required' });
+      }
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'School admin school context is required' });
+      }
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
@@ -2625,7 +2631,9 @@ export async function createApp() {
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
-          : schoolIdParam;
+          : actor.role === 'parent'
+            ? actor.schoolId ?? null
+            : schoolIdParam;
 
       const baseSelect = {
         id: classes.id,
@@ -2710,7 +2718,30 @@ export async function createApp() {
         .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
 
       if (actor.role !== 'super_admin') {
-        if (actor.schoolId != null) {
+        if (actor.role === 'parent') {
+          const childStudentIds = await getParentChildStudentIds(actor.id);
+          console.log('DEBUG parent childStudentIds', childStudentIds);
+          if (childStudentIds.length === 0) {
+            return res.json([]);
+          }
+
+          const childClassRows = await db
+            .select({ classId: students.classId })
+            .from(students)
+            .where(inArray(students.id, childStudentIds));
+          console.log('DEBUG parent childClassRows', childClassRows);
+
+          const childClassIds = Array.from(new Set(childClassRows
+            .map((row: any) => row.classId)
+            .filter((id): id is number => id != null)));
+          console.log('DEBUG parent childClassIds', childClassIds);
+
+          if (childClassIds.length === 0) {
+            return res.json([]);
+          }
+
+          query = query.where(inArray(classes.id, childClassIds)) as any;
+        } else if (actor.schoolId != null) {
           query = query.where(or(eq(classes.schoolId, actor.schoolId), sql`${classes.schoolId} IS NULL`)) as any;
         } else {
           return res.json([]);
@@ -2718,6 +2749,12 @@ export async function createApp() {
       }
 
       const allClasses = await query;
+
+      if (actor.role === 'parent') {
+        console.log('DEBUG GET /api/classes parent returning child classes', allClasses);
+        res.json(allClasses);
+        return;
+      }
 
       // Fill missing teacherName values by querying teachers->users for teacherIds
       try {
@@ -3003,9 +3040,16 @@ export async function createApp() {
       const [classToDelete] = await db.select().from(classes).where(eq(classes.id, id));
       if (!classToDelete) return res.status(404).json({ error: 'Class not found' });
 
-      // School admin can only delete classes in their own school
-      if (actor.role !== 'super_admin') {
-        if (actor.schoolId && classToDelete.schoolId !== actor.schoolId) {
+      // Only super_admin or school_admin may delete classes.
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Forbidden: only super_admin or school_admin can delete classes' });
+      }
+
+      if (actor.role === 'school_admin') {
+        if (!actor.schoolId) {
+          return res.status(403).json({ error: 'Forbidden: school_admin must have a schoolId' });
+        }
+        if (classToDelete.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot delete class in another school' });
         }
       }
