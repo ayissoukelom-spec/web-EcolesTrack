@@ -440,7 +440,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'bulletins') {
-      return <BulletinsView currentRole={currentRole} schoolsList={schoolsList} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} gradesList={gradesList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
+      return <BulletinsView schoolsList={schoolsList} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} gradesList={gradesList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
     }
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {
@@ -452,7 +452,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'mobile-parent') {
-      return <MobileParentView currentRole={currentRole} studentsList={studentsList} parentsList={parentsList} absencesList={absencesList} gradesList={gradesList} notificationsList={notificationsList} onJustifyAbsence={handleJustifyAbsence} />;
+      return <MobileParentView studentsList={studentsList} parentsList={parentsList} absencesList={absencesList} gradesList={gradesList} notificationsList={notificationsList} onJustifyAbsence={handleJustifyAbsence} />;
     }
 
     return null;

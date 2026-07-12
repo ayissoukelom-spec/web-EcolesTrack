@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.tsx';
+import { AuthProvider } from './contexts/AuthContext.tsx';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
 const mockCountOverdueEvaluations = vi.hoisted(() => vi.fn());
@@ -13,6 +14,7 @@ vi.mock('./lib/api.ts', () => ({
   clearSimulatedRole: vi.fn(),
   clearSimulatedUser: vi.fn(),
   getSimulatedSchoolId: () => 1,
+  getActiveSchoolId: () => 1,
   getSimulatedUser: () => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1 }),
   setSimulatedUser: vi.fn(),
   findTeacherProfileFromSimulatedUser: () => null,
@@ -75,7 +77,11 @@ describe('App bulletin navigation', () => {
   });
 
   it('shows a dedicated Bulletin entry and opens the bulletin view', async () => {
-    render(<App />);
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
 
     const bulletinButton = await screen.findByRole('button', { name: /^Bulletins$/i });
     fireEvent.click(bulletinButton);
@@ -86,7 +92,11 @@ describe('App bulletin navigation', () => {
   it('shows a sidebar badge when overdue evaluations exist', async () => {
     mockCountOverdueEvaluations.mockReturnValue(2);
 
-    render(<App />);
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
 
     expect(await screen.findAllByText('2')).toHaveLength(2);
   });

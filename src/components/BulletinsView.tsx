@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type {
+  BulletinDetail,
   BulletinListFilters,
   BulletinListItem,
   BulletinTermOption,
@@ -22,7 +23,6 @@ import BulletinDetailView from './bulletins/BulletinDetail.tsx';
 import BulletinActions from './bulletins/BulletinActions.tsx';
 
 interface BulletinsViewProps {
-  currentRole: UserRole;
   schoolsList: School[];
   classesList: Class[];
   studentsList: Student[];
@@ -53,7 +53,6 @@ const toParentListItem = (detail: BulletinDetail): BulletinListItem => ({
 });
 
 export default function BulletinsView({
-  currentRole,
   schoolsList,
   classesList,
   studentsList,
@@ -61,11 +60,12 @@ export default function BulletinsView({
   gradesList,
   teacherClassIds = [],
 }: BulletinsViewProps) {
+  const { role, user: simulated } = useAuth();
+  const currentRole: UserRole = role as UserRole;
   const canGenerate = currentRole === 'school_admin' || currentRole === 'super_admin';
   const canList = currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher' || currentRole === 'parent';
   const isTeacher = currentRole === 'teacher';
   const isParent = currentRole === 'parent';
-  const { user: simulated } = useAuth();
 
   const [filters, setFilters] = useState<{ classId?: number; studentId?: number; termId?: number }>({});
   const [page, setPage] = useState(1);

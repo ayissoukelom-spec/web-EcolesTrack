@@ -28,7 +28,6 @@ interface MobileParentViewProps {
   gradesList: Grade[];
   notificationsList: SystemNotification[];
   onJustifyAbsence: (id: number, reason: string) => void;
-  currentRole?: UserRole;
 }
 
 export default function MobileParentView({
@@ -38,7 +37,6 @@ export default function MobileParentView({
   gradesList,
   notificationsList,
   onJustifyAbsence,
-  currentRole,
 }: MobileParentViewProps) {
   const [activeScreen, setActiveScreen] = useState<'login' | 'dashboard' | 'absences' | 'grades' | 'notifs'>('login');
   const [notifTab, setNotifTab] = useState<'notes' | 'homework'>('notes');
@@ -48,7 +46,8 @@ export default function MobileParentView({
   // States for live alerts inside simulator
   const [pushedAlert, setPushedAlert] = useState<SystemNotification | null>(null);
 
-  const { user: simulatedUser } = useAuth();
+  const { user: simulatedUser, role } = useAuth();
+  const currentRole: UserRole = role as UserRole;
   const parentEmail = simulatedUser?.email || 'marianne.dubois@gmail.com';
 
   const currentEmail = simulatedUser?.email?.toLowerCase();
