@@ -857,6 +857,10 @@ export async function createApp() {
 
       // Create linked profile for teacher/parent
       let teacherProfile: any = null;
+      if (role === 'teacher' && resolvedSchoolId == null) {
+        return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
+      }
+
       if (role === 'parent') {
         const normalizedStudentId = studentId != null && studentId !== '' ? parseInt(studentId, 10) : undefined;
         const parentStudentId = Number.isNaN(normalizedStudentId as number) ? undefined : normalizedStudentId;
@@ -894,7 +898,7 @@ export async function createApp() {
         }
       } else if (role === 'teacher') {
         const teacherResult = await db.insert(teachers)
-          .values({ userId: createdUser.id, schoolId: resolvedSchoolId, phone: phone || '', specialization: normalizeSpecialization(specialization) || null })
+          .values({ userId: createdUser.id, schoolId: resolvedSchoolId ?? 0, phone: phone || '', specialization: normalizeSpecialization(specialization) || null })
           .returning();
         teacherProfile = teacherResult[0];
 
@@ -1378,11 +1382,26 @@ export async function createApp() {
       const id = Number(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid user id' });
 
-      // Only allow if actor is the owner, or an admin (super_admin or school_admin)
+      const [targetUser] = await db.select().from(users).where(eq(users.id, id));
+      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
       if (!actor) return res.status(403).json({ error: 'Forbidden' });
       const actorIsOwner = actor.id && Number(actor.id) === id;
       if (!(actorIsOwner || ['super_admin', 'school_admin'].includes(actor.role))) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (!actorIsOwner && actor.role === 'school_admin') {
+        if (['super_admin', 'school_admin'].includes(targetUser.role)) {
+          return res.status(403).json({ error: 'Forbidden: cannot modify admin accounts' });
+        }
+
+        if (actor.schoolId !== targetUser.schoolId) {
+          const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+          if (!membership) {
+            return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+          }
+        }
       }
 
       const { firstName, lastName, name, phone, address } = req.body as any;
@@ -1400,8 +1419,8 @@ export async function createApp() {
       }
 
       // If the user is a parent, persist phone/address in parents table
-      const [targetUser] = await db.select().from(users).where(eq(users.id, id));
-      if (targetUser && targetUser.role === 'parent') {
+      const [updatedUserCandidate] = await db.select().from(users).where(eq(users.id, id));
+      if (updatedUserCandidate && updatedUserCandidate.role === 'parent') {
         const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
         const parentValues: any = {
           phone: typeof phone === 'string' ? phone : existingParent[0]?.phone || '',
@@ -3247,12 +3266,17 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden: only admin roles can create teachers' });
+      }
 
       const parsedSchoolId = parseInt(String(schoolId), 10);
 
-      // School admin can only create teachers in their own school
-      if (actor.role !== 'super_admin') {
-        if (actor.schoolId && parsedSchoolId !== actor.schoolId) {
+      if (actor.role === 'school_admin') {
+        if (actor.schoolId == null) {
+          return res.status(403).json({ error: 'Forbidden: missing school context' });
+        }
+        if (parsedSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot create teacher in another school' });
         }
       }
@@ -3499,6 +3523,12 @@ export async function createApp() {
           // Load user and validate school permission
           const actor = await resolveActor(req);
           if (!actor) return res.status(404).json({ error: 'User not found' });
+          if (!['super_admin', 'school_admin'].includes(actor.role)) {
+            return res.status(403).json({ error: 'Forbidden: only admin roles can create parents' });
+          }
+          if (actor.role === 'school_admin' && actor.schoolId == null) {
+            return res.status(403).json({ error: 'Forbidden: missing school context' });
+          }
 
           const parsedStudentId = studentId != null && studentId !== '' ? parseInt(String(studentId), 10) : undefined;
           let resolvedSchoolId = schoolId != null && schoolId !== '' ? parseInt(String(schoolId), 10) : null;
@@ -3648,7 +3678,31 @@ export async function createApp() {
         .where(eq(parents.id, id));
 
       if (!rows || rows.length === 0) return res.status(404).json({ error: 'Parent not found' });
-      res.json(rows[0]);
+      const parent = rows[0];
+
+      if (actor.role === 'super_admin') {
+        return res.json(parent);
+      }
+
+      if (actor.role === 'parent') {
+        if (actor.id === parent.userId) {
+          return res.json(parent);
+        }
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (actor.role === 'school_admin') {
+        if (actor.schoolId === parent.schoolId) {
+          return res.json(parent);
+        }
+        const membership = await ensureUserSchoolMembership(parent.userId, actor.schoolId, 'parent');
+        if (membership) {
+          return res.json(parent);
+        }
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      return res.status(403).json({ error: 'Forbidden' });
     } catch (err: any) {
       console.error('Failed to fetch parent by id:', err);
       res.status(500).json({ error: 'Failed to fetch parent' });

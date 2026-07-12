@@ -69,14 +69,69 @@ function createMockDb() {
 
     const parseQueryChunks = (sqlObj: any) => {
       if (!sqlObj || !Array.isArray(sqlObj.queryChunks)) return;
+      const flattened: any[] = [];
+      const collectChunks = (obj: any) => {
+        if (!obj || typeof obj !== 'object' || !Array.isArray(obj.queryChunks)) return;
+        for (const chunk of obj.queryChunks) {
+          if (chunk == null) continue;
+          if (typeof chunk === 'object' && chunk !== null && Array.isArray((chunk as any).queryChunks)) {
+            collectChunks(chunk);
+          } else {
+            flattened.push(chunk);
+          }
+        }
+      };
+      collectChunks(sqlObj);
+
       let lastColumn: string | null = null;
-      for (const chunk of sqlObj.queryChunks) {
+      for (const chunk of flattened) {
         if (chunk == null) continue;
         const ctor = chunk.constructor?.name;
 
         if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger') && typeof chunk.name === 'string') {
           lastColumn = chunk.name.toLowerCase();
           continue;
+        }
+
+        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger') && typeof (chunk as any).text === 'string') {
+          const text = (chunk as any).text.toLowerCase();
+          if (text.includes('lower(') && text.includes('email')) {
+            lastColumn = 'email';
+            continue;
+          }
+        }
+
+        if (typeof chunk === 'string') {
+          const text = chunk.toLowerCase();
+          if (text.includes('lower(') && text.includes('email')) {
+            lastColumn = 'email';
+            continue;
+          }
+          if (lastColumn) {
+            const normalizedLast = lastColumn.replace(/_/g, '');
+            const value = chunk;
+            if (normalizedLast.includes('uid')) result.uid = value;
+            else if (normalizedLast.includes('email')) result.email = value;
+            else if (normalizedLast.includes('schoolid')) result.schoolId = value === null ? null : Number(value);
+            else if (normalizedLast.includes('userid')) result.userId = value === null ? null : Number(value);
+            else if (normalizedLast.includes('classid')) {
+              if (Array.isArray(value)) {
+                result.classIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.classId = value === null ? null : Number(value);
+              }
+            } else if (normalizedLast.includes('teacherid')) {
+              result.teacherId = value === null ? null : Number(value);
+            } else if (normalizedLast === 'id' || /\.id$/.test(normalizedLast) || /^id$/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.id = value === null ? null : Number(value);
+              }
+            }
+            lastColumn = null;
+            continue;
+          }
         }
 
         if (ctor === 'Param') {
@@ -252,6 +307,9 @@ function createMockDb() {
       if (maybeId) conditions.id = Number(maybeId[1]);
     }
 
+    if (tableName === 'users' && !Object.keys(conditions).length && cond && typeof cond === 'object' && JSON.stringify(cond).includes('LOWER')) {
+      console.log('DEBUG filterTableRows users no conditions', { cond });
+    }
     if (tableName === 'teachers') {
       console.log('DEBUG filterTableRows teachers', { conditions, rows });
     }
@@ -678,6 +736,141 @@ describe('E2E security: auth & privilege checks', () => {
       .set('Authorization', 'Bearer token-school')
       .send({ email: 'super@x.test', name: 'SuperChanged', role: 'super_admin' });
     expect([400, 403]).toContain(updateRes.status);
+  });
+
+  it('3a. school_admin cannot update a user outside their school via PUT /api/users/:id', async () => {
+    FIXTURES.users.push({ id: 99, uid: 'other-school-user', email: 'otherparent@x.test', name: 'OtherUser', role: 'teacher', schoolId: 20, isDeleted: false });
+
+    const res = await request(app)
+      .put('/api/users/99')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Intruder' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3b. school_admin cannot update an admin account via PUT /api/users/:id', async () => {
+    const res = await request(app)
+      .put('/api/users/1')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'SuperChanged' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3c. school_admin can update a same-school teacher via PUT /api/users/:id', async () => {
+    const res = await request(app)
+      .put('/api/users/3')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Updated Teacher' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 3, name: 'Updated Teacher' });
+  });
+
+  it('3d. parent can access own parent details via GET /api/parents/:id', async () => {
+    const res = await request(app)
+      .get('/api/parents/1')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 1, userId: 6, schoolId: 10 });
+  });
+
+  it('3e. parent cannot access another parent detail via GET /api/parents/:id', async () => {
+    const res = await request(app)
+      .get('/api/parents/2')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3f. school_admin can access same-school parent detail via GET /api/parents/:id', async () => {
+    const res = await request(app)
+      .get('/api/parents/1')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 1, userId: 6, schoolId: 10 });
+  });
+
+  it('3g. school_admin cannot access another-school parent detail via GET /api/parents/:id', async () => {
+    FIXTURES.users.push({ id: 20, uid: 'other-parent-uid', email: 'otherparent@x.test', name: 'OtherParent', role: 'parent', schoolId: 20, isDeleted: false });
+    FIXTURES.parents.push({ id: 4, userId: 20, studentId: null, schoolId: 20 });
+
+    const res = await request(app)
+      .get('/api/parents/4')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3h. school_admin can create a teacher in their own school via POST /api/teachers', async () => {
+    const res = await request(app)
+      .post('/api/teachers')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'New Teacher', email: 'newteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ email: 'newteacher@x.test', name: 'New Teacher', schoolId: 10 });
+  });
+
+  it('3i. teacher cannot create a teacher via POST /api/teachers', async () => {
+    const res = await request(app)
+      .post('/api/teachers')
+      .set('Authorization', 'Bearer token-teacher')
+      .send({ name: 'Bad Teacher', email: 'badteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3j. parent cannot create a teacher via POST /api/teachers', async () => {
+    const res = await request(app)
+      .post('/api/teachers')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .send({ name: 'Bad Teacher', email: 'badteacher2@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3k. school_admin can create a parent in their own school via POST /api/parents', async () => {
+    const res = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'New Parent', email: 'newparent@x.test', phone: '+22998765432', address: 'Rue Test', schoolId: 10 });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ email: 'newparent@x.test', name: 'New Parent', schoolId: 10 });
+  });
+
+  it('3l. parent cannot create a parent via POST /api/parents', async () => {
+    const res = await request(app)
+      .post('/api/parents')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .send({ name: 'Bad Parent', email: 'badparent@x.test', phone: '+22998765432', address: 'Rue Test', schoolId: 10 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3m. teacher cannot create a parent via POST /api/parents', async () => {
+    const res = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-teacher')
+      .send({ name: 'Bad Parent', email: 'badparent2@x.test', phone: '+22998765432', address: 'Rue Test', schoolId: 10 });
+
+    expect(res.status).toBe(403);
   });
 
   it('4. school_admin cannot act outside their school', async () => {
