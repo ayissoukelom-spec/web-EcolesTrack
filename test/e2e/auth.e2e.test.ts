@@ -17,7 +17,10 @@ const FIXTURES = {
     { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
   ],
-  schools: [{ id: 10, name: 'Test School' }],
+  schools: [
+    { id: 10, name: 'Test School' },
+    { id: 20, name: 'Other School' },
+  ],
   academicYears: [{ id: 1, schoolId: 10, name: '2025-2026', isActive: true }],
   classes: [
     { id: 1, name: 'Assigned Class', schoolId: 10, academicYearId: 1, teacherId: 77 },
@@ -285,6 +288,9 @@ function createMockDb() {
       const builder: any = {
         _table: null,
         _joins: [] as Array<{ table: any; cond: any }>,
+        _cond: undefined as any,
+        _limit: undefined as number | undefined,
+        _orderBy: undefined as any,
         from(table: any) {
           builder._table = table;
           return builder;
@@ -297,52 +303,78 @@ function createMockDb() {
           builder._joins.push({ table, cond });
           return builder;
         },
-        where: async (cond?: any) => {
-          console.log('DEBUG select.where', {
-            fromTable: resolveTableName(builder._table),
-            joins: builder._joins.map((j: any) => resolveTableName(j.table)),
-            cond,
-            conditions: extractConditions(cond),
-          });
-          const rows = filterTableRows(builder._table, cond);
-          const conditions = extractConditions(cond);
-
-          const fromName = resolveTableName(builder._table);
-          if (fromName === 'classes' && conditions.userId !== undefined) {
-            return rows.filter((row) => {
-              return FIXTURES.classTeachers.some((assignment) => {
-                if (assignment.classId !== row.id) return false;
-                const teacher = FIXTURES.teachers.find((t) => t.id === assignment.teacherId);
-                return teacher?.userId === conditions.userId;
-              });
-            });
-          }
-
-          if (fromName === 'classes' && conditions.ids !== undefined) {
-            return rows.filter((row) => {
-              return Array.isArray(conditions.ids) && conditions.ids.includes(Number(row.id));
-            });
-          }
-
-          if (fromName === 'classes' && conditions.teacherId !== undefined) {
-            return rows.filter((row) => {
-              return FIXTURES.classTeachers.some((assignment) => {
-                if (assignment.classId !== row.id) return false;
-                return assignment.teacherId === conditions.teacherId;
-              });
-            });
-          }
-
-          if (fromName === 'classes' && conditions.rawClassTeacherFilter) {
-            return rows.filter((row) => {
-              return FIXTURES.classTeachers.some((assignment) => assignment.classId === row.id && assignment.teacherId === Number(conditions.rawClassTeacherFilter));
-            });
-          }
-
-          return rows;
+        where(cond?: any) {
+          builder._cond = cond;
+          return builder;
         },
-        limit: async (n: number) => [] as any,
+        orderBy(..._args: any[]) {
+          builder._orderBy = _args;
+          return builder;
+        },
+        limit(n: number) {
+          builder._limit = n;
+          return builder;
+        },
+        then(onfulfilled: any, onrejected: any) {
+          return executeQuery().then(onfulfilled, onrejected);
+        },
+        catch(onrejected: any) {
+          return executeQuery().catch(onrejected);
+        },
       };
+
+      const executeQuery = async () => {
+        console.log('DEBUG select.where', {
+          fromTable: resolveTableName(builder._table),
+          joins: builder._joins.map((j: any) => resolveTableName(j.table)),
+          cond: builder._cond,
+          conditions: extractConditions(builder._cond),
+          limit: builder._limit,
+          orderBy: builder._orderBy,
+        });
+
+        let rows = filterTableRows(builder._table, builder._cond);
+        const conditions = extractConditions(builder._cond);
+        const fromName = resolveTableName(builder._table);
+
+        if (fromName === 'classes' && conditions.userId !== undefined) {
+          rows = rows.filter((row) => {
+            return FIXTURES.classTeachers.some((assignment) => {
+              if (assignment.classId !== row.id) return false;
+              const teacher = FIXTURES.teachers.find((t) => t.id === assignment.teacherId);
+              return teacher?.userId === conditions.userId;
+            });
+          });
+        }
+
+        if (fromName === 'classes' && conditions.ids !== undefined) {
+          rows = rows.filter((row) => {
+            return Array.isArray(conditions.ids) && conditions.ids.includes(Number(row.id));
+          });
+        }
+
+        if (fromName === 'classes' && conditions.teacherId !== undefined) {
+          rows = rows.filter((row) => {
+            return FIXTURES.classTeachers.some((assignment) => {
+              if (assignment.classId !== row.id) return false;
+              return assignment.teacherId === conditions.teacherId;
+            });
+          });
+        }
+
+        if (fromName === 'classes' && conditions.rawClassTeacherFilter) {
+          rows = rows.filter((row) => {
+            return FIXTURES.classTeachers.some((assignment) => assignment.classId === row.id && assignment.teacherId === Number(conditions.rawClassTeacherFilter));
+          });
+        }
+
+        if (typeof builder._limit === 'number') {
+          rows = rows.slice(0, builder._limit);
+        }
+
+        return rows;
+      };
+
       return builder;
     },
     insert() {
@@ -350,13 +382,11 @@ function createMockDb() {
         values: (obj: any) => ({
           returning: async () => {
             // crud: infers insert target by inspecting keys
-            if (obj.uid || obj.role) {
-              const newId = FIXTURES.users.length + 1;
-              const row = { id: newId, ...obj };
-              FIXTURES.users.push(row as any);
-              return [row];
+            if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
+              FIXTURES.userSchools.push(obj as any);
+              return [obj];
             }
-            if (obj.userId && obj.passwordHash) {
+            if (obj.userId !== undefined && obj.passwordHash) {
               FIXTURES.localAuths.push(obj as any);
               return [obj];
             }
@@ -364,9 +394,11 @@ function createMockDb() {
               FIXTURES.auditEvents.push(obj as any);
               return [obj];
             }
-            if (obj.userId && obj.schoolId && obj.role) {
-              FIXTURES.userSchools.push(obj as any);
-              return [obj];
+            if (obj.uid && obj.email) {
+              const newId = FIXTURES.users.length + 1;
+              const row = { id: newId, ...obj };
+              FIXTURES.users.push(row as any);
+              return [row];
             }
             return [obj];
           },
@@ -659,6 +691,37 @@ describe('E2E security: auth & privilege checks', () => {
       .set('Authorization', 'Bearer token-school')
       .send({ userId: newUser.id, password: 'SafePass1!' });
     expect([400, 403]).toContain(res.status);
+  });
+
+  it('4a. super_admin can add a school membership for a teacher', async () => {
+    const res = await request(app)
+      .post('/api/users/3/schools')
+      .set('Authorization', 'Bearer token-super')
+      .send({ schoolId: 20, role: 'teacher' });
+
+    expect([200, 201]).toContain(res.status);
+    if (res.status === 201) {
+      expect(res.body).toMatchObject({ userId: 3, schoolId: 20, role: 'teacher' });
+      expect(FIXTURES.userSchools.some((row: any) => row.userId === 3 && row.schoolId === 20 && row.role === 'teacher')).toBe(true);
+    }
+  });
+
+  it('4b. non-super_admin cannot add school membership', async () => {
+    const res = await request(app)
+      .post('/api/users/3/schools')
+      .set('Authorization', 'Bearer token-school')
+      .send({ schoolId: 20, role: 'teacher' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('4c. super_admin cannot add membership for non-teacher/parent user', async () => {
+    const res = await request(app)
+      .post('/api/users/1/schools')
+      .set('Authorization', 'Bearer token-super')
+      .send({ schoolId: 20, role: 'teacher' });
+
+    expect(res.status).toBe(400);
   });
 
   it('5. super_admin can perform allowed actions', async () => {
