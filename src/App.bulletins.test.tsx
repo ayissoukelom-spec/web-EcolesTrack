@@ -1,21 +1,24 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.tsx';
 import { AuthProvider } from './contexts/AuthContext.tsx';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
 const mockCountOverdueEvaluations = vi.hoisted(() => vi.fn());
+const mockGetSimulatedRole = vi.hoisted(() => vi.fn(() => 'school_admin'));
+const mockGetSimulatedUser = vi.hoisted(() => vi.fn(() => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 })));
+const mockGetActiveSchoolId = vi.hoisted(() => vi.fn(() => 1));
 
 vi.mock('./lib/api.ts', () => ({
   apiFetch: mockApiFetch,
-  getSimulatedRole: () => 'school_admin',
+  getSimulatedRole: () => mockGetSimulatedRole(),
   getUiErrorMessage: (message: string | null) => message,
   setSimulatedRole: vi.fn(),
   clearSimulatedRole: vi.fn(),
   clearSimulatedUser: vi.fn(),
   getSimulatedSchoolId: () => 1,
-  getActiveSchoolId: () => 1,
-  getSimulatedUser: () => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1 }),
+  getActiveSchoolId: () => mockGetActiveSchoolId(),
+  getSimulatedUser: () => mockGetSimulatedUser(),
   setSimulatedUser: vi.fn(),
   findTeacherProfileFromSimulatedUser: () => null,
 }));
@@ -58,6 +61,10 @@ vi.mock('./components/ArchiveView.tsx', () => ({ default: () => <div>ArchiveView
 vi.mock('./components/BulletinsView.tsx', () => ({ default: () => <div>BulletinsView</div> }));
 
 describe('App bulletin navigation', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     mockApiFetch.mockReset();
     mockCountOverdueEvaluations.mockReset();
@@ -99,5 +106,130 @@ describe('App bulletin navigation', () => {
     );
 
     expect(await screen.findAllByText('2')).toHaveLength(2);
+  });
+
+  const setupAbsencesResponse = (absences: any[]) => {
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/dashboard/summary') return Promise.resolve({});
+      if (url === '/api/absences') return Promise.resolve(absences);
+      if (url === '/api/schools') return Promise.resolve([]);
+      if (url === '/api/academic-years') return Promise.resolve([]);
+      if (url === '/api/teachers') return Promise.resolve([]);
+      if (url === '/api/parents') return Promise.resolve([]);
+      if (url === '/api/evaluations') return Promise.resolve([]);
+      if (url === '/api/grades') return Promise.resolve([]);
+      if (url === '/api/notifications') return Promise.resolve([]);
+      if (url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+  };
+
+  const renderWithRole = async (role: string, absences: any[]) => {
+    mockGetSimulatedRole.mockReturnValue(role);
+    mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: 1, role, id: 1 });
+    setupAbsencesResponse(absences);
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+  };
+
+  it('shows the Absences badge only for unjustified absences', async () => {
+    await renderWithRole('school_admin', [
+      { id: 1, isJustified: false },
+      { id: 2, isJustified: true },
+      { id: 3, isJustified: false },
+    ]);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(await within(absencesButton).findByText('2')).toBeTruthy();
+  });
+
+  it('hides the Absences badge when all absences are justified', async () => {
+    await renderWithRole('school_admin', [
+      { id: 1, isJustified: true },
+      { id: 2, isJustified: true },
+    ]);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(within(absencesButton).queryByText('1')).toBeNull();
+    expect(within(absencesButton).queryByText('2')).toBeNull();
+  });
+
+  it('shows 99+ when unjustified absences count exceeds 99', async () => {
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/dashboard/summary') return Promise.resolve({});
+      if (url === '/api/absences') return Promise.resolve([
+        { id: 1, isJustified: true },
+        { id: 2, isJustified: true },
+      ]);
+      if (url === '/api/schools') return Promise.resolve([]);
+      if (url === '/api/academic-years') return Promise.resolve([]);
+      if (url === '/api/teachers') return Promise.resolve([]);
+      if (url === '/api/parents') return Promise.resolve([]);
+      if (url === '/api/evaluations') return Promise.resolve([]);
+      if (url === '/api/grades') return Promise.resolve([]);
+      if (url === '/api/notifications') return Promise.resolve([]);
+      if (url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(within(absencesButton).queryByText('1')).toBeNull();
+    expect(within(absencesButton).queryByText('2')).toBeNull();
+  });
+
+  it('shows 99+ when unjustified absences count exceeds 99', async () => {
+    const manyAbsences = Array.from({ length: 120 }, (_, index) => ({ id: index + 1, isJustified: false }));
+    await renderWithRole('school_admin', manyAbsences);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(await within(absencesButton).findByText('99+')).toBeTruthy();
+  });
+
+  it('shows the Absences badge for parent role when there are unjustified absences', async () => {
+    await renderWithRole('parent', [
+      { id: 1, isJustified: false },
+      { id: 2, isJustified: true },
+    ]);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(await within(absencesButton).findByText('1')).toBeTruthy();
+  });
+
+  it('shows the Absences badge for teacher role when there are unjustified absences', async () => {
+    await renderWithRole('teacher', [
+      { id: 1, isJustified: false },
+      { id: 2, isJustified: true },
+    ]);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(await within(absencesButton).findByText('1')).toBeTruthy();
+  });
+
+  it('shows the Absences badge for super_admin role when there are unjustified absences', async () => {
+    await renderWithRole('super_admin', [
+      { id: 1, isJustified: false },
+      { id: 2, isJustified: true },
+    ]);
+
+    const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
+    const absencesButton = absencesButtons[0];
+    expect(await within(absencesButton).findByText('1')).toBeTruthy();
   });
 });
