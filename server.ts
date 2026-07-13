@@ -1048,6 +1048,10 @@ export async function createApp() {
         }
       }
 
+      if (actor.role === 'school_admin' && parsedSchoolId !== undefined && parsedSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Forbidden: cannot move user to another school' });
+      }
+
       // Enforce hierarchy: school_admin cannot modify to super_admin or school_admin
       if (actor.role === 'school_admin' && ['super_admin', 'school_admin'].includes(role)) {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot modify admin accounts' });
@@ -2132,8 +2136,8 @@ export async function createApp() {
       }
 
       const existingSchoolRows = schoolIds.length > 0 ? await db.select({ id: schools.id }).from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
-      const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
-      const existingParentRows = parentIds.length > 0 ? await db.select({ id: parents.id }).from(parents).where(sql`${parents.id} IN ${parentIds}`) : [];
+      const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
+      const existingParentRows = parentIds.length > 0 ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents).where(sql`${parents.id} IN ${parentIds}`) : [];
 
       const existingSchoolIds = new Set(existingSchoolRows.map((r: any) => r.id));
       const existingClassIds = new Set(existingClassRows.map((r: any) => r.id));
@@ -2168,6 +2172,32 @@ export async function createApp() {
         if (!parentId || !existingParentIds.has(parentId)) {
           errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
           continue;
+        }
+
+        const classRow = existingClassRows.find((c: any) => c.id === classId);
+        if (!classRow) {
+          errors.push({ row: i, reason: `Class not found: ${classId}`, data: s });
+          continue;
+        }
+        if (classRow.schoolId !== schoolId) {
+          const classAllowed = classRow.schoolId == null && await isApprovedClassForSchool(classId, schoolId);
+          if (!classAllowed) {
+            errors.push({ row: i, reason: `Class ${classId} does not belong to school ${schoolId}`, data: s });
+            continue;
+          }
+        }
+
+        const parentRow = existingParentRows.find((p: any) => p.id === parentId);
+        if (!parentRow) {
+          errors.push({ row: i, reason: `Parent not found: ${parentId}`, data: s });
+          continue;
+        }
+        if (parentRow.schoolId !== schoolId) {
+          const membership = await ensureUserSchoolMembership(parentRow.userId, schoolId, 'parent');
+          if (!membership) {
+            errors.push({ row: i, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
+            continue;
+          }
         }
 
         try {
@@ -3729,7 +3759,23 @@ export async function createApp() {
         const normalizedEmail = normalizeEmail(r.email || '');
         const phone = (r.phone || '').trim();
         const address = (r.address || '').trim();
-        const schoolId = r.schoolId ? parseInt(r.schoolId) : (actor.role === 'school_admin' ? actor.schoolId : null);
+        const requestedSchoolId = r.schoolId != null && r.schoolId !== '' ? parseInt(String(r.schoolId), 10) : null;
+        let schoolId = null;
+
+        if (actor.role === 'school_admin') {
+          if (actor.schoolId == null) {
+            errors.push({ row: i, email: normalizedEmail || undefined, error: 'Forbidden: missing school context' });
+            continue;
+          }
+          if (requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
+            errors.push({ row: i, email: normalizedEmail || undefined, error: 'Cannot import parent for another school' });
+            continue;
+          }
+
+          schoolId = actor.schoolId;
+        } else {
+          schoolId = requestedSchoolId;
+        }
 
         if (!name || !normalizedEmail) {
           errors.push({ row: i, email: normalizedEmail || undefined, error: 'name and email are required' });
@@ -3899,6 +3945,12 @@ export async function createApp() {
       // Load user and validate school permission
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Only super_admin or school_admin can create students' });
+      }
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'Forbidden: missing school context' });
+      }
 
       const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
 
@@ -3906,11 +3958,35 @@ export async function createApp() {
         return res.status(400).json({ error: `Missing compulsory student parameters. Received firstName=${firstName}, lastName=${lastName}, schoolId=${schoolId}, classId=${classId}` });
       }
 
-      // School admin can only create students in their own school
-      if (actor.role !== 'super_admin') {
-        if (!actor.schoolId || effectiveSchoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Cannot create student in another school' });
+      const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, parsedClassId));
+      if (!classRecord) {
+        return res.status(404).json({ error: 'Class not found' });
+      }
+
+      const targetSchoolId = effectiveSchoolId as number;
+      if (classRecord.schoolId !== targetSchoolId) {
+        const classAllowed = classRecord.schoolId == null && await isApprovedClassForSchool(parsedClassId, targetSchoolId);
+        if (!classAllowed) {
+          return res.status(403).json({ error: 'Class does not belong to the selected school' });
         }
+      }
+
+      if (parsedParentId) {
+        const [parentRecord] = await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents).where(eq(parents.id, parsedParentId));
+        if (!parentRecord) {
+          return res.status(404).json({ error: 'Parent not found' });
+        }
+        if (actor.role !== 'super_admin' && parentRecord.schoolId !== targetSchoolId) {
+          const membership = await ensureUserSchoolMembership(parentRecord.userId, targetSchoolId, 'parent');
+          if (!membership) {
+            return res.status(403).json({ error: 'Parent does not belong to the selected school' });
+          }
+        }
+      }
+
+      // School admin can only create students in their own school
+      if (actor.role === 'school_admin' && effectiveSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot create student in another school' });
       }
 
       const resolvedSchoolAdminId = await (async () => {
@@ -3980,65 +4056,124 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
-      const studentId = parseInt(req.params.id);
+      const studentId = parseInt(req.params.id, 10);
       const { firstName, lastName, birthDate, schoolId, classId, parentId, academicYearId, teacherId, schoolAdminId, gender } = req.body;
 
-      if (!firstName || !lastName || !classId || !parentId) {
+      if (!studentId || !firstName || !lastName || classId == null || parentId == null) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-
-      // Allow super_admin and school_admin to update students
       if (!['super_admin', 'school_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Only super_admin or school_admin can update students' });
       }
 
-      // Get existing student
       const [existingStudent] = await db.select().from(students).where(eq(students.id, studentId));
       if (!existingStudent) return res.status(404).json({ error: 'Student not found' });
 
-      if (actor.role === 'school_admin' && actor.schoolId != null && existingStudent.schoolId != null && actor.schoolId !== existingStudent.schoolId) {
-        return res.status(403).json({ error: 'You can only update students from your school' });
+      const requestedSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId).trim() !== '' ? parseInt(String(schoolId), 10) : existingStudent.schoolId;
+      if (schoolId !== undefined && schoolId !== null && String(schoolId).trim() !== '' && Number.isNaN(requestedSchoolId)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (requestedSchoolId != null && requestedSchoolId <= 0) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
       }
 
-      // Normalize incoming numeric values
-      const newSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId) !== '' ? parseInt(String(schoolId)) : existingStudent.schoolId;
-      const newClassId = parseInt(String(classId));
-      const newParentId = parseInt(String(parentId));
-      const newSchoolAdminId = schoolAdminId !== undefined && schoolAdminId !== null && String(schoolAdminId) !== '' ? parseInt(String(schoolAdminId)) : (existingStudent.schoolAdminId ?? null);
+      if (actor.role === 'school_admin' && actor.schoolId != null) {
+        if (existingStudent.schoolId != null && actor.schoolId !== existingStudent.schoolId) {
+          return res.status(403).json({ error: 'You can only update students from your school' });
+        }
+        if (requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Cannot move student to another school' });
+        }
+      }
+
+      const parsedClassId = parseInt(String(classId), 10);
+      const parsedParentId = parseInt(String(parentId), 10);
+      const parsedSchoolAdminId = schoolAdminId !== undefined && schoolAdminId !== null && String(schoolAdminId).trim() !== '' ? parseInt(String(schoolAdminId), 10) : (existingStudent.schoolAdminId ?? null);
       const newGender = gender !== undefined && gender !== null && String(gender).trim() !== '' ? String(gender) : existingStudent.gender;
 
-      // Build diff description
+      if (Number.isNaN(parsedClassId) || parsedClassId <= 0) {
+        return res.status(400).json({ error: 'Invalid classId' });
+      }
+      if (Number.isNaN(parsedParentId) || parsedParentId <= 0) {
+        return res.status(400).json({ error: 'Invalid parentId' });
+      }
+      if (parsedSchoolAdminId != null && Number.isNaN(parsedSchoolAdminId)) {
+        return res.status(400).json({ error: 'Invalid schoolAdminId' });
+      }
+
+      const [classRecord] = await db
+        .select({ id: classes.id, schoolId: classes.schoolId })
+        .from(classes)
+        .where(eq(classes.id, parsedClassId));
+      if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+
+      const resolvedSchoolId = requestedSchoolId ?? classRecord.schoolId;
+      if (actor.role === 'school_admin' && actor.schoolId != null && resolvedSchoolId != null && resolvedSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot assign student to another school' });
+      }
+
+      if (classRecord.schoolId !== resolvedSchoolId) {
+        const classAllowed = classRecord.schoolId == null && await isApprovedClassForSchool(parsedClassId, resolvedSchoolId);
+        if (!classAllowed) {
+          return res.status(403).json({ error: 'Class does not belong to the selected school' });
+        }
+      }
+
+      const [parentRecord] = await db
+        .select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId })
+        .from(parents)
+        .where(eq(parents.id, parsedParentId));
+      if (!parentRecord) return res.status(404).json({ error: 'Parent not found' });
+
+      if (actor.role !== 'super_admin' && resolvedSchoolId != null && parentRecord.schoolId !== resolvedSchoolId) {
+        const membership = await ensureUserSchoolMembership(parentRecord.userId, resolvedSchoolId, 'parent');
+        if (!membership) {
+          return res.status(403).json({ error: 'Parent does not belong to the selected school' });
+        }
+      }
+
+      if (parsedSchoolAdminId != null) {
+        const [assignedAdmin] = await db
+          .select()
+          .from(users)
+          .where(and(eq(users.id, parsedSchoolAdminId), eq(users.role, 'school_admin')));
+        if (!assignedAdmin) {
+          return res.status(400).json({ error: 'Invalid schoolAdminId' });
+        }
+        if (resolvedSchoolId != null && assignedAdmin.schoolId !== resolvedSchoolId) {
+          return res.status(400).json({ error: 'schoolAdminId does not belong to the selected school' });
+        }
+      }
+
       const changes: string[] = [];
       if (existingStudent.firstName !== firstName) changes.push(`firstName: "${existingStudent.firstName}" → "${firstName}"`);
       if (existingStudent.lastName !== lastName) changes.push(`lastName: "${existingStudent.lastName}" → "${lastName}"`);
       if (existingStudent.birthDate !== birthDate) changes.push(`birthDate: "${existingStudent.birthDate}" → "${birthDate}"`);
       if (existingStudent.gender !== newGender) changes.push(`gender: "${existingStudent.gender ?? ''}" → "${newGender ?? ''}"`);
-      if (existingStudent.schoolId !== newSchoolId) changes.push(`schoolId: ${existingStudent.schoolId} → ${newSchoolId}`);
-      if (existingStudent.classId !== newClassId) changes.push(`classId: ${existingStudent.classId} → ${newClassId}`);
-      if (existingStudent.parentId !== newParentId) changes.push(`parentId: ${existingStudent.parentId} → ${newParentId}`);
-      if ((existingStudent.schoolAdminId ?? null) !== newSchoolAdminId) changes.push(`schoolAdminId: ${existingStudent.schoolAdminId ?? 'null'} → ${newSchoolAdminId}`);
+      if (existingStudent.schoolId !== resolvedSchoolId) changes.push(`schoolId: ${existingStudent.schoolId} → ${resolvedSchoolId}`);
+      if (existingStudent.classId !== parsedClassId) changes.push(`classId: ${existingStudent.classId} → ${parsedClassId}`);
+      if (existingStudent.parentId !== parsedParentId) changes.push(`parentId: ${existingStudent.parentId} → ${parsedParentId}`);
+      if ((existingStudent.schoolAdminId ?? null) !== parsedSchoolAdminId) changes.push(`schoolAdminId: ${existingStudent.schoolAdminId ?? 'null'} → ${parsedSchoolAdminId}`);
 
       if (changes.length === 0) {
         return res.status(200).json(existingStudent);
       }
 
-      // Update student
       const result = await db
         .update(students)
-        .set({ firstName, lastName, birthDate, gender: newGender, schoolId: newSchoolId, classId: newClassId, parentId: newParentId, schoolAdminId: newSchoolAdminId })
+        .set({ firstName, lastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
         .where(eq(students.id, studentId))
         .returning();
 
-      // Log audit event (use the helper that accepts actor + params)
       await logAuditEvent(
-        user,
-        'UPDATE',
+        actor,
+        'update',
         'student',
         studentId,
-        existingStudent.schoolId ?? null,
+        resolvedSchoolId ?? null,
         `Student updated: ${changes.join('; ')}`
       );
 
@@ -5121,7 +5256,8 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'parent' || actor.role === 'teacher') return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') return res.status(403).json({ error: 'Forbidden' });
 
       let evaluationIds: number[] = [];
       if (actor.role === 'super_admin') {
@@ -5454,6 +5590,10 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'Forbidden: missing school context' });
+      }
 
       let targetUserIds: number[] = [];
 
@@ -5462,24 +5602,28 @@ export async function createApp() {
         const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
         if (!targetUser) return res.status(404).json({ error: 'Target user not found' });
         
-        if (actor.role !== 'super_admin') {
-          if (actor.schoolId && targetUser.schoolId !== actor.schoolId) {
-            return res.status(403).json({ error: 'Cannot send notification to user in another school' });
+        if (actor.role === 'school_admin') {
+          if (targetUser.schoolId !== actor.schoolId) {
+            const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+            if (!membership) {
+              return res.status(403).json({ error: 'Cannot send notification to user in another school' });
+            }
           }
         }
-        
+
         targetUserIds.push(targetUser.id);
       } else {
         // Send to all parents (or all parents in school if school_admin)
         let query = db.select().from(parents).innerJoin(users, eq(parents.userId, users.id));
         
-        if (actor.role !== 'super_admin' && actor.schoolId) {
-          // School admin can only send to parents in their school
+        if (actor.role === 'school_admin') {
+          query = query.where(eq(users.schoolId, actor.schoolId)) as any;
+        } else if (actor.role !== 'super_admin' && actor.schoolId) {
           query = query.where(eq(users.schoolId, actor.schoolId)) as any;
         }
         
         const parentsList = await query;
-        targetUserIds = parentsList.map(p => p.users.id);
+        targetUserIds = parentsList.map(p => p.userId);
       }
 
       for (const id of targetUserIds) {

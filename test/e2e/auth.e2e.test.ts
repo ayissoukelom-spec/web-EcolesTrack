@@ -470,20 +470,25 @@ function createMockDb() {
             const conditions = extractConditions(cond);
             const tableName = resolveTableName(table);
             if (conditions.id != null) {
-              if (tableName === 'users') {
-                const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
+              const id = Number(conditions.id);
+              const updateRow = (rows: any[]) => {
+                const idx = rows.findIndex((row) => row.id === id);
                 if (idx >= 0) {
-                  FIXTURES.users[idx] = { ...FIXTURES.users[idx], ...values };
-                  return [FIXTURES.users[idx]];
+                  rows[idx] = { ...rows[idx], ...values };
+                  return [rows[idx]];
                 }
-              }
-              if (tableName === 'classes') {
-                const idx = FIXTURES.classes.findIndex((c) => c.id === Number(conditions.id));
-                if (idx >= 0) {
-                  FIXTURES.classes[idx] = { ...FIXTURES.classes[idx], ...values };
-                  return [FIXTURES.classes[idx]];
-                }
-              }
+                return [];
+              };
+
+              if (tableName === 'users') return updateRow(FIXTURES.users);
+              if (tableName === 'classes') return updateRow(FIXTURES.classes);
+              if (tableName === 'students') return updateRow(FIXTURES.students);
+              if (tableName === 'parents') return updateRow(FIXTURES.parents);
+              if (tableName === 'teachers') return updateRow(FIXTURES.teachers);
+              if (tableName === 'userSchools') return updateRow(FIXTURES.userSchools);
+              if (tableName === 'localAuths') return updateRow(FIXTURES.localAuths);
+              if (tableName === 'schoolClasses') return updateRow(FIXTURES.schoolClasses);
+              if (tableName === 'auditEvents') return updateRow(FIXTURES.auditEvents);
             }
             return [];
           };
@@ -871,6 +876,69 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ name: 'Bad Parent', email: 'badparent2@x.test', phone: '+22998765432', address: 'Rue Test', schoolId: 10 });
 
     expect(res.status).toBe(403);
+  });
+
+  it('3n. school_admin cannot batch import parents for another school via POST /api/parents/batch', async () => {
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([{ name: 'Remote Parent', email: 'remote@x.test', schoolId: 20 }]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0]).toMatchObject({ error: 'Cannot import parent for another school' });
+  });
+
+  it('3o. school_admin can batch import parents for their own school via POST /api/parents/batch', async () => {
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([{ name: 'Local Parent', email: 'localparent@x.test' }]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(1);
+    expect(res.body.inserted[0].user.email).toBe('localparent@x.test');
+    expect(res.body.inserted[0].user.schoolId).toBe(10);
+  });
+
+  it('3p. school_admin cannot send notification to another-school user via POST /api/notifications/send', async () => {
+    const anotherUser = { id: 99, uid: 'other-notif-uid', email: 'othernotif@x.test', name: 'OtherNotif', role: 'parent', schoolId: 20, isDeleted: false };
+    (FIXTURES.users as any[]).push(anotherUser);
+
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Hello', body: 'Important message', type: 'alert', userId: anotherUser.id });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3q. non-admin cannot send notifications via POST /api/notifications/send', async () => {
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-teacher')
+      .send({ title: 'Oops', body: 'This should fail', type: 'alert' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3r. school_admin cannot change a student to another school via PUT /api/students/:id', async () => {
+    const res = await request(app)
+      .put('/api/students/11')
+      .set('Authorization', 'Bearer token-school')
+      .send({ firstName: 'Child', lastName: 'One', birthDate: '2010-01-01', schoolId: 20, classId: 1, parentId: 1 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3s. school_admin can update a same-school student via PUT /api/students/:id', async () => {
+    const res = await request(app)
+      .put('/api/students/11')
+      .set('Authorization', 'Bearer token-school')
+      .send({ firstName: 'Child', lastName: 'One Updated', birthDate: '2010-01-01', schoolId: 10, classId: 1, parentId: 1 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 11, lastName: 'One Updated', schoolId: 10 });
   });
 
   it('4. school_admin cannot act outside their school', async () => {
