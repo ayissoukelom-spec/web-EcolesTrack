@@ -23,6 +23,12 @@ describe('AdminView create-user teacher form', () => {
       },
       configurable: true,
     });
+    if (!window.location?.origin) {
+      Object.defineProperty(window, 'location', {
+        value: new URL('http://localhost/'),
+        configurable: true,
+      });
+    }
   });
 
   it('renders birth date options in a portal so they stay visible inside the student modal', () => {
@@ -238,10 +244,15 @@ describe('AdminView create-user teacher form', () => {
     const cegCheckbox = screen.getByRole('checkbox', { name: 'CEG' });
     fireEvent.click(cegCheckbox);
 
-    expect(screen.getByLabelText('6ème')).toBeTruthy();
-    expect(screen.getByLabelText('5ème')).toBeTruthy();
-    expect(screen.getByLabelText('3ème')).toBeTruthy();
-    expect(screen.queryByLabelText('2nde')).toBeNull();
+    const sixieme = screen.getByLabelText('6ème') as HTMLInputElement;
+    const cinquieme = screen.getByLabelText('5ème') as HTMLInputElement;
+    const troisieme = screen.getByLabelText('3ème') as HTMLInputElement;
+    const seconde = screen.getByLabelText('2nde') as HTMLInputElement;
+
+    expect(sixieme.checked).toBe(true);
+    expect(cinquieme.checked).toBe(true);
+    expect(troisieme.checked).toBe(true);
+    expect(seconde.checked).toBe(false);
   });
 
   it('allows selecting multiple class groups at once', async () => {
@@ -305,7 +316,7 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByLabelText('Tle')).toBeTruthy();
   });
 
-  it('submits a school without requiring manual subject entry', async () => {
+  it('shows an error when creating a school without classes', async () => {
     const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
@@ -346,18 +357,254 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
     fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
 
+    expect((await screen.findByRole('alert')).textContent).toContain('Veuillez sélectionner au moins une classe.');
+    expect(onAddSchool).not.toHaveBeenCalled();
+  });
+
+  it('shows an error when creating a school without subjects', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: '6ème', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByLabelText('6ème'));
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Veuillez sélectionner au moins une matière.');
+    expect(onAddSchool).not.toHaveBeenCalled();
+  });
+
+  it('submits a school with required classes and subjects', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [{ id: 10, name: '6ème', schoolId: 1, academicYearId: 1 }];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+    const subjects = [{ id: 1, name: 'Mathématiques', schoolId: 1 }];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        subjectsList={subjects}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByLabelText('6ème'));
+    fireEvent.click(screen.getByLabelText('Mathématiques'));
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
       name: 'École du Lac',
       phone: '+228 90000000',
-      subjectNames: [],
+      classNames: ['6ème'],
+      subjectNames: ['Mathématiques'],
     }));
+  });
+
+  it('updates an existing school while preserving the current phone when unchanged', async () => {
+    const onUpdateSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: 'Ancienne adresse', phone: '+228 90000000' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        onUpdateSchool={onUpdateSchool}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.click(screen.getByTitle('Éditer'));
+
+    const editDialog = screen.getByRole('dialog', { name: /Modifier l'école/ });
+    fireEvent.change(within(editDialog).getByPlaceholderText('C.S LE SAVOIR'), { target: { value: 'École du Lac Modifiée' } });
+    fireEvent.click(within(editDialog).getByRole('button', { name: /Enregistrer/i }));
+
+    expect(onUpdateSchool).toHaveBeenCalledWith(1, expect.objectContaining({
+      name: 'École du Lac Modifiée',
+      address: 'Ancienne adresse',
+      phone: '+228 90000000',
+    }));
+  });
+
+  it('shows an error when creating a school without a name', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain("Le nom de l'établissement est requis.");
+    expect(onAddSchool).not.toHaveBeenCalled();
+  });
+
+  it('shows an error when creating a school with an invalid phone number', async () => {
+    const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={onAddSchool}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Le numéro de téléphone doit contenir exactement 8 chiffres.');
+    expect(onAddSchool).not.toHaveBeenCalled();
   });
 
   it('forwards selected existing subjects when creating a school', async () => {
     const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
-    const classes: Class[] = [];
+    const classes: Class[] = [{ id: 10, name: '6ème', schoolId: 1, academicYearId: 1 }];
     const teachers: Teacher[] = [];
     const students: Student[] = [];
     const parents: Parent[] = [];
@@ -394,6 +641,8 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
     fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByLabelText('6ème'));
+
     const subjectPanels = screen.getAllByText('Matières existantes');
     expect(subjectPanels.length).toBeGreaterThan(0);
     const createSchoolPanel = subjectPanels.find((node) => {
@@ -412,6 +661,7 @@ describe('AdminView create-user teacher form', () => {
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
       name: 'École du Lac',
       phone: '+228 90000000',
+      classNames: ['6ème'],
       subjectNames: ['Mathématiques'],
     }));
   });

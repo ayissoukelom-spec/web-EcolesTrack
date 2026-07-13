@@ -356,7 +356,7 @@ export default function AdminModal(props: any) {
       contentClassName="max-w-3xl"
       ariaLabel="Formulaire d'administration"
     >
-      <form onSubmit={handleFormSubmit} className="space-y-3 overflow-auto max-h-[80vh]">
+      <form onSubmit={handleFormSubmit} noValidate className="space-y-3 overflow-auto max-h-[80vh]">
           {/* Form 1: SCHOOL */}
           {activeTab === 'schools' && (
             <div className="space-y-3">

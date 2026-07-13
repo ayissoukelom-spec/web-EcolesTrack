@@ -1842,8 +1842,29 @@ export async function createApp() {
   app.post('/api/schools', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { name, address, phone, classNames, subjectNames } = req.body;
+      const name = String(req.body?.name || '').trim();
+      const address = req.body?.address != null ? String(req.body.address).trim() : '';
+      const phone = String(req.body?.phone || '').trim();
+      const classNames = req.body?.classNames;
+      const subjectNames = req.body?.subjectNames;
+
       if (!name) return res.status(400).json({ error: 'Name is required' });
+      if (!phone) return res.status(400).json({ error: 'Phone is required' });
+      if (!/^\+228\s[0-9]{8}$/.test(phone)) {
+        return res.status(400).json({ error: 'Phone must be in the format +228 12345678' });
+      }
+      if (!Array.isArray(classNames) || classNames.length === 0) {
+        return res.status(400).json({ error: 'classNames must be a non-empty array' });
+      }
+      if (classNames.some((item: any) => typeof item !== 'string' || !String(item).trim())) {
+        return res.status(400).json({ error: 'classNames must contain only non-empty strings' });
+      }
+      if (!Array.isArray(subjectNames) || subjectNames.length === 0) {
+        return res.status(400).json({ error: 'subjectNames must be a non-empty array' });
+      }
+      if (subjectNames.some((item: any) => typeof item !== 'string' || !String(item).trim())) {
+        return res.status(400).json({ error: 'subjectNames must contain only non-empty strings' });
+      }
 
       // Load actor and validate permission
       const actor = await resolveActor(req);
@@ -1931,7 +1952,38 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id);
-      const { name, address, phone, classNames, subjectNames } = req.body;
+      const name = String(req.body?.name || '').trim();
+      const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
+      const phoneRaw = req.body?.phone;
+      const phone = phoneRaw != null ? String(phoneRaw).trim() : undefined;
+      const classNames = req.body?.classNames;
+      const subjectNames = req.body?.subjectNames;
+
+      if (!name) return res.status(400).json({ error: 'Name is required' });
+      if (phone !== undefined) {
+        if (!phone) {
+          return res.status(400).json({ error: 'Phone is required' });
+        }
+        if (!/^\+228\s[0-9]{8}$/.test(phone)) {
+          return res.status(400).json({ error: 'Phone must be in the format +228 12345678' });
+        }
+      }
+      if (classNames != null) {
+        if (!Array.isArray(classNames)) {
+          return res.status(400).json({ error: 'classNames must be an array' });
+        }
+        if (classNames.some((item: any) => typeof item !== 'string' || !String(item).trim())) {
+          return res.status(400).json({ error: 'classNames must contain only non-empty strings' });
+        }
+      }
+      if (subjectNames != null) {
+        if (!Array.isArray(subjectNames)) {
+          return res.status(400).json({ error: 'subjectNames must be an array' });
+        }
+        if (subjectNames.some((item: any) => typeof item !== 'string' || !String(item).trim())) {
+          return res.status(400).json({ error: 'subjectNames must contain only non-empty strings' });
+        }
+      }
 
       // Load actor and validate school permission
       const actor = await resolveActor(req);
@@ -1948,8 +2000,12 @@ export async function createApp() {
         return res.status(404).json({ error: 'School not found' });
       }
 
+      const updatePayload: any = { name };
+      if (address !== undefined) updatePayload.address = address;
+      if (phone !== undefined) updatePayload.phone = phone;
+
       const result = await db.update(schools)
-        .set({ name, address, phone })
+        .set(updatePayload)
         .where(eq(schools.id, id))
         .returning();
       

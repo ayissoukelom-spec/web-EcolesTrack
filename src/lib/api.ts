@@ -236,7 +236,20 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
   }
 
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const apiUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
+  const rawUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
+  const apiUrl = (() => {
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
+      return rawUrl;
+    }
+    const base = typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'http://localhost';
+    try {
+      return new URL(rawUrl, base).toString();
+    } catch {
+      return rawUrl;
+    }
+  })();
   const mergedOptions = {
     ...options,
     headers: {
@@ -293,7 +306,20 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
 export async function apiFetchBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const headers = getSimulationHeaders();
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const apiUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
+  const rawUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
+  const apiUrl = (() => {
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
+      return rawUrl;
+    }
+    const base = typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'http://localhost';
+    try {
+      return new URL(rawUrl, base).toString();
+    } catch {
+      return rawUrl;
+    }
+  })();
   const mergedHeaders = {
     ...headers,
     ...(options.headers || {}),

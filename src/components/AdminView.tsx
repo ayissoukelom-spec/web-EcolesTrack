@@ -927,8 +927,13 @@ export default function AdminView({
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (activeTab === 'schools') {
-      // Validate school phone has exactly 8 digits
-      const phoneDigits = schoolForm.phoneDigits.trim();
+      const normalizedName = String(schoolForm.name || '').trim();
+      if (!normalizedName) {
+        setStudentError('Le nom de l\'établissement est requis.');
+        return;
+      }
+
+      const phoneDigits = String(schoolForm.phoneDigits || '').trim();
       if (!phoneDigits || phoneDigits.length !== 8 || !/^[0-9]{8}$/.test(phoneDigits)) {
         setStudentError('Le numéro de téléphone doit contenir exactement 8 chiffres.');
         return;
@@ -941,10 +946,20 @@ export default function AdminView({
         .map((value) => value.trim())
         .filter(Boolean);
       const combinedSubjectNames = Array.from(new Set([...selectedSubjectNames, ...parsedSubjectNames]));
+
+      if (selectedClassNames.length === 0) {
+        setStudentError('Veuillez sélectionner au moins une classe.');
+        return;
+      }
+      if (combinedSubjectNames.length === 0) {
+        setStudentError('Veuillez sélectionner au moins une matière.');
+        return;
+      }
+
       try {
         await onAddSchool({
-          name: schoolForm.name,
-          address: schoolForm.address,
+          name: normalizedName,
+          address: String(schoolForm.address || '').trim(),
           phone: fullPhone,
           classNames: selectedClassNames,
           subjectNames: combinedSubjectNames,
@@ -1893,12 +1908,15 @@ export default function AdminView({
                           setEditSchoolError('Le numéro de téléphone doit contenir exactement 8 chiffres.');
                           return;
                         }
-                        await onUpdateSchool(schoolToEdit.id, {
+                        const editPayload: any = {
                           name: editSchoolForm.name.trim(),
                           address: editSchoolForm.address.trim(),
-                          phone: phoneDigits ? `+228 ${phoneDigits}` : '',
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
-                        });
+                        };
+                        if (phoneDigits) {
+                          editPayload.phone = `+228 ${phoneDigits}`;
+                        }
+                        await onUpdateSchool(schoolToEdit.id, editPayload);
                         setEditSchoolOpen(false);
                         setSchoolToEdit(null);
                       }
