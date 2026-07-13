@@ -134,12 +134,10 @@ export default function AdminModal(props: any) {
     return result.sort((a, b) => a.localeCompare(b, 'fr'));
   };
 
-  const visibleClassNames = (schoolForm.selectedClassGroups && schoolForm.selectedClassGroups.length > 0)
-    ? getGroupClassNames(schoolForm.selectedClassGroups)
-    : availableClassNames;
-  const visibleSubjectNames = (schoolForm.selectedSubjectGroups && schoolForm.selectedSubjectGroups.length > 0)
-    ? getGroupSubjectNames(schoolForm.selectedSubjectGroups)
-    : availableSubjectNames;
+  // Always display ALL available classes/subjects, regardless of group selection
+  // Group selection only affects automatic checking, not visibility
+  const visibleClassNames = availableClassNames;
+  const visibleSubjectNames = availableSubjectNames;
   const filteredVisibleSubjectNames = subjectSearchQuery
     ? visibleSubjectNames.filter((name) => name.toLowerCase().includes(subjectSearchQuery.trim().toLowerCase()))
     : visibleSubjectNames;
@@ -392,13 +390,14 @@ export default function AdminModal(props: any) {
                           type="checkbox"
                           checked={isSelected}
                           onChange={(e) => {
-                            const currentGroupIds = schoolForm.selectedClassGroups || [];
+                          const currentGroupIds = schoolForm.selectedClassGroups || [];
                             const nextGroups = e.target.checked
                               ? [...currentGroupIds, String(group.id)]
                               : currentGroupIds.filter((id: string) => id !== String(group.id));
-                            const nextClassNames = nextGroups.length > 0
-                              ? getGroupClassNames(nextGroups)
-                              : (schoolForm.selectedClassNames || []);
+                            // Calculate classes from active groups + manually selected classes
+                            const classesFromGroups = getGroupClassNames(nextGroups);
+                            const manualClasses = schoolForm.manuallySelectedClassNames || [];
+                            const nextClassNames = Array.from(new Set([...classesFromGroups, ...manualClasses]));
                             setSchoolForm({ ...schoolForm, selectedClassGroups: nextGroups, selectedClassNames: nextClassNames });
                           }}
                           className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -417,11 +416,29 @@ export default function AdminModal(props: any) {
                         type="checkbox"
                         checked={(schoolForm.selectedClassNames || []).includes(name)}
                         onChange={(e) => {
-                          const current = schoolForm.selectedClassNames || [];
-                          const next = e.target.checked
-                            ? [...current, name]
-                            : current.filter((n: string) => n !== name);
-                          setSchoolForm({ ...schoolForm, selectedClassNames: next });
+                          const classesFromActiveGroups = getGroupClassNames(schoolForm.selectedClassGroups || []);
+                          const currentManual = schoolForm.manuallySelectedClassNames || [];
+                          const currentAll = schoolForm.selectedClassNames || [];
+                          
+                          if (e.target.checked) {
+                            // When selecting: add to both manual and all
+                            const nextManual = Array.from(new Set([...currentManual, name]));
+                            const nextAll = Array.from(new Set([...currentAll, name]));
+                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, selectedClassNames: nextAll });
+                          } else {
+                            // When deselecting: check if still covered by a group
+                            const isCoveredByGroup = classesFromActiveGroups.includes(name);
+                            const nextManual = currentManual.filter((n: string) => n !== name);
+                            let nextAll;
+                            if (isCoveredByGroup) {
+                              // Keep in all selections because it's still covered by a group
+                              nextAll = currentAll;
+                            } else {
+                              // Remove from all selections since no group covers it anymore
+                              nextAll = currentAll.filter((n: string) => n !== name);
+                            }
+                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, selectedClassNames: nextAll });
+                          }
                         }}
                         className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                       />
@@ -444,7 +461,10 @@ export default function AdminModal(props: any) {
                               const next = e.target.checked
                                 ? [...current, String(group.id)]
                                 : current.filter((id: string) => id !== String(group.id));
-                              const nextSubjectNames = next.length > 0 ? getGroupSubjectNames(next) : (schoolForm.selectedSubjectNames || []);
+                              // Calculate subjects from active groups + manually selected subjects
+                              const subjectsFromGroups = getGroupSubjectNames(next);
+                              const manualSubjects = schoolForm.manuallySelectedSubjectNames || [];
+                              const nextSubjectNames = Array.from(new Set([...subjectsFromGroups, ...manualSubjects]));
                               setSchoolForm({ ...schoolForm, selectedSubjectGroups: next, selectedSubjectNames: nextSubjectNames });
                             }}
                             className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -471,11 +491,29 @@ export default function AdminModal(props: any) {
                           type="checkbox"
                           checked={(schoolForm.selectedSubjectNames || []).includes(name)}
                           onChange={(e) => {
-                            const current = schoolForm.selectedSubjectNames || [];
-                            const next = e.target.checked
-                              ? [...current, name]
-                              : current.filter((n: string) => n !== name);
-                            setSchoolForm({ ...schoolForm, selectedSubjectNames: next });
+                            const subjectsFromActiveGroups = getGroupSubjectNames(schoolForm.selectedSubjectGroups || []);
+                            const currentManual = schoolForm.manuallySelectedSubjectNames || [];
+                            const currentAll = schoolForm.selectedSubjectNames || [];
+                            
+                            if (e.target.checked) {
+                              // When selecting: add to both manual and all
+                              const nextManual = Array.from(new Set([...currentManual, name]));
+                              const nextAll = Array.from(new Set([...currentAll, name]));
+                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, selectedSubjectNames: nextAll });
+                            } else {
+                              // When deselecting: check if still covered by a group
+                              const isCoveredByGroup = subjectsFromActiveGroups.includes(name);
+                              const nextManual = currentManual.filter((n: string) => n !== name);
+                              let nextAll;
+                              if (isCoveredByGroup) {
+                                // Keep in all selections because it's still covered by a group
+                                nextAll = currentAll;
+                              } else {
+                                // Remove from all selections since no group covers it anymore
+                                nextAll = currentAll.filter((n: string) => n !== name);
+                              }
+                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, selectedSubjectNames: nextAll });
+                            }
                           }}
                           className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                         />

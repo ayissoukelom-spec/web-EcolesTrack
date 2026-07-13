@@ -484,7 +484,7 @@ export default function AdminView({
     { id: 'lycee', name: 'Lycée (2nde à Tle)', classNames: ['2nde', '1ère', 'Tle'] },
   ];
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[] });
   const [classGroups, setClassGroups] = useState<any[]>(() => {
     if (typeof window === 'undefined') return defaultClassGroups;
     try {
@@ -949,7 +949,7 @@ export default function AdminView({
           classNames: selectedClassNames,
           subjectNames: combinedSubjectNames,
         });
-        setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] });
+        setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], selectedClassGroups: [], manuallySelectedClassNames: [], subjectNames: '', selectedSubjectNames: [], selectedSubjectGroups: [], manuallySelectedSubjectNames: [] });
         setStudentError(null);
         setIsModalOpen(false);
         setSearchQuery('');
