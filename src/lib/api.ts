@@ -121,9 +121,19 @@ export function setActiveSchoolId(schoolId: number | null) {
   if (typeof localStorage === 'undefined') return;
   if (schoolId == null) {
     localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
+    try {
+      window.dispatchEvent(new CustomEvent('simulatedUserChanged', { detail: null }));
+    } catch {
+      // ignore
+    }
     return;
   }
   localStorage.setItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY, String(schoolId));
+  try {
+    window.dispatchEvent(new CustomEvent('simulatedUserChanged', { detail: { activeSchoolId: schoolId } }));
+  } catch {
+    // ignore
+  }
 }
 
 export function findTeacherProfileFromSimulatedUser(

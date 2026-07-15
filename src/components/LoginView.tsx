@@ -37,8 +37,6 @@ export default function LoginView({ onLogin }: Props) {
       setSchools(data.schools || []);
       if (data.activeSchoolId != null) {
         setSelectedSchoolId(data.activeSchoolId);
-      } else if ((data.schools || []).length > 0) {
-        setSelectedSchoolId(data.schools[0].id);
       } else {
         setSelectedSchoolId('');
       }
@@ -88,7 +86,28 @@ export default function LoginView({ onLogin }: Props) {
         return;
       }
 
-      await loadSchools();
+      const schoolData = await loadSchools();
+
+      if (Array.isArray(schoolData.schools) && schoolData.schools.length > 1) {
+        setSelectionPending(true);
+        return;
+      }
+
+      const activeSchoolId = Number(schoolData.activeSchoolId ?? schoolData.schools?.[0]?.id ?? null);
+      if (Number.isFinite(activeSchoolId)) {
+        setActiveSchoolId(activeSchoolId);
+        setSimulatedUser({
+          id: user.id,
+          uid: user.uid || `local_${Date.now()}`,
+          email: user.email,
+          name: user.name,
+          schoolId: activeSchoolId,
+        });
+        window.history.pushState(null, '', '/');
+        onLogin(user.role || 'parent');
+        return;
+      }
+
       setSelectionPending(true);
     } catch (err: any) {
       setError(err?.message || 'Échec de la connexion');
@@ -106,18 +125,23 @@ export default function LoginView({ onLogin }: Props) {
     setError(null);
     setLoading(true);
     try {
-      await apiFetch('/api/auth/schools/active', {
+      const result = await apiFetch('/api/auth/schools/active', {
         method: 'POST',
         body: JSON.stringify({ schoolId: Number(selectedSchoolId) }),
       });
 
-      setActiveSchoolId(Number(selectedSchoolId));
+      if (result?.token) {
+        persistAccessToken(result.token);
+      }
+
+      const activeSchoolId = Number(result?.schoolId ?? selectedSchoolId);
+      setActiveSchoolId(activeSchoolId);
       setSimulatedUser({
         id: loggedInUser?.id,
         uid: loggedInUser?.uid || `local_${Date.now()}`,
         email: loggedInUser?.email,
         name: loggedInUser?.name,
-        schoolId: Number(selectedSchoolId),
+        schoolId: activeSchoolId,
       });
 
       window.history.pushState(null, '', '/');
@@ -166,8 +190,9 @@ export default function LoginView({ onLogin }: Props) {
                 <select
                   className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100"
                   value={selectedSchoolId}
-                  onChange={(e) => setSelectedSchoolId(Number(e.target.value))}
+                  onChange={(e) => setSelectedSchoolId(e.target.value === '' ? '' : Number(e.target.value))}
                 >
+                  <option value="">-- Choisissez une école --</option>
                   {schools.map((school) => (
                     <option key={school.id} value={school.id}>
                       {school.name}

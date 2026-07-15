@@ -115,7 +115,6 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
 
-  const activeSchoolId = req.user.schoolId ?? null;
   const role = req.user.role;
   if (!role) return null;
   const uid = req.user.uid;
@@ -137,7 +136,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
     console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
-      const resolvedSchoolId = activeSchoolId ?? dbUser.schoolId ?? null;
+      const resolvedSchoolId = req.user.schoolId ?? dbUser.schoolId ?? null;
       return { ...dbUser, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
     }
 
@@ -146,7 +145,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
       role,
       email: req.user.email ?? null,
       name: req.user.name ?? null,
-      schoolId: activeSchoolId,
+      schoolId: req.user.schoolId ?? null,
       simulated: true,
     };
 
@@ -159,7 +158,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
 
   const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
   if (dbUser) {
-    const resolvedSchoolId = activeSchoolId ?? dbUser.schoolId ?? null;
+    const resolvedSchoolId = await getActiveUserSchoolId(dbUser.id);
     if (role === 'school_admin' && resolvedSchoolId == null) {
       return null;
     }
@@ -210,6 +209,17 @@ async function getUserSchoolMemberships(userId: number | null | undefined) {
   }).from(userSchools).where(eq(userSchools.userId, userId));
 
   return rows;
+}
+
+async function getActiveUserSchoolId(userId: number | null | undefined) {
+  if (!userId) return null;
+
+  const [row] = await db.select({ schoolId: userSchools.schoolId })
+    .from(userSchools)
+    .where(and(eq(userSchools.userId, userId), eq(userSchools.isActive, true)))
+    .limit(1);
+
+  return row?.schoolId ?? null;
 }
 
 async function ensureUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, requiredRole?: string | null) {
@@ -1544,8 +1554,6 @@ export async function createApp() {
       const activeSchoolId = actor.role === 'super_admin'
         ? null
         : memberships.find((membership) => membership.isActive)?.schoolId
-          ?? actor.schoolId
-          ?? schoolsList[0]?.id
           ?? null;
 
       res.json({

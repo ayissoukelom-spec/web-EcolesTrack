@@ -52,7 +52,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const { user: authenticatedUser, role, activeSchoolId } = useAuth();
+  const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
@@ -284,6 +284,13 @@ export default function App() {
     }
     if (role) fetchAllData();
   }, [role]);
+
+  useEffect(() => {
+    if (!role) return;
+    if (currentRole === 'super_admin' || activeSchoolId != null) {
+      fetchAllData();
+    }
+  }, [activeSchoolId, currentRole, role]);
 
   useEffect(() => {
     if (activeTab === 'audit' && currentRole === 'super_admin') {
@@ -771,7 +778,7 @@ export default function App() {
   };
 
   // If not authenticated, render SPA login view
-  if (!currentRole) {
+  if (!authenticatedUser || (!token && currentRole !== 'super_admin') || (currentRole !== 'super_admin' && !activeSchoolId)) {
     return <LoginView onLogin={(role) => { setSimulatedRole(role); }} />;
   }
 

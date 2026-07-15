@@ -109,6 +109,10 @@ export const verifyToken = async (
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 
+    const tokenSchoolId = decoded.schoolId != null && decoded.schoolId !== ''
+      ? Number(decoded.schoolId)
+      : null;
+
     req.user = {
       id: dbUser.id,
       uid: dbUser.uid,
@@ -116,7 +120,7 @@ export const verifyToken = async (
       name: dbUser.name || dbUser.email || 'Utilisateur',
       role: dbUser.role,
       appRole: mapToAppRole(dbUser.role),
-      schoolId: dbUser.schoolId ?? null,
+      schoolId: Number.isFinite(tokenSchoolId) ? tokenSchoolId : (dbUser.schoolId ?? null),
     };
     return next();
   } catch (error) {
