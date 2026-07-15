@@ -78,4 +78,21 @@ describe('LoginView', () => {
       expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
     });
   });
+
+  it('toggles password visibility when clicking the eye icon', () => {
+    render(<LoginView onLogin={mockOnLogin} />);
+
+    const passwordInput = screen.getByLabelText(/Mot de passe/i) as HTMLInputElement;
+    const toggleButton = screen.getByRole('button', { name: /Afficher le mot de passe/i });
+
+    expect(passwordInput.type).toBe('password');
+
+    fireEvent.click(toggleButton);
+    expect(passwordInput.type).toBe('text');
+    expect(toggleButton).toHaveAttribute('aria-label', 'Masquer le mot de passe');
+
+    fireEvent.click(toggleButton);
+    expect(passwordInput.type).toBe('password');
+    expect(toggleButton).toHaveAttribute('aria-label', 'Afficher le mot de passe');
+  });
 });

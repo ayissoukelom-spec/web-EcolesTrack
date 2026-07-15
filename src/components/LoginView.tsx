@@ -21,6 +21,7 @@ function persistAccessToken(token: unknown) {
 export default function LoginView({ onLogin }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [schools, setSchools] = useState<Array<{ id: number; name: string }>>([]);
@@ -233,7 +234,34 @@ export default function LoginView({ onLogin }: Props) {
         </label>
         <label className="block text-sm mb-4">
           <RequiredLabel label="Mot de passe" required />
-          <input className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+          <div className="relative mt-1">
+            <input
+              className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type={showPassword ? 'text' : 'password'}
+              required
+            />
+            <button
+              type="button"
+              aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+              onClick={() => setShowPassword((current) => !current)}
+              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-100"
+            >
+              {showPassword ? (
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C7 20 2.73 16.11 1 12c.5-1.1 1.17-2.14 2-3.07" />
+                  <path d="M9.88 9.88A3 3 0 0 0 14.12 14.12" />
+                  <path d="M3 3l18 18" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+            </button>
+          </div>
         </label>
         <button type="submit" disabled={loading} className="w-full px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
           {loading ? 'Connexion...' : 'Se connecter'}
