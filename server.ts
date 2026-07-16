@@ -322,7 +322,7 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // JSON parsing middleware
   app.use(express.json());
