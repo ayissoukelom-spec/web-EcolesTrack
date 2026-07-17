@@ -30,6 +30,9 @@ export const createPool = () => {
     password: process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
     connectionTimeoutMillis: 15000,
+    ssl: {
+      rejectUnauthorized: false,
+    },
   });
 };
 
