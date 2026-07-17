@@ -105,6 +105,8 @@ async function resolveActor(req: AuthRequest) {
   console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
 
+  const normalizedRole = req.user.role === 'super_admin' ? 'super_admin' : req.user.role;
+
   // In simulated mode, resolve a matching DB user first. If none exists yet,
   // fall back to the simulated profile so tokenless development flows still work.
   if (req.user.simulated) {
@@ -124,6 +126,9 @@ async function resolveActor(req: AuthRequest) {
     console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
+      if (normalizedRole === 'super_admin') {
+        return { ...dbUser, role: normalizedRole, schoolId: null };
+      }
       if (dbUser.schoolId == null && req.user.schoolId != null) {
         return { ...dbUser, schoolId: req.user.schoolId };
       }
@@ -132,8 +137,8 @@ async function resolveActor(req: AuthRequest) {
 
     return {
       uid: req.user.uid,
-      role: req.user.role,
-      schoolId: req.user.schoolId,
+      role: normalizedRole,
+      schoolId: normalizedRole === 'super_admin' ? null : req.user.schoolId,
       email: req.user.email,
       name: req.user.name,
     } as any;
@@ -141,7 +146,12 @@ async function resolveActor(req: AuthRequest) {
 
   // Otherwise, load from DB for real authenticated users.
   const [dbUser] = await db.select().from(users).where(eq(users.uid, req.user.uid));
-  if (dbUser) return dbUser;
+  if (dbUser) {
+    if (normalizedRole === 'super_admin') {
+      return { ...dbUser, role: normalizedRole, schoolId: null };
+    }
+    return dbUser;
+  }
 
   return null;
 }
@@ -634,7 +644,7 @@ async function startServer() {
         return res.status(403).json({ error: 'Forbidden: cannot create users for other schools' });
       }
 
-      const resolvedSchoolId = schoolId != null ? schoolId : actor.role === 'school_admin' ? actor.schoolId : null;
+      const resolvedSchoolId = role === 'super_admin' ? null : (schoolId != null ? schoolId : actor.role === 'school_admin' ? actor.schoolId : null);
 
       if (role === 'school_admin' && academicYearId == null) {
         return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -830,7 +840,11 @@ async function startServer() {
       if (existingSameEmail.length > 0) return res.status(409).json({ error: 'Email already in use by another user' });
 
       const updatedValues: any = { email, name, role, gender: gender ?? null };
-      if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
+      if (role === 'super_admin') {
+        updatedValues.schoolId = null;
+      } else if (parsedSchoolId !== undefined) {
+        updatedValues.schoolId = parsedSchoolId;
+      }
       if (role === 'school_admin') {
         if (academicYearId == null) {
           return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -1148,9 +1162,13 @@ async function startServer() {
 
       if (existingUser.length > 0) {
         const existing = existingUser[0];
-        if (req.user.schoolId && existing.schoolId !== req.user.schoolId) {
+        const isSuperAdmin = existing.role === 'super_admin' || req.user.role === 'super_admin';
+        if (!isSuperAdmin && req.user.schoolId != null && existing.schoolId !== req.user.schoolId) {
           await db.update(users).set({ schoolId: req.user.schoolId }).where(eq(users.uid, uid));
           existing.schoolId = req.user.schoolId;
+        } else if (isSuperAdmin && existing.schoolId !== null) {
+          await db.update(users).set({ schoolId: null }).where(eq(users.uid, uid));
+          existing.schoolId = null;
         }
         return res.json(existing);
       }
@@ -1160,8 +1178,9 @@ async function startServer() {
       const normalizedRole = String(role || '').trim();
       const finalRole = allowedRoles.includes(normalizedRole) ? normalizedRole : 'parent';
 
-      let resolvedSchoolId = req.user.schoolId ?? null;
-      if (req.user.simulated && !resolvedSchoolId && finalRole !== 'super_admin') {
+      const isSuperAdmin = finalRole === 'super_admin' || req.user.role === 'super_admin';
+      let resolvedSchoolId = isSuperAdmin ? null : (req.user.schoolId ?? null);
+      if (req.user.simulated && !resolvedSchoolId && !isSuperAdmin) {
         const defaultSchool = await db.select().from(schools).limit(1);
         if (defaultSchool.length > 0) {
           resolvedSchoolId = defaultSchool[0].id;

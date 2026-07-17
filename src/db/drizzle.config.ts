@@ -34,7 +34,9 @@ export default defineConfig({
     user: user,
     password: password,
     database: sqlDbName,
-    ssl: { rejectUnauthorized: false },
+    ssl: process.env.SQL_HOST?.includes('render.com')
+  ? { rejectUnauthorized: false }
+  : false,,
   },
   verbose: true,
 });
