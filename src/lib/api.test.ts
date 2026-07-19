@@ -100,4 +100,43 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/api/test')).rejects.toMatchObject({ status: 401, isUnauthorized: true });
   });
+
+  it('clears auth state, marks the session expired, and redirects to login on token/session 401 errors', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'Unauthorized: Invalid token' }) } as any);
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+
+    await expect(apiFetch('/api/test')).rejects.toMatchObject({ status: 401, isUnauthorized: true });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBe('Votre session a expiré. Veuillez vous reconnecter.');
+    expect(replaceMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not clear session or redirect on non-token 401 errors', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'Unauthorized access' }) } as any);
+
+    await expect(apiFetch('/api/test')).rejects.toMatchObject({ status: 401, isUnauthorized: true });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
 });

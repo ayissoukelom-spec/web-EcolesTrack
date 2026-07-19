@@ -54,7 +54,7 @@ describe('LoginView', () => {
     render(<LoginView onLogin={mockOnLogin} />);
 
     fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'test@example.com' } });
-    fireEvent.change(screen.getByLabelText(/Mot de passe/i), { target: { value: '123456' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 
     await waitFor(() => {
@@ -71,7 +71,7 @@ describe('LoginView', () => {
     render(<LoginView onLogin={mockOnLogin} />);
 
     fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'test@example.com' } });
-    fireEvent.change(screen.getByLabelText(/Mot de passe/i), { target: { value: '123456' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 
     await waitFor(() => {
@@ -82,17 +82,21 @@ describe('LoginView', () => {
   it('toggles password visibility when clicking the eye icon', () => {
     render(<LoginView onLogin={mockOnLogin} />);
 
-    const passwordInput = screen.getByLabelText(/Mot de passe/i) as HTMLInputElement;
+    const passwordInput = screen.getByLabelText(/Mot de passe/i, { selector: 'input' }) as HTMLInputElement;
     const toggleButton = screen.getByRole('button', { name: /Afficher le mot de passe/i });
 
     expect(passwordInput.type).toBe('password');
 
     fireEvent.click(toggleButton);
     expect(passwordInput.type).toBe('text');
-    expect(toggleButton).toHaveAttribute('aria-label', 'Masquer le mot de passe');
+    expect(toggleButton.getAttribute('aria-label')).toBe('Masquer le mot de passe');
 
     fireEvent.click(toggleButton);
     expect(passwordInput.type).toBe('password');
-    expect(toggleButton).toHaveAttribute('aria-label', 'Afficher le mot de passe');
+    expect(toggleButton.getAttribute('aria-label')).toBe('Afficher le mot de passe');
   });
-});
+  it('displays the session expired message when redirected after 401', () => {
+    localStorage.setItem('ecoletrack_session_expired_message', 'Votre session a expiré. Veuillez vous reconnecter.');
+    render(<LoginView onLogin={mockOnLogin} />);
+    expect(screen.getByText(/Votre session a expiré/i)).toBeTruthy();
+  });});

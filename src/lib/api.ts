@@ -27,6 +27,8 @@ const LOCAL_STORAGE_ROLE_KEY = 'ecoletrack_simulated_role';
 const LOCAL_STORAGE_USER_KEY = 'ecoletrack_simulated_user';
 const LOCAL_STORAGE_ACTIVE_SCHOOL_KEY = 'ecoletrack_active_school_id';
 const LOCAL_STORAGE_ACCESS_TOKEN_KEY = 'ecoletrack_jwt_access';
+const SESSION_EXPIRED_MESSAGE_KEY = 'ecoletrack_session_expired_message';
+const SESSION_EXPIRED_MESSAGE = 'Votre session a expiré. Veuillez vous reconnecter.';
 const API_BASE_URL = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL
   ? String(import.meta.env.VITE_API_BASE_URL)
   : '';
@@ -65,6 +67,12 @@ export function isUnauthorizedError(error: unknown): boolean {
     typeof error === 'object' &&
     ((error as any).status === 401 || (error as any).isUnauthorized === true)
   );
+}
+
+function isTokenSessionError(errorMessage: string | null): boolean {
+  if (!errorMessage) return false;
+  const normalized = errorMessage.trim();
+  return /^(Unauthorized: Missing token|Unauthorized: Invalid token|Unauthenticated)$/i.test(normalized);
 }
 
 export function getSimulatedRole(): string | null {
@@ -107,6 +115,39 @@ export function clearSimulatedUser() {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
   localStorage.removeItem(LOCAL_STORAGE_ACTIVE_SCHOOL_KEY);
+}
+
+export function clearAccessToken() {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(LOCAL_STORAGE_ACCESS_TOKEN_KEY);
+}
+
+export function clearAuthSession() {
+  clearAccessToken();
+  clearSimulatedRole();
+  clearSimulatedUser();
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new Event('simulatedUserChanged'));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function markSessionExpired() {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(SESSION_EXPIRED_MESSAGE_KEY, SESSION_EXPIRED_MESSAGE);
+}
+
+export function getSessionExpiredMessage(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(SESSION_EXPIRED_MESSAGE_KEY);
+}
+
+export function clearSessionExpiredMessage() {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(SESSION_EXPIRED_MESSAGE_KEY);
 }
 
 export function getActiveSchoolId(): number | null {
@@ -306,6 +347,19 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     (error as any).status = response.status;
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
+      const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');
+      if (isTokenSessionError(errorMessage)) {
+        clearAuthSession();
+        markSessionExpired();
+        if (
+          typeof window !== 'undefined' &&
+          window.location &&
+          typeof window.location.replace === 'function' &&
+          window.location.pathname !== '/login'
+        ) {
+          window.location.replace('/login');
+        }
+      }
     }
     throw error;
   }
@@ -350,6 +404,19 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     (error as any).status = response.status;
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
+      const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');
+      if (isTokenSessionError(errorMessage)) {
+        clearAuthSession();
+        markSessionExpired();
+        if (
+          typeof window !== 'undefined' &&
+          window.location &&
+          typeof window.location.replace === 'function' &&
+          window.location.pathname !== '/login'
+        ) {
+          window.location.replace('/login');
+        }
+      }
     }
     throw error;
   }
