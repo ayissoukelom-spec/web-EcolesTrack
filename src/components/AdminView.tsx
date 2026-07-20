@@ -3433,19 +3433,19 @@ export default function AdminView({
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
                 <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4">Nom de l’établissement</th>
-                    <th className="px-6 py-4">Adresse</th>
-                    <th className="px-6 py-4">Téléphone</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
+                    <th className="px-3 sm:px-6 py-4">Nom de l’établissement</th>
+                    <th className="px-3 sm:px-6 py-4">Adresse</th>
+                    <th className="px-3 sm:px-6 py-4">Téléphone</th>
+                    <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {schoolsList.filter((s) => filterBySearch(s.name)).map((sc) => (
                     <tr key={sc.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-6 py-4 font-bold text-slate-800">{sc.name}</td>
-                      <td className="px-6 py-4 text-slate-500">{sc.address || '—'}</td>
-                      <td className="px-6 py-4 text-slate-500">{sc.phone || '—'}</td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{sc.name}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.address || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.phone || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-right">
                         {userRole === 'super_admin' ? (
                           <div className="flex items-center justify-end gap-2">
                             <button
@@ -3512,16 +3512,16 @@ export default function AdminView({
             <table className="w-full text-left text-xs sm:text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                 <tr>
-                  <th className="px-6 py-4">Label Année Scolaire</th>
-                  <th className="px-6 py-4">Statut</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                  <th className="px-3 sm:px-6 py-4">Label Année Scolaire</th>
+                  <th className="px-3 sm:px-6 py-4">Statut</th>
+                  <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleYearsList.filter((y) => filterBySearch(y.name)).map((yr) => (
                   <tr key={yr.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-800">{yr.name}</td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{yr.name}</td>
+                    <td className="px-3 sm:px-6 py-4">
                       {yr.isActive ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-100">
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -3533,7 +3533,7 @@ export default function AdminView({
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-right text-slate-400 text-xs">
+                    <td className="px-3 sm:px-6 py-4 text-right text-slate-400 text-xs">
                       {userRole === 'super_admin' ? (
                         <div className="inline-flex items-center gap-2">
                           {!yr.isActive && (
@@ -3821,11 +3821,11 @@ export default function AdminView({
             <table className="w-full text-left text-xs sm:text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                 <tr>
-                  <th className="px-6 py-4">Nom de la classe</th>
-                  <th className="px-6 py-4">Enseignant Principal</th>
-                  <th className="px-6 py-4">Lien Année</th>
-                  <th className="px-6 py-4">Statut</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                  <th className="px-3 sm:px-6 py-4">Nom de la classe</th>
+                  <th className="px-3 sm:px-6 py-4">Enseignant Principal</th>
+                  <th className="px-3 sm:px-6 py-4">Lien Année</th>
+                  <th className="px-3 sm:px-6 py-4">Statut</th>
+                  <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -3833,10 +3833,10 @@ export default function AdminView({
                   .filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name))
                   .map((cls) => (
                     <tr key={cls.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-6 py-4 font-bold text-slate-800">{cls.name}</td>
-                      <td className="px-6 py-4 text-indigo-600 font-semibold">{cls.teacherName || 'Non assigné'}</td>
-                      <td className="px-6 py-4 text-slate-500">{cls.yearName || 'N/A'}</td>
-                      <td className="px-6 py-4">
+                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{cls.name}</td>
+                      <td className="px-3 sm:px-6 py-4 text-indigo-600 font-semibold">{cls.teacherName || 'Non assigné'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{cls.yearName || 'N/A'}</td>
+                      <td className="px-3 sm:px-6 py-4">
                         {cls.status ? (
                           <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${cls.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : cls.status === 'rejected' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
                             {cls.status === 'approved' ? 'Approuvée' : cls.status === 'rejected' ? 'Refusée' : 'En attente'}
@@ -3845,7 +3845,7 @@ export default function AdminView({
                           <span className="text-slate-400 text-xs italic">—</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right space-x-2">
+                      <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         {userRole === 'super_admin' && (
                           <button
                             onClick={() => onDeleteClass(cls.id)}
@@ -3956,22 +3956,22 @@ export default function AdminView({
                 <table className="w-full text-left text-xs sm:text-sm text-slate-600">
                   <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                     <tr>
-                      <th className="px-6 py-4">Nom complet</th>
-                      <th className="px-6 py-4">Adresse Email</th>
-                      <th className="px-6 py-4">École</th>
-                      <th className="px-6 py-4">Spécialité enseignée</th>
-                      <th className="px-6 py-4">Téléphone</th>
+                      <th className="px-3 sm:px-6 py-4">Nom complet</th>
+                      <th className="px-3 sm:px-6 py-4">Adresse Email</th>
+                      <th className="px-3 sm:px-6 py-4">École</th>
+                      <th className="px-3 sm:px-6 py-4">Spécialité enseignée</th>
+                      <th className="px-3 sm:px-6 py-4">Téléphone</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredTeachersList.map((tc) => (
                       <tr key={tc.id} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-6 py-4 font-bold text-slate-800">{tc.name}</td>
-                        <td className="px-6 py-4 text-slate-500 font-mono text-xs">{tc.email}</td>
-                        <td className="px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
-                        <td className="px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
-                        <td className="px-6 py-4 text-slate-500">{tc.phone || '—'}</td>
-                        <td className="px-6 py-4 text-right space-x-2">
+                        <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{tc.name}</td>
+                        <td className="px-3 sm:px-6 py-4 text-slate-500 font-mono text-xs">{tc.email}</td>
+                        <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
+                        <td className="px-3 sm:px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
+                        <td className="px-3 sm:px-6 py-4 text-slate-500">{tc.phone || '—'}</td>
+                        <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                           <button
                             onClick={() => openTeacherDetail(tc)}
                             className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
@@ -4226,23 +4226,23 @@ export default function AdminView({
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
                 <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4">Nom</th>
-                    <th className="px-6 py-4">Classe</th>
-                    <th className="px-6 py-4">Année scolaire</th>
-                    <th className="px-6 py-4">Tuteur</th>
-                    <th className="px-6 py-4">École</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
+                    <th className="px-3 sm:px-6 py-4">Nom</th>
+                    <th className="px-3 sm:px-6 py-4">Classe</th>
+                    <th className="px-3 sm:px-6 py-4">Année scolaire</th>
+                    <th className="px-3 sm:px-6 py-4">Tuteur</th>
+                    <th className="px-3 sm:px-6 py-4">École</th>
+                    <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredStudentsList.map((st) => (
                     <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-6 py-4 font-bold text-slate-800">{st.firstName} {st.lastName}</td>
-                      <td className="px-6 py-4 text-slate-500">{st.className || '—'}</td>
-                      <td className="px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name || st.yearName || '—'}</td>
-                      <td className="px-6 py-4 text-slate-500">{st.parentName || '—'}</td>
-                      <td className="px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === st.schoolId)?.name || '—'}</td>
-                      <td className="px-6 py-4 text-right space-x-2">
+                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.firstName} {st.lastName}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{st.className || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name || st.yearName || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{st.parentName || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === st.schoolId)?.name || '—'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => openStudentDetail(st)}
                           className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
@@ -4296,11 +4296,11 @@ export default function AdminView({
             <table className="w-full text-left text-xs sm:text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                 <tr>
-                  <th className="px-6 py-4">Nom du tuteur</th>
-                  <th className="px-6 py-4">Téléphone mobile</th>
-                  <th className="px-6 py-4">Élève associé</th>
-                  <th className="px-6 py-4">École de l'élève</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                  <th className="px-3 sm:px-6 py-4">Nom du tuteur</th>
+                  <th className="px-3 sm:px-6 py-4">Téléphone mobile</th>
+                  <th className="px-3 sm:px-6 py-4">Élève associé</th>
+                  <th className="px-3 sm:px-6 py-4">École de l'élève</th>
+                  <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -4310,11 +4310,11 @@ export default function AdminView({
                   filterBySearch(p.name)
                 ).map((pt) => (
                   <tr key={pt.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-800">{pt.name}</td>
-                    <td className="px-6 py-4 text-slate-500">{pt.phone || '—'}</td>
-                    <td className="px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentFirstName} ${pt.studentLastName}` : '—'}</td>
-                    <td className="px-6 py-4 text-slate-500">{pt.schoolName || (pt.studentSchoolId ? schoolsList.find((s) => s.id === pt.studentSchoolId)?.name : null) || pt.studentSchoolName || schoolsList.find((s) => s.id === studentsList.find((st) => st.id === pt.studentId || st.parentId === pt.id)?.schoolId)?.name || '—'}</td>
-                    <td className="px-6 py-4 text-right space-x-2">
+                    <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{pt.name}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.phone || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentFirstName} ${pt.studentLastName}` : '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.schoolName || (pt.studentSchoolId ? schoolsList.find((s) => s.id === pt.studentSchoolId)?.name : null) || pt.studentSchoolName || schoolsList.find((s) => s.id === studentsList.find((st) => st.id === pt.studentId || st.parentId === pt.id)?.schoolId)?.name || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                       <button
                         onClick={() => openParentDetail(pt)}
                         className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold transition-colors"
@@ -4404,31 +4404,31 @@ export default function AdminView({
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                 <tr>
-                  <th className="px-6 py-4">Nom complet</th>
-                  <th className="px-6 py-4">Email</th>
-                  <th className="px-6 py-4">Rôle</th>
-                  <th className="px-6 py-4">École</th>
-                  <th className="px-6 py-4">Année scolaire</th>
-                  <th className="px-6 py-4">Spécialisation</th>
-                  <th className="px-6 py-4">Téléphone</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                  <th className="px-3 sm:px-6 py-4">Nom complet</th>
+                  <th className="px-3 sm:px-6 py-4">Email</th>
+                  <th className="px-3 sm:px-6 py-4">Rôle</th>
+                  <th className="px-3 sm:px-6 py-4">École</th>
+                  <th className="px-3 sm:px-6 py-4">Année scolaire</th>
+                  <th className="px-3 sm:px-6 py-4">Spécialisation</th>
+                  <th className="px-3 sm:px-6 py-4">Téléphone</th>
+                  <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredAccountsList.map((user) => (
                   <tr key={user.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-800">{user.name}</td>
-                    <td className="px-6 py-4 text-slate-500 font-mono text-xs">{user.email}</td>
-                    <td className="px-6 py-4 text-slate-700 capitalize">{user.role.replace('_', ' ')}</td>
-                    <td className="px-6 py-4 text-slate-500">{(() => {
+                    <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{user.name}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500 font-mono text-xs">{user.email}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-700 capitalize">{user.role.replace('_', ' ')}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{(() => {
                       const teacherProfile = teachersList.find((t) => t.userId === user.id);
                       const sid = user.schoolId ?? teacherProfile?.schoolId ?? null;
                       return sid ? (schoolsList.find((s) => s.id === Number(sid))?.name || '—') : '—';
                     })()}</td>
-                    <td className="px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
-                    <td className="px-6 py-4 text-slate-500">{(user as any).specialization || '—'}</td>
-                    <td className="px-6 py-4 text-slate-500">{(user as any).phone || '—'}</td>
-                    <td className="px-6 py-4 text-right space-x-2">
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).specialization || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).phone || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => {
                             const teacherProfile = teachersList.find((t) => t.userId === user.id);
@@ -4610,3 +4610,6 @@ export default function AdminView({
     </div>
   );
 }
+
+
+
