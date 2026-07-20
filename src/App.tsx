@@ -35,6 +35,7 @@ import MobileParentView from './components/MobileParentView.tsx';
 import ParentNotesView from './components/ParentNotesView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
 import BulletinsView from './components/BulletinsView.tsx';
+import GlobalErrorToast from './components/GlobalErrorToast.tsx';
 
 import {
   LayoutDashboard,
@@ -819,6 +820,10 @@ export default function App() {
         isSyncing={isSyncing}
         onManageAccounts={() => setActiveTab('administration')}
       />
+
+      {visibleErrorMsg && (
+        <GlobalErrorToast message={visibleErrorMsg} onClose={() => setErrorMsg(null)} />
+      )}
 
       {/* Main workspace with sidebar option layout */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6">
