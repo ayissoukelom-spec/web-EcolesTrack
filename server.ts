@@ -5112,6 +5112,7 @@ export async function createApp() {
       if (uniqueParentIds.length > 0) {
         const notificationsToInsert = uniqueParentIds.map((parentUserId) => ({
           userId: parentUserId,
+          evaluationId: createdEvaluation.id,
           title: `Nouveau devoir publié : ${title}`,
           body: `Un nouveau devoir en ${subject} a été publié pour la classe ${classRecord.name} le ${date}. Encouragez votre enfant à se préparer !`,
           type: 'grade',
@@ -5305,6 +5306,29 @@ export async function createApp() {
           editCount: 0,
         }).returning();
         savedGrade = inserted[0];
+      }
+
+      const totalStudentsInClass = await db
+        .select({ count: sql<number>`count(*)::integer` })
+        .from(students)
+        .where(eq(students.classId, evaluation.classId));
+
+      const totalGradesForEvaluation = await db
+        .select({ count: sql<number>`count(*)::integer` })
+        .from(grades)
+        .where(eq(grades.evaluationId, parseInt(evaluationId)));
+
+      if (
+        totalStudentsInClass[0]?.count != null &&
+        totalGradesForEvaluation[0]?.count != null &&
+        totalGradesForEvaluation[0].count === totalStudentsInClass[0].count
+      ) {
+        await db.delete(notifications).where(
+          and(
+            eq(notifications.evaluationId, parseInt(evaluationId)),
+            eq(notifications.type, 'grade')
+          )
+        );
       }
 
       // Create simulated push notification for parent of this student

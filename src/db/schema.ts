@@ -227,6 +227,7 @@ export const absences = pgTable('absences', {
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(), // Recipient users.id
+  evaluationId: integer('evaluation_id').references(() => evaluations.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   body: text('body').notNull(),
   type: text('type').notNull(), // 'absence' | 'grade' | 'info'
