@@ -185,7 +185,7 @@ export default function NotesView({
       title: newEvalTitle,
       coefficient: Number(newEvalCoefficient),
       maxScore: Number(newEvalMaxScore),
-      date: normalizeDateToISODate(newEvalDate) || newEvalDate,
+      date: newEvalDate,
     });
     setIsNewEvalFormOpen(false);
     setNewEvalClassId('');

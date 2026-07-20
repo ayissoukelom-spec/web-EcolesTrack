@@ -4949,8 +4949,9 @@ export async function createApp() {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
       }
 
-      const evaluationDate = String(date).slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(evaluationDate)) {
+      const evaluationDate = String(date || '');
+      const parsedEvaluationDate = new Date(evaluationDate);
+      if (!evaluationDate || Number.isNaN(parsedEvaluationDate.getTime())) {
         return res.status(400).json({ error: 'Invalid evaluation date format. Expected YYYY-MM-DD' });
       }
 
@@ -5201,17 +5202,19 @@ export async function createApp() {
       const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
       if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
 
-      const evaluationDate = String(evaluation.date || '').slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(evaluationDate)) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const plannedDate = new Date(`${evaluationDate}T00:00:00`);
-        if (Number.isNaN(plannedDate.getTime())) {
-          return res.status(400).json({ error: 'Date du devoir invalide' });
-        }
-        if (plannedDate.getTime() > today.getTime()) {
-          return res.status(400).json({ error: `La saisie des notes n'est pas encore possible : la date prévue du devoir (${evaluationDate}) n'est pas atteinte.` });
-        }
+      const evaluationDate = String(evaluation.date || '');
+      const plannedDate = new Date(evaluationDate);
+      console.log('DEBUG evaluation.date raw:', evaluation.date);
+      console.log('DEBUG evaluation.date typeof:', typeof evaluation.date);
+      console.log('DEBUG plannedDate:', plannedDate);
+      console.log('DEBUG plannedDate timestamp:', plannedDate.getTime());
+      console.log('DEBUG current date:', new Date());
+      console.log('DEBUG now timestamp:', Date.now());
+      if (evaluationDate && Number.isNaN(plannedDate.getTime())) {
+        return res.status(400).json({ error: 'Date du devoir invalide' });
+      }
+      if (evaluationDate && plannedDate.getTime() > Date.now()) {
+        return res.status(400).json({ error: `La saisie des notes n'est pas encore possible : la date prévue du devoir (${evaluationDate}) n'est pas atteinte.` });
       }
 
       const scoreValidation = validateGradeScore(normalizedScore, evaluation.maxScore);
