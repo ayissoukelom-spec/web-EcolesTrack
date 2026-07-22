@@ -400,14 +400,14 @@ export default function ArchiveView({
                       <button
                         type="button"
                         onClick={() => exportEvaluationExcel(ev)}
-                        className="rounded-full bg-slate-800 text-white px-4 py-2 text-xs font-semibold hover:bg-slate-900"
+                        className="rounded-full bg-emerald-600 text-white px-4 py-2 text-xs font-semibold hover:bg-emerald-700"
                       >
                         Télécharger Excel
                       </button>
                       <button
                         type="button"
                         onClick={() => exportEvaluationPdf(ev)}
-                        className="rounded-full bg-slate-800 text-white px-4 py-2 text-xs font-semibold hover:bg-slate-900"
+                        className="rounded-full bg-rose-600 text-white px-4 py-2 text-xs font-semibold hover:bg-rose-700"
                       >
                         Télécharger PDF
                       </button>
