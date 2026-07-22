@@ -66,84 +66,186 @@ export default function ArchiveView({
     const school = evaluationClass ? schoolsList.find((school) => school.id === evaluationClass.schoolId) : undefined;
     const gradesForEval = gradesList
       .filter((grade) => grade.evaluationId === ev.id)
-      .map((grade) => {
+      .map((grade, index) => {
         const student = studentsList.find((st) => st.id === grade.studentId);
         const studentName = grade.studentName || `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim();
         return {
+          index: index + 1,
           studentName: studentName || 'Élève',
           score: grade.score ?? '',
           remarks: grade.remarks ?? '',
         };
       });
 
-    const rows: Array<Array<string | number>> = [
-      ['École', school?.name ?? ''],
-      ['Classe', evaluationClass?.name ?? ''],
-      ['Matière', ev.subject],
-      ['Enseignant', ev.teacherName ?? ''],
-      ['Intitulé du devoir', ev.title],
-      ['Date', normalizeDateOnly(ev.date || ev.createdAt) ?? ''],
-      [],
-      ['Élève', 'Note', 'Remarques'],
-      ...gradesForEval.map((grade) => [grade.studentName, grade.score, grade.remarks]),
-    ];
-
-    return rows;
+    return {
+      meta: [
+        ['École', school?.name ?? ''],
+        ['Classe', evaluationClass?.name ?? ''],
+        ['Matière', ev.subject],
+        ['Enseignant', ev.teacherName ?? ''],
+        ['Intitulé du devoir', ev.title],
+        ['Date', normalizeDateOnly(ev.date || ev.createdAt) ?? ''],
+      ],
+      grades: gradesForEval,
+    };
   };
 
   const exportEvaluationExcel = async (ev: Evaluation) => {
-    const rows = getExportRows(ev);
+    const { meta, grades } = getExportRows(ev);
+    const rows: Array<Array<string | number>> = [
+      ['Relevé des notes'],
+      [],
+      ...meta,
+      [],
+      ['N°', 'Élève', 'Note', 'Remarques'],
+      ...grades.map((grade) => [grade.index, grade.studentName, grade.score, grade.remarks]),
+    ];
+
     const worksheet = XLSX.utils.aoa_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Notes archivées');
-    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Relevé des notes');
+
+    worksheet['!cols'] = [
+      { wch: 5 },
+      { wch: 30 },
+      { wch: 15 },
+      { wch: 40 },
+    ];
+    worksheet['!freeze'] = { xSplit: 0, ySplit: 7 };
+
+    const headerRow = 6;
+    const titleCell = worksheet['A1'];
+    if (titleCell) {
+      titleCell.s = {
+        font: { bold: true, sz: 16 },
+        alignment: { horizontal: 'left', vertical: 'center' },
+      };
+    }
+
+    for (let col = 0; col < 4; col += 1) {
+      const cellRef = XLSX.utils.encode_cell({ r: headerRow, c: col });
+      const cell = worksheet[cellRef];
+      if (cell) {
+        cell.s = {
+          font: { bold: true },
+          fill: { fgColor: { rgb: 'FFDCE6F1' } },
+          border: {
+            top: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+            bottom: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+            left: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+            right: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+          },
+          alignment: { horizontal: 'center', vertical: 'center' },
+        };
+      }
+    }
+
+    grades.forEach((_, rowIndex) => {
+      const rowNumber = headerRow + 1 + rowIndex;
+      for (let col = 0; col < 4; col += 1) {
+        const cellRef = XLSX.utils.encode_cell({ r: rowNumber, c: col });
+        const cell = worksheet[cellRef];
+        if (cell) {
+          cell.s = {
+            alignment: { horizontal: col === 0 ? 'center' : 'left', vertical: 'center' },
+          };
+        }
+      }
+    });
+
+    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellStyles: true });
     const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     downloadBlob(blob, `archive-evaluation-${ev.id}.xlsx`);
   };
 
   const exportEvaluationPdf = async (ev: Evaluation) => {
-    const rows = getExportRows(ev);
+    const { meta, grades } = getExportRows(ev);
     const pdfDoc = await PDFDocument.create();
     const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const pageWidth = 595.28;
     const pageHeight = 841.89;
     const margin = 40;
-    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const lineHeight = 18;
+    const tableTopGap = 24;
+    const cellPadding = 6;
+    const tableX = margin;
+    const tableWidth = pageWidth - margin * 2;
+    const colWidths = [40, 220, 100, tableWidth - 40 - 220 - 100];
+
+    const createPage = () => pdfDoc.addPage([pageWidth, pageHeight]);
+    let page = createPage();
     let cursorY = pageHeight - margin;
-    const lineHeight = 14;
-    const drawLine = (text: string, bold = false, size = 11) => {
-      if (cursorY < margin + lineHeight) {
-        page = pdfDoc.addPage([pageWidth, pageHeight]);
-        cursorY = pageHeight - margin;
-      }
-      page.drawText(text, {
-        x: margin,
-        y: cursorY,
-        size,
-        font: bold ? helveticaBold : helvetica,
-        color: rgb(0, 0, 0),
-      });
-      cursorY -= lineHeight;
+
+    const drawText = (text: string, x: number, y: number, options: any = {}) => {
+      page.drawText(text, { x, y, font: options.bold ? helveticaBold : helvetica, size: options.size ?? 11, color: rgb(0, 0, 0) });
     };
 
-    rows.forEach((row, index) => {
-      const [first, second, third] = row;
-      if (index === 0) {
-        drawLine('Export des notes archivées', true, 14);
-        cursorY -= 8;
+    const drawLine = (x1: number, y1: number, x2: number, y2: number) => {
+      page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: 1, color: rgb(0.6, 0.6, 0.6) });
+    };
+
+    const addPageIfNeeded = (neededHeight: number) => {
+      if (cursorY - neededHeight < margin) {
+        page = createPage();
+        cursorY = pageHeight - margin;
       }
-      if (row.length === 0) {
-        cursorY -= lineHeight;
-        return;
-      }
-      if (index <= 5) {
-        drawLine(`${first}: ${second}`, false, 11);
-      } else if (index === 7) {
-        drawLine(`${first} | ${second} | ${third}`, true, 11);
-      } else {
-        drawLine(`${first} | ${second} | ${third}`, false, 10);
-      }
+    };
+
+    drawText('Relevé des notes', tableX, cursorY, { bold: true, size: 18 });
+    cursorY -= 28;
+
+    meta.forEach(([label, value]) => {
+      addPageIfNeeded(lineHeight);
+      drawText(`${label}:`, tableX, cursorY, { bold: true, size: 11 });
+      drawText(String(value), tableX + 110, cursorY, { size: 11 });
+      cursorY -= lineHeight;
+    });
+
+    cursorY -= 8;
+    addPageIfNeeded(lineHeight + tableTopGap + (grades.length + 1) * (lineHeight + 8));
+
+    const headerY = cursorY;
+    const headerHeight = lineHeight + 10;
+    const headerTextY = headerY - 16;
+    let currentX = tableX;
+    const headers = ['N°', 'Élève', 'Note', 'Remarques'];
+
+    headers.forEach((header, index) => {
+      page.drawRectangle({
+        x: currentX,
+        y: headerY - headerHeight - 4,
+        width: colWidths[index],
+        height: headerHeight,
+        color: rgb(0.95, 0.95, 0.95),
+        borderColor: rgb(0.6, 0.6, 0.6),
+        borderWidth: 1,
+      });
+
+      const textSize = 11;
+      const textWidth = helveticaBold.widthOfTextAtSize(header, textSize);
+      const textX = (index === 0 || index === 2)
+        ? currentX + (colWidths[index] - textWidth) / 2
+        : currentX + cellPadding;
+
+      drawText(header, textX, headerTextY, { bold: true, size: textSize });
+      currentX += colWidths[index];
+    });
+
+    let rowY = headerY - headerHeight - 8;
+    grades.forEach((grade) => {
+      addPageIfNeeded(lineHeight + 8);
+      currentX = tableX;
+      const rowHeight = lineHeight + 8;
+      page.drawRectangle({ x: currentX, y: rowY - 4, width: tableWidth, height: rowHeight, borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1 });
+      drawText(String(grade.index), currentX + cellPadding, rowY, { size: 10 });
+      currentX += colWidths[0];
+      drawText(grade.studentName, currentX + cellPadding, rowY, { size: 10 });
+      currentX += colWidths[1];
+      drawText(String(grade.score), currentX + cellPadding, rowY, { size: 10 });
+      currentX += colWidths[2];
+      drawText(grade.remarks || '—', currentX + cellPadding, rowY, { size: 10 });
+      rowY -= rowHeight;
     });
 
     const pdfBytes = await pdfDoc.save();
