@@ -691,7 +691,7 @@ export default function AdminView({
     if (userRole === 'super_admin' && superAdminSchoolFilterId && !accountBelongsToSchool(u, superAdminSchoolFilterId)) {
       return false;
     }
-    if (userRole === 'super_admin' && accountRoleFilter && u.role !== accountRoleFilter) {
+    if (accountRoleFilter && u.role !== accountRoleFilter) {
       return false;
     }
     return filterBySearch(`${u.name} ${u.email} ${u.role}`);
@@ -4369,21 +4369,23 @@ export default function AdminView({
                 <p className="text-sm text-slate-500">Créez et gérez les comptes, y compris les admins écoles.</p>
               </div>
             </div>
-            {userRole === 'super_admin' && (
+            {(userRole === 'super_admin' || userRole === 'school_admin') && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
-                  <select
-                    className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
-                    value={superAdminSchoolFilterId ?? ''}
-                    onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                  >
-                    <option value="">Toutes les écoles</option>
-                    {schoolsList.map((school) => (
-                      <option key={school.id} value={String(school.id)}>{school.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {userRole === 'super_admin' && (
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                    <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
+                    <select
+                      className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+                      value={superAdminSchoolFilterId ?? ''}
+                      onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                    >
+                      <option value="">Toutes les écoles</option>
+                      {schoolsList.map((school) => (
+                        <option key={school.id} value={String(school.id)}>{school.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                   <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par rôle</label>
                   <select
@@ -4392,8 +4394,12 @@ export default function AdminView({
                     onChange={(e) => setAccountRoleFilter(e.target.value)}
                   >
                     <option value="">Tous les rôles</option>
-                    <option value="super_admin">Super Admin</option>
-                    <option value="school_admin">Admin École</option>
+                    {userRole === 'super_admin' && (
+                      <>
+                        <option value="super_admin">Super Admin</option>
+                        <option value="school_admin">Admin École</option>
+                      </>
+                    )}
                     <option value="teacher">Enseignant</option>
                     <option value="parent">Parent</option>
                   </select>
