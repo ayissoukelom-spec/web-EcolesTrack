@@ -55,11 +55,21 @@ export default function AbsenceView({
     period: 'morning',
   });
   const [selectedAbsentStudentIds, setSelectedAbsentStudentIds] = useState<string[]>([]);
+  const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [isMultipleSaveInProgress, setIsMultipleSaveInProgress] = useState(false);
 
   const studentsInSelectedClass = newAbsenceForm.classId
     ? sortedStudents.filter((st) => String(st.classId) === newAbsenceForm.classId)
     : [];
+  const filteredStudentsInClass = studentSearchQuery.trim()
+    ? studentsInSelectedClass.filter((st) => {
+        const query = studentSearchQuery.trim().toLowerCase();
+        const lastName = (st.lastName || '').toLowerCase();
+        const firstName = (st.firstName || '').toLowerCase();
+        const fullName = `${lastName} ${firstName}`.trim();
+        return lastName.includes(query) || firstName.includes(query) || fullName.includes(query);
+      })
+    : studentsInSelectedClass;
 
   const availableLastNames = Array.from(
     new Set(studentsInSelectedClass.map((st) => st.lastName || ''))
@@ -213,8 +223,17 @@ export default function AbsenceView({
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                   Sélection multiple des élèves
                 </label>
+                <div className="mb-3">
+                  <input
+                    type="search"
+                    value={studentSearchQuery}
+                    onChange={(e) => setStudentSearchQuery(e.target.value)}
+                    placeholder="Rechercher un élève..."
+                    className="w-full px-3 py-2 border border-slate-200 rounded-2xl bg-white text-xs sm:text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
                 <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-2xl bg-white p-3 space-y-2">
-                  {studentsInSelectedClass.map((st) => (
+                  {filteredStudentsInClass.map((st) => (
                     <label key={st.id} className="flex items-center gap-2 text-slate-700 text-xs sm:text-sm">
                       <input
                         type="checkbox"
@@ -230,6 +249,9 @@ export default function AbsenceView({
                       <span>{st.lastName?.toUpperCase()} {st.firstName}</span>
                     </label>
                   ))}
+                  {filteredStudentsInClass.length === 0 && (
+                    <p className="text-slate-500 text-xs">Aucun élève ne correspond à la recherche.</p>
+                  )}
                 </div>
                 <p className="text-slate-500 text-[11px] mt-2">
                   Sélectionnez plusieurs élèves pour préparer un appel de classe. Le flux actuel de saisie individuelle reste disponible.
