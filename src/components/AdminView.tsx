@@ -2454,7 +2454,7 @@ export default function AdminView({
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
                         phone: userForm.phone ? (updatedRole !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
                         specialization: userForm.specialization,
-                        address: updatedRole === 'parent' ? userForm.address.trim() : undefined,
+                        address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
                         studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
                         classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
                       });
