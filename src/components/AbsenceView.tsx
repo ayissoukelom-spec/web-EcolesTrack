@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Absence, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag } from 'lucide-react';
@@ -12,7 +12,7 @@ interface AbsenceViewProps {
   studentsList: Student[];
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
-  onAddAbsence: (data: { studentId: number; classId: number; date: string; period: string; isJustified: boolean }) => void;
+  onAddAbsence: (data: { studentId: number; classId: number; date: string; period: string; isJustified: boolean }) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string) => void;
 }
 
@@ -54,6 +54,8 @@ export default function AbsenceView({
     date: new Date().toISOString().split('T')[0],
     period: 'morning',
   });
+  const [selectedAbsentStudentIds, setSelectedAbsentStudentIds] = useState<string[]>([]);
+  const [isMultipleSaveInProgress, setIsMultipleSaveInProgress] = useState(false);
 
   const studentsInSelectedClass = newAbsenceForm.classId
     ? sortedStudents.filter((st) => String(st.classId) === newAbsenceForm.classId)
@@ -97,6 +99,40 @@ export default function AbsenceView({
       date: new Date().toISOString().split('T')[0],
       period: 'morning',
     });
+  };
+
+  const handleCreateMultipleAbsences = async () => {
+    if (selectedAbsentStudentIds.length === 0 || !newAbsenceForm.classId || isMultipleSaveInProgress) return;
+
+    setIsMultipleSaveInProgress(true);
+    try {
+      const studentIdsToCreate = selectedAbsentStudentIds.map((id) => parseInt(id, 10));
+      for (const studentId of studentIdsToCreate) {
+        const student = studentsList.find((s) => s.id === studentId);
+        if (!student) continue;
+
+        await onAddAbsence({
+          studentId: student.id,
+          classId: student.classId,
+          date: newAbsenceForm.date,
+          period: newAbsenceForm.period,
+          isJustified: false,
+        });
+      }
+
+      setIsFormOpen(false);
+      setNewAbsenceForm({
+        studentId: '',
+        classId: '',
+        lastName: '',
+        firstName: '',
+        date: new Date().toISOString().split('T')[0],
+        period: 'morning',
+      });
+      setSelectedAbsentStudentIds([]);
+    } finally {
+      setIsMultipleSaveInProgress(false);
+    }
   };
 
   const handleJustifySubmit = (e: React.FormEvent) => {
@@ -163,12 +199,43 @@ export default function AbsenceView({
               <CustomDropdown
                 options={[{ value: '', label: '-- Choisissez une classe --' }, ...sortedClasses.map((cl) => ({ value: String(cl.id), label: cl.name }))]}
                 value={newAbsenceForm.classId}
-                onChange={(v) => setNewAbsenceForm((prev) => ({ ...prev, classId: v, lastName: '', firstName: '', studentId: '' }))}
+                onChange={(v) => {
+                  setNewAbsenceForm((prev) => ({ ...prev, classId: v, lastName: '', firstName: '', studentId: '' }));
+                  setSelectedAbsentStudentIds([]);
+                }}
                 placeholder="-- Choisissez une classe --"
                 required
                 className=""
               />
             </div>
+            {newAbsenceForm.classId && studentsInSelectedClass.length > 0 && (
+              <div className="md:col-span-4">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Sélection multiple des élèves
+                </label>
+                <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-2xl bg-white p-3 space-y-2">
+                  {studentsInSelectedClass.map((st) => (
+                    <label key={st.id} className="flex items-center gap-2 text-slate-700 text-xs sm:text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedAbsentStudentIds.includes(String(st.id))}
+                        onChange={(e) => {
+                          const id = String(st.id);
+                          setSelectedAbsentStudentIds((prev) =>
+                            e.target.checked ? [...prev, id] : prev.filter((selectedId) => selectedId !== id)
+                          );
+                        }}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>{st.lastName?.toUpperCase()} {st.firstName}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-slate-500 text-[11px] mt-2">
+                  Sélectionnez plusieurs élèves pour préparer un appel de classe. Le flux actuel de saisie individuelle reste disponible.
+                </p>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                 <RequiredLabel label="Sélectionner le Nom" required />
@@ -268,13 +335,22 @@ export default function AbsenceView({
                 <option value="all_day">Toute la Journée (all_day)</option>
               </select>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-col sm:flex-row">
               <button
                 type="submit"
                 className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm rounded-xl shadow-md transition-colors cursor-pointer"
                 id="btn-absence-submit"
               >
                 Enregistrer
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateMultipleAbsences}
+                disabled={selectedAbsentStudentIds.length === 0 || isMultipleSaveInProgress}
+                className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                id="btn-absence-submit-multiple"
+              >
+                {isMultipleSaveInProgress ? 'Enregistrement en cours…' : 'Enregistrer les absences sélectionnées'}
               </button>
               <button
                 type="button"
