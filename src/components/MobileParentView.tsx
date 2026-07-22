@@ -109,7 +109,7 @@ export default function MobileParentView({
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-  type ParentNotifCategory = 'notes' | 'homework' | 'other';
+  type ParentNotifCategory = 'notes' | 'homework' | 'absences' | 'info' | 'other';
 
   const classifyParentNotification = (notif: SystemNotification): ParentNotifCategory => {
     const notifType = normalizeForMatch(notif.type);
@@ -120,6 +120,8 @@ export default function MobileParentView({
     if (isHomeworkByType || isHomeworkByKeyword) return 'homework';
 
     if (notifType === 'grade') return 'notes';
+    if (notifType === 'absence') return 'absences';
+    if (notifType === 'info') return 'info';
 
     return 'other';
   };
@@ -135,6 +137,12 @@ export default function MobileParentView({
       } else if (category === 'homework') {
         acc.homework.push(notif);
         acc.seenIds.add(notif.id);
+      } else if (category === 'absences') {
+        acc.absences.push(notif);
+        acc.seenIds.add(notif.id);
+      } else if (category === 'info') {
+        acc.info.push(notif);
+        acc.seenIds.add(notif.id);
       }
 
       return acc;
@@ -142,13 +150,23 @@ export default function MobileParentView({
     {
       notes: [] as SystemNotification[],
       homework: [] as SystemNotification[],
+      absences: [] as SystemNotification[],
+      info: [] as SystemNotification[],
       seenIds: new Set<number>(),
     }
   );
 
   const mobileNotesNotifications = parentNotifBuckets.notes;
   const mobileHomeworkNotifications = parentNotifBuckets.homework;
-  const currentNotifTabList = notifTab === 'notes' ? mobileNotesNotifications : mobileHomeworkNotifications;
+  const mobileAbsenceNotifications = parentNotifBuckets.absences;
+  const mobileInfoNotifications = parentNotifBuckets.info;
+  const currentNotifTabList = notifTab === 'notes'
+    ? mobileNotesNotifications
+    : notifTab === 'homework'
+      ? mobileHomeworkNotifications
+      : notifTab === 'absences'
+        ? mobileAbsenceNotifications
+        : mobileInfoNotifications;
 
   // Calculate Average score for child
   const calculateGPA = () => {
@@ -512,7 +530,7 @@ export default function MobileParentView({
                       <div className="space-y-3 animate-fade-in">
                         <h4 className="font-extrabold text-xs text-white">Notifications Push Recues</h4>
 
-                        <div className="rounded-lg bg-slate-900/70 border border-slate-800 p-1 flex gap-1">
+                        <div className="rounded-lg bg-slate-900/70 border border-slate-800 p-1 flex gap-1 flex-wrap">
                           <button
                             type="button"
                             onClick={() => setNotifTab('notes')}
@@ -522,7 +540,7 @@ export default function MobileParentView({
                                 : 'text-slate-300 hover:bg-slate-800'
                             }`}
                           >
-                            Notes ({mobileNotesNotifications.length})
+                            Notes ({mobileNotesNotifications.filter((n) => !n.isRead).length})
                           </button>
                           <button
                             type="button"
@@ -533,7 +551,29 @@ export default function MobileParentView({
                                 : 'text-slate-300 hover:bg-slate-800'
                             }`}
                           >
-                            Devoirs ({mobileHomeworkNotifications.length})
+                            Devoirs ({mobileHomeworkNotifications.filter((n) => !n.isRead).length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNotifTab('absences')}
+                            className={`flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-colors ${
+                              notifTab === 'absences'
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            Absences ({mobileAbsenceNotifications.filter((n) => !n.isRead).length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNotifTab('info')}
+                            className={`flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-colors ${
+                              notifTab === 'info'
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            Informations ({mobileInfoNotifications.filter((n) => !n.isRead).length})
                           </button>
                         </div>
 
@@ -570,7 +610,11 @@ export default function MobileParentView({
                             <p className="text-slate-500 text-center py-6 text-[10px]">
                               {notifTab === 'notes'
                                 ? 'Aucune notification liée aux notes.'
-                                : 'Aucune notification de devoir à venir.'}
+                                : notifTab === 'homework'
+                                  ? 'Aucune notification de devoir à venir.'
+                                  : notifTab === 'absences'
+                                    ? 'Aucune notification d’absence.'
+                                    : 'Aucune information disponible.'}
                             </p>
                           )}
                         </div>

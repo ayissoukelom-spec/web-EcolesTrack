@@ -23,7 +23,7 @@ export default function NotificationView({
   onNotificationRead,
 }: NotificationViewProps) {
   const [isSending, setIsSending] = useState(false);
-  const [parentActiveTab, setParentActiveTab] = useState<'notes' | 'homework'>('notes');
+  const [parentActiveTab, setParentActiveTab] = useState<'notes' | 'homework' | 'absences' | 'info'>('notes');
   const [notifForm, setNotifForm] = useState({
     title: '',
     body: '',
@@ -59,7 +59,7 @@ export default function NotificationView({
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
 
-  type ParentNotifCategory = 'notes' | 'homework' | 'other';
+  type ParentNotifCategory = 'notes' | 'homework' | 'absences' | 'info' | 'other';
 
   // Centralized classifier to keep parent tabs deterministic and avoid duplicates.
   const classifyParentNotification = (notif: SystemNotification): ParentNotifCategory => {
@@ -74,6 +74,8 @@ export default function NotificationView({
 
     // Notes tab: strictly grade notifications only.
     if (notifType === 'grade') return 'notes';
+    if (notifType === 'absence') return 'absences';
+    if (notifType === 'info') return 'info';
 
     return 'other';
   };
@@ -82,6 +84,8 @@ export default function NotificationView({
     const seenIds = new Set<number>();
     const notes: SystemNotification[] = [];
     const homework: SystemNotification[] = [];
+    const absences: SystemNotification[] = [];
+    const info: SystemNotification[] = [];
 
     for (const notif of notificationsList) {
       if (seenIds.has(notif.id)) continue;
@@ -92,15 +96,29 @@ export default function NotificationView({
       } else if (category === 'homework') {
         homework.push(notif);
         seenIds.add(notif.id);
+      } else if (category === 'absences') {
+        absences.push(notif);
+        seenIds.add(notif.id);
+      } else if (category === 'info') {
+        info.push(notif);
+        seenIds.add(notif.id);
       }
     }
 
-    return { notes, homework };
+    return { notes, homework, absences, info };
   }, [notificationsList]);
 
   const parentNotesNotifications = parentNotificationsByCategory.notes;
   const parentUpcomingHomeworkNotifications = parentNotificationsByCategory.homework;
-  const parentTabNotifications = parentActiveTab === 'notes' ? parentNotesNotifications : parentUpcomingHomeworkNotifications;
+  const parentAbsencesNotifications = parentNotificationsByCategory.absences;
+  const parentInfoNotifications = parentNotificationsByCategory.info;
+  const parentTabNotifications = parentActiveTab === 'notes'
+    ? parentNotesNotifications
+    : parentActiveTab === 'homework'
+      ? parentUpcomingHomeworkNotifications
+      : parentActiveTab === 'absences'
+        ? parentAbsencesNotifications
+        : parentInfoNotifications;
 
   const renderNotificationCard = (notif: SystemNotification) => {
     const themeColor =
@@ -204,7 +222,7 @@ export default function NotificationView({
                   >
                     Notes
                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'notes' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
-                      {parentNotesNotifications.length}
+                      {parentNotesNotifications.filter((n) => !n.isRead).length}
                     </span>
                   </button>
                   <button
@@ -218,7 +236,35 @@ export default function NotificationView({
                   >
                     Devoirs à venir
                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'homework' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
-                      {parentUpcomingHomeworkNotifications.length}
+                      {parentUpcomingHomeworkNotifications.filter((n) => !n.isRead).length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setParentActiveTab('absences')}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      parentActiveTab === 'absences'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-800 hover:bg-white/70'
+                    }`}
+                  >
+                    Absences
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'absences' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                      {parentAbsencesNotifications.filter((n) => !n.isRead).length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setParentActiveTab('info')}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                      parentActiveTab === 'info'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-800 hover:bg-white/70'
+                    }`}
+                  >
+                    Informations
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${parentActiveTab === 'info' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                      {parentInfoNotifications.filter((n) => !n.isRead).length}
                     </span>
                   </button>
                 </div>
@@ -226,7 +272,13 @@ export default function NotificationView({
                 <div className="space-y-2">
                   <div className="flex items-center justify-between px-1">
                     <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">
-                      {parentActiveTab === 'notes' ? 'Notes' : 'Devoirs à venir'}
+                      {parentActiveTab === 'notes'
+                        ? 'Notes'
+                        : parentActiveTab === 'homework'
+                          ? 'Devoirs à venir'
+                          : parentActiveTab === 'absences'
+                            ? 'Absences'
+                            : 'Informations'}
                     </h4>
                     <span className="text-[11px] text-slate-400">
                       {parentTabNotifications.length} notification{parentTabNotifications.length > 1 ? 's' : ''}
@@ -241,7 +293,11 @@ export default function NotificationView({
                     <div className="py-6 px-4 rounded-lg bg-slate-50 text-slate-400 text-xs text-center">
                       {parentActiveTab === 'notes'
                         ? 'Aucune notification liée aux notes.'
-                        : 'Aucune notification de devoir à venir.'}
+                        : parentActiveTab === 'homework'
+                          ? 'Aucune notification de devoir à venir.'
+                          : parentActiveTab === 'absences'
+                            ? 'Aucune notification d’absence.'
+                            : 'Aucune information disponible.'}
                     </div>
                   )}
                 </div>
