@@ -406,9 +406,6 @@ export default function NotesView({
     return !isEvaluationFullyGraded(ev);
   });
 
-  const hasAnyGrade = (ev: Evaluation) =>
-    gradesList.some((g) => g.evaluationId === ev.id);
-
   const isSchoolAdminEvaluationLocked = (ev: Evaluation) => {
     const classStudents = studentsList.filter((st) => st.classId === ev.classId);
     const eligibleStudents = getEligibleStudentsForEvaluationWithGradesUtil(ev, classStudents, gradesList);
@@ -529,7 +526,7 @@ export default function NotesView({
     if (Number(ev.classId) !== selectedClassIdNumber) return false;
 
     if (userRole === 'teacher') {
-      return hasAnyGrade(ev);
+      return isEvaluationCompleted(ev);
     }
 
     if (userRole === 'school_admin') {

@@ -73,7 +73,7 @@ export default function ArchiveView({
         if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
       }
       if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
-      if (!isEvaluationArchivedUtil(ev, gradesList)) return false;
+      if (!isEvaluationArchivedUtil(ev, studentsList, gradesList)) return false;
 
       const evaluationDateValue = getEvaluationDateValue(ev);
       if (fromDate && (!evaluationDateValue || evaluationDateValue < fromDate)) return false;

@@ -139,7 +139,7 @@ export const isEvaluationFullyGraded = (evaluation: Evaluation, students: Studen
     (g) => g.evaluationId === evaluation.id && eligibleStudentIds.has(g.studentId),
   );
 
-  return gradesForEval.length > 0;
+  return gradesForEval.length === eligibleStudentIds.size;
 };
 
 export const getOverdueEvaluations = (
@@ -215,8 +215,8 @@ export const getFullyGradedEvaluations = (evaluations: Evaluation[], students: S
 export const hasAnyGrade = (evaluation: Evaluation, grades: Grade[]): boolean =>
   grades.some((grade) => grade.evaluationId === evaluation.id);
 
-export const isEvaluationArchived = (evaluation: Evaluation, grades: Grade[]): boolean =>
-  hasAnyGrade(evaluation, grades);
+export const isEvaluationArchived = (evaluation: Evaluation, students: Student[], grades: Grade[]): boolean =>
+  isEvaluationCompleted(evaluation, students, grades);
 
 export const isEvaluationArchivedForSchoolAdminByAge = (
   evaluation: Evaluation,

@@ -790,7 +790,7 @@ export default function App() {
       return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
         && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
-    return !isEvaluationArchived(ev, gradesList);
+    return !isEvaluationArchived(ev, studentsList, gradesList);
   });
   const archivedEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return false;
@@ -798,7 +798,7 @@ export default function App() {
       return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
         || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
-    return isEvaluationArchived(ev, gradesList);
+    return isEvaluationArchived(ev, studentsList, gradesList);
   });
 
   return (

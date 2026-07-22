@@ -6,6 +6,7 @@ import {
   getFullyGradedEvaluations,
   getOverdueEvaluations,
   isEvaluationArchivedForSchoolAdminByAge,
+  isEvaluationArchived,
   isEvaluationFullyGraded,
   isEvaluationCompleted,
   isStudentEligibleForEvaluation,
@@ -228,6 +229,18 @@ describe('evaluation completion status (new business rule)', () => {
       remarks: 'OK',
     })) as Grade[];
     expect(isEvaluationCompleted(evaluation, thirtyStudents, thirtyGrades)).toBe(true);
+  });
+
+  it('considère l évaluation archivée uniquement lorsque toutes les notes éligibles sont présentes', () => {
+    const ineligibleGrades: Grade[] = [
+      { id: 2, evaluationId: 1, studentId: 2, score: '12', remarks: 'OK' },
+    ];
+    expect(isEvaluationArchived(evaluation, students, ineligibleGrades)).toBe(false);
+
+    const fullGrades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '15', remarks: 'Bien' },
+    ];
+    expect(isEvaluationArchived(evaluation, students, fullGrades)).toBe(true);
   });
 });
 
