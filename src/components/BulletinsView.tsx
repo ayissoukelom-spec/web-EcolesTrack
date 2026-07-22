@@ -386,7 +386,7 @@ export default function BulletinsView({
         const student = studentsList.find((s) => s.id === entry.studentId);
         return {
           id,
-          studentName: student ? `${student.firstName} ${student.lastName}`.trim() : `Eleve ${entry.studentId}`,
+          studentName: student ? `${student.lastName} ${student.firstName}`.trim() : `Eleve ${entry.studentId}`,
           className,
           termName,
         };

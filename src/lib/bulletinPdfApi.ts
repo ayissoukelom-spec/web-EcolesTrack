@@ -298,7 +298,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     return {
       id: header.id,
       studentId: header.studentId,
-      studentName: `${header.studentFirstName} ${header.studentLastName}`.trim(),
+      studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
       classId: header.classId,
       className: header.className,
       schoolName: header.schoolName,

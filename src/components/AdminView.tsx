@@ -2337,7 +2337,7 @@ export default function AdminView({
                       {studentsList
                         .filter((st) => !userForm.schoolId || String(st.schoolId) === userForm.schoolId)
                         .map((st) => (
-                          <option key={st.id} value={String(st.id)}>{`${st.firstName} ${st.lastName}`}</option>
+                          <option key={st.id} value={String(st.id)}>{`${st.lastName} ${st.firstName}`}</option>
                         ))}
                     </select>
                   </div>
@@ -2543,7 +2543,7 @@ export default function AdminView({
                 </button>
               </div>
               <div className="text-sm text-slate-700 space-y-3">
-                <div><strong>Nom complet:</strong> {studentDetail.firstName} {studentDetail.lastName}</div>
+                <div><strong>Nom complet:</strong> {studentDetail.lastName} {studentDetail.firstName}</div>
                 <div><strong>Date de naissance:</strong> {studentDetail.birthDate || '—'}</div>
                 <div><strong>École:</strong> {schoolsList.find((s) => s.id === studentDetail.schoolId)?.name || '—'}</div>
                 <div><strong>Classe:</strong> {studentDetail.className || '—'}</div>
@@ -2634,7 +2634,7 @@ export default function AdminView({
                 <div><strong>Email:</strong> {parentDetail.email || '—'}</div>
                 <div><strong>Téléphone:</strong> {parentDetail.phone || '—'}</div>
                 <div><strong>Adresse:</strong> {parentDetail.address || '—'}</div>
-                <div><strong>Élève associé:</strong> {parentDetail.studentFirstName && parentDetail.studentLastName ? `${parentDetail.studentFirstName} ${parentDetail.studentLastName}` : '—'}</div>
+                <div><strong>Élève associé:</strong> {parentDetail.studentFirstName && parentDetail.studentLastName ? `${parentDetail.studentLastName} ${parentDetail.studentFirstName}` : '—'}</div>
                 <div><strong>École de l'élève:</strong> {
                   parentDetail.schoolName || (parentDetail.studentSchoolId ? schoolsList.find((s) => s.id === parentDetail.studentSchoolId)?.name : null) || parentDetail.studentSchoolName ||
                   schoolsList.find((s) => s.id === studentsList.find((st) => st.id === parentDetail.studentId || st.parentId === parentDetail.id)?.schoolId)?.name ||
@@ -4237,7 +4237,7 @@ export default function AdminView({
                 <tbody className="divide-y divide-slate-100">
                   {filteredStudentsList.map((st) => (
                     <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.firstName} {st.lastName}</td>
+                          <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.lastName} {st.firstName}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{st.className || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name || st.yearName || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{st.parentName || '—'}</td>
@@ -4312,7 +4312,7 @@ export default function AdminView({
                   <tr key={pt.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{pt.name}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.phone || '—'}</td>
-                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentFirstName} ${pt.studentLastName}` : '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentLastName} ${pt.studentFirstName}` : '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.schoolName || (pt.studentSchoolId ? schoolsList.find((s) => s.id === pt.studentSchoolId)?.name : null) || pt.studentSchoolName || schoolsList.find((s) => s.id === studentsList.find((st) => st.id === pt.studentId || st.parentId === pt.id)?.schoolId)?.name || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                       <button

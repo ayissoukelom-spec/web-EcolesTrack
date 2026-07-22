@@ -112,7 +112,7 @@ export default function BulletinActions({
               >
                 <option value="">Eleve cible</option>
                 {studentsList.map((s) => (
-                  <option key={s.id} value={s.id}>{s.firstName} {s.lastName} - {s.className}</option>
+                  <option key={s.id} value={s.id}>{s.lastName} {s.firstName} - {s.className}</option>
                 ))}
               </select>
             </div>

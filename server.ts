@@ -4263,7 +4263,7 @@ export async function createApp() {
         .select({
           id: absences.id,
           studentId: absences.studentId,
-          studentName: sql<string>`concat(${students.firstName}, ' ', ${students.lastName})`,
+          studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           classId: absences.classId,
           className: classes.name,
           date: absences.date,
@@ -5143,7 +5143,7 @@ export async function createApp() {
           evaluationDate: evaluations.date,
           subject: evaluations.subject,
           studentId: grades.studentId,
-          studentName: sql<string>`concat(${students.firstName}, ' ', ${students.lastName})`,
+          studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           score: grades.score,
           remarks: grades.remarks,
           editCount: grades.editCount,
@@ -5247,7 +5247,7 @@ export async function createApp() {
 
         if (enrollmentDate.getTime() > evaluationTimestamp.getTime()) {
           return res.status(400).json({ 
-            error: `Impossible de créer une note pour ${student.firstName} ${student.lastName}: cet élève n'était pas encore inscrit au moment de la création du devoir (${evaluation.createdAt || evaluation.date})` 
+            error: `Impossible de créer une note pour ${student.lastName} ${student.firstName}: cet élève n'était pas encore inscrit au moment de la création du devoir (${evaluation.createdAt || evaluation.date})`
           });
         }
       }
@@ -5568,7 +5568,7 @@ export async function createApp() {
         .select({
           id: absences.id,
           studentId: absences.studentId,
-          studentName: sql<string>`concat(${students.firstName}, ' ', ${students.lastName})`,
+          studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           date: absences.date,
           isJustified: absences.isJustified,
           period: absences.period,
@@ -5595,7 +5595,7 @@ export async function createApp() {
         .select({
           id: grades.id,
           studentId: grades.studentId,
-          studentName: sql<string>`concat(${students.firstName}, ' ', ${students.lastName})`,
+          studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           evaluationTitle: evaluations.title,
           score: grades.score,
           date: evaluations.date,

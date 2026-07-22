@@ -289,7 +289,7 @@ export default function ParentNotesView({
                 >
                   {children.map((student) => (
                     <option key={student.id} value={student.id}>
-                      {student.firstName} {student.lastName}
+                      {student.lastName} {student.firstName}
                     </option>
                   ))}
                 </select>

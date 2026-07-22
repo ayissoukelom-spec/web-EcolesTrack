@@ -68,7 +68,7 @@ export default function ArchiveView({
       .filter((grade) => grade.evaluationId === ev.id)
       .map((grade, index) => {
         const student = studentsList.find((st) => st.id === grade.studentId);
-        const studentName = grade.studentName || `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim();
+        const studentName = student ? `${student.lastName ?? ''} ${student.firstName ?? ''}`.trim() : grade.studentName;
         return {
           index: index + 1,
           studentName: studentName || 'Élève',
@@ -421,7 +421,7 @@ export default function ArchiveView({
                       return (
                         <div key={grade.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                            <div className="text-sm font-semibold text-slate-800">{student ? `${student.lastName || ''} ${student.firstName || ''}`.trim() || 'Élève' : grade.studentName || 'Élève'}</div>
                             {isGradeModified(grade) && (
                               <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-800 bg-amber-100 rounded-full px-2 py-0.5">
                                 Modifiée

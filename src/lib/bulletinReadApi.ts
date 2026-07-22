@@ -208,7 +208,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       items: rows.map((row) => ({
         id: row.id,
         studentId: row.studentId,
-        studentName: `${row.studentFirstName} ${row.studentLastName}`.trim(),
+        studentName: `${row.studentLastName} ${row.studentFirstName}`.trim(),
         classId: row.classId,
         className: row.className,
         schoolYearId: row.schoolYearId,
@@ -281,7 +281,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
     return {
       id: header.id,
       studentId: header.studentId,
-      studentName: `${header.studentFirstName} ${header.studentLastName}`.trim(),
+      studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
       classId: header.classId,
       className: header.className,
       schoolYearId: header.schoolYearId,

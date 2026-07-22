@@ -963,7 +963,7 @@ export default function NotesView({
                           const archivedGradeClass = getGradeBadgeClass(archivedGradeBand);
                           return (
                             <div key={grade.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                              <div className="font-semibold text-slate-800">{grade.studentName || `${student?.firstName || 'Élève'} ${student?.lastName || ''}`.trim() || 'Élève'}</div>
+                              <div className="font-semibold text-slate-800">{student ? `${student.lastName || ''} ${student.firstName || ''}`.trim() || 'Élève' : grade.studentName || 'Élève'}</div>
                               <div className="flex flex-col gap-1 mt-1 text-slate-600">
                                 <span>
                                   Note :
@@ -1050,7 +1050,7 @@ export default function NotesView({
 
                     return (
                       <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-6 py-4 font-bold text-slate-800">{st.firstName} {st.lastName}</td>
+                        <td className="px-6 py-4 font-bold text-slate-800">{st.lastName} {st.firstName}</td>
                         <td className="px-6 py-4 font-bold text-slate-700">
                           <span className="bg-slate-100 px-2.5 py-1 rounded-lg text-xs">
                             {studentAverage} {scoreScaleSuffix}
@@ -1202,7 +1202,7 @@ export default function NotesView({
                   <div className="text-xs text-amber-800 space-y-1">
                     {ineligibleStudentsForSelectedEval.map((student) => (
                       <div key={student.id} className="flex justify-between">
-                        <span>{student.firstName} {student.lastName}</span>
+                        <span>{student.lastName} {student.firstName}</span>
                         <span className="text-amber-700 font-mono">
                           Inscrit le {student.enrolledAt ? new Date(student.enrolledAt).toLocaleDateString('fr-FR') : 'date inconnue'}
                         </span>

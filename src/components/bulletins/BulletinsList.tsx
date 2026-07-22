@@ -83,7 +83,7 @@ export default function BulletinsList({
             >
               <option value="">Tous les eleves</option>
               {visibleStudents.map((s) => (
-                <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>
+                <option key={s.id} value={s.id}>{s.lastName} {s.firstName}</option>
               ))}
             </select>
 

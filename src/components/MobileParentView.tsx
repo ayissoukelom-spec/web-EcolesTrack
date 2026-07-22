@@ -350,7 +350,7 @@ export default function MobileParentView({
                               : 'bg-slate-900 text-slate-400 hover:text-white'
                           }`}
                         >
-                          {ch.firstName}
+                          {ch.lastName} {ch.firstName}
                         </button>
                       ))}
                     </div>
@@ -366,7 +366,7 @@ export default function MobileParentView({
                         <div className="bg-gradient-to-br from-indigo-900 to-indigo-950 p-4 rounded-xl border border-indigo-800/40 relative overflow-hidden">
                           <div className="space-y-1.5 relative z-10">
                             <span className="text-[8px] font-bold text-indigo-200 bg-white/15 px-2 py-0.5 rounded uppercase tracking-wider inline-block">Élève actif</span>
-                            <h3 className="font-extrabold text-white text-sm">{activeChild.firstName} {activeChild.lastName}</h3>
+                            <h3 className="font-extrabold text-white text-sm">{activeChild.lastName} {activeChild.firstName}</h3>
                             <p className="text-[10px] text-indigo-200">Date naiss : {activeChild.birthDate}</p>
                           </div>
                         </div>
