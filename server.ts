@@ -3291,6 +3291,14 @@ export async function createApp() {
         newModelQuery = newModelQuery.where(eq(userSchools.schoolId, actor.schoolId)) as any;
       }
 
+      if (actor.role === 'teacher') {
+        if (!actor.id) {
+          return res.json([]);
+        }
+        oldModelQuery = oldModelQuery.where(eq(teachers.userId, actor.id)) as any;
+        newModelQuery = newModelQuery.where(eq(teachers.userId, actor.id)) as any;
+      }
+
       const [oldTeachers, newTeachers] = await Promise.all([
         oldModelQuery,
         newModelQuery,
