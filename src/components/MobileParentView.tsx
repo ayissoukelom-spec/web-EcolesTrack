@@ -42,7 +42,7 @@ export default function MobileParentView({
   onNotificationRead,
 }: MobileParentViewProps) {
   const [activeScreen, setActiveScreen] = useState<'login' | 'dashboard' | 'absences' | 'grades' | 'notifs'>('login');
-  const [notifTab, setNotifTab] = useState<'notes' | 'homework'>('notes');
+  const [notifTab, setNotifTab] = useState<'notes' | 'homework' | 'absences' | 'info'>('notes');
   const [password, setPassword] = useState('parent123456');
   const [selectedChildId, setSelectedChildId] = useState<number | null>(null);
 
