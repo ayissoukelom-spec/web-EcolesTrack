@@ -5,6 +5,8 @@ import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
 import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationArchived as isEvaluationArchivedUtil, parseDateValue } from '../lib/evaluationUtils';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
+import * as XLSX from 'xlsx';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 interface ArchiveViewProps {
   userRole: UserRole;
@@ -46,6 +48,107 @@ export default function ArchiveView({
     const date = parseDateValue(value);
     if (!date) return null;
     return date.toISOString().split('T')[0];
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
+  const getExportRows = (ev: Evaluation) => {
+    const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
+    const school = evaluationClass ? schoolsList.find((school) => school.id === evaluationClass.schoolId) : undefined;
+    const gradesForEval = gradesList
+      .filter((grade) => grade.evaluationId === ev.id)
+      .map((grade) => {
+        const student = studentsList.find((st) => st.id === grade.studentId);
+        const studentName = grade.studentName || `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim();
+        return {
+          studentName: studentName || 'Élève',
+          score: grade.score ?? '',
+          remarks: grade.remarks ?? '',
+        };
+      });
+
+    const rows: Array<Array<string | number>> = [
+      ['École', school?.name ?? ''],
+      ['Classe', evaluationClass?.name ?? ''],
+      ['Matière', ev.subject],
+      ['Enseignant', ev.teacherName ?? ''],
+      ['Intitulé du devoir', ev.title],
+      ['Date', normalizeDateOnly(ev.date || ev.createdAt) ?? ''],
+      [],
+      ['Élève', 'Note', 'Remarques'],
+      ...gradesForEval.map((grade) => [grade.studentName, grade.score, grade.remarks]),
+    ];
+
+    return rows;
+  };
+
+  const exportEvaluationExcel = async (ev: Evaluation) => {
+    const rows = getExportRows(ev);
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Notes archivées');
+    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    downloadBlob(blob, `archive-evaluation-${ev.id}.xlsx`);
+  };
+
+  const exportEvaluationPdf = async (ev: Evaluation) => {
+    const rows = getExportRows(ev);
+    const pdfDoc = await PDFDocument.create();
+    const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const pageWidth = 595.28;
+    const pageHeight = 841.89;
+    const margin = 40;
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let cursorY = pageHeight - margin;
+    const lineHeight = 14;
+    const drawLine = (text: string, bold = false, size = 11) => {
+      if (cursorY < margin + lineHeight) {
+        page = pdfDoc.addPage([pageWidth, pageHeight]);
+        cursorY = pageHeight - margin;
+      }
+      page.drawText(text, {
+        x: margin,
+        y: cursorY,
+        size,
+        font: bold ? helveticaBold : helvetica,
+        color: rgb(0, 0, 0),
+      });
+      cursorY -= lineHeight;
+    };
+
+    rows.forEach((row, index) => {
+      const [first, second, third] = row;
+      if (index === 0) {
+        drawLine('Export des notes archivées', true, 14);
+        cursorY -= 8;
+      }
+      if (row.length === 0) {
+        cursorY -= lineHeight;
+        return;
+      }
+      if (index <= 5) {
+        drawLine(`${first}: ${second}`, false, 11);
+      } else if (index === 7) {
+        drawLine(`${first} | ${second} | ${third}`, true, 11);
+      } else {
+        drawLine(`${first} | ${second} | ${third}`, false, 10);
+      }
+    });
+
+    const pdfBytes = await pdfDoc.save();
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    downloadBlob(blob, `archive-evaluation-${ev.id}.pdf`);
   };
 
   const isEvaluationFullyGraded = (ev: Evaluation) =>
@@ -190,6 +293,24 @@ export default function ArchiveView({
                     <span>Notes enregistrées</span>
                     <span>{gradesForEval.length} / {getEligibleStudentsForEvaluationWithGrades(ev, studentsList.filter((st) => st.classId === ev.classId), gradesList).length}</span>
                   </div>
+                  {userRole === 'teacher' && ev.teacherId === teacherId && (
+                    <div className="flex flex-wrap gap-3 mb-4">
+                      <button
+                        type="button"
+                        onClick={() => exportEvaluationExcel(ev)}
+                        className="rounded-full bg-slate-800 text-white px-4 py-2 text-xs font-semibold hover:bg-slate-900"
+                      >
+                        Télécharger Excel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => exportEvaluationPdf(ev)}
+                        className="rounded-full bg-slate-800 text-white px-4 py-2 text-xs font-semibold hover:bg-slate-900"
+                      >
+                        Télécharger PDF
+                      </button>
+                    </div>
+                  )}
                   <div className="grid gap-3 sm:grid-cols-2">
                     {gradesForEval.map((grade) => {
                       const student = studentsList.find((st) => st.id === grade.studentId);

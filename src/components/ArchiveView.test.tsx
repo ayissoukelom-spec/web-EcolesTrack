@@ -144,4 +144,29 @@ describe('Archive UI regression', () => {
     expect(gradeInput).toBeDefined();
     expect(screen.getByRole('button', { name: /Mettre à jour/i })).toBeDefined();
   });
+
+  it('affiche les boutons d export XLSX et PDF uniquement pour un enseignant', () => {
+    render(
+      <ArchiveView
+        {...defaultProps}
+        userRole="teacher"
+        teacherId={100}
+      />
+    );
+
+    expect(screen.getAllByRole('button', { name: /Télécharger Excel/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Télécharger PDF/i })).toHaveLength(2);
+  });
+
+  it('n affiche pas les boutons d export pour un administrateur', () => {
+    render(
+      <ArchiveView
+        {...defaultProps}
+        userRole="school_admin"
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Télécharger Excel/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Télécharger PDF/i })).toBeNull();
+  });
 });
