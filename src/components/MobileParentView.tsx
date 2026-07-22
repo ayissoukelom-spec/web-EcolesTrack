@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Student, Absence, Grade, SystemNotification, UserRole, Parent } from '../types.ts';
+import { apiFetch } from '../lib/api.ts';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import { getPublicationLabel } from '../lib/dateFormatting';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
@@ -28,6 +29,7 @@ interface MobileParentViewProps {
   gradesList: Grade[];
   notificationsList: SystemNotification[];
   onJustifyAbsence: (id: number, reason: string) => void;
+  onNotificationRead?: () => void;
 }
 
 export default function MobileParentView({
@@ -37,6 +39,7 @@ export default function MobileParentView({
   gradesList,
   notificationsList,
   onJustifyAbsence,
+  onNotificationRead,
 }: MobileParentViewProps) {
   const [activeScreen, setActiveScreen] = useState<'login' | 'dashboard' | 'absences' | 'grades' | 'notifs'>('login');
   const [notifTab, setNotifTab] = useState<'notes' | 'homework'>('notes');
@@ -539,7 +542,21 @@ export default function MobileParentView({
                             const publishedAtLabel = getPublicationLabel(notif.createdAt);
 
                             return (
-                              <div key={notif.id} className="p-3 bg-slate-900 border border-slate-850 rounded-lg text-[10px] space-y-1">
+                              <div
+                                key={notif.id}
+                                role="button"
+                                onClick={async () => {
+                                  try {
+                                    if (!notif.isRead) {
+                                      await apiFetch(`/api/notifications/${notif.id}/read`, { method: 'PUT' });
+                                      if (onNotificationRead) onNotificationRead();
+                                    }
+                                  } catch (e) {
+                                    console.warn('Failed to mark notification read', e);
+                                  }
+                                }}
+                                className="p-3 bg-slate-900 border border-slate-850 rounded-lg text-[10px] space-y-1 cursor-pointer"
+                              >
                                 <p className="font-bold text-indigo-300">{notif.title}</p>
                                 <p className="text-slate-400 leading-snug">{notif.body}</p>
                                 {publishedAtLabel && (

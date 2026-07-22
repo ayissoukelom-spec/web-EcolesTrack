@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
+import { apiFetch } from '../lib/api.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
 import { getPublicationLabel } from '../lib/dateFormatting';
@@ -10,6 +11,7 @@ interface NotificationViewProps {
   usersList: User[];
   onSendNotification: (data: { title: string; body: string; type: string; userId?: number }) => void;
   onMarkAllAsRead: () => void;
+  onNotificationRead?: () => void;
 }
 
 export default function NotificationView({
@@ -18,6 +20,7 @@ export default function NotificationView({
   usersList,
   onSendNotification,
   onMarkAllAsRead,
+  onNotificationRead,
 }: NotificationViewProps) {
   const [isSending, setIsSending] = useState(false);
   const [parentActiveTab, setParentActiveTab] = useState<'notes' | 'homework'>('notes');
@@ -109,7 +112,19 @@ export default function NotificationView({
     return (
       <div
         key={notif.id}
-        className={`p-4 rounded-xl border flex gap-3 transition-colors ${
+        role="button"
+        onClick={async () => {
+          try {
+            if (!notif.isRead) {
+              await apiFetch(`/api/notifications/${notif.id}/read`, { method: 'PUT' });
+              if (onNotificationRead) onNotificationRead();
+            }
+          } catch (e) {
+            // best-effort: swallow errors to avoid breaking UI
+            console.warn('Failed to mark notification read', e);
+          }
+        }}
+        className={`p-4 rounded-xl border flex gap-3 transition-colors cursor-pointer ${
           notif.isRead ? 'bg-white border-slate-100 text-slate-600' : 'bg-slate-50/70 border-indigo-100/50'
         }`}
       >

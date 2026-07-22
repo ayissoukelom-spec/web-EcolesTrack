@@ -778,6 +778,15 @@ export default function App() {
     }
   };
 
+  const handleNotificationRead = async () => {
+    // refresh notifications list after a single notification is marked read
+    try {
+      await fetchAllData(false);
+    } catch (e) {
+      console.warn('Failed to refresh data after marking notification read', e);
+    }
+  };
+
   // If not authenticated, render SPA login view
   if (!authenticatedUser || (!token && currentRole !== 'super_admin') || (currentRole !== 'super_admin' && !activeSchoolId)) {
     return <LoginView onLogin={(role) => { setSimulatedRole(role); }} />;
@@ -1195,6 +1204,7 @@ export default function App() {
                   usersList={usersList}
                   onSendNotification={handleSendNotification}
                   onMarkAllAsRead={handleMarkAllAsRead}
+                  onNotificationRead={handleNotificationRead}
                 />
               )}
 
@@ -1206,6 +1216,7 @@ export default function App() {
                   gradesList={gradesList}
                   notificationsList={notificationsList}
                   onJustifyAbsence={handleJustifyAbsence}
+                  onNotificationRead={handleNotificationRead}
                 />
               )}
             </div>

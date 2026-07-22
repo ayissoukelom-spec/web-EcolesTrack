@@ -5685,6 +5685,26 @@ export async function createApp() {
     }
   });
 
+  // Mark a single notification as read (only for the owning user)
+  app.put('/api/notifications/:id/read', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id);
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      // Only allow marking notifications that belong to the actor
+      const updated = await db
+        .update(notifications)
+        .set({ isRead: true })
+        .where(and(eq(notifications.id, id), eq(notifications.userId, actor.id)));
+
+      res.json({ success: true, updated: (updated ?? 0) });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to mark notification as read' });
+    }
+  });
+
   // Send system-wide / simulated push notice
   app.post('/api/notifications/send', requireAuth, async (req: AuthRequest, res) => {
     try {
