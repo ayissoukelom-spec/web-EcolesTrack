@@ -5738,7 +5738,10 @@ export async function createApp() {
         targetUserIds.push(targetUser.id);
       } else {
         // Send to all parents (or all parents in school if school_admin)
-        let query = db.select().from(parents).innerJoin(users, eq(parents.userId, users.id));
+        let query = db
+        .select({ userId: parents.userId })
+        .from(parents)
+        .innerJoin(users, eq(parents.userId, users.id));
         
         if (actor.role === 'school_admin') {
           query = query.where(eq(users.schoolId, actor.schoolId)) as any;
