@@ -404,13 +404,15 @@ export default function AdminModal(props: any) {
                             const nextGroups = e.target.checked
                               ? [...currentGroupIds, String(group.id)]
                               : currentGroupIds.filter((id: string) => id !== String(group.id));
-                            // Calculate classes from active groups + manually selected classes
                             const classesFromGroups = getGroupClassNames(nextGroups);
                             const manualClasses = schoolForm.manuallySelectedClassNames || [];
-                            const manualDeselected = schoolForm.manuallyDeselectedClassNames || [];
-                            // union of group-derived and manual-selected, then remove manual-deselected overrides
+                            let manualDeselected = schoolForm.manuallyDeselectedClassNames || [];
+                            if (!e.target.checked) {
+                              const removedClasses = getGroupClassNames([String(group.id)]);
+                              manualDeselected = manualDeselected.filter((name: string) => !removedClasses.includes(name));
+                            }
                             const nextClassNames = Array.from(new Set([...classesFromGroups, ...manualClasses])).filter((n) => !manualDeselected.includes(n));
-                            setSchoolForm({ ...schoolForm, selectedClassGroups: nextGroups, selectedClassNames: nextClassNames });
+                            setSchoolForm({ ...schoolForm, selectedClassGroups: nextGroups, selectedClassNames: nextClassNames, manuallyDeselectedClassNames: manualDeselected });
                           }}
                           className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                         />
@@ -478,12 +480,15 @@ export default function AdminModal(props: any) {
                               const next = e.target.checked
                                 ? [...current, String(group.id)]
                                 : current.filter((id: string) => id !== String(group.id));
-                              // Calculate subjects from active groups + manually selected subjects
                               const subjectsFromGroups = getGroupSubjectNames(next);
                               const manualSubjects = schoolForm.manuallySelectedSubjectNames || [];
-                              const manualDeselected = schoolForm.manuallyDeselectedSubjectNames || [];
+                              let manualDeselected = schoolForm.manuallyDeselectedSubjectNames || [];
+                              if (!e.target.checked) {
+                                const removedSubjects = getGroupSubjectNames([String(group.id)]);
+                                manualDeselected = manualDeselected.filter((name: string) => !removedSubjects.includes(name));
+                              }
                               const nextSubjectNames = Array.from(new Set([...subjectsFromGroups, ...manualSubjects])).filter((n) => !manualDeselected.includes(n));
-                              setSchoolForm({ ...schoolForm, selectedSubjectGroups: next, selectedSubjectNames: nextSubjectNames });
+                              setSchoolForm({ ...schoolForm, selectedSubjectGroups: next, selectedSubjectNames: nextSubjectNames, manuallyDeselectedSubjectNames: manualDeselected });
                             }}
                             className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                           />

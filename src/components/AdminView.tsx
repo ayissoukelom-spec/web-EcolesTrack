@@ -946,12 +946,16 @@ export default function AdminView({
         .map((value) => value.trim())
         .filter(Boolean);
       const combinedSubjectNames = Array.from(new Set([...selectedSubjectNames, ...parsedSubjectNames]));
+      const manuallyDeselectedClassNames = schoolForm.manuallyDeselectedClassNames || [];
+      const manuallyDeselectedSubjectNames = schoolForm.manuallyDeselectedSubjectNames || [];
+      const finalClassNames = selectedClassNames.filter((name) => !manuallyDeselectedClassNames.includes(name));
+      const finalSubjectNames = combinedSubjectNames.filter((name) => !manuallyDeselectedSubjectNames.includes(name));
 
-      if (selectedClassNames.length === 0) {
+      if (finalClassNames.length === 0) {
         setStudentError('Veuillez sélectionner au moins une classe.');
         return;
       }
-      if (combinedSubjectNames.length === 0) {
+      if (finalSubjectNames.length === 0) {
         setStudentError('Veuillez sélectionner au moins une matière.');
         return;
       }
@@ -961,10 +965,22 @@ export default function AdminView({
           name: normalizedName,
           address: String(schoolForm.address || '').trim(),
           phone: fullPhone,
-          classNames: selectedClassNames,
-          subjectNames: combinedSubjectNames,
+          classNames: finalClassNames,
+          subjectNames: finalSubjectNames,
         });
-        setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], selectedClassGroups: [], manuallySelectedClassNames: [], subjectNames: '', selectedSubjectNames: [], selectedSubjectGroups: [], manuallySelectedSubjectNames: [] });
+        setSchoolForm({
+          name: '',
+          address: '',
+          phone: '',
+          phoneDigits: '',
+          selectedClassNames: [],
+          selectedClassGroups: [],
+          manuallySelectedClassNames: [],
+          subjectNames: '',
+          selectedSubjectNames: [],
+          selectedSubjectGroups: [],
+          manuallySelectedSubjectNames: [],
+        });
         setStudentError(null);
         setIsModalOpen(false);
         setSearchQuery('');

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import React, { useState } from 'react';
 import AdminModal from './AdminModal';
 import type { School, AcademicYear, Class, Parent, Student, Teacher, User } from '../types';
 
@@ -189,6 +190,48 @@ describe('AdminModal class groups synchronization', () => {
     const lastCall = mockSetSchoolForm.mock.calls[mockSetSchoolForm.mock.calls.length - 1];
     expect(lastCall[0].selectedClassNames).toContain('6ème'); // Still in 'all' group
     expect(lastCall[0].selectedClassNames).not.toContain('5ème'); // Only in 'ceg' group
+  });
+
+  it('should restore manually deselected classes when the group is reselected', () => {
+    const baseProps = {
+      ...createBaseProps(),
+      schoolForm: {
+        ...createBaseProps().schoolForm,
+        selectedClassGroups: ['ceg'],
+        selectedClassNames: ['6ème', '5ème', '4ème'],
+        manuallyDeselectedClassNames: ['6ème'],
+      },
+    };
+
+    const stateRef = { current: baseProps.schoolForm };
+
+    const TestWrapper = () => {
+      const [schoolForm, setSchoolForm] = useState(baseProps.schoolForm);
+      stateRef.current = schoolForm;
+      return <AdminModal {...baseProps} schoolForm={schoolForm} setSchoolForm={setSchoolForm} />;
+    };
+
+    render(<TestWrapper />);
+
+    const groupCheckbox = screen.getAllByRole('checkbox').find((cb) => {
+      const label = cb.parentElement?.querySelector('.text-sm');
+      return label?.textContent === 'CEG (Collège)';
+    });
+
+    fireEvent.click(groupCheckbox!); // Deselect group
+    expect(stateRef.current.selectedClassGroups).toEqual([]);
+    expect(stateRef.current.selectedClassNames).toEqual([]);
+    expect(stateRef.current.manuallyDeselectedClassNames).toEqual([]);
+
+    const groupCheckboxAfter = screen.getAllByRole('checkbox').find((cb) => {
+      const label = cb.parentElement?.querySelector('.text-sm');
+      return label?.textContent === 'CEG (Collège)';
+    });
+
+    fireEvent.click(groupCheckboxAfter!); // Reselect group
+    expect(stateRef.current.selectedClassGroups).toContain('ceg');
+    expect(stateRef.current.selectedClassNames).toContain('6ème');
+    expect(stateRef.current.manuallyDeselectedClassNames).not.toContain('6ème');
   });
 
   it('should keep manual class selection when deselecting a group that also selected it', () => {
