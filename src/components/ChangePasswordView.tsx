@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { User } from '../types.ts';
 import { apiFetch } from '../lib/api.ts';
 import RequiredLabel from './RequiredLabel';
+import togoFlag from '../assets/flags/togo_drap.jpg';
 
 interface Props {
   user: User;
@@ -68,18 +69,23 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <form onSubmit={submit} className="bg-white p-6 rounded shadow w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+      <img
+        src={togoFlag}
+        alt="Drapeau du Togo"
+        className="absolute top-6 left-6 w-20 md:w-24 lg:w-28 h-auto object-contain"
+      />
+      <form onSubmit={submit} className="bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
         <h2 className="text-xl font-semibold mb-4">Changer le mot de passe</h2>
-        <p className="text-sm text-slate-600 mb-4">
+        <p className="text-sm text-slate-400 mb-4">
           Vous devez remplacer le mot de passe par défaut avant de continuer.
         </p>
-        {error && <div className="text-rose-600 mb-3">{error}</div>}
+        {error && <div className="text-rose-400 mb-3">{error}</div>}
         <label className="block text-sm mb-4">
           <RequiredLabel label="Mot de passe actuel" required />
           <div className="relative mt-1">
             <input
-              className="w-full pr-10 p-2 border rounded"
+              className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               type={showCurrentPassword ? 'text' : 'password'}
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
@@ -89,7 +95,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
               type="button"
               aria-label={showCurrentPassword ? 'Masquer le mot de passe actuel' : 'Afficher le mot de passe actuel'}
               onClick={() => setShowCurrentPassword((current) => !current)}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-800"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
             >
               {showCurrentPassword ? (
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
@@ -110,7 +116,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
           <RequiredLabel label="Nouveau mot de passe" required />
           <div className="relative mt-1">
             <input
-              className="w-full pr-10 p-2 border rounded"
+              className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               type={showNewPassword ? 'text' : 'password'}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
@@ -120,7 +126,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
               type="button"
               aria-label={showNewPassword ? 'Masquer le nouveau mot de passe' : 'Afficher le nouveau mot de passe'}
               onClick={() => setShowNewPassword((current) => !current)}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-800"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
             >
               {showNewPassword ? (
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
@@ -141,7 +147,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
           <RequiredLabel label="Confirmer le nouveau mot de passe" required />
           <div className="relative mt-1">
             <input
-              className="w-full pr-10 p-2 border rounded"
+              className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               type={showConfirmPassword ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
@@ -151,7 +157,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
               type="button"
               aria-label={showConfirmPassword ? 'Masquer la confirmation du mot de passe' : 'Afficher la confirmation du mot de passe'}
               onClick={() => setShowConfirmPassword((current) => !current)}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-800"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
             >
               {showConfirmPassword ? (
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
