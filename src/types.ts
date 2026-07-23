@@ -165,6 +165,20 @@ export interface Absence {
   period: 'morning' | 'afternoon' | 'all_day';
   isJustified: boolean;
   justificationReason?: string;
+  justificationFileId?: number;
+  justificationFileName?: string;
+}
+
+export interface AbsenceJustification {
+  id: number;
+  absenceId: number;
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedBy: number;
+  uploadedAt: string;
+  createdAt?: string;
 }
 
 export interface SystemNotification {

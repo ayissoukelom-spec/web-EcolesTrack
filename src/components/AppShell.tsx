@@ -294,8 +294,8 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleJustifyAbsence = async (id: number, reason: string) => {
-    await justifyAbsence(id, reason);
+  const handleJustifyAbsence = async (id: number, reason: string, file?: File) => {
+    await justifyAbsence(id, reason, file);
     await fetchAllData();
   };
 

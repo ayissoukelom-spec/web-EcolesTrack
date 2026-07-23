@@ -1,9 +1,105 @@
 {
-  "id": "e1f23f85-57fe-404c-8f9f-e55dfacecf08",
-  "prevId": "7ec13e8b-8fb1-488f-bf0a-ed86ee403233",
+  "id": "b49ed98f-6813-46b4-8d6f-672b1f25f01b",
+  "prevId": "e1f23f85-57fe-404c-8f9f-e55dfacecf08",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.absence_justifications": {
+      "name": "absence_justifications",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "absence_id": {
+          "name": "absence_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_name": {
+          "name": "file_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_path": {
+          "name": "file_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uploaded_by": {
+          "name": "uploaded_by",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uploaded_at": {
+          "name": "uploaded_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "absence_justifications_absence_id_absences_id_fk": {
+          "name": "absence_justifications_absence_id_absences_id_fk",
+          "tableFrom": "absence_justifications",
+          "tableTo": "absences",
+          "columnsFrom": [
+            "absence_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "absence_justifications_uploaded_by_users_id_fk": {
+          "name": "absence_justifications_uploaded_by_users_id_fk",
+          "tableFrom": "absence_justifications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "uploaded_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.absences": {
       "name": "absences",
       "schema": "",
@@ -686,128 +782,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.evaluation_participations": {
-      "name": "evaluation_participations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "evaluation_id": {
-          "name": "evaluation_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "student_id": {
-          "name": "student_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "evaluation_participations_evaluation_id_student_id_idx": {
-          "name": "evaluation_participations_evaluation_id_student_id_idx",
-          "columns": [
-            {
-              "expression": "evaluation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "student_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "evaluation_participations_evaluation_id_status_idx": {
-          "name": "evaluation_participations_evaluation_id_status_idx",
-          "columns": [
-            {
-              "expression": "evaluation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "evaluation_participations_evaluation_id_evaluations_id_fk": {
-          "name": "evaluation_participations_evaluation_id_evaluations_id_fk",
-          "tableFrom": "evaluation_participations",
-          "tableTo": "evaluations",
-          "columnsFrom": [
-            "evaluation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "evaluation_participations_student_id_students_id_fk": {
-          "name": "evaluation_participations_student_id_students_id_fk",
-          "tableFrom": "evaluation_participations",
-          "tableTo": "students",
-          "columnsFrom": [
-            "student_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.evaluations": {
       "name": "evaluations",
       "schema": "",
@@ -1211,13 +1185,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "category": {
-          "name": "category",
-          "type": "notification_category_enum",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
         },
         "is_read": {
           "name": "is_read",
@@ -2341,18 +2308,7 @@
       "isRLSEnabled": false
     }
   },
-  "enums": {
-    "public.notification_category_enum": {
-      "name": "notification_category_enum",
-      "schema": "public",
-      "values": [
-        "evaluation_created",
-        "grade_created",
-        "absence_created",
-        "info"
-      ]
-    }
-  },
+  "enums": {},
   "schemas": {},
   "sequences": {},
   "roles": {},

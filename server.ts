@@ -20,6 +20,9 @@
 */
 import express from 'express';
 import path from 'path';
+import { promises as fsPromises } from 'fs';
+import crypto from 'crypto';
+import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
@@ -48,6 +51,7 @@ import {
   evaluations,
   grades,
   absences,
+  absenceJustifications,
   notifications,
   auditEvents,
   schoolTerms,
@@ -469,6 +473,39 @@ export async function createApp() {
 
   // JSON parsing middleware
   app.use(express.json());
+
+  const uploadStorageDir = path.join(process.cwd(), 'uploads', 'absence-justifications');
+  await fsPromises.mkdir(uploadStorageDir, { recursive: true });
+
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: uploadStorageDir,
+      filename: (_req, file, cb) => {
+        const randomSuffix = crypto.randomBytes(16).toString('hex');
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${randomSuffix}-${safeName}`);
+      },
+    }),
+    limits: {
+      fileSize: 5 * 1024 * 1024, // 5Mo
+    },
+    fileFilter: (_req, file, cb) => {
+      const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg'];
+      if (!allowedTypes.includes(file.mimetype)) {
+        return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+
+  const handleSingleFileUpload = (req: any, res: any, next: any) => {
+    upload.single('file')(req, res, (err: any) => {
+      if (err) {
+        return res.status(400).json({ error: err.message || 'Invalid file upload' });
+      }
+      return next();
+    });
+  };
 
   // Global debug middleware for request/response tracing
   app.use((req, res, next) => {
@@ -1936,16 +1973,36 @@ export async function createApp() {
             const trimmedSubjectName = String(subjectName || '').trim();
             if (!trimmedSubjectName) continue;
 
-            const existingSubject = await db.select().from(subjects).where(and(eq(subjects.schoolId, createdSchool.id), eq(subjects.name, trimmedSubjectName))).limit(1);
-            if (existingSubject.length > 0) continue;
+            const [existingSubject] = await db.select().from(subjects).where(
+              and(sql`${subjects.schoolId} IS NULL`, eq(subjects.name, trimmedSubjectName))
+            ).limit(1);
 
-            await db.insert(subjects).values({
-              name: trimmedSubjectName,
+            let subjectId: number;
+            if (existingSubject) {
+              subjectId = existingSubject.id;
+            } else {
+              const [createdSubject] = await db.insert(subjects).values({
+                name: trimmedSubjectName,
+              }).returning({ id: subjects.id });
+              subjectId = createdSubject.id;
+            }
+
+            const existingSchoolSubject = await db.select().from(schoolSubjects).where(
+              and(
+                eq(schoolSubjects.schoolId, createdSchool.id),
+                eq(schoolSubjects.subjectId, subjectId)
+              )
+            ).limit(1);
+            if (existingSchoolSubject.length > 0) continue;
+
+            await db.insert(schoolSubjects).values({
               schoolId: createdSchool.id,
+              subjectId,
+              status: 'approved',
             });
           }
         } catch (subjectCreationErr: any) {
-          console.warn('Warning: Could not create subjects for school:', subjectCreationErr?.message);
+          console.warn('Warning: Could not create school subjects for school:', subjectCreationErr?.message);
         }
       }
 
@@ -4278,10 +4335,22 @@ export async function createApp() {
           period: absences.period,
           isJustified: absences.isJustified,
           justificationReason: absences.justificationReason,
-          parentId: students.parentId,
-          parentUserId: parents.userId,
-          schoolId: students.schoolId,
-        })
+        justificationFileId: sql<number>`(
+          select id from ${absenceJustifications}
+          where ${absenceJustifications.absenceId} = ${absences.id}
+          order by ${absenceJustifications.uploadedAt} desc
+          limit 1
+        )`,
+        justificationFileName: sql<string>`(
+          select file_name from ${absenceJustifications}
+          where ${absenceJustifications.absenceId} = ${absences.id}
+          order by ${absenceJustifications.uploadedAt} desc
+          limit 1
+        )`,
+        parentId: students.parentId,
+        parentUserId: parents.userId,
+        schoolId: students.schoolId,
+      })
         .from(absences)
         .innerJoin(students, eq(absences.studentId, students.id))
         .innerJoin(classes, eq(absences.classId, classes.id))
@@ -4405,6 +4474,124 @@ export async function createApp() {
       res.json(updated[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to validate absence justification' });
+    }
+  });
+
+  app.post('/api/absences/:id/justifications', requireAuth, handleSingleFileUpload, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid absence id' });
+      }
+
+      const justificationReason = typeof req.body.justificationReason === 'string'
+        ? req.body.justificationReason.trim()
+        : '';
+      if (!justificationReason) {
+        return res.status(400).json({ error: 'Please specify a reason for justification' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: 'Please upload a justification file' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const [absence] = await db
+        .select()
+        .from(absences)
+        .innerJoin(students, eq(absences.studentId, students.id))
+        .where(eq(absences.id, id));
+
+      if (!absence) return res.status(404).json({ error: 'Absence not found' });
+      if (actor.role !== 'super_admin' && actor.schoolId && absence.students.schoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot justify absence in another school' });
+      }
+
+      const updated = await db.update(absences)
+        .set({
+          isJustified: true,
+          justificationReason,
+        })
+        .where(eq(absences.id, id))
+        .returning();
+
+      const inserted = await db.insert(absenceJustifications).values({
+        absenceId: id,
+        fileName: req.file.originalname,
+        filePath: req.file.filename,
+        mimeType: req.file.mimetype,
+        fileSize: Number(req.file.size),
+        uploadedBy: req.user.id,
+      }).returning();
+
+      await logAuditEvent(
+        actor,
+        'create',
+        'absence_justification',
+        id,
+        actor.schoolId ?? null,
+        `Uploaded justification file ${req.file.originalname} for absence ${id}`,
+      );
+
+      res.status(201).json({
+        ...updated[0],
+        justificationFileId: inserted[0]?.id,
+        justificationFileName: inserted[0]?.fileName,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to upload absence justification' });
+    }
+  });
+
+  app.get('/api/absences/:id/justification/download', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid absence id' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const [absence] = await db
+        .select()
+        .from(absences)
+        .innerJoin(students, eq(absences.studentId, students.id))
+        .where(eq(absences.id, id));
+
+      if (!absence) return res.status(404).json({ error: 'Absence not found' });
+      if (actor.role !== 'super_admin' && actor.schoolId && absence.students.schoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot access absence justification in another school' });
+      }
+
+      const [justification] = await db.select().from(absenceJustifications)
+        .where(eq(absenceJustifications.absenceId, id))
+        .orderBy(desc(absenceJustifications.uploadedAt))
+        .limit(1);
+
+      if (!justification) {
+        return res.status(404).json({ error: 'No justification file found' });
+      }
+
+      const safeFileName = path.basename(String(justification.filePath));
+      const absoluteFilePath = path.join(uploadStorageDir, safeFileName);
+      try {
+        await fsPromises.access(absoluteFilePath);
+      } catch {
+        return res.status(404).json({ error: 'Justification file not found on disk' });
+      }
+
+      res.download(absoluteFilePath, justification.fileName, (downloadErr) => {
+        if (downloadErr && !res.headersSent) {
+          console.error('Failed to send justification download:', downloadErr);
+          res.status(500).json({ error: 'Failed to send justification file' });
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to download justification file' });
     }
   });
 

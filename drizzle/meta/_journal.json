@@ -36,6 +36,13 @@
       "when": 1782657941683,
       "tag": "0004_add_subjects_table",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784784733272,
+      "tag": "0005_young_black_bolt",
+      "breakpoints": true
     }
   ]
 }

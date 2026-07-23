@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { Absence, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
-import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag } from 'lucide-react';
+import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download } from 'lucide-react';
+import { downloadAbsenceJustification } from '../lib/api.ts';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
@@ -13,7 +14,7 @@ interface AbsenceViewProps {
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; period: string; isJustified: boolean }) => Promise<void>;
-  onJustifyAbsence: (id: number, reason: string) => void;
+  onJustifyAbsence: (id: number, reason: string, file?: File | null) => void;
 }
 
 export default function AbsenceView({
@@ -148,7 +149,7 @@ export default function AbsenceView({
   const handleJustifySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!showJustifyModal) return;
-    onJustifyAbsence(showJustifyModal.id, justificationText);
+    onJustifyAbsence(showJustifyModal.id, justificationText, uploadMockFile);
     setShowJustifyModal(null);
     setJustificationText('');
     setUploadMockFile(null);
@@ -458,22 +459,48 @@ export default function AbsenceView({
                       </span>
                     )}
                   </td>
-                  <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate text-xs">
-                    {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                  <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate text-xs space-y-1">
+                    <div>{abs.justificationReason || '— En attente de motif de l\'enfant...'}</div>
+                    {abs.justificationFileName ? (
+                      <div className="text-[10px] text-slate-400 truncate break-words">
+                        Fichier justificatif : <span className="font-semibold text-slate-700">{abs.justificationFileName}</span>
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-6 py-4 text-right">
                     {/* Only specific roles or Parent themselves can justify absences */}
-                    {!abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
-                      <button
-                        onClick={() => {
-                          setShowJustifyModal(abs);
-                        }}
-                        className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-600 hover:bg-indigo-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer"
-                        id={`btn-abs-justify-${abs.id}`}
-                      >
-                        Justifier
-                      </button>
-                    )}
+                    {abs.justificationFileName ? (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const blob = await downloadAbsenceJustification(abs.id);
+                          const url = URL.createObjectURL(blob);
+                          const anchor = document.createElement('a');
+                          anchor.href = url;
+                          anchor.download = abs.justificationFileName || 'justification';
+                          anchor.click();
+                          URL.revokeObjectURL(url);
+                        } catch (error) {
+                          console.error('Impossible de télécharger le justificatif', error);
+                        }
+                      }}
+                      className="p-1.5 px-3 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer mr-2"
+                    >
+                      <Download className="inline-block h-3.5 w-3.5 mr-1 align-text-bottom" />
+                      Télécharger
+                    </button>
+                  ) : null}
+                  {!abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
+                    <button
+                      onClick={() => {
+                        setShowJustifyModal(abs);
+                      }}
+                      className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-600 hover:bg-indigo-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                      id={`btn-abs-justify-${abs.id}`}
+                    >
+                      Justifier
+                    </button>
+                  )}
                   </td>
                 </tr>
               ))}
@@ -493,18 +520,19 @@ export default function AbsenceView({
           isOpen={!!showJustifyModal}
           onClose={() => setShowJustifyModal(null)}
           ariaLabel="Justifier l'absence"
-          contentClassName="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100"
+          contentClassName="bg-white rounded-2xl w-full max-w-md max-h-[90vh] shadow-2xl overflow-hidden border border-slate-100"
           overlayClassName="bg-slate-900/50 backdrop-blur-sm"
         >
           <div className="bg-indigo-600 px-6 py-5 text-white flex justify-between items-center">
-              <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-                <FileSymlink className="h-5 w-5" />
-                Justifier l'absence de {showJustifyModal.studentName}
-              </h3>
-              <button onClick={() => setShowJustifyModal(null)} className="text-white hover:text-white text-xs font-bold cursor-pointer">✕</button>
-            </div>
-            
-            <form onSubmit={handleJustifySubmit} className="p-6 space-y-4">
+            <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
+              <FileSymlink className="h-5 w-5" />
+              Justifier l'absence de {showJustifyModal.studentName}
+            </h3>
+            <button onClick={() => setShowJustifyModal(null)} className="text-white hover:text-white text-xs font-bold cursor-pointer">✕</button>
+          </div>
+
+          <form onSubmit={handleJustifySubmit} className="flex flex-col min-h-0">
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-6 space-y-4">
               <div className="bg-slate-50 p-3.5 rounded-xl text-xs space-y-1">
                 <p className="text-slate-500">Détails de l'absence :</p>
                 <p className="font-bold text-slate-800">Date : {showJustifyModal.date} ({showJustifyModal.period})</p>
@@ -525,7 +553,6 @@ export default function AbsenceView({
                 />
               </div>
 
-              {/* Usability patterns: file upload requirements */}
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Charger un document justificatif (certificat médical / optionnel)</label>
                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center hover:bg-slate-50/50 transition-colors cursor-pointer relative">
@@ -542,28 +569,29 @@ export default function AbsenceView({
                 {uploadMockFile && (
                   <p className="mt-2 text-xs font-semibold text-emerald-600 flex items-center gap-1">
                     <CheckSquare className="h-4 w-4" />
-                    Fichier : {uploadMockFile.name} (Simulé)
+                    Fichier : {uploadMockFile.name}
                   </p>
                 )}
               </div>
+            </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowJustifyModal(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md cursor-pointer"
-                  id="btn-confirm-justify"
-                >
-                  Valider la justification
-                </button>
-              </div>
-            </form>
+            <div className="flex-none z-20 bg-white/95 backdrop-blur-sm border-t border-slate-200 px-6 py-4 flex flex-col sm:flex-row justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowJustifyModal(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md cursor-pointer"
+                id="btn-confirm-justify"
+              >
+                Valider la justification
+              </button>
+            </div>
+          </form>
         </ModalSurface>
       )}
     </div>

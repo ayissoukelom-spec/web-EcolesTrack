@@ -28,11 +28,21 @@ export function useAbsences() {
     await refresh();
   }, [refresh]);
 
-  const justifyAbsence = useCallback(async (id: number, reason: string) => {
-    await apiFetch(`/api/absences/${id}/justify`, {
-      method: 'PUT',
-      body: JSON.stringify({ justificationReason: reason }),
-    });
+  const justifyAbsence = useCallback(async (id: number, reason: string, file?: File) => {
+    if (file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('justificationReason', reason);
+      await apiFetch(`/api/absences/${id}/justifications`, {
+        method: 'POST',
+        body: formData,
+      });
+    } else {
+      await apiFetch(`/api/absences/${id}/justify`, {
+        method: 'PUT',
+        body: JSON.stringify({ justificationReason: reason }),
+      });
+    }
     await refresh();
   }, [refresh]);
 

@@ -56,7 +56,7 @@ export default function ModalSurface({
     >
       <div
         ref={contentRef}
-        className={`bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-auto ${disablePadding ? '' : 'p-6'} ${contentClassName || ''}`.trim()}
+        className={`bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden min-h-0 flex flex-col ${disablePadding ? '' : 'p-6'} ${contentClassName || ''}`.trim()}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"

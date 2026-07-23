@@ -369,6 +369,10 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
 
 export async function apiFetchBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const headers = getSimulationHeaders();
+  const storedAccessToken = localStorage.getItem(LOCAL_STORAGE_ACCESS_TOKEN_KEY);
+  if (storedAccessToken) {
+    headers.Authorization = `Bearer ${storedAccessToken}`;
+  }
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const rawUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
   const apiUrl = (() => {
@@ -422,6 +426,12 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
   }
 
   return response.blob();
+}
+
+export async function downloadAbsenceJustification(absenceId: number): Promise<Blob> {
+  return apiFetchBlob(`/api/absences/${absenceId}/justification/download`, {
+    method: 'GET',
+  });
 }
 
 export async function fetchBulletinsList(filters: BulletinListFilters): Promise<BulletinListResponse> {

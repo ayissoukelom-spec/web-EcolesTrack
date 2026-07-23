@@ -223,6 +223,19 @@ export const absences = pgTable('absences', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// 11b. Absence Justifications
+export const absenceJustifications = pgTable('absence_justifications', {
+  id: serial('id').primaryKey(),
+  absenceId: integer('absence_id').references(() => absences.id, { onDelete: 'cascade' }).notNull(),
+  fileName: text('file_name').notNull(),
+  filePath: text('file_path').notNull(),
+  mimeType: text('mime_type').notNull(),
+  fileSize: integer('file_size').notNull(),
+  uploadedBy: integer('uploaded_by').references(() => users.id, { onDelete: 'set null' }).notNull(),
+  uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // 12. Notifications
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
