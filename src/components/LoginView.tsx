@@ -3,6 +3,7 @@ import { apiFetch, setActiveSchoolId, setSimulatedRole, setSimulatedUser, getSes
 import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
 import logoImage from '../assets/logo.png';
+import togoFlag from '../assets/flags/togo_drap.jpg';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'ecoletrack_jwt_access';
 
@@ -232,6 +233,11 @@ export default function LoginView({ onLogin }: Props) {
         <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
       ) : (
         <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+          <img
+            src={togoFlag}
+            alt="Drapeau du Togo"
+            className="absolute top-6 left-6 w-24 md:w-28 lg:w-32 h-auto object-contain rounded-md shadow-md z-10"
+          />
           <form onSubmit={submit} className="bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
             <div className="flex justify-center mb-6">
           <img src={logoImage} alt="ET Ecoles Track" className="w-24 h-24 object-contain" />
