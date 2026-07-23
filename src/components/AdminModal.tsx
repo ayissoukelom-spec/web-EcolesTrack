@@ -134,6 +134,16 @@ export default function AdminModal(props: any) {
     return result.sort((a, b) => a.localeCompare(b, 'fr'));
   };
 
+  // Ensure form has manual deselection arrays to avoid undefined checks elsewhere
+  useEffect(() => {
+    if (!schoolForm.manuallyDeselectedClassNames) {
+      setSchoolForm((prev: any) => ({ ...prev, manuallyDeselectedClassNames: [] }));
+    }
+    if (!schoolForm.manuallyDeselectedSubjectNames) {
+      setSchoolForm((prev: any) => ({ ...prev, manuallyDeselectedSubjectNames: [] }));
+    }
+  }, []);
+
   // Always display ALL available classes/subjects, regardless of group selection
   // Group selection only affects automatic checking, not visibility
   const visibleClassNames = availableClassNames;
@@ -397,7 +407,9 @@ export default function AdminModal(props: any) {
                             // Calculate classes from active groups + manually selected classes
                             const classesFromGroups = getGroupClassNames(nextGroups);
                             const manualClasses = schoolForm.manuallySelectedClassNames || [];
-                            const nextClassNames = Array.from(new Set([...classesFromGroups, ...manualClasses]));
+                            const manualDeselected = schoolForm.manuallyDeselectedClassNames || [];
+                            // union of group-derived and manual-selected, then remove manual-deselected overrides
+                            const nextClassNames = Array.from(new Set([...classesFromGroups, ...manualClasses])).filter((n) => !manualDeselected.includes(n));
                             setSchoolForm({ ...schoolForm, selectedClassGroups: nextGroups, selectedClassNames: nextClassNames });
                           }}
                           className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -418,26 +430,31 @@ export default function AdminModal(props: any) {
                         onChange={(e) => {
                           const classesFromActiveGroups = getGroupClassNames(schoolForm.selectedClassGroups || []);
                           const currentManual = schoolForm.manuallySelectedClassNames || [];
+                          const currentDeselected = schoolForm.manuallyDeselectedClassNames || [];
                           const currentAll = schoolForm.selectedClassNames || [];
                           
                           if (e.target.checked) {
-                            // When selecting: add to both manual and all
+                            // When selecting: remove from deselected and add to manual selections
                             const nextManual = Array.from(new Set([...currentManual, name]));
+                            const nextDeselected = currentDeselected.filter((n: string) => n !== name);
                             const nextAll = Array.from(new Set([...currentAll, name]));
-                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, selectedClassNames: nextAll });
+                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, manuallyDeselectedClassNames: nextDeselected, selectedClassNames: nextAll });
                           } else {
-                            // When deselecting: check if still covered by a group
+                            // When deselecting: if covered by group, record as manually deselected so it stays unchecked; otherwise remove from manual selection/all
                             const isCoveredByGroup = classesFromActiveGroups.includes(name);
                             const nextManual = currentManual.filter((n: string) => n !== name);
-                            let nextAll;
+                            let nextAll = currentAll.filter((n: string) => n !== name);
+                            let nextDeselected = currentDeselected;
                             if (isCoveredByGroup) {
-                              // Keep in all selections because it's still covered by a group
-                              nextAll = currentAll;
+                              // Add to deselected overrides so group doesn't re-check it
+                              nextDeselected = Array.from(new Set([...currentDeselected, name]));
+                              // Ensure it's removed from all selections
+                              nextAll = nextAll.filter((n: string) => n !== name);
                             } else {
-                              // Remove from all selections since no group covers it anymore
-                              nextAll = currentAll.filter((n: string) => n !== name);
+                              // Not covered by group: just remove
+                              nextDeselected = currentDeselected.filter((n: string) => n !== name);
                             }
-                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, selectedClassNames: nextAll });
+                            setSchoolForm({ ...schoolForm, manuallySelectedClassNames: nextManual, manuallyDeselectedClassNames: nextDeselected, selectedClassNames: nextAll });
                           }
                         }}
                         className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -464,7 +481,8 @@ export default function AdminModal(props: any) {
                               // Calculate subjects from active groups + manually selected subjects
                               const subjectsFromGroups = getGroupSubjectNames(next);
                               const manualSubjects = schoolForm.manuallySelectedSubjectNames || [];
-                              const nextSubjectNames = Array.from(new Set([...subjectsFromGroups, ...manualSubjects]));
+                              const manualDeselected = schoolForm.manuallyDeselectedSubjectNames || [];
+                              const nextSubjectNames = Array.from(new Set([...subjectsFromGroups, ...manualSubjects])).filter((n) => !manualDeselected.includes(n));
                               setSchoolForm({ ...schoolForm, selectedSubjectGroups: next, selectedSubjectNames: nextSubjectNames });
                             }}
                             className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
@@ -493,26 +511,28 @@ export default function AdminModal(props: any) {
                           onChange={(e) => {
                             const subjectsFromActiveGroups = getGroupSubjectNames(schoolForm.selectedSubjectGroups || []);
                             const currentManual = schoolForm.manuallySelectedSubjectNames || [];
+                            const currentDeselected = schoolForm.manuallyDeselectedSubjectNames || [];
                             const currentAll = schoolForm.selectedSubjectNames || [];
                             
                             if (e.target.checked) {
-                              // When selecting: add to both manual and all
+                              // When selecting: remove from deselected and add to manual selections
                               const nextManual = Array.from(new Set([...currentManual, name]));
+                              const nextDeselected = currentDeselected.filter((n: string) => n !== name);
                               const nextAll = Array.from(new Set([...currentAll, name]));
-                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, selectedSubjectNames: nextAll });
+                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, manuallyDeselectedSubjectNames: nextDeselected, selectedSubjectNames: nextAll });
                             } else {
-                              // When deselecting: check if still covered by a group
+                              // When deselecting: if covered by group, record as manually deselected so it stays unchecked; otherwise remove from manual selection/all
                               const isCoveredByGroup = subjectsFromActiveGroups.includes(name);
                               const nextManual = currentManual.filter((n: string) => n !== name);
-                              let nextAll;
+                              let nextAll = currentAll.filter((n: string) => n !== name);
+                              let nextDeselected = currentDeselected;
                               if (isCoveredByGroup) {
-                                // Keep in all selections because it's still covered by a group
-                                nextAll = currentAll;
+                                nextDeselected = Array.from(new Set([...currentDeselected, name]));
+                                nextAll = nextAll.filter((n: string) => n !== name);
                               } else {
-                                // Remove from all selections since no group covers it anymore
-                                nextAll = currentAll.filter((n: string) => n !== name);
+                                nextDeselected = currentDeselected.filter((n: string) => n !== name);
                               }
-                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, selectedSubjectNames: nextAll });
+                              setSchoolForm({ ...schoolForm, manuallySelectedSubjectNames: nextManual, manuallyDeselectedSubjectNames: nextDeselected, selectedSubjectNames: nextAll });
                             }
                           }}
                           className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
