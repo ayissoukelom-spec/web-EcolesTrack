@@ -442,8 +442,9 @@ function createMockDb() {
   };
 
   const db = {
-    select() {
+    select(selectSpec?: any) {
       const builder: any = {
+        _selected: selectSpec,
         _table: null,
         _joins: [] as Array<{ table: any; cond: any }>,
         _conds: [] as any[],
@@ -481,6 +482,22 @@ function createMockDb() {
         catch(onrejected: any) {
           return executeQuery().catch(onrejected);
         },
+      };
+
+      const resolveSelectedValue = (expr: any, baseRow: any) => {
+        if (expr == null) return null;
+        if (typeof expr === 'string' || typeof expr === 'number' || typeof expr === 'boolean') return expr;
+        if (typeof expr === 'object') {
+          if (expr.name) {
+            const key = String(expr.name);
+            if (baseRow && Object.prototype.hasOwnProperty.call(baseRow, key)) {
+              return baseRow[key];
+            }
+            return baseRow ? baseRow[key.toLowerCase()] : null;
+          }
+          if (expr.value !== undefined) return expr.value;
+        }
+        return null;
       };
 
       const executeQuery = async () => {
@@ -535,6 +552,16 @@ function createMockDb() {
 
         if (typeof builder._limit === 'number') {
           rows = rows.slice(0, builder._limit);
+        }
+
+        if (builder._selected && typeof builder._selected === 'object' && !Array.isArray(builder._selected)) {
+          return rows.map((row: any) => {
+            const mapped: Record<string, any> = {};
+            for (const [alias, expr] of Object.entries(builder._selected)) {
+              mapped[alias] = resolveSelectedValue(expr, row);
+            }
+            return mapped;
+          });
         }
 
         return rows;
@@ -1204,6 +1231,29 @@ describe('E2E security: auth & privilege checks', () => {
 
     const deleted = FIXTURES.users.find((u) => u.id === 3);
     if (deleted) expect(deleted.isDeleted).toBe(true);
+  });
+
+  it('6a. school_admin created by admin preserves phone and appears in simulation users', async () => {
+    const createRes = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({
+        email: 'schoolphone@x.test',
+        name: 'SchoolPhoneAdmin',
+        role: 'school_admin',
+        schoolId: 10,
+        academicYearId: 1,
+        phone: '+228 98765432',
+      });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body).toMatchObject({ email: 'schoolphone@x.test', role: 'school_admin', phone: '+228 98765432' });
+
+    const listRes = await request(app)
+      .get('/api/simulation/users')
+      .set('Authorization', 'Bearer token-super');
+    expect(listRes.status).toBe(200);
+    expect(Array.isArray(listRes.body)).toBe(true);
+    expect(listRes.body.some((u: any) => u.email === 'schoolphone@x.test' && u.phone === '+228 98765432')).toBe(true);
   });
 
   it('7. teacher only sees assigned classes via classTeachers', async () => {

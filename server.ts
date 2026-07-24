@@ -695,6 +695,7 @@ export async function createApp() {
           academicYearId: users.academicYearId,
           isDeleted: users.isDeleted,
           createdAt: users.createdAt,
+          userPhone: users.phone,
           teacherId: teachers.id,
           teacherPhone: teachers.phone,
           teacherSpecialization: teachers.specialization,
@@ -720,7 +721,7 @@ export async function createApp() {
             academicYearId: user.academicYearId,
             isDeleted: user.isDeleted,
             createdAt: user.createdAt,
-            phone: user.teacherPhone || user.parentPhone || null,
+            phone: user.userPhone || user.teacherPhone || user.parentPhone || null,
             specialization: user.teacherSpecialization || null,
             classIds: [],
             _teacherId: user.teacherId,
@@ -898,7 +899,7 @@ export async function createApp() {
         return res.status(409).json({ error: 'User with same email already exists' + (resolvedSchoolId && role !== 'super_admin' ? ' in this school' : '') });
       }
 
-      const newUserRows = await db.insert(users).values({ uid: finalUid, email: normalizedEmail, name, role, schoolId: resolvedSchoolId, academicYearId, gender: gender ?? null }).returning();
+      const newUserRows = await db.insert(users).values({ uid: finalUid, email: normalizedEmail, name, role, schoolId: resolvedSchoolId, academicYearId, gender: gender ?? null, phone: phone || null }).returning();
       const createdUser = newUserRows[0];
 
       if (role === 'school_admin' && resolvedSchoolId != null) {
@@ -1039,7 +1040,7 @@ export async function createApp() {
       const responseBody: any = {
         ...createdUser,
         specialization: role === 'teacher' ? (teacherProfile?.specialization || null) : null,
-        phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? phone || '' : undefined,
+        phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? phone || '' : createdUser.phone ?? null,
       };
 
       if (role === 'teacher' && teacherProfile?.id) {
@@ -1154,6 +1155,7 @@ export async function createApp() {
 
       const updatedValues: any = { email, name, role, gender: gender ?? null };
       if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
+      if (phone !== undefined) updatedValues.phone = phone || null;
       if (role === 'school_admin') {
         if (academicYearId == null) {
           return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -1464,6 +1466,7 @@ export async function createApp() {
 
       const updatedFields: any = {};
       if (displayName) updatedFields.name = displayName;
+      if (phone !== undefined) updatedFields.phone = phone || null;
 
       console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
 

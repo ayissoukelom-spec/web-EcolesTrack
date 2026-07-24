@@ -41,6 +41,7 @@ export const users = pgTable('users', {
   role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'teacher' | 'parent'
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'set null' }),
+  phone: text('phone'),
   gender: text('gender'),
   isDeleted: boolean('is_deleted').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
