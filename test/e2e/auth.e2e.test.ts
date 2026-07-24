@@ -16,6 +16,7 @@ const FIXTURES = {
     { id: 7, uid: 'sim-parent-no-school', email: 'parent-noschool@x.test', name: 'ParentNoSchool', role: 'parent', schoolId: null, isDeleted: false },
     { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
+    { id: 10, uid: 'teacher-sim', email: 'teacher@x.test', name: 'TeacherSim', role: 'teacher', schoolId: 10, isDeleted: false },
   ],
   schools: [
     { id: 10, name: 'Test School' },
@@ -31,6 +32,7 @@ const FIXTURES = {
     { id: 77, userId: 3, schoolId: 10, phone: '+22911111111', specialization: 'Math' },
     { id: 88, userId: 4, schoolId: 10, phone: '+22922222222', specialization: 'Science' },
     { id: 99, userId: 5, schoolId: null, phone: '+22933333333', specialization: 'History' },
+    { id: 100, userId: 10, schoolId: 10, phone: '+22944444444', specialization: 'Science' },
   ],
   parents: [
     { id: 1, userId: 6, studentId: 11, schoolId: 10 },
@@ -42,6 +44,7 @@ const FIXTURES = {
   ],
   classTeachers: [
     { classId: 1, teacherId: 77 },
+    { classId: 1, teacherId: 100 },
   ],
   schoolClasses: [
     { id: 500, classId: 3, schoolId: 10, status: 'approved' },
@@ -52,7 +55,10 @@ const FIXTURES = {
   absenceJustifications: [],
   notifications: [],
   localAuths: [],
-  userSchools: [],
+  userSchools: [
+    { userId: 2, schoolId: 10, role: 'school_admin', isActive: true },
+    { userId: 3, schoolId: 10, role: 'teacher', isActive: true },
+  ],
   auditEvents: [],
 };
 
@@ -113,21 +119,37 @@ function createMockDb() {
             continue;
           }
           if (lastColumn) {
-            const normalizedLast = lastColumn.replace(/_/g, '');
+            const normalizedLast = lastColumn.replace(/_/g, '').replace(/\./g, '');
             const value = chunk;
             if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
-            else if (normalizedLast.includes('schoolid')) result.schoolId = value === null ? null : Number(value);
-            else if (normalizedLast.includes('userid')) result.userId = value === null ? null : Number(value);
-            else if (normalizedLast.includes('classid')) {
+            else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
+            else if (/user.*id/.test(normalizedLast)) result.userId = value === null ? null : Number(value);
+            else if (/student.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.studentIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.studentId = value === null ? null : Number(value);
+              }
+            } else if (/parent.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.parentIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.parentId = value === null ? null : Number(value);
+              }
+            } else if (/class.*id/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.classIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
               } else {
                 result.classId = value === null ? null : Number(value);
               }
-            } else if (normalizedLast.includes('teacherid')) {
-              result.teacherId = value === null ? null : Number(value);
-            } else if (normalizedLast === 'id' || /\.id$/.test(normalizedLast) || /^id$/.test(normalizedLast)) {
+            } else if (/teacher.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.teacherIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.teacherId = value === null ? null : Number(value);
+              }
+            } else if (normalizedLast === 'id' || /^id$/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
               } else {
@@ -141,21 +163,37 @@ function createMockDb() {
 
         if (ctor === 'Param') {
           if (lastColumn) {
-            const normalizedLast = lastColumn.replace(/_/g, '');
+            const normalizedLast = lastColumn.replace(/_/g, '').replace(/\./g, '');
             const value = (chunk as any).value;
             if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
-            else if (normalizedLast.includes('schoolid')) result.schoolId = value === null ? null : Number(value);
-            else if (normalizedLast.includes('userid')) result.userId = value === null ? null : Number(value);
-            else if (normalizedLast.includes('classid')) {
+            else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
+            else if (/user.*id/.test(normalizedLast)) result.userId = value === null ? null : Number(value);
+            else if (/student.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.studentIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.studentId = value === null ? null : Number(value);
+              }
+            } else if (/parent.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.parentIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.parentId = value === null ? null : Number(value);
+              }
+            } else if (/class.*id/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.classIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
               } else {
                 result.classId = value === null ? null : Number(value);
               }
-            } else if (normalizedLast.includes('teacherid')) {
-              result.teacherId = value === null ? null : Number(value);
-            } else if (normalizedLast === 'id' || /\.id$/.test(normalizedLast) || /^id$/.test(normalizedLast)) {
+            } else if (/teacher.*id/.test(normalizedLast)) {
+              if (Array.isArray(value)) {
+                result.teacherIds = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+              } else {
+                result.teacherId = value === null ? null : Number(value);
+              }
+            } else if (normalizedLast === 'id' || /^id$/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
               } else {
@@ -172,8 +210,14 @@ function createMockDb() {
           const rawValues = chunk as any[];
           const values = rawValues.map((v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v);
           const parsed = values.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
-          if (normalizedLast.includes('classid')) {
+          if (normalizedLast.includes('studentid')) {
+            result.studentIds = parsed;
+          } else if (normalizedLast.includes('parentid')) {
+            result.parentIds = parsed;
+          } else if (normalizedLast.includes('classid')) {
             result.classIds = parsed;
+          } else if (normalizedLast.includes('teacherid')) {
+            result.teacherIds = parsed;
           } else if (normalizedLast.includes('id') || normalizedLast.endsWith('.id')) {
             result.ids = parsed;
           }
@@ -197,29 +241,40 @@ function createMockDb() {
       const left = item.left;
       const right = item.right;
       if (left !== undefined && right !== undefined) {
-        const leftStr = String(left).toLowerCase();
-        const rightIsPrimitive = right === null || ['string', 'number', 'boolean'].includes(typeof right);
-        if (leftStr.includes('uid') && rightIsPrimitive) result.uid = right;
-        if (leftStr.includes('email') && rightIsPrimitive) result.email = right;
-        if (leftStr.includes('schoolid') && rightIsPrimitive) result.schoolId = right === null ? null : Number(right);
-        if (leftStr.includes('userid') && rightIsPrimitive) result.userId = right === null ? null : Number(right);
-        if (leftStr.includes('classid')) {
-          if (rightIsPrimitive) {
-            if (Array.isArray(right)) {
-              result.classIds = right.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
-            } else {
-              result.classId = right === null ? null : Number(right);
-            }
+        const leftStr = String(left).toLowerCase().replace(/\./g, '');
+        const rawRight = right && typeof right === 'object' && 'value' in right ? (right as any).value : right;
+        const rightIsPrimitive = rawRight === null || ['string', 'number', 'boolean'].includes(typeof rawRight);
+        if (leftStr.includes('uid') && rightIsPrimitive) result.uid = rawRight;
+        if (leftStr.includes('email') && rightIsPrimitive) result.email = rawRight;
+        if (/school.*id/.test(leftStr) && rightIsPrimitive) result.schoolId = rawRight === null ? null : Number(rawRight);
+        if (/user.*id/.test(leftStr) && rightIsPrimitive) result.userId = rawRight === null ? null : Number(rawRight);
+        if (/student.*id/.test(leftStr)) {
+          if (Array.isArray(rawRight)) {
+            result.studentIds = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          } else if (rightIsPrimitive) {
+            result.studentId = rawRight === null ? null : Number(rawRight);
           }
         }
-        if (leftStr.includes('teacherid') && rightIsPrimitive) result.teacherId = right === null ? null : Number(right);
-        if (leftStr.includes('id') && !leftStr.includes('schoolid') && !leftStr.includes('userid') && !leftStr.includes('classid') && !leftStr.includes('teacherid')) {
-          if (rightIsPrimitive) {
-            if (Array.isArray(right)) {
-              result.ids = right.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
-            } else {
-              result.id = right === null ? null : Number(right);
-            }
+        if (/parent.*id/.test(leftStr)) {
+          if (Array.isArray(rawRight)) {
+            result.parentIds = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          } else if (rightIsPrimitive) {
+            result.parentId = rawRight === null ? null : Number(rawRight);
+          }
+        }
+        if (/class.*id/.test(leftStr)) {
+          if (Array.isArray(rawRight)) {
+            result.classIds = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          } else if (rightIsPrimitive) {
+            result.classId = rawRight === null ? null : Number(rawRight);
+          }
+        }
+        if (/teacher.*id/.test(leftStr) && rightIsPrimitive) result.teacherId = rawRight === null ? null : Number(rawRight);
+        if (/id/.test(leftStr) && !/school.*id/.test(leftStr) && !/user.*id/.test(leftStr) && !/class.*id/.test(leftStr) && !/teacher.*id/.test(leftStr) && !/student.*id/.test(leftStr) && !/parent.*id/.test(leftStr)) {
+          if (Array.isArray(rawRight)) {
+            result.ids = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          } else if (rightIsPrimitive) {
+            result.id = rawRight === null ? null : Number(rawRight);
           }
         }
         if (typeof left === 'object' && left !== null) search(left);
@@ -329,7 +384,10 @@ function createMockDb() {
       : []) as any[];
 
     if (!cond) return rows;
-    const conditions = extractConditions(cond);
+    const isNormalizedConditionsObject = cond && typeof cond === 'object' && !('queryChunks' in cond) && !('left' in cond) && !('right' in cond) && !('args' in cond);
+    const conditions = isNormalizedConditionsObject
+      ? (cond as Record<string, any>)
+      : extractConditions(cond);
     if (!Object.keys(conditions).length && typeof cond === 'string') {
       const maybeUid = /"([a-z0-9\-]+)"/gi.exec(cond);
       if (maybeUid) conditions.uid = maybeUid[1];
@@ -356,19 +414,29 @@ function createMockDb() {
         }
       }
       if (conditions.ids !== undefined) {
-        if (!Array.isArray(conditions.ids) || !conditions.ids.includes(Number(row.id))) return false;
+        const idMatchTarget = tableName === 'parents' ? Number(row.studentId)
+          : tableName === 'absences' ? Number(row.studentId)
+          : Number(row.id);
+        if (!Array.isArray(conditions.ids) || !conditions.ids.includes(idMatchTarget)) return false;
       }
       if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
       if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
-      if (conditions.parentId !== undefined && row.parentId !== conditions.parentId) return false;
-      if (conditions.classId !== undefined && row.classId !== conditions.classId) return false;
-      if (conditions.ids !== undefined) {
-        if (!Array.isArray(conditions.ids) || !conditions.ids.includes(Number(row.id))) return false;
+      if (conditions.studentId !== undefined && row.studentId !== conditions.studentId) return false;
+      if (conditions.studentIds !== undefined) {
+        if (!Array.isArray(conditions.studentIds) || !conditions.studentIds.includes(Number(row.studentId))) return false;
       }
+      if (conditions.parentId !== undefined && row.parentId !== conditions.parentId) return false;
+      if (conditions.parentIds !== undefined) {
+        if (!Array.isArray(conditions.parentIds) || !conditions.parentIds.includes(Number(row.parentId))) return false;
+      }
+      if (conditions.classId !== undefined && row.classId !== conditions.classId) return false;
       if (conditions.classIds !== undefined) {
-        if (!Array.isArray(conditions.classIds) || !conditions.classIds.includes(Number(row.id))) return false;
+        if (!Array.isArray(conditions.classIds) || !conditions.classIds.includes(Number(row.classId))) return false;
       }
       if (conditions.teacherId !== undefined && row.teacherId !== conditions.teacherId) return false;
+      if (conditions.teacherIds !== undefined) {
+        if (!Array.isArray(conditions.teacherIds) || !conditions.teacherIds.includes(Number(row.teacherId))) return false;
+      }
       return true;
     });
   };
@@ -378,6 +446,7 @@ function createMockDb() {
       const builder: any = {
         _table: null,
         _joins: [] as Array<{ table: any; cond: any }>,
+        _conds: [] as any[],
         _cond: undefined as any,
         _limit: undefined as number | undefined,
         _orderBy: undefined as any,
@@ -394,6 +463,7 @@ function createMockDb() {
           return builder;
         },
         where(cond?: any) {
+          if (cond !== undefined) builder._conds.push(cond);
           builder._cond = cond;
           return builder;
         },
@@ -414,17 +484,22 @@ function createMockDb() {
       };
 
       const executeQuery = async () => {
+        const combinedConditions = builder._conds.reduce((acc: Record<string, any>, cond: any) => {
+          const extracted = extractConditions(cond);
+          return Object.assign(acc, extracted);
+        }, {} as Record<string, any>);
+
         console.log('DEBUG select.where', {
           fromTable: resolveTableName(builder._table),
           joins: builder._joins.map((j: any) => resolveTableName(j.table)),
           cond: builder._cond,
-          conditions: extractConditions(builder._cond),
+          conditions: combinedConditions,
           limit: builder._limit,
           orderBy: builder._orderBy,
         });
 
-        let rows = filterTableRows(builder._table, builder._cond);
-        const conditions = extractConditions(builder._cond);
+        let rows = filterTableRows(builder._table, combinedConditions);
+        const conditions = combinedConditions;
         const fromName = resolveTableName(builder._table);
 
         if (fromName === 'classes' && conditions.userId !== undefined) {
