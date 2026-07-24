@@ -1,16 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the DB module that studentAccess imports (src/db/index.ts)
-const mockDb: any = {
+const mockDb: any = vi.hoisted(() => ({
   selectReturn: [],
-  select: vi.fn(() => ({
-    from: (_table: any) => ({
-      where: async (_cond?: any) => mockDb.selectReturn,
-      innerJoin: (_t: any, _on?: any) => ({ where: async (_c?: any) => mockDb.selectReturn }),
-    }),
-  })),
-  execute: vi.fn(async () => ({ rows: mockDb.selectReturn })),
-};
+  select: vi.fn(() => {
+    const builder: any = {
+      _rows: Array.isArray(mockDb.selectReturn) ? mockDb.selectReturn : [mockDb.selectReturn],
+      from(_table: any) {
+        return builder;
+      },
+      where: async (_cond?: any) => builder,
+      innerJoin: (_t: any, _on?: any) => builder,
+      then(onFulfilled: any, onRejected: any) {
+        return Promise.resolve(builder._rows).then(onFulfilled, onRejected);
+      },
+      catch(onRejected: any) {
+        return Promise.resolve(builder._rows).catch(onRejected);
+      },
+      finally(onFinally: any) {
+        return Promise.resolve(builder._rows).finally(onFinally);
+      },
+    };
+    return builder;
+  }),
+  execute: vi.fn(async () => ({ rows: Array.isArray(mockDb.selectReturn) ? mockDb.selectReturn : [mockDb.selectReturn] })),
+}));
 
 vi.mock('../db/index.ts', () => ({ db: mockDb }));
 

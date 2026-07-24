@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { users } from '../db/schema.ts';
+import { users, userSchools } from '../db/schema.ts';
 
 // Mock state for controlling DB responses
 const mockState = {
   usersByUid: new Map<string, any>(),
   usersByEmail: new Map<string, any>(),
+  userSchoolMemberships: new Map<number, any[]>(),
 };
 
 // Create a builder that properly handles .where() chains
@@ -16,6 +17,9 @@ const createBuilder = (table: any, allRows: any[]) => {
       return builder;
     },
     where() {
+      return builder;
+    },
+    limit(_n?: number) {
       return builder;
     },
     then(resolve: (value: any) => void) {
@@ -42,6 +46,8 @@ vi.mock('../db/index.ts', () => {
         let rows: any[] = [];
         if (table === users) {
           rows = Array.from(mockState.usersByUid.values());
+        } else if (table === userSchools) {
+          rows = Array.from(mockState.userSchoolMemberships.values()).flat();
         }
         return createBuilder(table, rows);
       }),
@@ -60,6 +66,7 @@ describe('resolveActor', () => {
     mockDb.select.mockClear();
     mockState.usersByUid.clear();
     mockState.usersByEmail.clear();
+    mockState.userSchoolMemberships.clear();
   });
 
   it('returns null when no req.user', async () => {
@@ -71,6 +78,7 @@ describe('resolveActor', () => {
   it('returns resolved DB actor for real JWT user with schoolId', async () => {
     const dbUser = { id: 1, uid: 'user_1', email: 'a@x', name: 'A', role: 'teacher', schoolId: 12 };
     mockState.usersByUid.set('user_1', dbUser);
+    mockState.userSchoolMemberships.set(1, [{ userId: 1, schoolId: 12, isActive: true }]);
 
     const req = { user: { uid: 'user_1', role: 'teacher', schoolId: 12 } } as AuthRequest;
     const result = await resolveActor(req);
