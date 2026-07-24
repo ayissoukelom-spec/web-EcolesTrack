@@ -245,9 +245,9 @@ test('school_admin can update one existing grade with save all', async () => {
   const evalSelect = findEvaluationSelect();
   fireEvent.change(evalSelect, { target: { value: '2' } });
 
-  const studentRow = await screen.findByText(/Marie Claire/i);
+  const studentRow = await screen.findByText(/Claire Marie/i);
   const row = studentRow.closest('tr');
-  if (!row) throw new Error('Could not locate student row for Marie Claire');
+  if (!row) throw new Error('Could not locate student row for Claire Marie');
 
   const input = await within(row).findByDisplayValue('12');
   fireEvent.change(input, { target: { value: '13' } });

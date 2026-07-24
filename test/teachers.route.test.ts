@@ -13,6 +13,16 @@ const mockState: any = {
   filterSchoolId: null as number | null,
 };
 
+const getTableName = (table: any) => {
+  if (!table) return '';
+  if (typeof table.name === 'string' && table.name.length > 0) return table.name;
+  const drizzleName = table[Symbol.for('drizzle:Name')];
+  if (typeof drizzleName === 'string' && drizzleName.length > 0) return drizzleName;
+  const originalName = table[Symbol.for('drizzle:OriginalName')];
+  if (typeof originalName === 'string' && originalName.length > 0) return originalName;
+  return '';
+};
+
 const createBuilder = (selectArgs: any[] = []) => {
   const builder: any = {
     _rows: [],
@@ -21,43 +31,38 @@ const createBuilder = (selectArgs: any[] = []) => {
     joinedUserSchools: false,
     from(table: any) {
       builder.table = table;
-      try { console.log('DBG builder.from table:', table && (table.name || table)); } catch(e) {}
       return builder;
     },
     innerJoin(table?: any) {
-      if (table === userSchools) builder.joinedUserSchools = true;
+      const tableName = getTableName(table);
+      if (tableName === 'user_schools' || tableName === 'userSchools') builder.joinedUserSchools = true;
       return builder;
     },
     leftJoin() { return builder; },
     where() { return builder; },
     then(resolve: (value: any) => void) {
-      // Decide return rows based on table and join context
+      // Decide return rows based on table and join context so the mock matches the route's real query shape.
       let out: any[] = [];
-      try { console.log('DBG then selectArgs:', builder.selectArgs, 'joinedUserSchools=', builder.joinedUserSchools, 'table=', builder.table && (builder.table.name || builder.table)); } catch(e) {}
-      if (builder.table === teachers) {
-        // Detect oldModel when projection includes teachers.id
-        const projectionIndicatesOld = Array.isArray(builder.selectArgs) && builder.selectArgs.some((arg: any) => {
-          if (!arg || typeof arg !== 'object') return false;
-          return Object.values(arg).some((v: any) => v === (teachers as any).id || v === (teachers as any));
-        });
-        const projectionIndicatesNew = Array.isArray(builder.selectArgs) && builder.selectArgs.some((arg: any) => {
-          if (!arg || typeof arg !== 'object') return false;
-          return Object.values(arg).some((v: any) => v === (userSchools as any).schoolId || v === (userSchools as any));
-        });
-        if (builder.joinedUserSchools || projectionIndicatesNew) {
-          out = mockState.newTeachers || [];
-        } else if (projectionIndicatesOld) {
-          out = mockState.oldTeachers || [];
-        } else {
-          // default to combining both if we cannot detect
-          out = (mockState.oldTeachers || []).concat(mockState.newTeachers || []);
+      const tableName = getTableName(builder.table);
+      if (tableName === 'teachers') {
+        const oldRows = mockState.oldTeachers || [];
+        const newRows = mockState.newTeachers || [];
+
+        // The route issues two distinct queries:
+        // 1) old model: teachers -> users
+        // 2) new model: teachers -> users -> userSchools
+        // The `userSchools` join is the reliable signal for the new-model branch.
+        out = builder.joinedUserSchools ? newRows : oldRows;
+
+        if (out.length === 0 && oldRows.length > 0 && newRows.length > 0) {
+          out = oldRows.concat(newRows);
         }
         if (mockState.filterSchoolId != null) {
           out = out.filter((t: any) => (t.schoolId === mockState.filterSchoolId) || (Array.isArray(t.schoolIds) && t.schoolIds.includes(mockState.filterSchoolId)));
         }
-      } else if (builder.table === classTeachers) {
+      } else if (tableName === 'class_teachers' || tableName === 'classTeachers') {
         out = mockState.classAssignments || [];
-      } else if (builder.table === users) {
+      } else if (tableName === 'users') {
         out = mockState.users || [];
       }
       return Promise.resolve(out).then(resolve);

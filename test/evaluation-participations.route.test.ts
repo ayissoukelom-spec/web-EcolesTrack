@@ -122,63 +122,27 @@ function extractConditions(cond: any): Record<string, any> {
   if (!cond || typeof cond !== 'object') return conditions;
 
   const text = getQueryText(cond).toLowerCase();
-  const params = getQueryParams(cond).map((value) => (typeof value === 'string' ? value : String(value)));
+  const fieldRegex = /(?:^|[^a-z0-9_])([a-z_]+(?:\.[a-z_]+)?)\s*(?:=|,)\s*(?:'([^']*)'|([a-z0-9_]+)|(-?\d+))/g;
+  const matches = Array.from(text.matchAll(fieldRegex));
 
-  const matchByField = (field: string) => {
-    const regex = new RegExp(`${field}\\s*=\\s*'([^']*)'`);
-    const match = text.match(regex);
-    if (match) return match[1];
-    return null;
-  };
+  for (const match of matches) {
+    const rawField = match[1] ?? '';
+    const rawValue = match[2] ?? match[3] ?? match[4] ?? '';
+    const field = rawField.replace(/^[^.]+\./, '').replace(/_/g, '');
+    const value = rawValue;
 
-  const matchByFieldOrEnum = (field: string) => {
-    const regex = new RegExp(`${field}\\s*=\\s*(?:'([^']*)'|([A-Za-z0-9_]+))`);
-    const match = text.match(regex);
-    if (match) return match[1] ?? match[2] ?? null;
-    return null;
-  };
-
-  const matchByNumber = (field: string) => {
-    const regex = new RegExp(`${field}\\s*=\\s*(\\d+)`);
-    const match = text.match(regex);
-    if (match) return Number(match[1]);
-    return null;
-  };
-
-  const matchByFieldOrNumber = (field: string) => {
-    const stringValue = matchByField(field);
-    if (stringValue !== null) return stringValue;
-    return matchByNumber(field);
-  };
-
-  if (text.includes('evaluation_id') || text.includes('evaluationid')) {
-    const value = matchByFieldOrNumber('evaluation_id') ?? matchByFieldOrNumber('evaluationid');
-    if (value !== null) conditions.evaluationId = value;
+    if (field === 'evaluationid') conditions.evaluationId = Number.isFinite(Number(value)) ? Number(value) : value;
+    if (field === 'studentid') conditions.studentId = Number.isFinite(Number(value)) ? Number(value) : value;
+    if (field === 'userid') conditions.userId = Number.isFinite(Number(value)) ? Number(value) : value;
+    if (field === 'id') conditions.id = Number.isFinite(Number(value)) ? Number(value) : value;
+    if (field === 'uid') conditions.uid = value;
+    if (field === 'email') conditions.email = value;
+    if (field === 'category') conditions.category = value;
+    if (field === 'status') conditions.status = value;
   }
-  if (text.includes('student_id') || text.includes('studentid')) {
-    const value = matchByFieldOrNumber('student_id') ?? matchByFieldOrNumber('studentid');
-    if (value !== null) conditions.studentId = value;
-  }
-  if (text.includes('user_id') || text.includes('userid')) {
-    const value = matchByFieldOrNumber('user_id') ?? matchByFieldOrNumber('userid');
-    if (value !== null) conditions.userId = value;
-  }
-  if (text.includes('id') && !text.includes('evaluation_id') && !text.includes('student_id') && !text.includes('user_id')) {
-    const value = matchByNumber('id');
-    if (value !== null) conditions.id = value;
-  }
-
-  const uid = matchByField('uid');
-  if (uid !== null) conditions.uid = uid;
-  const email = matchByField('email');
-  if (email !== null) conditions.email = email;
-  const category = matchByFieldOrEnum('category');
-  if (category !== null) conditions.category = category;
-  const status = matchByFieldOrEnum('status');
-  if (status !== null) conditions.status = status;
 
   if (conditions.category === undefined) {
-    const regex = /category\\s*=\\s*(?:'([^']*)'|([A-Za-z0-9_]+))/;
+    const regex = /category\s*(?:=|,)\s*(?:'([^']*)'|([A-Za-z0-9_]+))/;
     const match = text.match(regex);
     if (match) conditions.category = match[1] ?? match[2];
   }
@@ -345,9 +309,23 @@ const mockDb = {
   delete: (table: any) => ({
     where: async (cond: any) => {
       const name = resolveTableName(table);
-      const conditions = extractConditions(cond);
       const rows = (mockDbState as any)[name] || [];
-      const remaining = rows.filter((row: any) => !filterRows([row], conditions).length);
+      const text = getQueryText(cond).toLowerCase();
+      const params = getQueryParams(cond);
+      const targetEvaluationId = Number(params.find((value: any) => Number.isFinite(Number(value))) ?? NaN);
+      const targetCategory = params.find((value: any) => typeof value === 'string' && value.includes('evaluation_created'));
+
+      const remaining = rows.filter((row: any) => {
+        const matchesEvaluationId = Number.isFinite(targetEvaluationId)
+          ? Number(row.evaluationId) === targetEvaluationId
+          : true;
+        const matchesCategory = typeof targetCategory === 'string'
+          ? row.category === targetCategory
+          : true;
+
+        return !(matchesEvaluationId && matchesCategory);
+      });
+
       const deletedCount = rows.length - remaining.length;
       (mockDbState as any)[name] = remaining;
       return { rowCount: deletedCount };

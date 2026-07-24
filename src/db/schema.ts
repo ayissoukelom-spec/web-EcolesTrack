@@ -201,6 +201,17 @@ export const grades = pgTable('grades', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+export const evaluationParticipations = pgTable('evaluation_participations', {
+  id: serial('id').primaryKey(),
+  evaluationId: integer('evaluation_id').references(() => evaluations.id, { onDelete: 'cascade' }).notNull(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
+  status: text('status').default('pending').notNull(), // pending | graded | absent
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  evaluationStudentIdx: uniqueIndex('evaluation_participations_evaluation_student_idx').on(table.evaluationId, table.studentId),
+}));
+
 // 10. Grade history / audit trail
 export const gradeHistory = pgTable('grade_history', {
   id: serial('id').primaryKey(),

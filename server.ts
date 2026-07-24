@@ -55,6 +55,7 @@ import {
   notifications,
   auditEvents,
   schoolTerms,
+  evaluationParticipations,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
@@ -143,7 +144,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
 
     if (dbUser) {
       const resolvedSchoolId = req.user.schoolId ?? dbUser.schoolId ?? null;
-      return { ...dbUser, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
+      return { ...dbUser, role, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
     }
 
     const simulatedActor: ResolvedActor = {
@@ -168,7 +169,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
     if (role === 'school_admin' && resolvedSchoolId == null) {
       return null;
     }
-    return { ...dbUser, schoolId: resolvedSchoolId } as ResolvedActor;
+    return { ...dbUser, role, schoolId: resolvedSchoolId } as ResolvedActor;
   }
 
   return null;
@@ -5521,6 +5522,55 @@ export async function createApp() {
     } catch (err: any) {
       console.error(err);
       res.status(500).json({ error: 'Failed to create assessment' });
+    }
+  });
+
+  app.post('/api/evaluation-participations', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const { evaluationId, studentId, status } = req.body ?? {};
+      const parsedEvaluationId = Number(evaluationId);
+      const parsedStudentId = Number(studentId);
+      const normalizedStatus = typeof status === 'string' ? status : 'pending';
+
+      if (!Number.isFinite(parsedEvaluationId) || !Number.isFinite(parsedStudentId)) {
+        return res.status(400).json({ error: 'evaluationId and studentId are required' });
+      }
+
+      const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parsedEvaluationId));
+      if (!evaluation) {
+        return res.status(404).json({ error: 'Evaluation not found' });
+      }
+
+      await db.execute(sql`
+        INSERT INTO evaluation_participations (evaluation_id, student_id, status, created_at, updated_at)
+        VALUES (${parsedEvaluationId}, ${parsedStudentId}, ${normalizedStatus}, NOW(), NOW())
+        ON CONFLICT (evaluation_id, student_id)
+        DO UPDATE SET status = ${normalizedStatus}, updated_at = NOW()
+      `);
+
+      const studentRows = await db.select().from(students).where(eq(students.classId, evaluation.classId));
+      const participationRows = await db.select().from(evaluationParticipations).where(eq(evaluationParticipations.evaluationId, parsedEvaluationId));
+      const completedCount = participationRows.filter((row: any) => row.status === 'graded' || row.status === 'absent').length;
+      const eligibleCount = studentRows.length;
+
+      if (eligibleCount > 0 && completedCount >= eligibleCount) {
+        await db.delete(notifications).where(
+          and(
+            eq(notifications.evaluationId, parsedEvaluationId),
+            eq(notifications.category, 'evaluation_created')
+          ) as any
+        );
+      }
+
+      return res.status(200).json({ ok: true });
+    } catch (err: any) {
+      console.error('ERROR /api/evaluation-participations', err);
+      return res.status(500).json({ error: 'Failed to update evaluation participation' });
     }
   });
 

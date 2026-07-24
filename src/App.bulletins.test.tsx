@@ -9,6 +9,24 @@ const mockGetSimulatedRole = vi.hoisted(() => vi.fn(() => 'school_admin'));
 const mockGetSimulatedUser = vi.hoisted(() => vi.fn(() => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 })));
 const mockGetActiveSchoolId = vi.hoisted(() => vi.fn(() => 1));
 
+const localStorageMock = (() => {
+  const store: Record<string, string> = {};
+  return {
+    clear() {
+      for (const key in store) delete store[key];
+    },
+    getItem(key: string) {
+      return store[key] ?? null;
+    },
+    setItem(key: string, value: string) {
+      store[key] = String(value);
+    },
+    removeItem(key: string) {
+      delete store[key];
+    },
+  };
+})();
+
 vi.mock('./lib/api.ts', () => ({
   apiFetch: mockApiFetch,
   getSimulatedRole: () => mockGetSimulatedRole(),
@@ -63,9 +81,18 @@ vi.mock('./components/BulletinsView.tsx', () => ({ default: () => <div>Bulletins
 describe('App bulletin navigation', () => {
   afterEach(() => {
     cleanup();
+    localStorageMock.clear();
   });
 
   beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: localStorageMock,
+    });
+    localStorageMock.clear();
+    localStorageMock.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorageMock.setItem('ecoletrack_active_school_id', '1');
+
     mockApiFetch.mockReset();
     mockCountOverdueEvaluations.mockReset();
     mockCountOverdueEvaluations.mockReturnValue(0);
