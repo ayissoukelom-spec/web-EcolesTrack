@@ -4,12 +4,14 @@ import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import { getTeacherClassIdSet } from './teacherScope.ts';
+import studentAccess from './studentAccess';
 import {
   academicYears,
   bulletinLines,
   bulletins,
   classTeachers,
   classes,
+  parents,
   schoolTerms,
   students,
   teachers,
@@ -137,8 +139,34 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
       return conditions;
     }
 
-    conditions.push(eq(students.schoolId, actor.schoolId));
-    conditions.push(inArray(bulletins.classId, teacherClassIds));
+    const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
+    if (authorizedStudentIds.length === 0) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    conditions.push(inArray(bulletins.studentId, authorizedStudentIds));
+  } else if (actor.role === 'parent') {
+    if (!actor.id) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    const childRows = await db
+      .select({ studentId: parents.studentId })
+      .from(parents)
+      .where(eq(parents.userId, actor.id));
+
+    const childIds = childRows
+      .map((row) => row.studentId)
+      .filter((studentId): studentId is number => Number.isInteger(studentId) && studentId > 0);
+
+    if (childIds.length === 0) {
+      conditions.push(sql`1 = 0`);
+      return conditions;
+    }
+
+    conditions.push(inArray(bulletins.studentId, childIds));
   } else if (actor.role !== 'super_admin') {
     if (actor.schoolId == null) {
       conditions.push(sql`1 = 0`);

@@ -12,12 +12,15 @@ import {
   classes,
   evaluations,
   grades,
+  parents,
   schools,
   schoolTerms,
   students,
 } from '../db/schema.ts';
+import studentAccess from './studentAccess';
 
 export interface BulletinPdfActor {
+  id?: number | null;
   role: string;
   schoolId?: number | null;
 }
@@ -184,55 +187,66 @@ const sanitizePdfText = (value: string): string => {
     .trim();
 };
 
-const buildConditions = (actor: BulletinPdfActor): SQL[] => {
-  const conditions: SQL[] = [];
-  if (actor.role !== 'super_admin') {
-    if (actor.schoolId == null) {
-      conditions.push(sql`1 = 0`);
-      return conditions;
-    }
-    conditions.push(eq(students.schoolId, actor.schoolId));
+const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
+  const [header] = await db
+    .select({
+      id: bulletins.id,
+      studentId: bulletins.studentId,
+      studentFirstName: students.firstName,
+      studentLastName: students.lastName,
+      classId: bulletins.classId,
+      className: classes.name,
+      schoolName: schools.name,
+      schoolYearId: bulletins.schoolYearId,
+      schoolYearName: academicYears.name,
+      termId: bulletins.termId,
+      termName: schoolTerms.name,
+      termStartDate: schoolTerms.startDate,
+      termEndDate: schoolTerms.endDate,
+      average: bulletins.average,
+      totalPoints: bulletins.totalPoints,
+      totalCoefficients: bulletins.totalCoefficients,
+      rank: bulletins.rank,
+      mention: bulletins.mention,
+      appreciation: bulletins.appreciation,
+      generatedAt: bulletins.generatedAt,
+      studentSchoolId: students.schoolId,
+      parentUserId: parents.userId,
+    })
+    .from(bulletins)
+    .innerJoin(students, eq(bulletins.studentId, students.id))
+    .leftJoin(parents, eq(students.parentId, parents.id))
+    .innerJoin(classes, eq(bulletins.classId, classes.id))
+    .innerJoin(schools, eq(classes.schoolId, schools.id))
+    .innerJoin(academicYears, eq(bulletins.schoolYearId, academicYears.id))
+    .innerJoin(schoolTerms, eq(bulletins.termId, schoolTerms.id))
+    .where(eq(bulletins.id, bulletinId));
+
+  if (!header) return null;
+  if (actor.role === 'super_admin') return header;
+
+  if (actor.role === 'teacher') {
+    const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any);
+    if (authorizedStudentIds.length === 0 || !authorizedStudentIds.includes(header.studentId)) return null;
+    return header;
   }
-  return conditions;
+
+  if (actor.role === 'school_admin') {
+    if (actor.schoolId == null || header.studentSchoolId !== actor.schoolId) return null;
+    return header;
+  }
+
+  if (actor.role === 'parent') {
+    if (!actor.id || header.parentUserId !== actor.id) return null;
+    return header;
+  }
+
+  return null;
 };
 
 export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
   async getById(actor, bulletinId) {
-    const conditions = buildConditions(actor);
-    conditions.push(eq(bulletins.id, bulletinId));
-    const whereClause = and(...conditions);
-
-    const [header] = await db
-      .select({
-        id: bulletins.id,
-        studentId: bulletins.studentId,
-        studentFirstName: students.firstName,
-        studentLastName: students.lastName,
-        classId: bulletins.classId,
-        className: classes.name,
-        schoolName: schools.name,
-        schoolYearId: bulletins.schoolYearId,
-        schoolYearName: academicYears.name,
-        termId: bulletins.termId,
-        termName: schoolTerms.name,
-        termStartDate: schoolTerms.startDate,
-        termEndDate: schoolTerms.endDate,
-        average: bulletins.average,
-        totalPoints: bulletins.totalPoints,
-        totalCoefficients: bulletins.totalCoefficients,
-        rank: bulletins.rank,
-        mention: bulletins.mention,
-        appreciation: bulletins.appreciation,
-        generatedAt: bulletins.generatedAt,
-      })
-      .from(bulletins)
-      .innerJoin(students, eq(bulletins.studentId, students.id))
-      .innerJoin(classes, eq(bulletins.classId, classes.id))
-      .innerJoin(schools, eq(classes.schoolId, schools.id))
-      .innerJoin(academicYears, eq(bulletins.schoolYearId, academicYears.id))
-      .innerJoin(schoolTerms, eq(bulletins.termId, schoolTerms.id))
-      .where(whereClause);
-
+    const header = await loadAuthorizedBulletinHeader(actor, bulletinId);
     if (!header) return null;
 
     const lines = await db

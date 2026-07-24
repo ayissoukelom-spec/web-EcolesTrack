@@ -46,6 +46,11 @@ const FIXTURES = {
   schoolClasses: [
     { id: 500, classId: 3, schoolId: 10, status: 'approved' },
   ],
+  absences: [
+    { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
+  ],
+  absenceJustifications: [],
+  notifications: [],
   localAuths: [],
   userSchools: [],
   auditEvents: [],
@@ -260,6 +265,9 @@ function createMockDb() {
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
+      if (lower.includes('absences')) return 'absences';
+      if (lower.includes('absencejustifications')) return 'absenceJustifications';
+      if (lower.includes('notifications')) return 'notifications';
       if (lower.includes('auditevents')) return 'auditEvents';
     }
     if (table && typeof table === 'object') {
@@ -277,7 +285,28 @@ function createMockDb() {
       if (keys.includes('schoolid') && keys.includes('teacherid') && keys.includes('userid')) return 'teachers';
       if (keys.includes('classid') && keys.includes('teacherid')) return 'classTeachers';
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('status')) return 'schoolClasses';
+      if (keys.includes('studentid') && keys.includes('date') && keys.includes('period') && keys.includes('isjustified')) return 'absences';
+      if (keys.includes('absenceid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'absenceJustifications';
+      if (keys.includes('type') && keys.includes('userid') && keys.includes('title')) return 'notifications';
     }
+
+    const maybeName = table && typeof table === 'object' ? (table.name || table.tableName || table.alias) : undefined;
+    if (typeof maybeName === 'string') {
+      const lower = maybeName.toLowerCase();
+      if (lower.includes('users')) return 'users';
+      if (lower.includes('schools')) return 'schools';
+      if (lower.includes('academicyears')) return 'academicYears';
+      if (lower.includes('localauths')) return 'localAuths';
+      if (lower.includes('userschools')) return 'userSchools';
+      if (lower.includes('parents')) return 'parents';
+      if (lower.includes('students')) return 'students';
+      if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
+      if (lower.includes('schoolclasses')) return 'schoolClasses';
+      if (lower.includes('absences')) return 'absences';
+      if (lower.includes('absencejustifications')) return 'absenceJustifications';
+      if (lower.includes('notifications')) return 'notifications';
+    }
+
     return '';
   };
 
@@ -294,6 +323,9 @@ function createMockDb() {
       : tableName === 'teachers' ? FIXTURES.teachers
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
+      : tableName === 'absences' ? FIXTURES.absences
+      : tableName === 'absenceJustifications' ? FIXTURES.absenceJustifications
+      : tableName === 'notifications' ? FIXTURES.notifications
       : []) as any[];
 
     if (!cond) return rows;
@@ -458,6 +490,14 @@ function createMockDb() {
               FIXTURES.users.push(row as any);
               return [row];
             }
+            if (obj.absenceId !== undefined || obj.filePath !== undefined || obj.fileName !== undefined) {
+              FIXTURES.absenceJustifications.push(obj as any);
+              return [obj];
+            }
+            if (obj.userId !== undefined && obj.type !== undefined) {
+              FIXTURES.notifications.push(obj as any);
+              return [obj];
+            }
             return [obj];
           },
         }),
@@ -488,6 +528,8 @@ function createMockDb() {
               if (tableName === 'userSchools') return updateRow(FIXTURES.userSchools);
               if (tableName === 'localAuths') return updateRow(FIXTURES.localAuths);
               if (tableName === 'schoolClasses') return updateRow(FIXTURES.schoolClasses);
+              if (tableName === 'absences') return updateRow(FIXTURES.absences);
+              if (tableName === 'notifications') return updateRow(FIXTURES.notifications);
               if (tableName === 'auditEvents') return updateRow(FIXTURES.auditEvents);
             }
             return [];
@@ -816,7 +858,76 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.status).toBe(403);
   });
 
-  it('3h. school_admin can create a teacher in their own school via POST /api/teachers', async () => {
+  it('3h. teacher only sees parents for authorized same-school students', async () => {
+    FIXTURES.users.push({ id: 20, uid: 'otherparent@x.test', email: 'otherparent@x.test', name: 'Other Parent', role: 'parent', schoolId: 20, isDeleted: false });
+    FIXTURES.parents.push({ id: 4, userId: 20, studentId: 12, schoolId: 20 });
+    FIXTURES.students.push({ id: 12, schoolId: 20, classId: 1, firstName: 'Unauthorized', lastName: 'Kid', birthDate: '2010-02-02', gender: 'male', parentId: 4, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+
+    const res = await request(app)
+      .get('/api/parents')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-sim')
+      .set('x-simulated-email', 'teacher@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.map((item: any) => item.id)).toContain(1);
+    expect(res.body.map((item: any) => item.id)).not.toContain(4);
+  });
+
+  it('3h1. teacher sees absences only for their authorized student classes', async () => {
+    const res = await request(app)
+      .get('/api/absences')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(1);
+    expect(res.body[0]?.studentId).toBe(11);
+  });
+
+  it('3h2. teacher cannot justify absence for student outside their assigned classes', async () => {
+    const res = await request(app)
+      .put('/api/absences/1/justify')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'other-teacher-uid')
+      .set('x-simulated-email', 'otherteacher@school.test')
+      .set('x-simulated-school-id', '10')
+      .send({ justificationReason: 'Motif invalide' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3h3. parent sees only their child absences', async () => {
+    const res = await request(app)
+      .get('/api/absences')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(1);
+    expect(res.body[0]?.studentId).toBe(11);
+  });
+
+  it('3h4. parent dashboard summary is scoped to their child', async () => {
+    const res = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('stats');
+    expect(res.body).toHaveProperty('recentAbsences');
+    expect(res.body).toHaveProperty('recentGrades');
+  });
+
+  it('3i. school_admin can create a teacher in their own school via POST /api/teachers', async () => {
     const res = await request(app)
       .post('/api/teachers')
       .set('Authorization', 'Bearer token-school')

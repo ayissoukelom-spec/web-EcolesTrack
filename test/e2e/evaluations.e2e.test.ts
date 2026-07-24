@@ -150,18 +150,25 @@ function resolveTableName(table: any) {
   return '';
 }
 
+function matches(value: any, condition: any) {
+  if (Array.isArray(condition)) {
+    return condition.map((item) => String(item)).includes(String(value));
+  }
+  return String(value) === String(condition);
+}
+
 function filterRows(rows: any[], conditions: Cond) {
   return rows.filter((row) => {
-    if (conditions.id !== undefined && Number(row.id) !== Number(conditions.id)) return false;
-    if (conditions.uid !== undefined && row.uid !== conditions.uid) return false;
-    if (conditions.email !== undefined && String(row.email).toLowerCase() !== String(conditions.email).toLowerCase()) return false;
-    if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
-    if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
-    if (conditions.classId !== undefined && row.classId !== conditions.classId) return false;
-    if (conditions.teacherId !== undefined && row.teacherId !== conditions.teacherId) return false;
-    if (conditions.subjectId !== undefined && row.subjectId !== conditions.subjectId) return false;
-    if (conditions.status !== undefined && row.status !== conditions.status) return false;
-    if (conditions.isActive !== undefined && row.isActive !== conditions.isActive) return false;
+    if (conditions.id !== undefined && !matches(row.id, conditions.id)) return false;
+    if (conditions.uid !== undefined && !matches(row.uid, conditions.uid)) return false;
+    if (conditions.email !== undefined && !matches(String(row.email).toLowerCase(), String(conditions.email).toLowerCase())) return false;
+    if (conditions.schoolId !== undefined && !matches(row.schoolId, conditions.schoolId)) return false;
+    if (conditions.userId !== undefined && !matches(row.userId, conditions.userId)) return false;
+    if (conditions.classId !== undefined && !matches(row.classId, conditions.classId)) return false;
+    if (conditions.teacherId !== undefined && !matches(row.teacherId, conditions.teacherId)) return false;
+    if (conditions.subjectId !== undefined && !matches(row.subjectId, conditions.subjectId)) return false;
+    if (conditions.status !== undefined && !matches(row.status, conditions.status)) return false;
+    if (conditions.isActive !== undefined && !matches(row.isActive, conditions.isActive)) return false;
     return true;
   });
 }
@@ -326,6 +333,24 @@ describe('POST /api/evaluations security', () => {
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('id');
     expect(res.body).toMatchObject({ classId: 100, subject: 'Science', title: 'Teacher Assigned', coefficient: 2, maxScore: 20 });
+  });
+
+  it('does not notify parent of other-school student with same classId for teacher evaluation', async () => {
+    FIXTURES.users.push({ id: 10, uid: 'other-parent-uid', email: 'otherparent@x.test', name: 'Other Parent', role: 'parent', schoolId: 20, isDeleted: false });
+    FIXTURES.parents.push({ id: 4, userId: 10, studentId: 12, schoolId: 20 });
+    FIXTURES.students.push({ id: 12, schoolId: 20, classId: 100, firstName: 'Other', lastName: 'Student', birthDate: '2010-03-03', gender: 'male', parentId: 4, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-sim')
+      .set('x-simulated-user-id', '4')
+      .set('x-simulated-school-id', '10')
+      .send({ classId: '100', subject: 'Science', title: 'Teacher Notification Scope', date: '2026-09-01', coefficient: 1, maxScore: 20 });
+
+    expect(res.status).toBe(201);
+    expect(FIXTURES.notifications.some((note: any) => note.userId === 10)).toBe(false);
+    expect(FIXTURES.notifications.some((note: any) => note.title?.includes('Nouveau devoir publié'))).toBe(true);
   });
 
   it('rejects school_admin for class in another school', async () => {

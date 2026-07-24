@@ -1,5 +1,6 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
 import {
   registerBulletinReadRoutes,
   type BulletinDetailResponse,
@@ -400,6 +401,90 @@ describe('Phase 6.5 bulletin security integration', () => {
     expect(detailResponse.status).toBe(200);
     expect(pdfResponse.status).toBe(200);
     expect(integration.counters.generateCalls).toBe(0);
+  });
+
+  it('teacher cannot download an unauthorized bulletin PDF', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = createAuthMiddleware();
+    const localResolveActor = async (req: AuthRequest) => {
+      if (!req.user) return null;
+      return { role: req.user.role || 'unknown', schoolId: req.user.schoolId ?? null };
+    };
+
+    const dataProvider: BulletinPdfDataProvider = {
+      getById: async (_actor, id) => {
+        return id === 1 ? pdfById[1] : null;
+      },
+    };
+
+    registerBulletinPdfRoute(app, {
+      resolveActor: localResolveActor,
+      verifyMiddleware,
+      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['admin', 'teacher'] }),
+      dataProvider,
+      pdfGenerator: async () => {
+        const pdfDoc = await PDFDocument.create();
+        pdfDoc.addPage();
+        return await pdfDoc.save();
+      },
+    });
+
+    await new Promise<void>((resolve) => {
+      activeServer = app.listen(0, () => resolve());
+    });
+    const address = activeServer.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const unauthorizedResponse = await fetch(`${baseUrl}/api/bulletins/2/pdf`, { headers: authHeader('teacherToken') });
+    expect(unauthorizedResponse.status).toBe(404);
+  });
+
+  it('teacher can download only authorized bulletins in batch and skips unauthorized ids', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = createAuthMiddleware();
+    const localResolveActor = async (req: AuthRequest) => {
+      if (!req.user) return null;
+      return { role: req.user.role || 'unknown', schoolId: req.user.schoolId ?? null };
+    };
+
+    const dataProvider: BulletinPdfDataProvider = {
+      getById: async (actor, id) => {
+        if (actor.role === 'teacher' && id === 1) return pdfById[1];
+        return null;
+      },
+    };
+
+    registerBulletinPdfRoute(app, {
+      resolveActor: localResolveActor,
+      verifyMiddleware,
+      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['admin', 'teacher'] }),
+      dataProvider,
+      pdfGenerator: async (data) => {
+        const pdfDoc = await PDFDocument.create();
+        const page = pdfDoc.addPage();
+        page.drawText(`SNAPSHOT_ONLY:${data.id}:${data.mention ?? ''}`);
+        return await pdfDoc.save();
+      },
+    });
+
+    await new Promise<void>((resolve) => {
+      activeServer = app.listen(0, () => resolve());
+    });
+    const address = activeServer.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const batchResponse = await fetch(`${baseUrl}/api/bulletins/pdf/batch?ids=1,2`, { headers: authHeader('teacherToken') });
+    const pdfBytes = new Uint8Array(await batchResponse.arrayBuffer());
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+
+    expect(batchResponse.status).toBe(200);
+    expect(pdfDoc.getPageCount()).toBe(1);
   });
 
   it('parent can only access own bulletin resources', async () => {

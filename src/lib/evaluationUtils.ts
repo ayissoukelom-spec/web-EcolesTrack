@@ -1,5 +1,14 @@
 import { Evaluation, Grade, Student, UserRole } from '../types.ts';
 
+/**
+ * NOTE: All functions in this module assume the `students` array passed
+ * as an argument has already been scoped to the relevant class/context
+ * (e.g. filtered by `classId` and/or authorization). These helpers are
+ * intentionally pure and do NOT perform authorization checks — callers
+ * must ensure they provide only authorized students (use `studentAccess`)
+ * when invoking these utilities in server or API handlers.
+ */
+
 export const parseDateValue = (value: string | Date | undefined | null): Date | null => {
   if (!value) return null;
   if (value instanceof Date) {

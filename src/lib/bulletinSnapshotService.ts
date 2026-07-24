@@ -2,6 +2,7 @@ import type express from 'express';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { requireRole, verifyToken } from '../middleware/auth.ts';
+import studentAccess from './studentAccess';
 import {
   bulletinLines,
   bulletins,
@@ -263,7 +264,14 @@ interface RegisterBulletinGenerateRouteOptions {
   resolveActor: (req: any) => Promise<{ role?: string; schoolId?: number | null } | null>;
   verifyMiddleware?: express.RequestHandler;
   accessMiddleware?: express.RequestHandler;
-  generateHandler?: (studentId: number, termId: number) => Promise<BulletinSnapshotResult>;
+  generateHandler?: (studentId: number, termId: number, persistence?: BulletinSnapshotPersistence) => Promise<BulletinSnapshotResult>;
+}
+
+class StudentAuthorizationError extends Error {
+  constructor(message?: string) {
+    super(message ?? 'Student authorization failed');
+    this.name = 'StudentAuthorizationError';
+  }
 }
 
 export const registerBulletinGenerateRoute = (
@@ -274,7 +282,7 @@ export const registerBulletinGenerateRoute = (
     resolveActor,
     verifyMiddleware = verifyToken as any,
     accessMiddleware = requireRole(['admin']) as any,
-    generateHandler = async (studentId, termId) => generateBulletinSnapshot(studentId, termId),
+    generateHandler = async (studentId, termId, persistence) => generateBulletinSnapshot(studentId, termId, persistence),
   } = options;
 
   app.post('/api/bulletins/generate', verifyMiddleware, accessMiddleware, async (req: any, res) => {
@@ -288,7 +296,112 @@ export const registerBulletinGenerateRoute = (
         return res.status(400).json({ error: 'studentId and termId are required' });
       }
 
-      const result = await generateHandler(studentId, termId);
+      // Build a persistence that uses studentAccess.getAuthorizedStudents when an actor is present
+      const persistence: BulletinSnapshotPersistence = {
+        transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {
+          return db.transaction(async (tx) => {
+            const ctx: BulletinSnapshotContext = {
+              async getStudentById(studentId) {
+                const [row] = await tx.select({
+                  id: students.id,
+                  classId: students.classId,
+                  schoolId: students.schoolId,
+                  firstName: students.firstName,
+                  lastName: students.lastName,
+                }).from(students).where(eq(students.id, studentId));
+                return row ?? null;
+              },
+              async getClassById(classId) {
+                const [row] = await tx.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
+                return row ?? null;
+              },
+              async getTermById(termId) {
+                const [row] = await tx.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+                return row ?? null;
+              },
+              async getClassStudents(classId) {
+                if (actor) {
+                  try {
+                    const rows = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
+                    return (rows as any).map((r: any) => ({ id: r.id, classId: r.classId, schoolId: r.schoolId, firstName: r.firstName, lastName: r.lastName }));
+                  } catch (e: any) {
+                    console.error('Bulletin generation student authorization failed', {
+                      classId,
+                      actor,
+                      error: e?.message || e,
+                    });
+                    throw new StudentAuthorizationError('Failed to authorize access to class students');
+                  }
+                }
+                return tx.select({
+                  id: students.id,
+                  classId: students.classId,
+                  schoolId: students.schoolId,
+                  firstName: students.firstName,
+                  lastName: students.lastName,
+                }).from(students).where(eq(students.classId, classId));
+              },
+              async getClassTermEvaluations(classId, termId) {
+                return tx.select({
+                  id: evaluations.id,
+                  classId: evaluations.classId,
+                  termId: evaluations.termId,
+                  subject: evaluations.subject,
+                  title: evaluations.title,
+                  coefficient: evaluations.coefficient,
+                  maxScore: evaluations.maxScore,
+                  countInBulletin: evaluations.countInBulletin,
+                }).from(evaluations).where(and(
+                  eq(evaluations.classId, classId),
+                  or(
+                    eq(evaluations.termId, termId),
+                    and(
+                      sql`${evaluations.termId} IS NULL`,
+                      sql`EXISTS (
+                        SELECT 1
+                        FROM school_terms st
+                        WHERE st.id = ${termId}
+                          AND st.start_date IS NOT NULL
+                          AND st.end_date IS NOT NULL
+                          AND ${evaluations.date} >= st.start_date
+                          AND ${evaluations.date} <= st.end_date
+                      )`,
+                    ),
+                  ),
+                ));
+              },
+              async getGradesForStudents(studentIds, evaluationIds) {
+                if (studentIds.length === 0 || evaluationIds.length === 0) return [];
+                return tx.select({ id: grades.id, evaluationId: grades.evaluationId, studentId: grades.studentId, score: grades.score }).from(grades).where(and(inArray(grades.studentId, studentIds), inArray(grades.evaluationId, evaluationIds)));
+              },
+              async insertBulletin(payload) {
+                const [inserted] = await tx.insert(bulletins).values({
+                  studentId: payload.studentId,
+                  classId: payload.classId,
+                  schoolYearId: payload.schoolYearId,
+                  termId: payload.termId,
+                  average: toStoredNumber(payload.average),
+                  totalPoints: toStoredStrictNumber(payload.totalPoints),
+                  totalCoefficients: toStoredStrictNumber(payload.totalCoefficients),
+                  rank: payload.rank,
+                  mention: payload.mention,
+                  appreciation: payload.appreciation,
+                  generatedAt: payload.generatedAt,
+                }).returning({ id: bulletins.id });
+                return inserted;
+              },
+              async insertBulletinLines(bulletinId, lines) {
+                if (lines.length === 0) return;
+                await tx.insert(bulletinLines).values(lines.map((line) => ({ bulletinId, subjectId: line.subjectId, subjectName: line.subjectName, coefficient: line.coefficient, average: toStoredNumber(line.average), teacherComment: line.teacherComment ?? null, rank: line.rank ?? null })));
+              },
+            };
+
+            return run(ctx);
+          });
+        },
+      };
+
+      const result = await generateHandler(studentId, termId, persistence);
       const createdId = (result as BulletinSnapshotResult & { id?: number }).id ?? result.bulletinId;
       return res.status(201).json({
         id: createdId,
@@ -299,7 +412,11 @@ export const registerBulletinGenerateRoute = (
         mention: result.mention,
         appreciation: result.appreciation,
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err instanceof StudentAuthorizationError) {
+        console.error('Bulletin generation authorization error:', err.message);
+        return res.status(403).json({ error: 'Unauthorized to generate bulletin for this class' });
+      }
       console.error('Failed to generate bulletin:', err);
       return res.status(500).json({ error: 'Failed to generate bulletin' });
     }
