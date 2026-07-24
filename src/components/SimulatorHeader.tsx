@@ -658,14 +658,16 @@ export default function SimulatorHeader({
           isOpen={createAccountOpen}
           onClose={() => setCreateAccountOpen(false)}
           ariaLabel="Créer un nouveau compte"
-          contentClassName="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto text-slate-800 shadow-xl relative z-[10000]"
+          contentClassName="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-hidden text-slate-800 shadow-xl relative z-[10000]"
           overlayClassName="bg-black/50 z-[9999]"
         >
-          <div className="flex items-start justify-between mb-4">
+          <div className="flex flex-col max-h-[calc(90vh-3rem)] overflow-hidden">
+            <div className="flex items-start justify-between mb-4 shrink-0">
               <h3 className="font-bold">Créer un nouveau compte</h3>
               <button aria-label="Fermer" className="text-slate-400 hover:text-slate-600 font-bold text-lg" onClick={() => setCreateAccountOpen(false)}>✕</button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <label className="block text-xs">
                   <RequiredLabel label="Rôle" required />
@@ -950,11 +952,11 @@ export default function SimulatorHeader({
               </div>
             </div>
 
-            <div className="mt-2">
+            <div className="mt-3 shrink-0">
               {createError && <div className="text-rose-600 text-sm">{createError}</div>}
             </div>
 
-            <div className="flex justify-end gap-2 mt-3">
+            <div className="flex justify-end gap-2 mt-3 shrink-0">
               <button className="px-3 py-2 rounded bg-slate-100" onClick={() => setCreateAccountOpen(false)} disabled={isCreating}>Annuler</button>
               <button className="px-3 py-2 rounded bg-emerald-600 text-white" onClick={async () => {
                 try {
@@ -1069,6 +1071,8 @@ export default function SimulatorHeader({
                 {isCreating ? 'Création...' : 'Créer'}
               </button>
             </div>
+          </div>
+          </div>
         </ModalSurface>
       )}
 
