@@ -169,7 +169,10 @@ export const getOverdueEvaluations = (
     const ageMs = nowMs - evaluationTimestamp.getTime();
     if (ageMs < overdueThresholdMs) return false;
 
-    const classStudents = students.filter((st) => st.classId === ev.classId);
+    const evaluationSchoolId = ev.schoolId ?? null;
+    const classStudents = students.filter((st) =>
+      st.classId === ev.classId && (evaluationSchoolId == null || st.schoolId === evaluationSchoolId)
+    );
     if (classStudents.length === 0) return false;
 
     const eligibleStudents = classStudents.filter((st) => {

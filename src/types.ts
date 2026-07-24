@@ -124,6 +124,7 @@ export interface Student {
 export interface Evaluation {
   id: number;
   classId: number;
+  schoolId?: number | null;
   className?: string;
   teacherId: number;
   teacherName?: string;

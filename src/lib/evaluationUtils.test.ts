@@ -112,6 +112,39 @@ describe('evaluation eligibility and grading rules', () => {
     expect(overdue.map((ev) => ev.id)).toEqual([2]);
   });
 
+  it('ignore les élèves d une autre école avec le même classId pour le calcul des overdue', () => {
+    const evaluationDifferentSchool = {
+      ...evaluation,
+      id: 99,
+      classId: 20,
+      date: '2024-01-01',
+      createdAt: '2024-01-01T09:00:00Z',
+      schoolId: 10,
+    } as Evaluation & { schoolId: number };
+
+    const allStudents: Student[] = [
+      { id: 1, schoolId: 10, classId: 20, className: '3ème A', firstName: 'Alice', lastName: 'Dupont', enrolledAt: '2023-12-01T08:00:00Z' },
+      { id: 2, schoolId: 10, classId: 20, className: '3ème A', firstName: 'Bob', lastName: 'Martin', enrolledAt: '2023-12-01T08:00:00Z' },
+      { id: 3, schoolId: 20, classId: 20, className: '3ème A', firstName: 'Other', lastName: 'Student', enrolledAt: '2023-12-01T08:00:00Z' },
+    ];
+
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 99, studentId: 1, score: '15', remarks: 'Bien' },
+      { id: 2, evaluationId: 99, studentId: 2, score: '14', remarks: 'OK' },
+    ];
+
+    const overdue = getOverdueEvaluations(
+      [evaluationDifferentSchool],
+      allStudents,
+      grades,
+      'super_admin',
+      undefined,
+      { overdueDays: 7, nowMs: new Date('2024-02-15T00:00:00Z').getTime() },
+    );
+
+    expect(overdue).toHaveLength(0);
+  });
+
   it('garde valide un élève historique déjà noté sur une ancienne évaluation', () => {
     const legacyEvaluation: Evaluation = {
       ...evaluation,
