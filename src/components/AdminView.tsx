@@ -462,6 +462,7 @@ export default function AdminView({
   const [searchQuery, setSearchQuery] = useState('');
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
+  const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
   
@@ -636,6 +637,59 @@ export default function AdminView({
     return text.toLowerCase().includes(searchQuery.toLowerCase());
   };
 
+  const parseUserDate = (value?: string | null) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getLocalDateOnly = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  const matchesCreationDateFilter = (value: string | null | undefined, filter: string) => {
+    if (!filter) return true;
+    const date = parseUserDate(value);
+    if (!date) return false;
+
+    const today = getLocalDateOnly(new Date());
+    const candidate = getLocalDateOnly(date);
+
+    if (filter === 'today') {
+      return candidate.getTime() === today.getTime();
+    }
+
+    if (filter === 'thisWeek') {
+      const weekStart = new Date(today);
+      const day = weekStart.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      weekStart.setDate(weekStart.getDate() + diff);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      return candidate.getTime() >= weekStart.getTime() && candidate.getTime() <= weekEnd.getTime();
+    }
+
+    if (filter === 'thisMonth') {
+      return candidate.getFullYear() === today.getFullYear() && candidate.getMonth() === today.getMonth();
+    }
+
+    if (filter === 'thisYear') {
+      return candidate.getFullYear() === today.getFullYear();
+    }
+
+    return true;
+  };
+
+  const formatCreatedAt = (value?: string | null) => {
+    const date = parseUserDate(value);
+    if (!date) return '—';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = String(date.getFullYear());
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const hasTime = /[T\s]\d{2}:\d{2}/.test(String(value));
+    return hasTime ? `${day}/${month}/${year} ${hours}:${minutes}` : `${day}/${month}/${year}`;
+  };
+
   const { user: simulatedUser } = useAuth();
   const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid)
     || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
@@ -692,6 +746,9 @@ export default function AdminView({
       return false;
     }
     if (accountRoleFilter && u.role !== accountRoleFilter) {
+      return false;
+    }
+    if (!matchesCreationDateFilter(u.createdAt, accountCreationDateFilter)) {
       return false;
     }
     return filterBySearch(`${u.name} ${u.email} ${u.role}`);
@@ -4386,11 +4443,12 @@ export default function AdminView({
               </div>
             </div>
             {(userRole === 'super_admin' || userRole === 'school_admin') && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {userRole === 'super_admin' && (
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
+                    <label className="text-slate-600 text-xs sm:text-sm font-semibold" htmlFor="account-school-filter">Filtrer par école</label>
                     <select
+                      id="account-school-filter"
                       className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
                       value={superAdminSchoolFilterId ?? ''}
                       onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
@@ -4403,8 +4461,9 @@ export default function AdminView({
                   </div>
                 )}
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par rôle</label>
+                  <label className="text-slate-600 text-xs sm:text-sm font-semibold" htmlFor="account-role-filter">Filtrer par rôle</label>
                   <select
+                    id="account-role-filter"
                     className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
                     value={accountRoleFilter}
                     onChange={(e) => setAccountRoleFilter(e.target.value)}
@@ -4420,6 +4479,21 @@ export default function AdminView({
                     <option value="parent">Parent</option>
                   </select>
                 </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <label className="text-slate-600 text-xs sm:text-sm font-semibold" htmlFor="account-creation-date-filter">Filtrer par date de création</label>
+                  <select
+                    id="account-creation-date-filter"
+                    className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+                    value={accountCreationDateFilter}
+                    onChange={(e) => setAccountCreationDateFilter(e.target.value)}
+                  >
+                    <option value="">Toutes les dates</option>
+                    <option value="today">Aujourd'hui</option>
+                    <option value="thisWeek">Cette semaine</option>
+                    <option value="thisMonth">Ce mois</option>
+                    <option value="thisYear">Cette année</option>
+                  </select>
+                </div>
               </div>
             )}
             <div className="overflow-x-auto overflow-y-auto max-h-[56vh] min-h-[18rem] pb-2">
@@ -4433,6 +4507,7 @@ export default function AdminView({
                   <th className="px-3 sm:px-6 py-4">Année scolaire</th>
                   <th className="px-3 sm:px-6 py-4">Spécialisation</th>
                   <th className="px-3 sm:px-6 py-4">Téléphone</th>
+                  <th className="px-3 sm:px-6 py-4">Date de création</th>
                   <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -4450,6 +4525,7 @@ export default function AdminView({
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).specialization || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).phone || '—'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{formatCreatedAt(user.createdAt)}</td>
                     <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => {
@@ -4512,7 +4588,7 @@ export default function AdminView({
                 ))}
                 {usersList.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="text-center py-8 text-slate-400 text-xs">Aucun compte de connexion disponible.</td>
+                    <td colSpan={9} className="text-center py-8 text-slate-400 text-xs">Aucun compte de connexion disponible.</td>
                   </tr>
                 )}
               </tbody>

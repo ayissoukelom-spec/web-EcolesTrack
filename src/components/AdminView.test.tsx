@@ -709,6 +709,57 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.queryByRole('button', { name: /Créer un compte/i })).toBeNull();
   });
 
+  it('shows the creation date column and filters accounts by creation date', () => {
+    const currentYear = new Date().getFullYear();
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [];
+    const teachers: Teacher[] = [];
+    const students: Student[] = [];
+    const parents: Parent[] = [];
+    const users: User[] = [
+      { id: 1, uid: 'u1', email: 'alice@example.com', name: 'Alice Martin', role: 'teacher', schoolId: 1, createdAt: new Date(currentYear, 5, 1, 12, 0, 0).toISOString() },
+      { id: 2, uid: 'u2', email: 'bob@example.com', name: 'Bob Durand', role: 'parent', schoolId: 1, createdAt: new Date(currentYear - 1, 5, 1, 12, 0, 0).toISOString() },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={() => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Comptes/i }));
+
+    expect(screen.getByText('Date de création')).toBeTruthy();
+    expect(screen.getByText((content, element) => content.startsWith(`01/06/${currentYear}`))).toBeTruthy();
+
+    const dateFilter = screen.getByLabelText(/Filtrer par date de création/i);
+    fireEvent.change(dateFilter, { target: { value: 'thisYear' } });
+
+    expect(screen.getByText((content, element) => content.startsWith(`01/06/${currentYear}`))).toBeTruthy();
+    expect(screen.queryByText((content, element) => content.startsWith(`01/06/${currentYear - 1}`))).toBeNull();
+  });
+
   it('hides the edit button for teachers in the teachers list', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
