@@ -534,7 +534,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
@@ -1647,6 +1647,19 @@ export default function AdminView({
   const [schoolToEdit, setSchoolToEdit] = useState<School | null>(null);
   const [editSchoolError, setEditSchoolError] = useState<string | null>(null);
 
+  const existingEditSchoolSubjectNames = schoolToEdit
+    ? Array.from(new Set((subjectsList || [])
+      .filter((subject: any) => subject.schoolId === schoolToEdit.id)
+      .map((subject: any) => String(subject.name || '').trim())
+      .filter(Boolean)))
+    : [];
+
+  const availableEditSchoolSubjectNames = Array.from(new Set((subjectsList || [])
+    .map((subject: any) => String(subject.name || '').trim())
+    .filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'fr'))
+    .filter((name) => !existingEditSchoolSubjectNames.includes(name));
+
   // States for student editing
   const [editStudentOpen, setEditStudentOpen] = useState(false);
   const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
@@ -1872,83 +1885,125 @@ export default function AdminView({
             contentClassName="max-w-md"
             ariaLabel="Modifier l'école"
           >
-            <div className="w-full">
+            <div className="w-full flex flex-col min-h-0">
               <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'école</h3>
-              <div className="space-y-3 text-sm">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
-                    <RequiredLabel label="Nom de l'établissement" required />
-                  </label>
-                  <input
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
-                    placeholder="C.S LE SAVOIR"
-                    value={editSchoolForm.name}
-                    onChange={(e) => setEditSchoolForm({ ...editSchoolForm, name: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adresse</label>
-                  <input
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
-                    placeholder="ex. 123 Rue de l'École"
-                    value={editSchoolForm.address}
-                    onChange={(e) => setEditSchoolForm({ ...editSchoolForm, address: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Téléphone</label>
-                  <div className="flex gap-2">
-                    <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
+              <div className="flex-1 min-h-0 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100">
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      <RequiredLabel label="Nom de l'établissement" required />
+                    </label>
                     <input
-                      className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-slate-800 focus:outline-indigo-500"
-                      placeholder="90000000"
-                      value={editSchoolForm.phoneDigits}
-                      onChange={(e) => setEditSchoolForm({ ...editSchoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8) })}
-                      maxLength={8}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
+                      placeholder="C.S LE SAVOIR"
+                      value={editSchoolForm.name}
+                      onChange={(e) => setEditSchoolForm({ ...editSchoolForm, name: e.target.value })}
                     />
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classes déjà assignées</label>
-                  <div className="flex flex-wrap gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adresse</label>
+                    <input
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
+                      placeholder="ex. 123 Rue de l'École"
+                      value={editSchoolForm.address}
+                      onChange={(e) => setEditSchoolForm({ ...editSchoolForm, address: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Téléphone</label>
+                    <div className="flex gap-2">
+                      <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
+                      <input
+                        className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-slate-800 focus:outline-indigo-500"
+                        placeholder="90000000"
+                        value={editSchoolForm.phoneDigits}
+                        onChange={(e) => setEditSchoolForm({ ...editSchoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        maxLength={8}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classes déjà assignées</label>
+                    <div className="flex flex-wrap gap-2">
                       {schoolToEdit && Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).length > 0 ? (
-                      Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).map((name) => (
-                        <span key={name} className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-medium">
-                          {name}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-xs text-slate-500">Aucune classe assignée actuellement.</span>
-                    )}
+                        Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).map((name) => (
+                          <span key={name} className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-medium">
+                            {name}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">Aucune classe assignée actuellement.</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des classes à cette école</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
-                    {Array.from(new Set(sortClasses(classesList || []).map((c) => c.name)))
-                      .filter((name) => !classesList.some((c) => isClassVisibleToSchool(c, schoolToEdit?.id) && c.name === name))
-                      .map((name) => (
-                        <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
-                          <input
-                            type="checkbox"
-                            checked={editSchoolForm.classNames.includes(name)}
-                            onChange={(e) => {
-                              const current = editSchoolForm.classNames || [];
-                              const next = e.target.checked
-                                ? [...current, name]
-                                : current.filter((n) => n !== name);
-                              setEditSchoolForm({ ...editSchoolForm, classNames: next });
-                            }}
-                            className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
-                          />
-                          <span className="text-sm text-slate-700">{name}</span>
-                        </label>
-                      ))}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des classes à cette école</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
+                      {Array.from(new Set(sortClasses(classesList || []).map((c) => c.name)))
+                        .filter((name) => !classesList.some((c) => isClassVisibleToSchool(c, schoolToEdit?.id) && c.name === name))
+                        .map((name) => (
+                          <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                            <input
+                              type="checkbox"
+                              checked={editSchoolForm.classNames.includes(name)}
+                              onChange={(e) => {
+                                const current = editSchoolForm.classNames || [];
+                                const next = e.target.checked
+                                  ? [...current, name]
+                                  : current.filter((n) => n !== name);
+                                setEditSchoolForm({ ...editSchoolForm, classNames: next });
+                              }}
+                              className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                            />
+                            <span className="text-sm text-slate-700">{name}</span>
+                          </label>
+                        ))}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Sélectionnez les classes à ajouter à cette école si elles n'ont pas été créées lors de son enregistrement.</p>
                   </div>
-                  <p className="mt-2 text-xs text-slate-500">Sélectionnez les classes à ajouter à cette école si elles n'ont pas été créées lors de son enregistrement.</p>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Matières déjà assignées</label>
+                    <div className="flex flex-wrap gap-2">
+                      {existingEditSchoolSubjectNames.length > 0 ? (
+                        existingEditSchoolSubjectNames.map((name) => (
+                          <span key={name} className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-medium">
+                            {name}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">Aucune matière assignée actuellement.</span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des matières à cette école</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
+                      {availableEditSchoolSubjectNames.length > 0 ? (
+                        availableEditSchoolSubjectNames.map((name) => (
+                          <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                            <input
+                              type="checkbox"
+                              checked={editSchoolForm.subjectNames.includes(name)}
+                              onChange={(e) => {
+                                const current = editSchoolForm.subjectNames || [];
+                                const next = e.target.checked
+                                  ? [...current, name]
+                                  : current.filter((n) => n !== name);
+                                setEditSchoolForm({ ...editSchoolForm, subjectNames: next });
+                              }}
+                              className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                            />
+                            <span className="text-sm text-slate-700">{name}</span>
+                          </label>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">Aucune matière disponible à ajouter.</span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Choisissez les matières à ajouter à l'école. Les matières déjà assignées ne sont pas affichées.</p>
+                  </div>
                 </div>
               </div>
-
               {editSchoolError && (
                 <div className="mt-3 p-2 bg-rose-50 border border-rose-200 rounded text-rose-700 text-xs flex items-start gap-2">
                   <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
@@ -1956,7 +2011,7 @@ export default function AdminView({
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 mt-6">
+              <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-200">
                 <button
                   onClick={() => {
                     setEditSchoolOpen(false);
@@ -1986,6 +2041,10 @@ export default function AdminView({
                           address: editSchoolForm.address.trim(),
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
                         };
+                        const subjectNames = editSchoolForm.subjectNames?.filter((name) => name.trim() !== '');
+                        if (subjectNames && subjectNames.length > 0) {
+                          editPayload.subjectNames = subjectNames;
+                        }
                         if (phoneDigits) {
                           editPayload.phone = `+228 ${phoneDigits}`;
                         }
@@ -3525,7 +3584,7 @@ export default function AdminView({
                               onClick={() => {
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, classNames: [] });
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}

@@ -224,7 +224,7 @@ export default function AppShell() {
     }
   };
 
-  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone: string; classNames?: string[] }) => {
+  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => {
     await apiFetch(`/api/schools/${id}`, { method: 'PUT', body: JSON.stringify(data) });
     await fetchAllData();
   };
