@@ -2141,6 +2141,28 @@ export async function createApp() {
             const trimmedSubjectName = String(subjectName || '').trim();
             if (!trimmedSubjectName) continue;
 
+            const [globalSubject] = await db.select().from(subjects).where(
+              and(sql`${subjects.schoolId} IS NULL`, eq(subjects.name, trimmedSubjectName))
+            ).limit(1);
+
+            if (globalSubject) {
+              const subjectId = globalSubject.id;
+              const existingSchoolSubject = await db.select().from(schoolSubjects).where(
+                and(
+                  eq(schoolSubjects.schoolId, id),
+                  eq(schoolSubjects.subjectId, subjectId)
+                )
+              ).limit(1);
+              if (existingSchoolSubject.length > 0) continue;
+
+              await db.insert(schoolSubjects).values({
+                schoolId: id,
+                subjectId,
+                status: 'approved',
+              });
+              continue;
+            }
+
             const existingSubject = await db.select().from(subjects).where(and(eq(subjects.schoolId, id), eq(subjects.name, trimmedSubjectName))).limit(1);
             if (existingSubject.length > 0) continue;
 
