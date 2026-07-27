@@ -1932,9 +1932,16 @@ export async function createApp() {
       const result = await db.insert(schools).values({ name, address, phone }).returning();
       const createdSchool = result[0];
 
-      // If classNames are provided, create them using the global academic year
       if (Array.isArray(classNames) && classNames.length > 0) {
         try {
+          const normalizedClassNames = Array.from(
+            new Set(
+              classNames
+                .map((className: any) => String(className || '').trim())
+                .filter((name: string) => name)
+            )
+          );
+
           const [globalActiveYear] = await db.select().from(academicYears).where(
             and(eq(academicYears.isActive, true), sql`${academicYears.schoolId} IS NULL`)
           ).limit(1);
@@ -1953,16 +1960,90 @@ export async function createApp() {
           if (!yearId) {
             console.warn('No academic years exist yet; skipped class creation for school because no global year was available.');
           } else {
-            for (const className of classNames) {
-              const trimmedClassName = String(className || '').trim();
-              if (!trimmedClassName) continue;
+            for (const trimmedClassName of normalizedClassNames) {
+              const [globalClass] = await db.select().from(classes).where(
+                and(
+                  sql`${classes.schoolId} IS NULL`,
+                  eq(classes.name, trimmedClassName)
+                )
+              ).limit(1);
+
+              if (globalClass) {
+                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
+                  and(
+                    eq(schoolClasses.schoolId, createdSchool.id),
+                    eq(schoolClasses.classId, globalClass.id)
+                  )
+                ).limit(1);
+
+                if (!existingSchoolClass) {
+                  await db.insert(schoolClasses).values({
+                    schoolId: createdSchool.id,
+                    classId: globalClass.id,
+                    status: 'approved',
+                  });
+                }
+                continue;
+              }
+
+              const [existingLocalClass] = await db.select().from(classes).where(
+                and(
+                  sql`${classes.schoolId} IS NOT NULL`,
+                  eq(classes.academicYearId, yearId),
+                  eq(classes.name, trimmedClassName)
+                )
+              ).limit(1);
+
+              if (existingLocalClass) {
+                const originalSchoolId = existingLocalClass.schoolId;
+                await db.update(classes).set({ schoolId: null }).where(eq(classes.id, existingLocalClass.id));
+
+                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
+                  and(
+                    eq(schoolClasses.schoolId, createdSchool.id),
+                    eq(schoolClasses.classId, existingLocalClass.id)
+                  )
+                ).limit(1);
+
+                if (!existingSchoolClass) {
+                  await db.insert(schoolClasses).values({
+                    schoolId: createdSchool.id,
+                    classId: existingLocalClass.id,
+                    status: 'approved',
+                  });
+                }
+
+                if (originalSchoolId != null && originalSchoolId !== createdSchool.id) {
+                  const [existingOriginalSchoolClass] = await db.select().from(schoolClasses).where(
+                    and(
+                      eq(schoolClasses.schoolId, originalSchoolId),
+                      eq(schoolClasses.classId, existingLocalClass.id)
+                    )
+                  ).limit(1);
+
+                  if (!existingOriginalSchoolClass) {
+                    await db.insert(schoolClasses).values({
+                      schoolId: originalSchoolId,
+                      classId: existingLocalClass.id,
+                      status: 'approved',
+                    });
+                  }
+                }
+                continue;
+              }
 
               try {
-                await db.insert(classes).values({
+                const [newClass] = await db.insert(classes).values({
                   name: trimmedClassName,
-                  schoolId: createdSchool.id,
+                  schoolId: null,
                   academicYearId: yearId,
                 }).returning();
+
+                await db.insert(schoolClasses).values({
+                  schoolId: createdSchool.id,
+                  classId: newClass.id,
+                  status: 'approved',
+                });
               } catch (classErr: any) {
                 console.warn(`Warning: Could not create class "${trimmedClassName}":`, classErr?.message);
               }
@@ -2084,9 +2165,16 @@ export async function createApp() {
         return res.status(404).json({ error: 'School not found' });
       }
 
-      // If classNames are provided, create them using the global academic year
       if (Array.isArray(classNames) && classNames.length > 0) {
         try {
+          const normalizedClassNames = Array.from(
+            new Set(
+              classNames
+                .map((className: any) => String(className || '').trim())
+                .filter((name: string) => name)
+            )
+          );
+
           const [globalActiveYear] = await db.select().from(academicYears).where(
             and(eq(academicYears.isActive, true), sql`${academicYears.schoolId} IS NULL`)
           ).limit(1);
@@ -2105,26 +2193,90 @@ export async function createApp() {
           if (!yearId) {
             console.warn('No academic years exist yet; skipped class creation during school update because no global year was available.');
           } else {
-            for (const className of classNames) {
-              const trimmedClassName = String(className || '').trim();
-              if (!trimmedClassName) continue;
-
-              const existingClass = await db.select().from(classes).where(
+            for (const trimmedClassName of normalizedClassNames) {
+              const [globalClass] = await db.select().from(classes).where(
                 and(
-                  eq(classes.schoolId, id),
+                  sql`${classes.schoolId} IS NULL`,
+                  eq(classes.name, trimmedClassName)
+                )
+              ).limit(1);
+
+              if (globalClass) {
+                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
+                  and(
+                    eq(schoolClasses.schoolId, id),
+                    eq(schoolClasses.classId, globalClass.id)
+                  )
+                ).limit(1);
+
+                if (!existingSchoolClass) {
+                  await db.insert(schoolClasses).values({
+                    schoolId: id,
+                    classId: globalClass.id,
+                    status: 'approved',
+                  });
+                }
+                continue;
+              }
+
+              const [existingLocalClass] = await db.select().from(classes).where(
+                and(
+                  sql`${classes.schoolId} IS NOT NULL`,
                   eq(classes.academicYearId, yearId),
                   eq(classes.name, trimmedClassName)
                 )
               ).limit(1);
 
-              if (existingClass.length > 0) continue;
+              if (existingLocalClass) {
+                const originalSchoolId = existingLocalClass.schoolId;
+                await db.update(classes).set({ schoolId: null }).where(eq(classes.id, existingLocalClass.id));
+
+                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
+                  and(
+                    eq(schoolClasses.schoolId, id),
+                    eq(schoolClasses.classId, existingLocalClass.id)
+                  )
+                ).limit(1);
+
+                if (!existingSchoolClass) {
+                  await db.insert(schoolClasses).values({
+                    schoolId: id,
+                    classId: existingLocalClass.id,
+                    status: 'approved',
+                  });
+                }
+
+                if (originalSchoolId != null && originalSchoolId !== id) {
+                  const [existingOriginalSchoolClass] = await db.select().from(schoolClasses).where(
+                    and(
+                      eq(schoolClasses.schoolId, originalSchoolId),
+                      eq(schoolClasses.classId, existingLocalClass.id)
+                    )
+                  ).limit(1);
+
+                  if (!existingOriginalSchoolClass) {
+                    await db.insert(schoolClasses).values({
+                      schoolId: originalSchoolId,
+                      classId: existingLocalClass.id,
+                      status: 'approved',
+                    });
+                  }
+                }
+                continue;
+              }
 
               try {
-                await db.insert(classes).values({
+                const [newClass] = await db.insert(classes).values({
                   name: trimmedClassName,
-                  schoolId: id,
+                  schoolId: null,
                   academicYearId: yearId,
                 }).returning();
+
+                await db.insert(schoolClasses).values({
+                  schoolId: id,
+                  classId: newClass.id,
+                  status: 'approved',
+                });
               } catch (classErr: any) {
                 console.warn(`Warning: Could not create class "${trimmedClassName}" during school update:`, classErr?.message);
               }
@@ -3066,44 +3218,49 @@ export async function createApp() {
 
       console.log('Attempting to create class', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
 
-      // Defensive duplicate check to avoid DB unique constraint errors
       try {
-        const duplicateCondition = resolvedSchoolId != null
-          ? and(
-            eq(classes.name, trimmedName),
-            eq(classes.schoolId, Number(resolvedSchoolId)),
-            eq(classes.academicYearId, Number(academicYearId))
-          )
-          : and(
+        const [existingGlobalClass] = await db.select().from(classes).where(
+          and(
             eq(classes.name, trimmedName),
             sql`${classes.schoolId} IS NULL`,
             eq(classes.academicYearId, Number(academicYearId))
-          );
+          )
+        ).limit(1);
 
-        const existing = await db.select().from(classes).where(duplicateCondition);
-        if (existing && existing.length > 0) {
-          return res.status(400).json({ error: `Classe déjà existante: ${trimmedName}` });
+        let classRow = existingGlobalClass;
+
+        if (!classRow) {
+          const [createdClass] = await db.insert(classes).values({
+            name: trimmedName,
+            schoolId: null,
+            academicYearId: Number(academicYearId),
+            teacherId: teacherId ? Number(teacherId) : null,
+          }).returning();
+          classRow = createdClass;
         }
-      } catch (dupErr: any) {
-        console.error('Error while checking duplicate class:', dupErr);
-        // continue to attempt insert; server will return DB error if it fails
-      }
 
-      try {
-        const [newClass] = await db.insert(classes).values({
-          name: trimmedName,
-          schoolId: resolvedSchoolId != null ? Number(resolvedSchoolId) : null,
-          academicYearId: Number(academicYearId),
-          teacherId: teacherId ? Number(teacherId) : null,
-        }).returning();
+        if (classRow && resolvedSchoolId != null) {
+          const normalizedSchoolId = Number(resolvedSchoolId);
+          const [existingSchoolClass] = await db.select().from(schoolClasses).where(
+            and(
+              eq(schoolClasses.schoolId, normalizedSchoolId),
+              eq(schoolClasses.classId, classRow.id)
+            )
+          ).limit(1);
 
-        console.log('✅ CLASS CREATED:', newClass);
-        console.log('✅ CREATED CLASS ID:', newClass.id);
-        console.log('✅ CLASS CREATED SUCCESSFULLY');
+          if (!existingSchoolClass) {
+            await db.insert(schoolClasses).values({
+              schoolId: normalizedSchoolId,
+              classId: classRow.id,
+              status: 'approved',
+            });
+          }
+        }
 
+        console.log('✅ CLASS CREATED/REUSED:', classRow);
         res.status(201).json({
-          ...newClass,
-          schoolId: newClass.schoolId ?? null,
+          ...classRow,
+          schoolId: classRow.schoolId ?? null,
           status: 'approved',
         });
       } catch (insertErr: any) {

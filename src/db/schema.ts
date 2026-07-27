@@ -118,6 +118,7 @@ export const classes = pgTable('classes', {
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'set null' }), // Principal teacher
 }, (table) => ({
   schoolAcademicYearNameIdx: uniqueIndex('classes_school_academic_year_name_idx').on(table.schoolId, table.academicYearId, table.name),
+  globalClassNameAcademicYearUniqueIdx: uniqueIndex('classes_global_name_academic_year_idx').on(table.name, table.academicYearId).where(sql`${table.schoolId} IS NULL`),
 }));
 
 // 7. Class teacher assignments (many-to-many)
