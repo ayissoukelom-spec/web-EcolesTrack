@@ -19,6 +19,7 @@
             await db.update(teachers).set({ phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
 */
 import express from 'express';
+import fetch from 'node-fetch';
 import path from 'path';
 import { promises as fsPromises } from 'fs';
 import crypto from 'crypto';
@@ -5744,7 +5745,7 @@ export async function createApp() {
         await db.delete(notifications).where(
           and(
             eq(notifications.evaluationId, parsedEvaluationId),
-            eq(notifications.category, 'evaluation_created')
+            eq(notifications.type, 'info')
           ) as any
         );
       }
@@ -5827,6 +5828,7 @@ export async function createApp() {
       if (normalizedScore === '' || normalizedScore === null || normalizedScore === undefined) {
         return res.status(400).json({ error: 'La note est requise' });
       }
+      let isGradeModification = false;
 
       // Load the evaluation to verify permissions and existence
       const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
@@ -5918,6 +5920,7 @@ export async function createApp() {
           const message = 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.';
           return res.status(403).json({ error: message });
         }
+        isGradeModification = true;
 
         const updated = await db
           .update(grades)
@@ -5934,6 +5937,46 @@ export async function createApp() {
           editCount: 0,
         }).returning();
         savedGrade = inserted[0];
+      }
+
+      // Notification mobile parent après création de la note
+      try {
+        console.log("🔔 Début notification note", { studentId });
+
+        const [studentRecord] = await db
+          .select()
+          .from(students)
+          .where(eq(students.id, parseInt(studentId)));
+
+        if (studentRecord?.parentId) {
+          const [parentRecord] = await db
+            .select()
+            .from(parents)
+            .where(eq(parents.id, studentRecord.parentId));
+
+          if (parentRecord?.userId) {
+            await fetch("http://localhost:3001/api/internal/grade-notification", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                parentId: parentRecord.userId,
+                title: "Nouvelle note disponible",
+                message: `Une nouvelle note a été ajoutée : ${score}`,
+                category: "grade",
+                metadata: {
+                  gradeId: savedGrade.id,
+                  studentId,
+                  evaluationId,
+                },
+                dedupeKey: `grade-${savedGrade.id}`,
+              }),
+            });
+          }
+        }
+      } catch (notificationError) {
+        console.error("Erreur notification mobile note:", notificationError);
       }
 
       let totalStudentsInClass: Array<{ count: number }>; 
@@ -5989,12 +6032,17 @@ export async function createApp() {
           ? await db.select().from(parents).where(eq(parents.id, student.parentId))
           : [null];
         if (parentRecord) {
-          await db.insert(notifications).values({
-            userId: parentRecord.userId,
-            title: `Nouvelle note pour ${student.firstName}`,
-            body: `${student.firstName} a obtenu la note de ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`,
+      await db.insert(notifications).values({
+        userId: parentRecord.userId,
+        title: isGradeModification
+          ? `Note modifiée pour ${student.firstName}`
+          : `Nouvelle note pour ${student.firstName}`,
+
+        body: isGradeModification
+          ? `${student.firstName} a une note modifiée : ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`
+          : `${student.firstName} a obtenu une nouvelle note : ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`,
             type: 'grade',
-          });
+      });
         }
       }
 
