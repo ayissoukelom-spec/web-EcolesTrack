@@ -4682,6 +4682,30 @@ export async function createApp() {
           body: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
           type: 'absence',
         });
+
+        try {
+          await fetch("http://localhost:3001/api/internal/absence-notification", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              parentId: parentRecord.userId,
+              title: `Nouvelle absence pour ${student.firstName}`,
+              message: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
+              category: "absence",
+              metadata: {
+                absenceId: result[0].id,
+                studentId,
+                classId,
+                period,
+              },
+              dedupeKey: `absence-${result[0].id}`,
+            }),
+          });
+        } catch (notificationError) {
+          console.error("Erreur notification mobile absence:", notificationError);
+        }
       }
 
       res.status(201).json(result[0]);
@@ -6507,25 +6531,44 @@ if (uniqueParentIds.length > 0) {
           query = query.where(eq(users.schoolId, actor.schoolId)) as any;
         }
         
-        const parentsList = await query;
+                const parentsList = await query;
         targetUserIds = parentsList.map(p => p.userId);
       }
 
       for (const id of targetUserIds) {
-        await db.insert(notifications).values({
-          userId: id,
-          title,
-          body,
-          type,
-        });
-      }
-
-      res.json({ success: true, message: `Notification successfully routed to ${targetUserIds.length} users.` });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to dispatch notifications' });
-    }
+  await db.insert(notifications).values({
+    userId: id,
+    title,
+    body,
+    type,
   });
 
+  await fetch("http://localhost:3001/api/internal/info-notification", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    parentId: String(id),
+    title,
+    message: body,
+    category: "info",
+    metadata: {
+      deepLink: "ecoletrack://dashboard",
+    },
+    dedupeKey: `info-${Date.now()}-${id}`,
+  }),
+});
+}
+
+      res.json({ success: true, message: `Notification successfully routed to ${targetUserIds.length} users.` });
+   } catch (err: any) {
+  console.error("❌ ERREUR ENVOI INFORMATION :", err);
+  res.status(500).json({ 
+    error: err.message || 'Failed to dispatch notifications' 
+  });
+}
+});
 
   // ==========================================
   // VITE DEVELOPMENT ENVIRONMENT MIDDLEWARE
