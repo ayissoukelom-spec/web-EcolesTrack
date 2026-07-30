@@ -5690,15 +5690,57 @@ export async function createApp() {
         )
       );
 
-      if (uniqueParentIds.length > 0) {
-        const notificationsToInsert = uniqueParentIds.map((parentUserId) => ({
-          userId: parentUserId,
+      const formattedDate = new Date(date).toLocaleString("fr-FR", {
+  day: "2-digit",
+  month: "long",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const evaluationMessage = `Un nouveau devoir en ${subject} a été programmé pour la classe de ${classRecord.name} sur le ${formattedDate}. Encouragez votre enfant à se préparer !`;
+console.log("📌 MESSAGE DEVOIR GENERE :", evaluationMessage);
+
+if (uniqueParentIds.length > 0) {
+  const notificationsToInsert = uniqueParentIds.map((parentUserId) => ({
+    userId: parentUserId,
+    evaluationId: createdEvaluation.id,
+    title: `Nouveau devoir publié : ${title}`,
+    body: evaluationMessage,
+    type: 'grade',
+  }));
+
+  await db.insert(notifications).values(notificationsToInsert);
+        
+        for (const parentUserId of uniqueParentIds) {
+  try {
+    console.log("📤 ENVOI NOTIFICATION DEVOIR", {
+  parentUserId,
+  evaluationId: createdEvaluation.id,
+  title
+});
+    await fetch("http://localhost:3001/api/internal/evaluation-notification", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        parentId: parentUserId,
+        title: `Nouveau devoir à venir : ${title}`,
+        message: evaluationMessage,
+        category: "evaluation",
+        metadata: {
           evaluationId: createdEvaluation.id,
-          title: `Nouveau devoir publié : ${title}`,
-          body: `Un nouveau devoir en ${subject} a été publié pour la classe ${classRecord.name} le ${date}. Encouragez votre enfant à se préparer !`,
-          type: 'grade',
-        }));
-        await db.insert(notifications).values(notificationsToInsert);
+          subject,
+          title,
+          classId,
+        },
+        dedupeKey: `evaluation-${createdEvaluation.id}-${parentUserId}`,
+      }),
+    });
+  } catch (notificationError) {
+    console.error("Erreur notification devoir mobile :", notificationError);
+  }
+}
       }
 
       res.status(201).json(createdEvaluation);
@@ -5961,17 +6003,27 @@ export async function createApp() {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                parentId: parentRecord.userId,
-                title: "Nouvelle note disponible",
-                message: `Une nouvelle note a été ajoutée : ${score}`,
-                category: "grade",
-                metadata: {
-                  gradeId: savedGrade.id,
-                  studentId,
-                  evaluationId,
-                },
-                dedupeKey: `grade-${savedGrade.id}`,
-              }),
+  parentId: parentRecord.userId,
+
+  title: isGradeModification
+    ? "Note modifiée"
+    : "Nouvelle note disponible",
+
+  message: isGradeModification
+    ? `La note a été modifiée : ${score}`
+    : `Une nouvelle note a été ajoutée : ${score}`,
+
+  category: "grade",
+
+  metadata: {
+    gradeId: savedGrade.id,
+    studentId,
+    evaluationId,
+    isGradeModification,
+  },
+
+  dedupeKey: `grade-${savedGrade.id}`,
+}),
             });
           }
         }
