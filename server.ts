@@ -19,7 +19,7 @@
             await db.update(teachers).set({ phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
 */
 import express from 'express';
-import fetch from 'node-fetch';
+const fetch = globalThis.fetch;
 import path from 'path';
 import { promises as fsPromises } from 'fs';
 import crypto from 'crypto';
