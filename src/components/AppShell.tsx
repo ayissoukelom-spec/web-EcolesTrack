@@ -289,7 +289,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; period: string; isJustified: boolean }) => {
+  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; subjectIds: number[]; startTime: string; endTime: string; isJustified: boolean }) => {
     await addAbsenceApi(data);
     await fetchAllData();
   };
@@ -400,7 +400,18 @@ export default function AppShell() {
     }
 
     if (activeTab === 'absences') {
-      return <AbsenceView userRole={currentRole} absencesList={absencesList} studentsList={studentsList} classesList={classesList} schoolsList={schoolsList} onAddAbsence={handleAddAbsence} onJustifyAbsence={handleJustifyAbsence} />;
+      return <AbsenceView
+        userRole={currentRole}
+        absencesList={absencesList}
+        studentsList={studentsList}
+        classesList={classesList}
+        schoolsList={schoolsList}
+        teachersList={teachersList}
+        teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
+        teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
+        onAddAbsence={handleAddAbsence}
+        onJustifyAbsence={handleJustifyAbsence}
+      />;
     }
 
     if (activeTab === 'notes' && currentRole !== 'parent') {

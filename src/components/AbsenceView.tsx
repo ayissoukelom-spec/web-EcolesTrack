@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Absence, Student, Class, UserRole } from '../types.ts';
+import { Absence, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
@@ -13,7 +13,11 @@ interface AbsenceViewProps {
   studentsList: Student[];
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
-  onAddAbsence: (data: { studentId: number; classId: number; date: string; period: string; isJustified: boolean }) => Promise<void>;
+  teachersList: Teacher[];
+  approvedSubjectsList: { id: number; name: string }[];
+  teacherClassIds?: number[];
+  teacherSpecializations?: string[];
+  onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectIds: number[]; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, file?: File | null) => void;
 }
 
@@ -23,6 +27,10 @@ export default function AbsenceView({
   studentsList,
   classesList,
   schoolsList,
+  teachersList,
+  approvedSubjectsList,
+  teacherClassIds,
+  teacherSpecializations,
   onAddAbsence,
   onJustifyAbsence,
 }: AbsenceViewProps) {
@@ -53,7 +61,9 @@ export default function AbsenceView({
     lastName: '',
     firstName: '',
     date: new Date().toISOString().split('T')[0],
-    period: 'morning',
+    subjectIds: [] as string[],
+    startTime: '08:00',
+    endTime: '09:30',
   });
   const [selectedAbsentStudentIds, setSelectedAbsentStudentIds] = useState<string[]>([]);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
@@ -88,6 +98,37 @@ export default function AbsenceView({
     ? studentsWithSelectedLastName.filter((st) => st.firstName === newAbsenceForm.firstName)
     : [];
 
+  const normalizeSubjectName = (value: string) =>
+    String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .replace(/[^a-z0-9 ]+/g, '')
+      .replace(/\s+/g, ' ');
+
+  const selectedClassIdNumber = newAbsenceForm.classId ? Number(newAbsenceForm.classId) : null;
+  const selectedClassTeachers = teachersList.filter((teacher) =>
+    Array.isArray(teacher.classIds) && selectedClassIdNumber != null && teacher.classIds.includes(selectedClassIdNumber)
+  );
+
+  const classTeacherSubjectNames = Array.from(new Set(
+    selectedClassTeachers.flatMap((teacher) => {
+      const specializations = Array.isArray(teacher.specialization)
+        ? teacher.specialization
+        : String(teacher.specialization || '').split(/[,;&|\/\+]/).map((value) => value.trim()).filter(Boolean);
+      return specializations;
+    })
+  ));
+
+  const effectiveTeacherSubjectNames = userRole === 'teacher' && teacherClassIds?.includes(selectedClassIdNumber)
+    ? teacherSpecializations || classTeacherSubjectNames
+    : classTeacherSubjectNames;
+
+  const availableSubjects = (approvedSubjectsList || []).filter((subject) => {
+    return effectiveTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
+  });
+
   const handleCreateAbsence = (e: React.FormEvent) => {
     e.preventDefault();
     const student = studentsList.find((s) => s.id === parseInt(newAbsenceForm.studentId));
@@ -97,10 +138,12 @@ export default function AbsenceView({
       studentId: student.id,
       classId: student.classId,
       date: newAbsenceForm.date,
-      period: newAbsenceForm.period,
+      subjectIds: newAbsenceForm.subjectIds.map((value) => Number(value)),
+      startTime: newAbsenceForm.startTime,
+      endTime: newAbsenceForm.endTime,
       isJustified: false,
     });
-    
+
     setIsFormOpen(false);
     setNewAbsenceForm({
       studentId: '',
@@ -108,7 +151,9 @@ export default function AbsenceView({
       lastName: '',
       firstName: '',
       date: new Date().toISOString().split('T')[0],
-      period: 'morning',
+      subjectIds: [],
+      startTime: '08:00',
+      endTime: '09:30',
     });
   };
 
@@ -126,7 +171,9 @@ export default function AbsenceView({
           studentId: student.id,
           classId: student.classId,
           date: newAbsenceForm.date,
-          period: newAbsenceForm.period,
+          subjectIds: newAbsenceForm.subjectIds.map((value) => Number(value)),
+          startTime: newAbsenceForm.startTime,
+          endTime: newAbsenceForm.endTime,
           isJustified: false,
         });
       }
@@ -138,7 +185,9 @@ export default function AbsenceView({
         lastName: '',
         firstName: '',
         date: new Date().toISOString().split('T')[0],
-        period: 'morning',
+        subjectIds: [],
+        startTime: '08:00',
+        endTime: '09:30',
       });
       setSelectedAbsentStudentIds([]);
     } finally {
@@ -346,17 +395,59 @@ export default function AbsenceView({
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
               />
             </div>
+            <div className="md:col-span-4">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Matières concernées" required />
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border border-slate-200 rounded-2xl bg-white max-h-56 overflow-y-auto">
+                {availableSubjects.length > 0 ? availableSubjects.map((subject) => (
+                  <label key={subject.id} className="flex items-center gap-2 text-slate-700 text-xs sm:text-sm">
+                    <input
+                      type="checkbox"
+                      checked={newAbsenceForm.subjectIds.includes(String(subject.id))}
+                      onChange={(e) => {
+                        const subjectId = String(subject.id);
+                        setNewAbsenceForm((prev) => ({
+                          ...prev,
+                          subjectIds: e.target.checked
+                            ? [...prev.subjectIds, subjectId]
+                            : prev.subjectIds.filter((id) => id !== subjectId),
+                        }));
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>{subject.name}</span>
+                  </label>
+                )) : (
+                  <div className="text-slate-500 text-xs sm:text-sm">
+                    Aucune matière attribuée pour cette classe et cet enseignant.
+                  </div>
+                )}
+              </div>
+            </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Période du manquement</label>
-              <select
-                value={newAbsenceForm.period}
-                onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, period: e.target.value })}
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Heure de début" required />
+              </label>
+              <input
+                required
+                type="time"
+                value={newAbsenceForm.startTime}
+                onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, startTime: e.target.value })}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
-              >
-                <option value="morning">Matinée (morning)</option>
-                <option value="afternoon">Après-midi (afternoon)</option>
-                <option value="all_day">Toute la Journée (all_day)</option>
-              </select>
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                <RequiredLabel label="Heure de fin" required />
+              </label>
+              <input
+                required
+                type="time"
+                value={newAbsenceForm.endTime}
+                onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, endTime: e.target.value })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+              />
             </div>
             <div className="flex gap-2 flex-col sm:flex-row">
               <button

@@ -4615,8 +4615,21 @@ export async function createApp() {
     try {
       console.log("[ABSENCE_TRACE] absence endpoint start", { body: req.body });
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { studentId, classId, date, period, isJustified, justificationReason } = req.body;
-      if (!studentId || !classId || !date || !period) {
+      const { studentId, classId, date, period, subjectIds, startTime, endTime, isJustified, justificationReason } = req.body;
+      const normalizedSubjectIds = Array.isArray(subjectIds) ? subjectIds.map((id: any) => Number(id)).filter((id) => !Number.isNaN(id)) : [];
+      const normalizedStartTime = typeof startTime === 'string' ? startTime : '';
+      const normalizedEndTime = typeof endTime === 'string' ? endTime : '';
+
+      const derivedPeriod = (() => {
+        if (period) return period;
+        if (!normalizedStartTime || !normalizedEndTime) return 'morning';
+        const [startHour] = normalizedStartTime.split(':').map(Number);
+        const [endHour] = normalizedEndTime.split(':').map(Number);
+        if (startHour < 12 && endHour > 14) return 'all_day';
+        return startHour >= 12 ? 'afternoon' : 'morning';
+      })();
+
+      if (!studentId || !classId || !date || !normalizedStartTime || !normalizedEndTime || normalizedSubjectIds.length === 0) {
         return res.status(400).json({ error: 'Missing mandatory absence parameters' });
       }
 
@@ -4669,7 +4682,7 @@ export async function createApp() {
         studentId: parseInt(studentId),
         classId: parseInt(classId),
         date,
-        period,
+        period: derivedPeriod,
         isJustified: isJustified || false,
         justificationReason,
       }).returning();
@@ -4689,13 +4702,16 @@ export async function createApp() {
         const notificationPayload = {
           parentId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
-          message: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
+          message: `Une absence a été signalée pour ${student.firstName} le ${date} de ${normalizedStartTime} à ${normalizedEndTime}. Veuillez fournir un justificatif.`,
           category: "absence",
           metadata: {
             absenceId: result[0].id,
             studentId,
             classId,
-            period,
+            period: derivedPeriod,
+            startTime: normalizedStartTime,
+            endTime: normalizedEndTime,
+            subjectIds: normalizedSubjectIds,
           },
           dedupeKey: `absence-${result[0].id}`,
         };

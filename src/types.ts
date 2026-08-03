@@ -164,6 +164,9 @@ export interface Absence {
   className: string;
   date: string;
   period: 'morning' | 'afternoon' | 'all_day';
+  subjectIds?: number[];
+  startTime?: string;
+  endTime?: string;
   isJustified: boolean;
   justificationReason?: string;
   justificationFileId?: number;
