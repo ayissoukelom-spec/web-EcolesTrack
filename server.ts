@@ -4613,6 +4613,7 @@ export async function createApp() {
 
   app.post('/api/absences', requireAuth, async (req: AuthRequest, res) => {
     try {
+      console.log("[ABSENCE_TRACE] absence endpoint start", { body: req.body });
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { studentId, classId, date, period, isJustified, justificationReason } = req.body;
       if (!studentId || !classId || !date || !period) {
@@ -4675,6 +4676,7 @@ export async function createApp() {
 
       // Automatically create a simulated notification for the Parent of this student
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
+      console.log("[ABSENCE_TRACE] absence created", { absenceId: result[0]?.id, studentId, classId, parentId: parentRecord?.userId ?? null });
       if (parentRecord) {
         await db.insert(notifications).values({
           userId: parentRecord.userId,
@@ -4683,28 +4685,33 @@ export async function createApp() {
           type: 'absence',
         });
 
+        const notificationUrl = "http://localhost:3001/api/internal/absence-notification";
+        const notificationPayload = {
+          parentId: parentRecord.userId,
+          title: `Nouvelle absence pour ${student.firstName}`,
+          message: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
+          category: "absence",
+          metadata: {
+            absenceId: result[0].id,
+            studentId,
+            classId,
+            period,
+          },
+          dedupeKey: `absence-${result[0].id}`,
+        };
+        console.log("[ABSENCE_TRACE] calling internal absence notification", { url: notificationUrl, payload: notificationPayload });
+
         try {
-          await fetch("http://localhost:3001/api/internal/absence-notification", {
+          const notificationResponse = await fetch(notificationUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              parentId: parentRecord.userId,
-              title: `Nouvelle absence pour ${student.firstName}`,
-              message: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
-              category: "absence",
-              metadata: {
-                absenceId: result[0].id,
-                studentId,
-                classId,
-                period,
-              },
-              dedupeKey: `absence-${result[0].id}`,
-            }),
+            body: JSON.stringify(notificationPayload),
           });
+          console.log("[ABSENCE_TRACE] internal absence notification response", { status: notificationResponse.status, ok: notificationResponse.ok });
         } catch (notificationError) {
-          console.error("Erreur notification mobile absence:", notificationError);
+          console.error("[ABSENCE_TRACE] Erreur notification mobile absence:", notificationError);
         }
       }
 
