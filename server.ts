@@ -5749,7 +5749,7 @@ if (uniqueParentIds.length > 0) {
   evaluationId: createdEvaluation.id,
   title
 });
-    await fetch("http://localhost:3001/api/internal/evaluation-notification", {
+    await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/evaluation-notification`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -6028,7 +6028,7 @@ if (uniqueParentIds.length > 0) {
             .where(eq(parents.id, studentRecord.parentId));
 
           if (parentRecord?.userId) {
-            await fetch("http://localhost:3001/api/internal/grade-notification", {
+            await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -6550,7 +6550,7 @@ if (uniqueParentIds.length > 0) {
     type,
   });
 
-  await fetch("http://localhost:3001/api/internal/info-notification", {
+  await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
