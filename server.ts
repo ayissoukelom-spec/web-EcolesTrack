@@ -4685,7 +4685,7 @@ export async function createApp() {
           type: 'absence',
         });
 
-        const notificationUrl = "http://localhost:3001/api/internal/absence-notification";
+        const notificationUrl = `${process.env.API_URL || "http://localhost:3001"}/api/internal/absence-notification`;
         const notificationPayload = {
           parentId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
