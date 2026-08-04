@@ -558,7 +558,7 @@ export async function seedDatabaseIfEmpty() {
       {
         userId: parentUser[0].id,
         title: 'Absence enregistrée de Lucas',
-        body: 'Lucas Dubois a été marqué absent ce matin (2026-06-12). Veuillez justifier cette absence dans votre espace.',
+        body: 'Une absence a été signalée pour Lucas Dubois le 12/06/2026. Veuillez justifier cette absence dans votre espace.',
         type: 'absence',
         isRead: false,
       },

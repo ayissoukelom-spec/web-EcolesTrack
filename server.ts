@@ -4693,10 +4693,53 @@ export async function createApp() {
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
       console.log("[ABSENCE_TRACE] absence created", { absenceId: result[0]?.id, studentId, classId, parentId: parentRecord?.userId ?? null });
       if (parentRecord) {
+        // Build a user-friendly message using start/end times and subject when available.
+        const formatDateSafe = (dateStr: string) => {
+          if (!dateStr) return '';
+          const opts = { day: '2-digit', month: '2-digit', year: 'numeric' } as const;
+          if (dateStr.includes('T')) return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+          const parts = String(dateStr).split('-');
+          if (parts.length === 3) {
+            const y = Number(parts[0]);
+            const m = Number(parts[1]) - 1;
+            const d = Number(parts[2]);
+            return new Date(y, m, d).toLocaleDateString('fr-FR', opts);
+          }
+          return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+        };
+        const formattedDate = formatDateSafe(date);
+
+        // Prefer any subject name provided in the incoming request to avoid an extra query.
+        const providedSubjectName = typeof (req.body as any).subjectName === 'string' && (req.body as any).subjectName.trim()
+          ? (req.body as any).subjectName.trim()
+          : undefined;
+
+        let subjectName: string | undefined = providedSubjectName;
+
+        // If no subject name provided but a subjectId exists, fetch the name from DB.
+        if (!subjectName && normalizedSubjectIds.length > 0) {
+          try {
+            const [sub] = await db.select({ name: subjects.name }).from(subjects).where(eq(subjects.id, normalizedSubjectIds[0]));
+            subjectName = sub?.name;
+          } catch (e) {
+            console.warn('Failed to load subject name for notification composition', e);
+          }
+        }
+
+        const timeRange = normalizedStartTime && normalizedEndTime ? ` de ${normalizedStartTime} à ${normalizedEndTime}` : '';
+        const subjectText = subjectName ? ` en ${subjectName}` : '';
+
+        // Fallback to derivedPeriod (humanized) if no time range or subject available
+        const humanizedPeriod = derivedPeriod === 'morning' ? 'Matin' : derivedPeriod === 'afternoon' ? 'Après‑midi' : derivedPeriod === 'all_day' ? 'Toute la journée' : derivedPeriod;
+        const periodFallback = !timeRange && !subjectText ? ` (${humanizedPeriod})` : '';
+
+        const messageBody = `Une absence a été signalée pour ${student.firstName} le ${formattedDate}${timeRange}${subjectText}${periodFallback}. Veuillez fournir un justificatif.`;
+
+        // Insert the notification in DB using the same human-readable message
         await db.insert(notifications).values({
           userId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
-          body: `Une absence a été signalée pour ${student.firstName} le ${date} (Période: ${period}). Veuillez fournir un justificatif.`,
+          body: messageBody,
           type: 'absence',
         });
 
@@ -4704,7 +4747,7 @@ export async function createApp() {
         const notificationPayload = {
           parentId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
-          message: `Une absence a été signalée pour ${student.firstName} le ${date} de ${normalizedStartTime} à ${normalizedEndTime}. Veuillez fournir un justificatif.`,
+          message: messageBody,
           category: "absence",
           metadata: {
             absenceId: result[0].id,
@@ -4714,6 +4757,7 @@ export async function createApp() {
             startTime: normalizedStartTime,
             endTime: normalizedEndTime,
             subjectId: normalizedSubjectIds.length > 0 ? normalizedSubjectIds[0] : undefined,
+            subjectName: subjectName,
           },
           dedupeKey: `absence-${result[0].id}`,
         };
