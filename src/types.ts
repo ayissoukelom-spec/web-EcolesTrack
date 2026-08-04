@@ -54,6 +54,7 @@ export interface User {
   avatarUrl?: string;
   specialization?: string | string[];
   isDeleted?: boolean;
+  lastLoginAt?: string | null;
   createdAt?: string;
 }
 
@@ -91,6 +92,7 @@ export interface Parent {
   className?: string;
   schoolName?: string;
   gender?: string;
+  lastLoginAt?: string | null;
 }
 
 export interface Class {
@@ -164,9 +166,6 @@ export interface Absence {
   className: string;
   date: string;
   period: 'morning' | 'afternoon' | 'all_day';
-  subjectIds?: number[];
-  startTime?: string;
-  endTime?: string;
   isJustified: boolean;
   justificationReason?: string;
   justificationFileId?: number;

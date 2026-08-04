@@ -98,6 +98,7 @@ export async function ensureUsersTableSchema() {
   try {
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;`);
+    await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;`);
     await db.execute(sql`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_unique;`);
 
     const duplicateCheck = await db.execute(sql`SELECT 1 AS duplicate

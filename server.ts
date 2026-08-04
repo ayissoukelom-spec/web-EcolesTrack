@@ -3772,6 +3772,7 @@ export async function createApp() {
         schoolId: parents.schoolId,
         className: classes.name,
         schoolName: schools.name,
+        lastLoginAt: users.lastLoginAt,
       };
 
       const baseOldModel = db

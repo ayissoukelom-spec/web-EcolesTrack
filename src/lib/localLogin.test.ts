@@ -3,10 +3,13 @@ import { Request, Response } from 'express';
 import { verifyJwt } from './jwt.ts';
 
 const mockWhere = vi.fn();
+const mockUpdateWhere = vi.fn();
+const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
 const mockDb = {
   select: vi.fn(() => ({
     from: vi.fn(() => ({ where: mockWhere })),
   })),
+  update: vi.fn(() => ({ set: mockSet })),
 };
 
 vi.mock('../db/index.ts', () => ({
@@ -27,6 +30,7 @@ const createMockRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockUpdateWhere.mockResolvedValue(undefined);
   process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.JWT_ISSUER = 'test-issuer';
   process.env.JWT_EXPIRES_IN = '1h';
@@ -89,6 +93,41 @@ describe('handleLocalLogin', () => {
     expect(decoded.sub).toBe(String(userRecord.id));
     expect(typeof decoded.iat).toBe('number');
     expect(typeof decoded.exp).toBe('number');
+  });
+
+  it('updates lastLoginAt for a successful parent login', async () => {
+    const password = 'SuperSecret123!';
+    const salt = 'test-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+
+    const userRecord = {
+      id: 456,
+      uid: 'parent_456',
+      email: 'parent@example.com',
+      name: 'Parent Example',
+      role: 'parent',
+      schoolId: 99,
+    };
+
+    const authRow = {
+      passwordHash,
+      salt,
+      mustReset: false,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([authRow]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const req = { body: { email: userRecord.email, password } } as Request;
+    const res = createMockRes() as Response;
+
+    await handleLocalLogin(req, res);
+
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ lastLoginAt: expect.any(Date) }));
+    expect(mockUpdateWhere).toHaveBeenCalled();
   });
 
   it('returns 401 when login credentials are invalid', async () => {

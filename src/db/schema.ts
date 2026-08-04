@@ -44,6 +44,7 @@ export const users = pgTable('users', {
   phone: text('phone'),
   gender: text('gender'),
   isDeleted: boolean('is_deleted').default(false).notNull(),
+  lastLoginAt: timestamp('last_login_at'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

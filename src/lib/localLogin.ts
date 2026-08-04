@@ -64,6 +64,12 @@ export async function handleLocalLogin(req: Request, res: Response) {
       jwtid: crypto.randomUUID(),
     });
 
+    if (userRecord.role === 'parent') {
+      await db.update(users)
+        .set({ lastLoginAt: new Date() })
+        .where(eq(users.id, userRecord.id));
+    }
+
     const response = {
       ...userRecord,
       mustReset: !!localMustReset,
