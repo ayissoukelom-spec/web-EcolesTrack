@@ -42,6 +42,7 @@ export default function AppShell() {
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
+  const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
 
   const {
     stats,
@@ -98,6 +99,7 @@ export default function AppShell() {
         '/api/evaluations',
         '/api/grades',
         '/api/notifications',
+        '/api/subjects?approvedOnly=true',
         '/api/simulation/users',
       ];
 
@@ -112,6 +114,7 @@ export default function AppShell() {
       setGradesList(Array.isArray(map['/api/grades']) ? map['/api/grades'] : []);
       setNotificationsList(Array.isArray(map['/api/notifications']) ? map['/api/notifications'] : []);
       setUsersList(Array.isArray(map['/api/simulation/users']) ? map['/api/simulation/users'] : []);
+      setApprovedSubjectsList(Array.isArray(map['/api/subjects?approvedOnly=true']) ? map['/api/subjects?approvedOnly=true'] : []);
 
       if (currentRole === 'super_admin') {
         await fetchAuditEvents();
@@ -289,7 +292,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; subjectIds: number[]; startTime: string; endTime: string; isJustified: boolean }) => {
+  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => {
     await addAbsenceApi(data);
     await fetchAllData();
   };
@@ -407,6 +410,7 @@ export default function AppShell() {
         classesList={classesList}
         schoolsList={schoolsList}
         teachersList={teachersList}
+        approvedSubjectsList={approvedSubjectsList}
         teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
         teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
         onAddAbsence={handleAddAbsence}

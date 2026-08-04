@@ -17,7 +17,7 @@ interface AbsenceViewProps {
   approvedSubjectsList: { id: number; name: string }[];
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
-  onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectIds: number[]; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
+  onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, file?: File | null) => void;
 }
 
@@ -61,7 +61,7 @@ export default function AbsenceView({
     lastName: '',
     firstName: '',
     date: new Date().toISOString().split('T')[0],
-    subjectIds: [] as string[],
+    subjectId: '' as string,
     startTime: '08:00',
     endTime: '09:30',
   });
@@ -138,7 +138,7 @@ export default function AbsenceView({
       studentId: student.id,
       classId: student.classId,
       date: newAbsenceForm.date,
-      subjectIds: newAbsenceForm.subjectIds.map((value) => Number(value)),
+      subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
       startTime: newAbsenceForm.startTime,
       endTime: newAbsenceForm.endTime,
       isJustified: false,
@@ -151,7 +151,7 @@ export default function AbsenceView({
       lastName: '',
       firstName: '',
       date: new Date().toISOString().split('T')[0],
-      subjectIds: [],
+      subjectId: '',
       startTime: '08:00',
       endTime: '09:30',
     });
@@ -171,7 +171,7 @@ export default function AbsenceView({
           studentId: student.id,
           classId: student.classId,
           date: newAbsenceForm.date,
-          subjectIds: newAbsenceForm.subjectIds.map((value) => Number(value)),
+          subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
           startTime: newAbsenceForm.startTime,
           endTime: newAbsenceForm.endTime,
           isJustified: false,
@@ -185,7 +185,7 @@ export default function AbsenceView({
         lastName: '',
         firstName: '',
         date: new Date().toISOString().split('T')[0],
-        subjectIds: [],
+        subjectId: '',
         startTime: '08:00',
         endTime: '09:30',
       });
@@ -403,17 +403,15 @@ export default function AbsenceView({
                 {availableSubjects.length > 0 ? availableSubjects.map((subject) => (
                   <label key={subject.id} className="flex items-center gap-2 text-slate-700 text-xs sm:text-sm">
                     <input
-                      type="checkbox"
-                      checked={newAbsenceForm.subjectIds.includes(String(subject.id))}
-                      onChange={(e) => {
+                      type="radio"
+                      name="absence-subject"
+                      value={String(subject.id)}
+                      checked={newAbsenceForm.subjectId === String(subject.id)}
+                      onChange={() => {
                         const subjectId = String(subject.id);
-                        setNewAbsenceForm((prev) => ({
-                          ...prev,
-                          subjectIds: e.target.checked
-                            ? [...prev.subjectIds, subjectId]
-                            : prev.subjectIds.filter((id) => id !== subjectId),
-                        }));
+                        setNewAbsenceForm((prev) => ({ ...prev, subjectId }));
                       }}
+                      required
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
                     <span>{subject.name}</span>

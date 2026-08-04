@@ -4615,8 +4615,9 @@ export async function createApp() {
     try {
       console.log("[ABSENCE_TRACE] absence endpoint start", { body: req.body });
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { studentId, classId, date, period, subjectIds, startTime, endTime, isJustified, justificationReason } = req.body;
-      const normalizedSubjectIds = Array.isArray(subjectIds) ? subjectIds.map((id: any) => Number(id)).filter((id) => !Number.isNaN(id)) : [];
+      const { studentId, classId, date, period, subjectId, startTime, endTime, isJustified, justificationReason } = req.body;
+      const normalizedSubjectId = subjectId != null ? Number(subjectId) : undefined;
+      const normalizedSubjectIds = normalizedSubjectId != null && !Number.isNaN(normalizedSubjectId) ? [normalizedSubjectId] : [];
       const normalizedStartTime = typeof startTime === 'string' ? startTime : '';
       const normalizedEndTime = typeof endTime === 'string' ? endTime : '';
 
@@ -4711,7 +4712,7 @@ export async function createApp() {
             period: derivedPeriod,
             startTime: normalizedStartTime,
             endTime: normalizedEndTime,
-            subjectIds: normalizedSubjectIds,
+            subjectId: normalizedSubjectIds.length > 0 ? normalizedSubjectIds[0] : undefined,
           },
           dedupeKey: `absence-${result[0].id}`,
         };

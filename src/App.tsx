@@ -609,7 +609,7 @@ export default function App() {
     }
   };
 
-  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; subjectIds: number[]; startTime: string; endTime: string; isJustified: boolean }) => {
+  const handleAddAbsence = async (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => {
     try {
       await apiFetch('/api/absences', {
         method: 'POST',
