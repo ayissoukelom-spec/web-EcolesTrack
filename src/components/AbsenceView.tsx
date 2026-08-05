@@ -49,6 +49,9 @@ export default function AbsenceView({
   });
   const [filterClass, setFilterClass] = useState('');
   const [filterSchool, setFilterSchool] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterSubject, setFilterSubject] = useState('');
+  const [filterDate, setFilterDate] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
   const [justificationText, setJustificationText] = useState('');
@@ -121,7 +124,7 @@ export default function AbsenceView({
     })
   ));
 
-  const effectiveTeacherSubjectNames = userRole === 'teacher' && teacherClassIds?.includes(selectedClassIdNumber)
+  const effectiveTeacherSubjectNames = userRole === 'teacher' && selectedClassIdNumber !== null && teacherClassIds?.includes(selectedClassIdNumber)
     ? teacherSpecializations || classTeacherSubjectNames
     : classTeacherSubjectNames;
 
@@ -205,12 +208,42 @@ export default function AbsenceView({
   };
 
   // Filter absences
+  const subjectOptions = Array.from(
+    new Set(absencesList.map((abs) => abs.subjectName || '').filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  const dateOptions = Array.from(
+    new Set(absencesList.map((abs) => abs.date || '').filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
   const filteredAbsences = absencesList.filter((abs) => {
     if (filterSchool) {
       const cls = classesList.find((c) => c.id === abs.classId);
       if (!cls || String((cls as any).schoolId) !== filterSchool) return false;
     }
     if (filterClass && String(abs.classId) !== filterClass) return false;
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      const studentName = String(abs.studentName || '').toLowerCase();
+      const className = String(abs.className || '').toLowerCase();
+
+      if (
+        !studentName.includes(query) &&
+        !className.includes(query)
+      ) {
+        return false;
+      }
+    }
+
+    if (filterSubject && String(abs.subjectName || '') !== filterSubject) {
+      return false;
+    }
+
+    if (filterDate && String(abs.date || '') !== filterDate) {
+      return false;
+    }
+
     return true;
   });
 
@@ -482,7 +515,7 @@ export default function AbsenceView({
           <Filter className="h-4 w-4 text-indigo-500" />
           <span className="text-xs sm:text-sm font-bold text-slate-700">Filtrer l'historique :</span>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           <select
             value={filterSchool}
             onChange={(e) => { setFilterSchool(e.target.value); setFilterClass(''); }}
@@ -508,6 +541,29 @@ export default function AbsenceView({
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
           </select>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Rechercher un élève..."
+            className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+          />
+          <select
+            value={filterSubject}
+            onChange={(e) => setFilterSubject(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+          >
+            <option value="">Toutes les matières</option>
+            {subjectOptions.map((subject) => (
+              <option key={subject} value={subject}>{subject}</option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={filterDate}
+            onChange={(e) => setFilterDate(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+          />
         </div>
       </div>
 
