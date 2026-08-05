@@ -43,6 +43,13 @@
       "when": 1784784733272,
       "tag": "0005_young_black_bolt",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785968004720,
+      "tag": "0006_quick_stardust",
+      "breakpoints": true
     }
   ]
 }
