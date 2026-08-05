@@ -457,7 +457,12 @@ export default function MobileParentView({
                               <p className="text-slate-400 capitalize">Période : {abs.period === 'morning' ? 'Matin' : 'Après-midi'}</p>
                               
                               {abs.isJustified ? (
-                                <p className="text-emerald-500 py-0.5 border-t border-slate-800/30 font-semibold italic truncate">Motif : {abs.justificationReason}</p>
+                                <div className="pt-2 border-t border-slate-800/30">
+                                  <div className="text-[10px] text-slate-400">Motif :</div>
+                                  <div className="font-bold text-emerald-500 py-1 whitespace-pre-wrap break-words">
+                                    {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                                  </div>
+                                </div>
                               ) : (
                                 <div className="pt-2 border-t border-slate-800/30">
                                   <button

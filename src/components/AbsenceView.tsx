@@ -519,7 +519,9 @@ export default function AbsenceView({
               <tr>
                 <th className="px-6 py-4">Élève</th>
                 <th className="px-6 py-4">Classe</th>
-                <th className="px-6 py-4">Date & Période</th>
+                <th className="px-6 py-4">Date</th>
+                <th className="px-6 py-4">Horaires</th>
+                <th className="px-6 py-4">Matière</th>
                 <th className="px-6 py-4">Statut de justification</th>
                 <th className="px-6 py-4">Motif justificatif</th>
                 <th className="px-6 py-4 text-right">Actions</th>
@@ -537,6 +539,12 @@ export default function AbsenceView({
                     </span>
                     )
                   </td>
+                  <td className="px-6 py-4 text-slate-600 font-mono text-xs">
+                    {abs.startTime && abs.endTime ? `${abs.startTime} - ${abs.endTime}` : '—'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600 font-medium">
+                    {abs.subjectName || 'Non précisée'}
+                  </td>
                   <td className="px-6 py-4">
                     {abs.isJustified ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-100">
@@ -548,10 +556,12 @@ export default function AbsenceView({
                       </span>
                     )}
                   </td>
-                  <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate text-xs space-y-1">
-                    <div>{abs.justificationReason || '— En attente de motif de l\'enfant...'}</div>
+                  <td className="px-6 py-4 text-slate-700 text-sm max-w-xs whitespace-normal break-words space-y-1">
+                    <div className="font-bold">
+  {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+</div>
                     {abs.justificationFileName ? (
-                      <div className="text-[10px] text-slate-400 truncate break-words">
+                      <div className="text-[10px] text-slate-400 whitespace-normal break-words">
                         Fichier justificatif : <span className="font-semibold text-slate-700">{abs.justificationFileName}</span>
                       </div>
                     ) : null}
@@ -595,7 +605,7 @@ export default function AbsenceView({
               ))}
               {filteredAbsences.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-slate-400 text-xs">Aucune absence recensée correspondant à vos critères.</td>
+                  <td colSpan={8} className="text-center py-8 text-slate-400 text-xs">Aucune absence recensée correspondant à vos critères.</td>
                 </tr>
               )}
             </tbody>

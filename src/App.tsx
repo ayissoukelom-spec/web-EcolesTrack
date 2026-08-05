@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   School,
   AcademicYear,
@@ -105,6 +105,7 @@ export default function App() {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
+  const processedNotificationIdsRef = useRef<Set<number>>(new Set());
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
@@ -292,6 +293,22 @@ export default function App() {
       fetchAllData();
     }
   }, [activeSchoolId, currentRole, role]);
+
+  useEffect(() => {
+    if (!notificationsList || notificationsList.length === 0) return;
+
+    const newNotifs = notificationsList.filter((notif) => !processedNotificationIdsRef.current.has(notif.id));
+    if (newNotifs.length === 0) return;
+
+    const hasAbsence = newNotifs.some((notif) => notif.type === 'absence');
+    const hasGrade = newNotifs.some((notif) => notif.type === 'grade');
+    if (!hasAbsence && !hasGrade) return;
+
+    newNotifs.forEach((notif) => processedNotificationIdsRef.current.add(notif.id));
+    if (hasAbsence || hasGrade) {
+      fetchAllData(false);
+    }
+  }, [notificationsList]);
 
   useEffect(() => {
     if (activeTab === 'audit' && currentRole === 'super_admin') {

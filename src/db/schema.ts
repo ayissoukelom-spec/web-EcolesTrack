@@ -232,6 +232,9 @@ export const absences = pgTable('absences', {
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   date: text('date').notNull(), // YYYY-MM-DD
   period: text('period').notNull(), // 'morning' | 'afternoon' | 'all_day'
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
+  startTime: text('start_time'),
+  endTime: text('end_time'),
   isJustified: boolean('is_justified').default(false).notNull(),
   justificationReason: text('justification_reason'),
   createdAt: timestamp('created_at').defaultNow(),

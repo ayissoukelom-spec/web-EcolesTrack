@@ -4533,27 +4533,32 @@ export async function createApp() {
           className: classes.name,
           date: absences.date,
           period: absences.period,
+          subjectId: absences.subjectId,
+          subjectName: subjects.name,
+          startTime: absences.startTime,
+          endTime: absences.endTime,
           isJustified: absences.isJustified,
           justificationReason: absences.justificationReason,
-        justificationFileId: sql<number>`(
-          select id from ${absenceJustifications}
-          where ${absenceJustifications.absenceId} = ${absences.id}
-          order by ${absenceJustifications.uploadedAt} desc
-          limit 1
-        )`,
-        justificationFileName: sql<string>`(
-          select file_name from ${absenceJustifications}
-          where ${absenceJustifications.absenceId} = ${absences.id}
-          order by ${absenceJustifications.uploadedAt} desc
-          limit 1
-        )`,
-        parentId: students.parentId,
-        parentUserId: parents.userId,
-        schoolId: students.schoolId,
-      })
+          justificationFileId: sql<number>`(
+            select id from ${absenceJustifications}
+            where ${absenceJustifications.absenceId} = ${absences.id}
+            order by ${absenceJustifications.uploadedAt} desc
+            limit 1
+          )`,
+          justificationFileName: sql<string>`(
+            select file_name from ${absenceJustifications}
+            where ${absenceJustifications.absenceId} = ${absences.id}
+            order by ${absenceJustifications.uploadedAt} desc
+            limit 1
+          )`,
+          parentId: students.parentId,
+          parentUserId: parents.userId,
+          schoolId: students.schoolId,
+        })
         .from(absences)
         .innerJoin(students, eq(absences.studentId, students.id))
         .innerJoin(classes, eq(absences.classId, classes.id))
+        .leftJoin(subjects, eq(absences.subjectId, subjects.id))
         .innerJoin(parents, eq(students.parentId, parents.id));
 
       if (actor.role !== 'super_admin') {
@@ -4614,7 +4619,7 @@ export async function createApp() {
 
   app.post('/api/absences', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log("[ABSENCE_TRACE] absence endpoint start", { body: req.body });
+      console.log('🚀 ENTER POST /api/absences', req.body);
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { studentId, classId, date, period, subjectId, startTime, endTime, isJustified, justificationReason } = req.body;
       const normalizedSubjectId = subjectId != null ? Number(subjectId) : undefined;
@@ -4680,14 +4685,28 @@ export async function createApp() {
         }
       }
 
+      console.log('🚀 BEFORE INSERT ABSENCE', {
+        studentId,
+        classId,
+        subjectId,
+        startTime,
+        endTime,
+      });
+
       const result = await db.insert(absences).values({
         studentId: parseInt(studentId),
         classId: parseInt(classId),
         date,
         period: derivedPeriod,
+        subjectId: normalizedSubjectIds.length > 0 ? normalizedSubjectIds[0] : undefined,
+        startTime: normalizedStartTime,
+        endTime: normalizedEndTime,
         isJustified: isJustified || false,
         justificationReason,
       }).returning();
+
+      const [absence] = result;
+      console.log('✅ ABSENCE INSERT SUCCESS', absence);
 
       // Automatically create a simulated notification for the Parent of this student
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
@@ -4778,8 +4797,9 @@ export async function createApp() {
       }
 
       res.status(201).json(result[0]);
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to record absence' });
+    } catch (error: any) {
+      console.error('❌ ABSENCE CREATION ERROR:', error);
+      res.status(500).json({ error: 'Failed to record absence', details: error?.message || String(error) });
     }
   });
 
