@@ -732,6 +732,41 @@ export default function AdminView({
     filterBySearch(`${st.firstName} ${st.lastName} ${st.className || ''} ${st.parentName || ''} ${st.yearName || ''}`)
   );
 
+  const isStudentExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
+
+  const getStudentAcademicYearName = (st: Student) =>
+    st.yearName ||
+    yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name ||
+    '';
+
+  const formatCsvCell = (value: string) => `"${String(value || '').replace(/"/g, '""')}"`;
+
+  const exportStudentsCsv = () => {
+    if (!isStudentExportAllowed) return;
+
+    const header = ['Nom', 'Prénom', 'Classe', 'Sexe', 'Année scolaire'];
+    const rows = [header.map(formatCsvCell).join(';')];
+
+    filteredStudentsList.forEach((st) => {
+      rows.push([
+        `${st.lastName || ''}`,
+        `${st.firstName || ''}`,
+        `${st.className || ''}`,
+        `${st.gender || ''}`,
+        `${getStudentAcademicYearName(st)}`,
+      ].map(formatCsvCell).join(';'));
+    });
+
+    const csvContent = `\uFEFF${rows.join('\r\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `liste-eleves-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   const accountBelongsToSchool = (user: User, schoolId: number | null | undefined) => {
     if (!schoolId) return true;
     if (user.schoolId === schoolId) return true;
@@ -4350,6 +4385,19 @@ export default function AdminView({
                     className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-3 py-2 rounded-lg"
                   >
                     Créer un élève
+                  </button>
+                </div>
+              </div>
+            )}
+            {isStudentExportAllowed && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={exportStudentsCsv}
+                    className="inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-200 transition-colors"
+                  >
+                    Exporter la liste des élèves
                   </button>
                 </div>
               </div>
