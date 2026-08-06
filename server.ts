@@ -6181,9 +6181,7 @@ if (uniqueParentIds.length > 0) {
     ? "Note modifiée"
     : "Nouvelle note disponible",
 
-  message: isGradeModification
-    ? `La note a été modifiée : ${score}`
-    : buildGradeNotificationMessage({
+  message: buildGradeNotificationMessage({
         studentName: studentRecord.firstName,
         score,
         maxScore: evaluation.maxScore,
@@ -6268,9 +6266,7 @@ if (uniqueParentIds.length > 0) {
           ? `Note modifiée pour ${student.firstName}`
           : `Nouvelle note pour ${student.firstName}`,
 
-        body: isGradeModification
-          ? `${student.firstName} a une note modifiée : ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`
-          : buildGradeNotificationMessage({
+        body: buildGradeNotificationMessage({
               studentName: student.firstName,
               score,
               maxScore: evaluationRecord.maxScore,
