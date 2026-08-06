@@ -4828,6 +4828,7 @@ export async function createApp() {
           message: messageBody,
           category: "absence",
           metadata: {
+            target: "absence",
             absenceId: result[0].id,
             studentId,
             classId,
@@ -5901,6 +5902,7 @@ if (uniqueParentIds.length > 0) {
         message: evaluationMessage,
         category: "evaluation",
         metadata: {
+          target: "homework",
           evaluationId: createdEvaluation.id,
           subject,
           title,
@@ -6192,6 +6194,7 @@ if (uniqueParentIds.length > 0) {
   category: "grade",
 
   metadata: {
+    target: "notes",
     gradeId: savedGrade.id,
     studentId,
     evaluationId,
@@ -6710,6 +6713,7 @@ if (uniqueParentIds.length > 0) {
     message: body,
     category: "info",
     metadata: {
+      target: "info",
       deepLink: "ecoletrack://dashboard",
     },
     dedupeKey: `info-${Date.now()}-${id}`,
