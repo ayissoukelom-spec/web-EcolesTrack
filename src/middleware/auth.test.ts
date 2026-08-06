@@ -70,6 +70,7 @@ describe('auth middleware access control', () => {
       type: 'access',
       jti: 'jti-99',
     });
+    mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([userRecord]);
 
     const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
@@ -89,6 +90,56 @@ describe('auth middleware access control', () => {
       schoolId: userRecord.schoolId,
     });
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blacklisted access token', async () => {
+    const token = 'revoked-token';
+    const userRecord = {
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    };
+
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: userRecord.uid,
+      type: 'access',
+      jti: 'jti-99',
+    });
+    mockWhere.mockResolvedValueOnce([{ token }]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('rejects a token for a soft-deleted user', async () => {
+    const token = 'deleted-token';
+
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: 'user_100',
+      type: 'access',
+      jti: 'jti-100',
+    });
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([]);
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 
   it('rejects an invalid JWT signature without falling back to simulated auth', async () => {

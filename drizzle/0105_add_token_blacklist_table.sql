@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS token_blacklist (
+  id SERIAL PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  blacklisted_at TIMESTAMP NOT NULL DEFAULT now(),
+  expires_at TIMESTAMP NOT NULL
+);

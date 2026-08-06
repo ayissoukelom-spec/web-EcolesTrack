@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
-import { users } from '../db/schema.ts';
-import { eq } from 'drizzle-orm';
+import { tokenBlacklist, users } from '../db/schema.ts';
+import { eq, gt } from 'drizzle-orm';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 
@@ -104,7 +104,15 @@ export const verifyToken = async (
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 
-    const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
+    const [blacklistedToken] = await db.select().from(tokenBlacklist).where(
+      eq(tokenBlacklist.token, token),
+      gt(tokenBlacklist.expiresAt, new Date()),
+    );
+    if (blacklistedToken) {
+      return res.status(401).json({ error: 'Unauthorized: Token revoked' });
+    }
+
+    const [dbUser] = await db.select().from(users).where(eq(users.uid, uid), eq(users.isDeleted, false));
     if (!dbUser) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }

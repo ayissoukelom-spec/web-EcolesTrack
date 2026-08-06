@@ -27,9 +27,10 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
+import { verifyJwt } from './src/lib/jwt.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
@@ -42,6 +43,7 @@ import {
   users,
   userSchools,
   localAuths,
+  tokenBlacklist,
   teachers,
   parents,
   classes,
@@ -481,6 +483,15 @@ export async function createApp() {
 
   const uploadStorageDir = path.join(process.cwd(), 'uploads', 'absence-justifications');
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
+
+  if (process.env.NODE_ENV === 'test') {
+    try {
+      await ensureTokenBlacklistTableExists();
+    } catch (err: any) {
+      console.error('Failed to initialize token_blacklist table in test environment:', err?.message || err);
+      throw err;
+    }
+  }
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -1516,13 +1527,45 @@ export async function createApp() {
   });
   app.post('/api/auth/local-login', loginLimiter, handleLocalLogin);
 
-  // Local logout (no-op server-side for stateless simulation, returns success)
+  // Local logout now revokes the current JWT access token server-side
   app.post('/api/auth/logout', async (req, res) => {
     try {
-      // Nothing to clear server-side in stateless setup; client should clear local simulation keys
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: Missing token' });
+      }
+
+      const token = authHeader.split('Bearer ')[1];
+      const secret = process.env.JWT_SECRET ?? 'dev-jwt-secret';
+      const decoded = verifyJwt(token, secret);
+      const uid = decoded?.uid;
+      const tokenType = decoded?.type;
+      const jti = decoded?.jti;
+      const exp = decoded?.exp;
+
+      if (!uid || tokenType !== 'access' || !jti || !exp) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+      }
+
+      const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
+      const expiresAt = new Date(exp * 1000);
+
+      try {
+        await db.insert(tokenBlacklist).values({
+          token,
+          userId: dbUser?.id ?? undefined,
+          expiresAt,
+        });
+      } catch (err: any) {
+        if (!String(err?.message || '').toLowerCase().includes('duplicate')) {
+          throw err;
+        }
+      }
+
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: 'Failed to logout' });
+      console.error('Logout error:', err);
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
   });
 

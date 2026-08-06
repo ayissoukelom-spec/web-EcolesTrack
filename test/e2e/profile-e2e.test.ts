@@ -56,10 +56,11 @@ describe('E2E: create → force password change → update profile → re-login'
     expect(login.status).toBe(200);
     expect(login.json).toHaveProperty('mustReset');
     expect(login.json.mustReset).toBeTruthy();
+    const loginToken = login.json.token;
 
     // 3) Change password using change-password endpoint
     const newPassword = 'E2EnewP@ss1234';
-    const change = await post('/api/auth/change-password', { email, currentPassword: '123456', newPassword });
+    const change = await post('/api/auth/change-password', { email, currentPassword: '123456', newPassword }, { Authorization: `Bearer ${loginToken}` });
     expect(change.status).toBe(200);
     expect(change.json).toHaveProperty('success');
     expect(change.json.success).toBeTruthy();
@@ -71,11 +72,30 @@ describe('E2E: create → force password change → update profile → re-login'
     expect(putResp.json).toHaveProperty('name');
     expect(putResp.json.name).toBe(updatedName);
 
-    // 5) Logout (no-op) then login again with new password and verify name persists
-    await post('/api/auth/logout', {});
+    // 5) Logout then login again with new password and verify name persists
+    await post('/api/auth/logout', {}, { Authorization: `Bearer ${loginToken}` });
     const relogin = await post('/api/auth/local-login', { email, password: newPassword });
     expect(relogin.status).toBe(200);
     expect(relogin.json).toHaveProperty('name');
     expect(relogin.json.name).toBe(updatedName);
+  }, 20000);
+
+  it('should reject a reused token after logout', async () => {
+    const email = uniqueEmail();
+    const name = 'E2E Logout Test';
+
+    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: '+22933333333' }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
+    expect(create.status).toBe(201);
+
+    const login = await post('/api/auth/local-login', { email, password: '123456' });
+    expect(login.status).toBe(200);
+    const token = login.json.token;
+    expect(token).toBeTruthy();
+
+    const logout = await post('/api/auth/logout', {}, { Authorization: `Bearer ${token}` });
+    expect(logout.status).toBe(200);
+
+    const protectedRes = await get('/api/auth/schools', { Authorization: `Bearer ${token}` });
+    expect(protectedRes.status).toBe(401);
   }, 20000);
 });

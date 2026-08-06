@@ -175,6 +175,21 @@ export async function ensureUserSchoolsTableExists() {
   }
 }
 
+export async function ensureTokenBlacklistTableExists() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS token_blacklist (
+      id SERIAL PRIMARY KEY,
+      token TEXT NOT NULL UNIQUE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      blacklisted_at TIMESTAMP NOT NULL DEFAULT now(),
+      expires_at TIMESTAMP NOT NULL
+    );`);
+  } catch (err: any) {
+    console.error('Failed to ensure token_blacklist table exists:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureSchoolTermsTableExists() {
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS school_terms (
