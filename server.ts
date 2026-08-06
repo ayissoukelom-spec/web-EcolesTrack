@@ -1527,13 +1527,18 @@ export async function createApp() {
   });
 
   // Change password for a user (current password required)
-  app.post('/api/auth/change-password', async (req, res) => {
+  app.post('/api/auth/change-password', requireAuth, async (req: AuthRequest, res) => {
     try {
       const { email, currentPassword, newPassword } = req.body;
       if (!email || !currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
       if (newPassword === '123456') return res.status(400).json({ error: 'Le mot de passe ne peut pas être le mot de passe par défaut' });
 
       const normalizedEmail = String(email).trim().toLowerCase();
+      const authenticatedEmail = req.user?.email ? String(req.user.email).trim().toLowerCase() : '';
+      if (!authenticatedEmail || authenticatedEmail !== normalizedEmail) {
+        return res.status(403).json({ error: 'Forbidden: authenticated user does not match requested email' });
+      }
+
       const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
       if (usersFound.length === 0) return res.status(404).json({ error: 'Utilisateur non trouvé' });
       const userRecord = usersFound[0];
