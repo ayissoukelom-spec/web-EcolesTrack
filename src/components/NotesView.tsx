@@ -513,29 +513,41 @@ export default function NotesView({
     }
   }, [filteredClasses, selectableEvaluations, selectedClassId]);
 
-  const archivedEvaluations = approvedEvaluations.filter((ev) => {
-    // super_admin should never see evaluations in the archive
-    if (userRole === 'super_admin') return false;
+  const archivedEvaluations = approvedEvaluations
+    .filter((ev) => {
+      // super_admin should never see evaluations in the archive
+      if (userRole === 'super_admin') return false;
 
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
-    }
+      if (userRole === 'teacher') {
+        if (teacherId == null) return false;
+        if (ev.teacherId !== teacherId) return false;
+      }
 
-    if (selectedClassIdNumber === null) return false;
-    if (Number(ev.classId) !== selectedClassIdNumber) return false;
+      if (selectedClassIdNumber === null) return false;
+      if (Number(ev.classId) !== selectedClassIdNumber) return false;
 
-    if (userRole === 'teacher') {
-      return isEvaluationCompleted(ev);
-    }
+      if (userRole === 'teacher') {
+        return isEvaluationCompleted(ev);
+      }
 
-    if (userRole === 'school_admin') {
-      return isSchoolAdminEvaluationLocked(ev)
-        || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
-    }
+      if (userRole === 'school_admin') {
+        return isSchoolAdminEvaluationLocked(ev)
+          || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
+      }
 
-    return false;
-  });
+      return false;
+    })
+    .sort((a, b) => {
+      const aDate = parseDateValue(a.date)?.getTime() ?? 0;
+      const bDate = parseDateValue(b.date)?.getTime() ?? 0;
+      if (aDate !== bDate) {
+        return bDate - aDate;
+      }
+
+      const aCreated = parseDateValue(a.createdAt)?.getTime() ?? 0;
+      const bCreated = parseDateValue(b.createdAt)?.getTime() ?? 0;
+      return bCreated - aCreated;
+    });
 
   const gradesForSelectedEval = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
   const eligibleStudentsWithHistory = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
