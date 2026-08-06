@@ -31,6 +31,7 @@ import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSc
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
+import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
@@ -6182,7 +6183,13 @@ if (uniqueParentIds.length > 0) {
 
   message: isGradeModification
     ? `La note a été modifiée : ${score}`
-    : `Une nouvelle note a été ajoutée : ${score}`,
+    : buildGradeNotificationMessage({
+        studentName: studentRecord.firstName,
+        score,
+        maxScore: evaluation.maxScore,
+        subjectName: evaluation.subject.toLowerCase(),
+        evaluationName: evaluation.title,
+      }),
 
   category: "grade",
 
@@ -6263,8 +6270,14 @@ if (uniqueParentIds.length > 0) {
 
         body: isGradeModification
           ? `${student.firstName} a une note modifiée : ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`
-          : `${student.firstName} a obtenu une nouvelle note : ${score}/${evaluationRecord.maxScore} en ${evaluationRecord.subject} pour : ${evaluationRecord.title}.`,
-            type: 'grade',
+          : buildGradeNotificationMessage({
+              studentName: student.firstName,
+              score,
+              maxScore: evaluationRecord.maxScore,
+              subjectName: evaluationRecord.subject,
+              evaluationName: evaluationRecord.title,
+            }),
+        type: 'grade',
       });
         }
       }
