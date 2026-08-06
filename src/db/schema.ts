@@ -7,6 +7,7 @@ export const schools = pgTable('schools', {
   name: text('name').notNull(),
   address: text('address'),
   phone: text('phone'),
+  studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

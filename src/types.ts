@@ -5,6 +5,7 @@ export interface School {
   name: string;
   address?: string;
   phone?: string;
+  studentsCreationLocked?: boolean;
   createdAt?: string;
 }
 

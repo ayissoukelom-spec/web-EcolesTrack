@@ -118,6 +118,15 @@ export async function ensureUsersTableSchema() {
   }
 }
 
+export async function ensureSchoolsTableSchema() {
+  try {
+    await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS students_creation_locked BOOLEAN NOT NULL DEFAULT false;`);
+  } catch (err: any) {
+    console.error('Failed to ensure schools table schema (students_creation_locked) exists:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureUserSchoolsTableExists() {
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS user_schools (

@@ -27,7 +27,7 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
@@ -2105,6 +2105,43 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id);
+      // Detect a special-case update that only toggles the students creation lock.
+      const bodyKeys = req.body && typeof req.body === 'object' ? Object.keys(req.body) : [];
+      const lockKeyNames = ['students_creation_locked', 'studentsCreationLocked'];
+      const isOnlyLockToggle = bodyKeys.length === 1 && lockKeyNames.includes(bodyKeys[0]);
+
+      // If the request only contains the lock toggle, handle it here and
+      // avoid requiring `name` so callers can perform a partial update.
+      if (isOnlyLockToggle) {
+        const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
+        const val = Boolean(studentsCreationLockedRaw);
+
+        const actor = await resolveActor(req);
+        if (!actor) return res.status(404).json({ error: 'User not found' });
+        if (actor.role !== 'super_admin') {
+          return res.status(403).json({ error: 'Only super admin can modify school information' });
+        }
+
+        const [existingSchool] = await db.select().from(schools).where(eq(schools.id, id));
+        if (!existingSchool) {
+          return res.status(404).json({ error: 'School not found' });
+        }
+
+        const result = await db.update(schools)
+          .set({ studentsCreationLocked: val })
+          .where(eq(schools.id, id))
+          .returning();
+
+        // Log audit event for lock/unlock
+        try {
+          await logAuditEvent(actor, val ? 'lock_student_creation' : 'unlock_student_creation', 'school', id, id, `students_creation_locked: "${existingSchool.studentsCreationLocked ?? false}" → "${val}"`);
+        } catch (e: any) {
+          console.error('Audit log failed for school lock toggle:', e?.message || e);
+        }
+
+        return res.status(200).json(result[0]);
+      }
+
       const name = String(req.body?.name || '').trim();
       const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
       const phoneRaw = req.body?.phone;
@@ -2156,6 +2193,15 @@ export async function createApp() {
       const updatePayload: any = { name };
       if (address !== undefined) updatePayload.address = address;
       if (phone !== undefined) updatePayload.phone = phone;
+      // allow updating the student creation lock (accept snake_case or camelCase)
+      const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
+      if (studentsCreationLockedRaw !== undefined) {
+        const val = Boolean(studentsCreationLockedRaw);
+        updatePayload.studentsCreationLocked = val;
+        if ((existingSchool.studentsCreationLocked ?? false) !== val) {
+          changes.push(`students_creation_locked: "${existingSchool.studentsCreationLocked ?? false}" → "${val}"`);
+        }
+      }
 
       const result = await db.update(schools)
         .set(updatePayload)
@@ -2437,13 +2483,20 @@ export async function createApp() {
         schoolIds.push(userRecord.schoolId);
       }
 
-      const existingSchoolRows = schoolIds.length > 0 ? await db.select({ id: schools.id }).from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
+      const existingSchoolRows = schoolIds.length > 0 ? await db.select().from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
       const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
       const existingParentRows = parentIds.length > 0 ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents).where(sql`${parents.id} IN ${parentIds}`) : [];
 
       const existingSchoolIds = new Set(existingSchoolRows.map((r: any) => r.id));
       const existingClassIds = new Set(existingClassRows.map((r: any) => r.id));
       const existingParentIds = new Set(existingParentRows.map((r: any) => r.id));
+
+      if (userRecord.role === 'school_admin') {
+        const lockedSchool = existingSchoolRows.find((r: any) => r.studentsCreationLocked === true);
+        if (lockedSchool) {
+          return res.status(403).json({ error: "L'import d'élèves est impossible : la création d'élèves est verrouillée pour cet établissement." });
+        }
+      }
 
       const inserted: any[] = [];
       const errors: any[] = [];
@@ -4293,6 +4346,11 @@ export async function createApp() {
       }
 
       const targetSchoolId = effectiveSchoolId as number;
+      // Enforce per-school student creation lock: school_admins cannot create when locked
+      const [schoolRow] = await db.select().from(schools).where(eq(schools.id, targetSchoolId));
+      if (schoolRow && (schoolRow.studentsCreationLocked ?? false) && actor.role === 'school_admin') {
+        return res.status(403).json({ error: 'La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissement.' });
+      }
       if (classRecord.schoolId !== targetSchoolId) {
         const classAllowed = classRecord.schoolId == null && await isApprovedClassForSchool(parsedClassId, targetSchoolId);
         if (!classAllowed) {
@@ -6712,6 +6770,7 @@ export async function startServer() {
   console.log('Verifying if database needs seeding...');
   try {
     await seedDatabaseIfEmpty();
+    await ensureSchoolsTableSchema();
     await ensureSchoolClassesTableExists();
     await ensureUsersTableSchema();
     await ensureUserSchoolsTableExists();

@@ -363,7 +363,7 @@ interface AdminViewProps {
   subjectsList?: any[];
   approvedSubjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
-  onUpdateSchool?: (id: number, data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onSetActiveYear?: (id: number) => Promise<any>;
@@ -553,6 +553,8 @@ export default function AdminView({
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
   const autoAssignedSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : undefined;
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
+  const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
+  const isStudentsCreationLocked = Boolean(currentSchoolForAdmin?.studentsCreationLocked);
 
   useEffect(() => {
     if (userRole === 'school_admin') {
@@ -1877,8 +1879,14 @@ export default function AdminView({
                 </button>
 
                 <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100"
+                  onClick={() => {
+                    if (userRole === 'school_admin' && isStudentsCreationLocked) {
+                      setStudentError('La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissementllée par le Super Admin pour cet établissement.');
+                      return;
+                    }
+                    fileInputRef.current?.click();
+                  }}
+                  className={`hidden sm:inline-flex items-center gap-2 ${userRole === 'school_admin' && isStudentsCreationLocked ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-100' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-100'} font-semibold text-xs px-3 py-2 rounded-lg`}
                   title="Importer Excel"
                 >
                   Importer Excel
@@ -1897,7 +1905,9 @@ export default function AdminView({
                 </button>
 
                 <button
-                  onClick={() => parentFileInputRef.current?.click()}
+                  onClick={() => {
+                    parentFileInputRef.current?.click();
+                  }}
                   className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100"
                   title="Importer Parents"
                 >
@@ -4364,8 +4374,48 @@ export default function AdminView({
                   </div>
                 </div>
                 <div className="flex justify-end w-full sm:w-auto">
+                  <div className="flex items-center gap-2">
+                    {/* Super Admin: toggle per-school student creation lock */}
+                    {userRole === 'super_admin' && (
+                      <button
+                        onClick={async () => {
+                          const selectedSchoolId = superAdminSchoolFilterId;
+                          if (!selectedSchoolId) {
+                            setStudentError('Sélectionnez d\'abord une école pour modifier l\'état de verrouillage.');
+                            return;
+                          }
+                          const school = schoolsList.find((s) => s.id === selectedSchoolId);
+                          const locked = Boolean(school?.studentsCreationLocked);
+                          const confirmMsg = locked
+                            ? 'Confirmer le déverrouillage des créations d\'élèves pour cette école ?'
+                            : 'Confirmer la clôture des créations d\'élèves pour cette école ?';
+                          if (!window.confirm(confirmMsg)) return;
+                          try {
+                            setStudentError(null);
+                            if (onUpdateSchool) {
+                              await (onUpdateSchool as any)(selectedSchoolId, { students_creation_locked: !locked });
+                            } else {
+                              await apiFetch(`/api/schools/${selectedSchoolId}`, { method: 'PUT', body: JSON.stringify({ students_creation_locked: !locked }) });
+                            }
+                          } catch (err: any) {
+                            setStudentError(err?.message || 'Impossible de modifier l\'état de verrouillage.');
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-3 py-2 rounded-lg"
+                        title="Clôturer/Déverrouiller les créations d'élèves"
+                      >
+                        { (schoolsList.find((s) => s.id === superAdminSchoolFilterId)?.studentsCreationLocked) ? 'Déverrouiller' : 'Clôturer' }
+                      </button>
+                    )}
+
+                    {/* Create button */}
+                  </div>
                   <button
                     onClick={() => {
+                      if (userRole === 'school_admin' && isStudentsCreationLocked) {
+                        setStudentError('La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissement.');
+                        return;
+                      }
                       setStudentForm({
                         firstName: '',
                         lastName: '',
@@ -4382,10 +4432,13 @@ export default function AdminView({
                       setActiveTab('students');
                       setIsModalOpen(true);
                     }}
-                    className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-3 py-2 rounded-lg"
+                    className={`inline-flex items-center gap-2 ${userRole === 'school_admin' && isStudentsCreationLocked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'} font-semibold text-xs px-3 py-2 rounded-lg`}
                   >
                     Créer un élève
                   </button>
+                  {userRole === 'school_admin' && isStudentsCreationLocked && (
+                    <div className="text-sm text-rose-600 italic ml-3">La création d'élèves est temporairement verrouillée par le Super Admin pour cet établissement.</div>
+                  )}
                 </div>
               </div>
             )}
