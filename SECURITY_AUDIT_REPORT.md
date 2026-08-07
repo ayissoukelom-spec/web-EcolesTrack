@@ -36,7 +36,7 @@ L'application a été soumise à un audit de sécurité approfondie couvrant l'O
 **CWE:** CWE-287 (Broken Authentication), CWE-778 (Insufficient Logging)
 
 #### Explication Technique
-L'authentification simule un système d'utilisateurs en développement via des headers HTTP (`x-simulated-role`, `x-simulated-uid`, etc.) **sans distinction d'environnement**. En production, un attaquant pouvait envoyer ces headers pour se faire passer pour n'importe quel utilisateur (super_admin, school_admin, etc.).
+L'authentification simule un système d'utilisateurs en développement via des headers HTTP (`x-simulated-role`, `x-simulated-uid`, etc.) **sans distinction d'environnement**. En pratique, la simulation est autorisée uniquement lorsque `NODE_ENV === 'test'` ou `ALLOW_SIMULATED_AUTH=true`. ATTENTION : `ALLOW_SIMULATED_AUTH` ne doit jamais être activé en production.
 
 #### Scénario d'Exploitation
 ```bash
@@ -164,6 +164,45 @@ if (!secret) {
 **Status:** ✅ CORRIGÉ
 
 ---
+
+## Implémentation actuelle
+
+Le backend utilise actuellement des JSON Web Tokens signés avec HS256 et la variable d'environnement `JWT_SECRET`. Comportement vérifié dans le code:
+
+- Signature: vérification de la signature HS256 avec `JWT_SECRET`.
+- Validation de `iss`: si `JWT_ISSUER` est configuré, le middleware valide la claim `iss`.
+- Validation de `aud`: si `JWT_AUDIENCE` est configuré, le middleware valide la claim `aud`.
+- Validation d'expiration / `nbf`: `exp` (et `nbf` si présent) sont vérifiés par la bibliothèque JWT.
+- Présence et validation de `jti`: le token doit contenir une `jti` (JWT ID) utilisée pour la révocation.
+- Blacklist: la vérification consulte la table `token_blacklist` en cherchant `token_jti` ou le token brut pour compatibilité historique; si trouvé et non-expiré, le token est rejeté.
+- Validation de `sub`: le middleware vérifie que `decoded.sub === String(dbUser.id)` pour lier le token à l'utilisateur en base.
+
+Ces vérifications sont exécutées dans `src/middleware/auth.ts` lors de `verifyToken()`.
+
+## Évolutions futures (non implémentées)
+
+Les éléments suivants sont des évolutions ciblées et ne doivent pas être pris pour l'état actuel du backend :
+
+- Passage à une signature asymétrique **RS256**.
+- Adoption d'un flux `refresh token` avec cookies HttpOnly ou body mobile.
+- Rotation des refresh tokens (`refresh token rotation`).
+- Publication et validation via **JWKS** / `kid`.
+- Gestion avancée des sessions et des révocations multi-device.
+
+Voir `JWT_FUTURE_DESIGN.md` pour la conception future.
+
+## Variables d'environnement requises en production
+
+En production, les variables suivantes doivent être configurées et sécurisées (ex. : vault, secret manager) :
+
+- `JWT_SECRET` : **OBLIGATOIRE**. Secret HS256 utilisé pour signer et vérifier les tokens.
+- `JWT_ISSUER` : recommandé. Permet de valider la claim `iss` si configuré.
+- `JWT_AUDIENCE` : recommandé. Permet de valider la claim `aud` si configuré.
+- `JWT_EXPIRES_IN` : recommandé. Format d'expiration des access tokens (ex. `1h`).
+- `ALLOW_SIMULATED_AUTH` : doit être **false** en production. "ALLOW_SIMULATED_AUTH ne doit jamais être activé en production".
+
+Ces paramètres garantissent que l'authentification JWT est robuste et évitent les fallbacks dangereux (secret codé en dur).
+
 
 ### 🟠 ÉLEVÉE 3: Absence de Rate Limiting sur le Login
 
@@ -479,6 +518,8 @@ Déployer EN PRODUCTION uniquement après:
 ## Conclusion
 
 L'application est **prête pour une mise en production SÉCURISÉE** après application des 3 correctifs critiques et configuration de l'environnement.
+
+Les contrôles d'authentification JWT sont désormais renforcés et suivent une chaîne de confiance claire : signature → claims JWT (`iss`, `aud`, `sub`, `jti`) → blacklist → utilisateur DB → résolution acteur → autorisation métier.
 
 Les vulnérabilités identifiées étaient haute-risque mais rapidement remédies par des modifications minimales.
 

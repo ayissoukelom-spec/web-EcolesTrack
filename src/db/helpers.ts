@@ -180,10 +180,13 @@ export async function ensureTokenBlacklistTableExists() {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS token_blacklist (
       id SERIAL PRIMARY KEY,
       token TEXT NOT NULL UNIQUE,
+      token_jti TEXT,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       blacklisted_at TIMESTAMP NOT NULL DEFAULT now(),
       expires_at TIMESTAMP NOT NULL
     );`);
+    await db.execute(sql`ALTER TABLE token_blacklist ADD COLUMN IF NOT EXISTS token_jti TEXT;`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS token_blacklist_token_jti_idx ON token_blacklist(token_jti);`);
   } catch (err: any) {
     console.error('Failed to ensure token_blacklist table exists:', err?.message || err);
     throw err;

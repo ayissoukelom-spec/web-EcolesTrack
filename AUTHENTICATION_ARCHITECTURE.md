@@ -1,5 +1,7 @@
 # 📋 DOCUMENT D'ARCHITECTURE D'AUTHENTIFICATION
 
+> NOTE: Sections describing refresh tokens, RS256 signing, or refresh-cookie behavior are FUTURE/PLANNED features and are not implemented in the current codebase. The current implementation issues HS256 access tokens only.
+
 **Date:** 2026-07-11  
 **Statut:** Partiellement Implémenté - Architecture Incohérente  
 **Risque Production:** 🔴 CRITIQUE
@@ -202,51 +204,14 @@ return {
 | **Mobile-friendly** | ✅ Excellent | ⚠️ Cookies problems | ✅ Excellent |
 | **Scalabilité** | ✅ Excellente | ❌ Difficile (sticky sessions) | ✅ Excellente |
 | **Revocation** | ❌ Difficile | ✅ Facile | ✅ Facile |
-| **Refresh tokens** | ✅ Possibles | ✅ Natifs | ✅ Natifs |
+| **Refresh tokens** | ✅ Possibles (future plan) | ✅ Natifs (future plan) | ✅ Natifs (future plan) |
 | **Implémentation** | ⚠️ Complexe | ✅ Simple | ❌ Très complexe |
 
-### 4.2 **Recommandation: JWT + Refresh Token (Hybrid Approach)**
+## Future Architecture
 
-**Pourquoi:**
+Les sections décrivant une architecture avec refresh tokens, rotation et RS256 sont des propositions d'évolution future. Elles ne correspondent pas à l'implémentation courante. Pour la conception cible détaillée, voir [JWT_FUTURE_DESIGN.md](JWT_FUTURE_DESIGN.md).
 
-1. **Déjà partiellement implémenté** → Coût minimal
-2. **Stateless** → Scalabilité pour multi-serveur
-3. **Mobile-compatible** → App école sur mobile
-4. **Revocation possible** → Avec refresh token rotation
-5. **Sécurisé** → Si bien implémenté
-
-### 4.3 Architecture JWT Recommandée
-
-```
-┌─ Access Token (JWT)
-│  ├─ Payload: { uid, email, role, schoolId, iat, exp:15min }
-│  ├─ Storage: Memory-only (NOT localStorage) ← Key change
-│  ├─ Expiration: 15 minutes
-│  └─ Usage: Authorization: Bearer [access_token]
-│
-├─ Refresh Token (JWT)
-│  ├─ Payload: { uid, tokenId, iat, exp:7days }
-│  ├─ Storage: HttpOnly cookie (httpOnly=true, secure=true)
-│  ├─ Expiration: 7 jours
-│  ├─ Rotation: New refresh token on each refresh
-│  └─ Usage: POST /api/auth/refresh
-│
-└─ Login Flow
-   ├─ POST /api/auth/local-login (email, password)
-   ├─ Validate credentials
-   ├─ Generate access token
-   ├─ Generate refresh token
-   ├─ Set HttpOnly cookie: refresh_token
-   └─ Return: { accessToken, user }
-```
-
-**Avantages de cette approche:**
-
-✅ **Sécurité XSS:** Access token en mémoire (disparaît au reload)  
-✅ **Sécurité CSRF:** Refresh token en HttpOnly cookie  
-✅ **Sécurité Logout:** Refresh token rotation  
-✅ **Mobile:** Refresh token dans header (pas de cookie)  
-✅ **Scalable:** Stateless access token  
+> Résumé: la future architecture proposera access tokens courts, refresh tokens en cookie HttpOnly, rotation des refresh tokens, détection de réutilisation et signature RS256 avec gestion de clés (kid). Ces éléments sont décrits et spécifiés dans `JWT_FUTURE_DESIGN.md`.
 
 ---
 
@@ -270,6 +235,8 @@ return {
 ---
 
 ### Phase 2: Backend JWT Generation (Semaine 2) - SAFE modifications
+
+> NOTE: Cette phase décrit une proposition ou un plan de migration. Le code présenté ci-dessous n'est pas le code actuellement déployé dans le backend. La base de code actuelle ne génère pas de JWT ni de refresh token lors du login.
 
 **Étape 2.1: Ajouter JWT generation au login**
 

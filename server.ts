@@ -67,6 +67,23 @@ import studentAccess from './src/lib/studentAccess.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 
+// When true, allow verbose/debug logs that may include sensitive user data.
+const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
+
+function toUserDto(user: any) {
+  return {
+    id: user.id,
+    uid: user.uid,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    schoolId: user.schoolId,
+    academicYearId: user.academicYearId,
+    phone: user.phone,
+    gender: user.gender,
+  };
+}
+
 async function logIfTeacherUserMismatch(userId: number | null | undefined, teacherId: number | null | undefined) {
   try {
     if (!userId || !teacherId) return;
@@ -123,7 +140,7 @@ interface ResolvedActor {
 
 // Helper to resolve actor with fallback to simulated profile in dev
 export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | null> {
-  console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
+  if (SENSITIVE_LOG) console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
 
   const role = req.user.role;
@@ -135,16 +152,16 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   if (req.user.simulated) {
     let dbUser: any = null;
     const rowsByUid = await db.select().from(users).where(eq(users.uid, uid));
-    console.log('TRACE resolveActor lookup by uid', { uid, rowsByUidLength: rowsByUid.length });
+    if (SENSITIVE_LOG) console.log('TRACE resolveActor lookup by uid', { uid, rowsByUidLength: rowsByUid.length });
     if (rowsByUid.length > 0) dbUser = rowsByUid[0];
 
     if (!dbUser && req.user.email) {
       const rowsByEmail = await db.select().from(users).where(eq(users.email, req.user.email));
-      console.log('TRACE resolveActor lookup by email', { email: req.user.email, rowsByEmailLength: rowsByEmail.length });
+      if (SENSITIVE_LOG) console.log('TRACE resolveActor lookup by email', { email: req.user.email, rowsByEmailLength: rowsByEmail.length });
       if (rowsByEmail.length > 0) dbUser = rowsByEmail[0];
     }
 
-    console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
+    if (SENSITIVE_LOG) console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
       const resolvedSchoolId = req.user.schoolId ?? dbUser.schoolId ?? null;
@@ -617,7 +634,7 @@ export async function createApp() {
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log('HANDLER ENTER /api/users/:userId/schools', { params: req.params, body: req.body, simulatedRole: req.headers['x-simulated-role'], hasAuth: !!req.headers.authorization });
+      if (SENSITIVE_LOG) console.log('HANDLER ENTER /api/users/:userId/schools', { params: req.params, body: req.body, simulatedRole: req.headers['x-simulated-role'], hasAuth: !!req.headers.authorization });
 
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
@@ -659,7 +676,7 @@ export async function createApp() {
       res.status(201).json(inserted[0] ?? null);
     } catch (err: any) {
       console.error('Error associating user with school:', err);
-      res.status(500).json({ error: err?.message || 'Failed to associate user with school' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -827,7 +844,7 @@ export async function createApp() {
       res.json({ simHeaders, resolvedActor: resolved, dbUser, teacherRow, classCount: classRows.length, classes: classRows, studentCount: studentRows.length, students: studentRows });
     } catch (err: any) {
       console.error('Debug sim-profile failed:', err);
-      res.status(500).json({ error: err?.message || 'Failed to run debug' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -836,14 +853,14 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       let actor = await resolveActor(req);
-      console.log('DEBUG /api/admin/users create request', {
+      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create request', {
         actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role, schoolId: actor.schoolId, email: actor.email } : null,
         body: req.body,
       });
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const { uid, email, name, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, gender, password, classIds, studentId } = req.body;
-      console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
+      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
       const normalizedEmail = normalizeEmail(email);
       if (!normalizedEmail || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
 
@@ -1068,7 +1085,7 @@ export async function createApp() {
       res.status(201).json(responseBody);
     } catch (err: any) {
       console.error('Error creating admin user:', err);
-      res.status(500).json({ error: err?.message || 'Failed to create user' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1332,11 +1349,11 @@ export async function createApp() {
         }
         res.json({ ...updatedUser, teacherId, classIds, phone: phoneValue, specialization: specializationValue });
       } else {
-        res.json(updatedUser);
+        res.json(toUserDto(updatedUser));
       }
     } catch (err: any) {
       console.error('Error updating admin user:', err);
-      res.status(500).json({ error: err?.message || 'Failed to update user' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1372,7 +1389,7 @@ export async function createApp() {
       res.json({ success: true, id });
     } catch (err: any) {
       console.error('Error deleting user:', err);
-      res.status(500).json({ error: err?.message || 'Failed to delete user' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1438,7 +1455,7 @@ export async function createApp() {
       res.json({ success: true, userId });
     } catch (err: any) {
       console.error('Error setting password:', err);
-      res.status(500).json({ error: err?.message || 'Failed to set password' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1481,7 +1498,7 @@ export async function createApp() {
       if (displayName) updatedFields.name = displayName;
       if (phone !== undefined) updatedFields.phone = phone || null;
 
-      console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
+      if (SENSITIVE_LOG) console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
 
       if (Object.keys(updatedFields).length > 0) {
         console.log('DEBUG updating users table', { id, updatedFields });
@@ -1510,10 +1527,10 @@ export async function createApp() {
 
       await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : actor.role === 'super_admin' ? 'Super admin' : 'User'} ${actor.email || actor.uid} updated account ${updatedUser.email}`);
 
-      res.json(updatedUser);
+      res.json(toUserDto(updatedUser));
     } catch (err: any) {
       console.error('Error in self-update user:', err);
-      res.status(500).json({ error: err?.message || 'Failed to update user' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1553,6 +1570,7 @@ export async function createApp() {
       try {
         await db.insert(tokenBlacklist).values({
           token,
+          tokenJti: jti,
           userId: dbUser?.id ?? undefined,
           expiresAt,
         });
@@ -1603,7 +1621,7 @@ export async function createApp() {
       res.json({ success: true });
     } catch (err: any) {
       console.error('change-password error:', err);
-      res.status(500).json({ error: err?.message || 'Failed to change password' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1655,7 +1673,7 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error('Error fetching user schools:', err);
-      res.status(500).json({ error: err?.message || 'Failed to fetch user schools' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1756,7 +1774,7 @@ export async function createApp() {
       res.json({ schoolId: parsedSchoolId });
     } catch (err: any) {
       console.error('Error setting active school:', err);
-      res.status(500).json({ error: err?.message || 'Failed to set active school' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1900,7 +1918,7 @@ export async function createApp() {
         }
       }
 
-      res.json(createdUser);
+      res.json(toUserDto(createdUser));
 
       return;
     } catch (err: any) {
@@ -2146,7 +2164,7 @@ export async function createApp() {
       res.status(201).json(createdSchool);
     } catch (err: any) {
       console.error('Error creating school:', err);
-      res.status(500).json({ error: err.message || 'Failed to create school' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -2666,7 +2684,7 @@ export async function createApp() {
       res.json({ insertedCount: inserted.length, inserted, errors });
     } catch (err: any) {
       console.error('Error in students batch import:', err);
-      res.status(500).json({ error: err?.message || 'Failed to import students' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
   
@@ -2790,10 +2808,11 @@ export async function createApp() {
       res.json({ message: 'School deleted successfully' });
     } catch (err: any) {
       console.error('Error deleting school:', err);
+      // Log the underlying error server-side for diagnostics, but do not expose details to clients.
       const errorMessage = err?.message && (err.message.includes('constraint') || err.message.includes('foreign key'))
         ? 'Impossible de supprimer cette école car elle contient des données liées. Supprimez d’abord les éléments associés.'
         : err?.message || 'Impossible de supprimer l’école.';
-      res.status(500).json({ error: errorMessage });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -3267,15 +3286,17 @@ export async function createApp() {
   app.post('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
       console.log('POST /api/classes exécuté');
-      console.log('🔥 RAW BODY RECEIVED =', req.body);
-      console.log('BODY FULL =', JSON.stringify(req.body));
-      console.log('name raw =', req.body?.name);
-      console.log('academicYearId raw =', req.body?.academicYearId);
-      console.log('type =', typeof req.body?.academicYearId);
-      console.log('schoolId raw =', req.body?.schoolId);
-      console.log('schoolId type =', typeof req.body?.schoolId);
-      console.log('🔥 FULL KEYS =', Object.keys(req.body || {}));
-      console.log('🔥 HIT POST /api/classes - NEW CODE');
+      if (SENSITIVE_LOG) {
+        console.log('🔥 RAW BODY RECEIVED =', req.body);
+        console.log('BODY FULL =', JSON.stringify(req.body));
+        console.log('name raw =', req.body?.name);
+        console.log('academicYearId raw =', req.body?.academicYearId);
+        console.log('type =', typeof req.body?.academicYearId);
+        console.log('schoolId raw =', req.body?.schoolId);
+        console.log('schoolId type =', typeof req.body?.schoolId);
+        console.log('🔥 FULL KEYS =', Object.keys(req.body || {}));
+        console.log('🔥 HIT POST /api/classes - NEW CODE');
+      }
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
@@ -3383,16 +3404,14 @@ export async function createApp() {
         if (insertErr && insertErr.code === '23505') {
           return res.status(400).json({ error: `Classe déjà existante: ${trimmedName}` });
         }
-        return res.status(500).json({ error: `Failed to create class: ${insertErr?.message || insertErr}` });
+        return res.status(500).json({ error: 'Internal server error' });
       }
     } catch (error: any) {
       console.error('POST /api/classes STACK:', error);
       console.error(error instanceof Error ? error.stack : error);
 
-      return res.status(500).json({
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+      // Do not expose internal error message or stack to client; keep server logs for diagnostics.
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -3838,7 +3857,7 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error('Error creating teacher profile:', err);
-      res.status(500).json({ error: `Failed to register teacher profile: ${err.message}` });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -3967,7 +3986,7 @@ export async function createApp() {
       res.json(list);
     } catch (err: any) {
       console.error('Error fetching parents:', err);
-      res.status(500).json({ error: `Failed to fetch parents list: ${err.message}` });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -4067,7 +4086,7 @@ export async function createApp() {
           });
         } catch (err: any) {
           console.error('Error recording parent info:', err);
-          res.status(500).json({ error: `Failed to record parent info: ${err.message}` });
+          res.status(500).json({ error: 'Internal server error' });
         }
       });
 
@@ -4272,7 +4291,7 @@ export async function createApp() {
       res.json({ insertedCount: inserted.length, errors, inserted });
     } catch (err: any) {
       console.error('Error importing parents batch:', err);
-      res.status(500).json({ error: err?.message || 'Failed to import parents' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -4359,7 +4378,7 @@ export async function createApp() {
       res.json(list);
     } catch (err: any) {
       console.error('Error fetching students:', err);
-      res.status(500).json({ error: `Failed to retrieve students: ${err.message}` });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -4483,7 +4502,7 @@ export async function createApp() {
       res.status(201).json(result[0]);
     } catch (err: any) {
       console.error('Error creating student profile:', err);
-      res.status(500).json({ error: `Failed to record student profile: ${err.message}` });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -4616,7 +4635,7 @@ export async function createApp() {
       res.status(200).json(result[0]);
     } catch (err: any) {
       console.error('Error updating student:', err);
-      res.status(500).json({ error: `Failed to update student: ${err.message}` });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -4726,7 +4745,7 @@ export async function createApp() {
 
   app.post('/api/absences', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log('🚀 ENTER POST /api/absences', req.body);
+      if (SENSITIVE_LOG) console.log('🚀 ENTER POST /api/absences', req.body);
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { studentId, classId, date, period, subjectId, startTime, endTime, isJustified, justificationReason } = req.body;
       const normalizedSubjectId = subjectId != null ? Number(subjectId) : undefined;
@@ -4907,7 +4926,7 @@ export async function createApp() {
       res.status(201).json(result[0]);
     } catch (error: any) {
       console.error('❌ ABSENCE CREATION ERROR:', error);
-      res.status(500).json({ error: 'Failed to record absence', details: error?.message || String(error) });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -5091,7 +5110,8 @@ export async function createApp() {
         justificationFileName: inserted[0]?.fileName,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Failed to upload absence justification' });
+      console.error('Failed to upload absence justification:', err);
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -5177,7 +5197,8 @@ export async function createApp() {
         }
       });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Failed to download justification file' });
+      console.error('Failed to download justification file:', err);
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -6077,7 +6098,7 @@ if (uniqueParentIds.length > 0) {
 
   app.post('/api/grades', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log('POST /api/grades payload', req.body);
+      if (SENSITIVE_LOG) console.log('POST /api/grades payload', req.body);
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'parent') {
@@ -6333,7 +6354,7 @@ if (uniqueParentIds.length > 0) {
     } catch (err: any) {
       console.error('POST /api/grades error:', err);
       console.error(err?.stack || err);
-      res.status(500).json({ error: err?.message || 'Failed to record student grade' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -6770,12 +6791,10 @@ if (uniqueParentIds.length > 0) {
 }
 
       res.json({ success: true, message: `Notification successfully routed to ${targetUserIds.length} users.` });
-   } catch (err: any) {
-  console.error("❌ ERREUR ENVOI INFORMATION :", err);
-  res.status(500).json({ 
-    error: err.message || 'Failed to dispatch notifications' 
-  });
-}
+  } catch (err: any) {
+    console.error("❌ ERREUR ENVOI INFORMATION :", err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
   // ==========================================

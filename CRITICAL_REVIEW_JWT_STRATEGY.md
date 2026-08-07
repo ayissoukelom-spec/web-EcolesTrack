@@ -1,4 +1,6 @@
 # Revue Critique: MINIMAL_JWT_MIGRATION_STRATEGY.md
+
+> NOTE: This document contains recommendations for a future migration to refresh-cookie flows and RS256. Those features are PLANNED only; the current codebase issues HS256 access tokens only. Do not treat RS256/refresh-cookie as implemented.
 ## Risques Cachés, Régressions & Étapes Manquantes
 
 **Statut:** 🔴 **Document à réviser avant implémentation**  

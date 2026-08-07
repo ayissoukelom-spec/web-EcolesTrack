@@ -69,6 +69,7 @@ describe('auth middleware access control', () => {
       uid: userRecord.uid,
       type: 'access',
       jti: 'jti-99',
+      sub: String(userRecord.id),
     });
     mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([userRecord]);
@@ -121,6 +122,36 @@ describe('auth middleware access control', () => {
     expect(res.status).toHaveBeenCalledWith(401);
   });
 
+  it('rejects a token when its jti is blacklisted', async () => {
+    const token = 'revoked-token';
+    const jti = 'jti-blacklisted';
+    const userRecord = {
+      id: 100,
+      uid: 'user_100',
+      email: 'user100@example.com',
+      name: 'User OneHundred',
+      role: 'teacher',
+      schoolId: 12,
+    };
+
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: userRecord.uid,
+      type: 'access',
+      jti,
+    });
+    mockWhere.mockResolvedValueOnce([{ tokenJti: jti }]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
   it('rejects a token for a soft-deleted user', async () => {
     const token = 'deleted-token';
 
@@ -131,6 +162,36 @@ describe('auth middleware access control', () => {
     });
     mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([]);
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('rejects a token when sub does not match the DB user id', async () => {
+    const token = 'mismatched-sub-token';
+    const userRecord = {
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    };
+
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: userRecord.uid,
+      type: 'access',
+      jti: 'jti-99',
+      sub: '100',
+    });
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
 
     const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
     const res = createMockRes();
@@ -192,8 +253,8 @@ describe('auth middleware access control', () => {
     expect(res.status).toHaveBeenCalledWith(401);
   });
 
-  it('authorizes simulated auth headers in development when no token is present', async () => {
-    process.env.NODE_ENV = 'development';
+  it('authorizes simulated auth headers in test when no token is present', async () => {
+    process.env.NODE_ENV = 'test';
     delete process.env.JWT_SECRET;
 
     const req = {

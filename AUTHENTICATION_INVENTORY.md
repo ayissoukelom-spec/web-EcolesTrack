@@ -534,12 +534,24 @@ const [schoolsLoading, setSchoolsLoading] = useState(false);
 
 ### Fichier: `.env.example`
 ```
+# Example environment variables (do NOT commit real secrets)
 GEMINI_API_KEY="MY_GEMINI_API_KEY"
 APP_URL="MY_APP_URL"
+
+# Auth simulation (TESTS ONLY) - DO NOT enable in production
+# Set to true only for test environments (NODE_ENV=test) or CI.
+ALLOW_SIMULATED_AUTH=false
+
+# JWT configuration (production: REQUIRED)
+# `JWT_SECRET` must be provided in production and stored securely.
+JWT_SECRET="YOUR_JWT_SECRET"
+JWT_ISSUER="ecoletrack"
+JWT_AUDIENCE="ecoletrack-api"
+JWT_EXPIRES_IN="1h"
 ```
 
-**Current Count:** 2 variables  
-**Auth-Related:** 0
+**Current Count:** 7 variables  
+**Auth-Related:** 5
 
 ---
 
@@ -551,8 +563,9 @@ APP_URL="MY_APP_URL"
 - `NODE_ENV` (checked: exact match 'production')
 
 **Actual Status:**
-- ❌ JWT_SECRET: Not documented in .env.example
+- ✅ JWT_SECRET: Documented in `.env.example`
 - ❌ NODE_ENV: Expected but not explicitly set anywhere
+- ✅ ALLOW_SIMULATED_AUTH: documented as test-only in `.env.example`; ne doit pas être activé en production
 
 ---
 

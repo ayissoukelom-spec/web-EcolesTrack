@@ -33,6 +33,7 @@ beforeEach(() => {
   mockUpdateWhere.mockResolvedValue(undefined);
   process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.JWT_ISSUER = 'test-issuer';
+  process.env.JWT_AUDIENCE = 'test-audience';
   process.env.JWT_EXPIRES_IN = '1h';
 });
 
@@ -90,6 +91,7 @@ describe('handleLocalLogin', () => {
     expect(decoded.role).toBe(userRecord.role);
     expect(decoded.schoolId).toBe(userRecord.schoolId);
     expect(decoded.iss).toBe('test-issuer');
+    expect(decoded.aud).toBe('test-audience');
     expect(decoded.sub).toBe(String(userRecord.id));
     expect(typeof decoded.iat).toBe('number');
     expect(typeof decoded.exp).toBe('number');

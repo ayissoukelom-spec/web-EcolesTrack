@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import { signJwt, verifyJwt } from './jwt';
 
@@ -33,15 +34,37 @@ describe('JWT utilities', () => {
     expect(verified).toBeDefined();
   });
 
-  it('includes issuer, subject, and jwtid claims when provided', () => {
+  it('includes issuer, audience, subject, and jwtid claims when provided', () => {
     const claims = { uid: 'user_5' };
-    const token = signJwt(claims, secret, { expiresIn: '1h', issuer: 'test-issuer', subject: '42', jwtid: 'test-jti' });
+    const token = signJwt(claims, secret, { expiresIn: '1h', issuer: 'test-issuer', audience: 'test-audience', subject: '42', jwtid: 'test-jti' });
     const verified = verifyJwt(token, secret);
 
     expect(verified.uid).toBe(claims.uid);
     expect(verified.iss).toBe('test-issuer');
+    expect(verified.aud).toBe('test-audience');
     expect(verified.sub).toBe('42');
     expect(verified.jti).toBe('test-jti');
+  });
+
+  it('rejects a token with an unexpected audience', () => {
+    const token = signJwt({ uid: 'user_6' }, secret, { expiresIn: '1h', issuer: 'test-issuer', audience: 'expected-audience', subject: '6', jwtid: 'test-jti' });
+    expect(() => verifyJwt(token, secret, { audience: 'other-audience' })).toThrow(/jwt audience invalid|invalid audience/i);
+  });
+
+  it('rejects a token with an unexpected issuer', () => {
+    const token = signJwt({ uid: 'user_7' }, secret, { expiresIn: '1h', issuer: 'expected-issuer', audience: 'test-audience', subject: '7', jwtid: 'test-jti' });
+    expect(() => verifyJwt(token, secret, { issuer: 'other-issuer' })).toThrow(/jwt issuer invalid|invalid issuer/i);
+  });
+
+  it('accepts a token without issuer or audience when no expected values are configured', () => {
+    const token = signJwt({ uid: 'user_8' }, secret, { expiresIn: '1h', subject: '8', jwtid: 'test-jti' });
+    const verified = verifyJwt(token, secret);
+    expect(verified.uid).toBe('user_8');
+  });
+
+  it('rejects a token before its not-before time', () => {
+    const token = jwt.sign({ uid: 'user_9' }, secret, { algorithm: 'HS256', notBefore: '10s', expiresIn: '1h' });
+    expect(() => verifyJwt(token, secret)).toThrow(/jwt not active|not before/i);
   });
 
   it('rejects signing when secret is absent', () => {

@@ -1,4 +1,4 @@
-import jwt, { SignOptions } from 'jsonwebtoken';
+import jwt, { SignOptions, VerifyOptions } from 'jsonwebtoken';
 
 export interface JwtPayload {
   uid: string;
@@ -15,6 +15,12 @@ export interface JwtSignOptions {
   audience?: string;
   subject?: string;
   jwtid?: string;
+}
+
+export interface JwtVerifyOptions {
+  issuer?: string;
+  audience?: string | string[];
+  subject?: string;
 }
 
 export interface JwtVerifiedPayload extends JwtPayload {
@@ -56,12 +62,26 @@ export function signJwt(payload: JwtPayload, secret: string, options: JwtSignOpt
   return jwt.sign(payload as string | Buffer | object, secret, signOptions);
 }
 
-export function verifyJwt(token: string, secret: string): JwtVerifiedPayload {
+export function verifyJwt(token: string, secret: string, options: JwtVerifyOptions = {}): JwtVerifiedPayload {
   if (!secret) {
     throw new Error('JWT secret is required to verify tokens');
   }
 
-  const decoded = jwt.verify(token, secret, { algorithms: [DEFAULT_JWT_ALGORITHM] });
+  const verifyOptions: VerifyOptions = {
+    algorithms: [DEFAULT_JWT_ALGORITHM],
+  };
+
+  if (options.issuer !== undefined) {
+    verifyOptions.issuer = options.issuer;
+  }
+  if (options.audience !== undefined) {
+    verifyOptions.audience = options.audience;
+  }
+  if (options.subject !== undefined) {
+    verifyOptions.subject = options.subject;
+  }
+
+  const decoded = jwt.verify(token, secret, verifyOptions);
   if (typeof decoded !== 'object' || decoded === null) {
     throw new Error('Invalid JWT payload');
   }

@@ -5,6 +5,7 @@ import { users, localAuths } from '../db/schema.ts';
 import { eq, sql } from 'drizzle-orm';
 
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
+const DEFAULT_JWT_AUDIENCE = 'ecoletrack-api';
 const DEFAULT_JWT_EXPIRES_IN = '1h';
 
 export async function handleLocalLogin(req: Request, res: Response) {
@@ -60,6 +61,7 @@ export async function handleLocalLogin(req: Request, res: Response) {
     const token = signJwt(payload, secret, {
       expiresIn: process.env.JWT_EXPIRES_IN ?? DEFAULT_JWT_EXPIRES_IN,
       issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,
+      audience: process.env.JWT_AUDIENCE ?? DEFAULT_JWT_AUDIENCE,
       subject: String(userRecord.id),
       jwtid: crypto.randomUUID(),
     });

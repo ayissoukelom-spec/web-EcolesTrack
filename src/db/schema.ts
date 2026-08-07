@@ -74,6 +74,7 @@ export const localAuths = pgTable('local_auths', {
 export const tokenBlacklist = pgTable('token_blacklist', {
   id: serial('id').primaryKey(),
   token: text('token').notNull().unique(),
+  tokenJti: text('token_jti'),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
   blacklistedAt: timestamp('blacklisted_at').defaultNow().notNull(),
   expiresAt: timestamp('expires_at').notNull(),

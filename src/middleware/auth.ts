@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
 import { tokenBlacklist, users } from '../db/schema.ts';
-import { eq, gt } from 'drizzle-orm';
+import { eq, gt, and, or } from 'drizzle-orm';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 
@@ -34,7 +34,9 @@ export const verifyToken = async (
   next: NextFunction
 ) => {
   const isProduction = process.env.NODE_ENV === 'production';
+  const allowSimulatedAuth = process.env.NODE_ENV === 'test' || process.env.ALLOW_SIMULATED_AUTH === 'true';
   const authHeader = req.headers.authorization;
+
   const simulatedRoleHeader = req.headers['x-simulated-role'];
   const simulatedRole = typeof simulatedRoleHeader === 'string'
     ? simulatedRoleHeader
@@ -67,7 +69,7 @@ export const verifyToken = async (
       : null;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    if (isProduction) {
+    if (!allowSimulatedAuth) {
       return res.status(401).json({ error: 'Unauthorized: Missing token' });
     }
 
@@ -95,7 +97,11 @@ export const verifyToken = async (
       return res.status(500).json({ error: 'Server configuration error' });
     }
 
-    const decoded = verifyJwt(token, secret);
+    const jwtVerifyOptions = {
+      issuer: process.env.JWT_ISSUER,
+      audience: process.env.JWT_AUDIENCE,
+    };
+    const decoded = verifyJwt(token, secret, jwtVerifyOptions);
     const uid = decoded?.uid;
     const tokenType = decoded?.type;
     const jti = decoded?.jti;
@@ -105,8 +111,13 @@ export const verifyToken = async (
     }
 
     const [blacklistedToken] = await db.select().from(tokenBlacklist).where(
-      eq(tokenBlacklist.token, token),
-      gt(tokenBlacklist.expiresAt, new Date()),
+      and(
+        or(
+          eq(tokenBlacklist.tokenJti, jti),
+          eq(tokenBlacklist.token, token),
+        ),
+        gt(tokenBlacklist.expiresAt, new Date()),
+      ),
     );
     if (blacklistedToken) {
       return res.status(401).json({ error: 'Unauthorized: Token revoked' });
@@ -117,9 +128,9 @@ export const verifyToken = async (
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 
-    const tokenSchoolId = decoded.schoolId != null && decoded.schoolId !== ''
-      ? Number(decoded.schoolId)
-      : null;
+    if (decoded.sub !== String(dbUser.id)) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
 
     req.user = {
       id: dbUser.id,
@@ -128,7 +139,7 @@ export const verifyToken = async (
       name: dbUser.name || dbUser.email || 'Utilisateur',
       role: dbUser.role,
       appRole: mapToAppRole(dbUser.role),
-      schoolId: Number.isFinite(tokenSchoolId) ? tokenSchoolId : (dbUser.schoolId ?? null),
+      schoolId: dbUser.schoolId ?? null,
     };
     return next();
   } catch (error) {

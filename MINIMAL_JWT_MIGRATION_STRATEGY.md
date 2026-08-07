@@ -1,4 +1,6 @@
 # Stratégie de Migration JWT Minimale et Progressive
+
+> NOTE: This document outlines a FUTURE migration path for refresh-cookie flows and RS256 signing. These are design proposals only — the current implementation uses HS256 access tokens and does not provide a refresh cookie flow.
 ## Production-Ready Sans Breaking Changes
 
 **Document Type:** Stratégie d'implémentation progressive  

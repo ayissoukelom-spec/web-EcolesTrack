@@ -1,4 +1,9 @@
 # Plan de Migration JWT - Stratégie Corrigée
+
+Cette stratégie concerne une évolution future et ne représente pas l'état actuel du système.
+
+> NOTE: Ce document décrit une stratégie de migration cible (cookies HttpOnly, rotation de refresh tokens, RS256 optionnel). Ces éléments sont des **plans** et ne reflètent pas l'implémentation courante qui utilise des access tokens HS256 sans mécanisme de refresh cookie.
+
 ## Architecture Cible avec Cookies HttpOnly + Token Rotation
 
 **Statut:** 🟡 Plan d'exécution détaillé (AVANT codage)  
@@ -77,7 +82,7 @@ Utilisée pour:
 ```sql
 CREATE TABLE IF NOT EXISTS token_blacklist (
   id SERIAL PRIMARY KEY,
-  token_jti VARCHAR(255) NOT NULL UNIQUE,  -- JWT ID from token
+  token_jti VARCHAR(255),                    -- JWT ID from token, nullable for backward compatibility
   user_id INTEGER NOT NULL,                 -- User who owns token
   session_id VARCHAR(255),                  -- Multi-device tracking
   reason VARCHAR(50),                       -- 'logout' | 'rotation' | 'theft_suspect'
@@ -205,6 +210,9 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 # JWT Configuration
 JWT_SECRET=your-secret-key-here-min-32-chars
 JWT_REFRESH_SECRET=your-refresh-secret-min-32-chars
+JWT_ISSUER=ecoletrack
+JWT_AUDIENCE=ecoletrack-api
+JWT_EXPIRES_IN=1h
 JWT_ACCESS_EXPIRY=3600         # seconds (1 hour)
 JWT_REFRESH_EXPIRY=604800      # seconds (7 days)
 
@@ -221,6 +229,8 @@ SESSION_TRACKING_ENABLED=false # Phase 5 feature
 **Risque:** Aucun (nouveau fichier)  
 **Rollback:** Supprimer lignes
 
+**Remarque de cohérence:** Les valeurs `JWT_ISSUER` et `JWT_AUDIENCE` doivent correspondre au contenu des tokens générés par `src/lib/localLogin.ts` et être validées par `src/middleware/auth.ts`. La vérification `decoded.sub === String(dbUser.id)` renforce la liaison entre le JWT et l’utilisateur en base.
+
 ---
 
 ### 0.2 - Créer `src/lib/jwt.ts` (NOUVEAU)
@@ -236,6 +246,8 @@ import crypto from 'crypto';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-jwt-refresh-secret';
+const JWT_ISSUER = process.env.JWT_ISSUER || 'ecoletrack';
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'ecoletrack-api';
 const ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY || '3600';      // 1 hour
 const REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY || '604800';   // 7 days
 
@@ -379,7 +391,7 @@ export const tokenBlacklist = pgTable(
   'token_blacklist',
   {
     id: serial('id').primaryKey(),
-    tokenJti: varchar('token_jti', { length: 255 }).notNull().unique(),
+    tokenJti: varchar('token_jti', { length: 255 }),
     userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
     sessionId: varchar('session_id', { length: 255 }),
     reason: varchar('reason', { length: 50 }), // 'logout', 'rotation', 'theft_suspect'
@@ -387,6 +399,9 @@ export const tokenBlacklist = pgTable(
     expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).default(sql`CURRENT_TIMESTAMP`)
   },
+)
+
+Note: la colonne `token_jti` est actuellement nullable pour compatibilité historique. La contrainte UNIQUE pourra être ajoutée après migration complète et vérification de l’unicité des JTI existants.
   (table) => ({
     userBlacklistIdx: index('idx_user_blacklist').on(table.userId, table.expiresAt),
     jtiIdx: index('idx_jti').on(table.tokenJti)
