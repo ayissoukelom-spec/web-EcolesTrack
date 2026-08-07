@@ -34,6 +34,15 @@ export interface JwtVerifiedPayload extends JwtPayload {
 
 const DEFAULT_JWT_ALGORITHM = 'HS256';
 
+export function getJwtSecret(options: { isProduction?: boolean } = {}): string | undefined {
+  const isProduction = options.isProduction ?? process.env.NODE_ENV === 'production';
+  const secret = process.env.JWT_SECRET;
+  if (typeof secret === 'string' && secret.trim()) {
+    return secret;
+  }
+  return isProduction ? undefined : 'dev-jwt-secret';
+}
+
 export function signJwt(payload: JwtPayload, secret: string, options: JwtSignOptions = {}): string {
   if (!secret) {
     throw new Error('JWT secret is required to sign tokens');

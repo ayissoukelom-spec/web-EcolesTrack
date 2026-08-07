@@ -30,7 +30,7 @@ import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
-import { verifyJwt } from './src/lib/jwt.ts';
+import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
 import { validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
@@ -1553,7 +1553,11 @@ export async function createApp() {
       }
 
       const token = authHeader.split('Bearer ')[1];
-      const secret = process.env.JWT_SECRET ?? 'dev-jwt-secret';
+      const secret = getJwtSecret({ isProduction: process.env.NODE_ENV === 'production' });
+      if (!secret) {
+        return res.status(500).json({ error: 'Server configuration error' });
+      }
+
       const decoded = verifyJwt(token, secret);
       const uid = decoded?.uid;
       const tokenType = decoded?.type;

@@ -21,6 +21,7 @@ vi.mock('../db/index.ts', () => {
 vi.mock('../lib/jwt.ts', () => {
   mockVerifyJwt = vi.fn();
   return {
+    getJwtSecret: vi.fn(() => 'test-jwt-secret'),
     verifyJwt: mockVerifyJwt,
   };
 });

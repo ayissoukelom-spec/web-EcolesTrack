@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { signJwt } from './jwt.ts';
+import { getJwtSecret, signJwt } from './jwt.ts';
 import { db } from '../db/index.ts';
 import { users, localAuths } from '../db/schema.ts';
 import { eq, sql } from 'drizzle-orm';
@@ -57,7 +57,11 @@ export async function handleLocalLogin(req: Request, res: Response) {
       type: 'access',
     };
 
-    const secret = process.env.JWT_SECRET ?? 'dev-jwt-secret';
+    const secret = getJwtSecret({ isProduction: process.env.NODE_ENV === 'production' });
+    if (!secret) {
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+
     const token = signJwt(payload, secret, {
       expiresIn: process.env.JWT_EXPIRES_IN ?? DEFAULT_JWT_EXPIRES_IN,
       issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,

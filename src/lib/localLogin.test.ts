@@ -31,6 +31,7 @@ const createMockRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockUpdateWhere.mockResolvedValue(undefined);
+  process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.JWT_ISSUER = 'test-issuer';
   process.env.JWT_AUDIENCE = 'test-audience';
@@ -143,6 +144,43 @@ describe('handleLocalLogin', () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
+  });
+
+  it('returns 500 when JWT secret is missing in production', async () => {
+    delete process.env.JWT_SECRET;
+    process.env.NODE_ENV = 'production';
+
+    const password = 'SuperSecret123!';
+    const salt = 'test-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+
+    const userRecord = {
+      id: 789,
+      uid: 'user_789',
+      email: 'prod@example.com',
+      name: 'Prod User',
+      role: 'teacher',
+      schoolId: 7,
+    };
+
+    const authRow = {
+      passwordHash,
+      salt,
+      mustReset: false,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([authRow]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const req = { body: { email: userRecord.email, password } } as Request;
+    const res = createMockRes() as Response;
+
+    await handleLocalLogin(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Server configuration error' });
   });
 
   it('returns 400 when email or password is missing', async () => {

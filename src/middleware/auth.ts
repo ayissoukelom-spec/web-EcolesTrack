@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyJwt } from '../lib/jwt.ts';
+import { getJwtSecret, verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
 import { tokenBlacklist, users } from '../db/schema.ts';
 import { eq, gt, and, or } from 'drizzle-orm';
@@ -91,7 +91,7 @@ export const verifyToken = async (
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const secret = process.env.JWT_SECRET ?? (isProduction ? undefined : 'dev-jwt-secret');
+    const secret = getJwtSecret({ isProduction });
     if (!secret) {
       console.error('JWT_SECRET is not configured');
       return res.status(500).json({ error: 'Server configuration error' });
