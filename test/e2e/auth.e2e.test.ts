@@ -484,16 +484,27 @@ function createMockDb() {
         },
       };
 
+      const resolveRowField = (row: any, rawKey: string) => {
+        if (row == null) return null;
+        const effectiveKey = String(rawKey).includes('.') ? String(rawKey).split('.').pop() ?? rawKey : rawKey;
+        if (Object.prototype.hasOwnProperty.call(row, effectiveKey)) return row[effectiveKey];
+        const camelCaseKey = effectiveKey.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase());
+        if (Object.prototype.hasOwnProperty.call(row, camelCaseKey)) return row[camelCaseKey];
+        const snakeCaseKey = effectiveKey.replace(/([A-Z])/g, (_match, letter) => `_${letter.toLowerCase()}`);
+        if (Object.prototype.hasOwnProperty.call(row, snakeCaseKey)) return row[snakeCaseKey];
+        const lowerKey = effectiveKey.toLowerCase();
+        const foundKey = Object.keys(row).find((k) => String(k).toLowerCase() === lowerKey);
+        if (foundKey) return row[foundKey];
+        return null;
+      };
+
       const resolveSelectedValue = (expr: any, baseRow: any) => {
         if (expr == null) return null;
         if (typeof expr === 'string' || typeof expr === 'number' || typeof expr === 'boolean') return expr;
         if (typeof expr === 'object') {
           if (expr.name) {
             const key = String(expr.name);
-            if (baseRow && Object.prototype.hasOwnProperty.call(baseRow, key)) {
-              return baseRow[key];
-            }
-            return baseRow ? baseRow[key.toLowerCase()] : null;
+            return resolveRowField(baseRow, key);
           }
           if (expr.value !== undefined) return expr.value;
         }

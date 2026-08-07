@@ -6802,7 +6802,7 @@ if (uniqueParentIds.length > 0) {
   // ==========================================
   // The `/login` route is handled by the SPA (React) in client-side routing.
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV === 'development') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
     });

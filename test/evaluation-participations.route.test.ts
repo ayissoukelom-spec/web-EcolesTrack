@@ -139,12 +139,19 @@ function extractConditions(cond: any): Record<string, any> {
     if (field === 'email') conditions.email = value;
     if (field === 'category') conditions.category = value;
     if (field === 'status') conditions.status = value;
+    if (field === 'type') conditions.type = value;
   }
 
   if (conditions.category === undefined) {
     const regex = /category\s*(?:=|,)\s*(?:'([^']*)'|([A-Za-z0-9_]+))/;
     const match = text.match(regex);
     if (match) conditions.category = match[1] ?? match[2];
+  }
+
+  if (conditions.type === undefined) {
+    const regex = /type\s*(?:=|,)\s*(?:'([^']*)'|([A-Za-z0-9_]+))/;
+    const match = text.match(regex);
+    if (match) conditions.type = match[1] ?? match[2];
   }
 
   return conditions;
@@ -157,6 +164,7 @@ function filterRows(rows: any[], conditions: Record<string, any>) {
     if (conditions.studentId !== undefined && Number(row.studentId) !== Number(conditions.studentId)) return false;
     if (conditions.userId !== undefined && Number(row.userId) !== Number(conditions.userId)) return false;
     if (conditions.category !== undefined && row.category !== conditions.category) return false;
+    if (conditions.type !== undefined && row.type !== conditions.type) return false;
     if (conditions.status !== undefined && row.status !== conditions.status) return false;
     return true;
   });
@@ -310,20 +318,17 @@ const mockDb = {
     where: async (cond: any) => {
       const name = resolveTableName(table);
       const rows = (mockDbState as any)[name] || [];
-      const text = getQueryText(cond).toLowerCase();
-      const params = getQueryParams(cond);
-      const targetEvaluationId = Number(params.find((value: any) => Number.isFinite(Number(value))) ?? NaN);
-      const targetCategory = params.find((value: any) => typeof value === 'string' && value.includes('evaluation_created'));
+      const conditions = extractConditions(cond);
 
       const remaining = rows.filter((row: any) => {
-        const matchesEvaluationId = Number.isFinite(targetEvaluationId)
-          ? Number(row.evaluationId) === targetEvaluationId
-          : true;
-        const matchesCategory = typeof targetCategory === 'string'
-          ? row.category === targetCategory
-          : true;
-
-        return !(matchesEvaluationId && matchesCategory);
+        if (conditions.id !== undefined && Number(row.id) !== Number(conditions.id)) return true;
+        if (conditions.evaluationId !== undefined && Number(row.evaluationId) !== Number(conditions.evaluationId)) return true;
+        if (conditions.studentId !== undefined && Number(row.studentId) !== Number(conditions.studentId)) return true;
+        if (conditions.userId !== undefined && Number(row.userId) !== Number(conditions.userId)) return true;
+        if (conditions.category !== undefined && row.category !== conditions.category) return true;
+        if (conditions.type !== undefined && row.type !== conditions.type) return true;
+        if (conditions.status !== undefined && row.status !== conditions.status) return true;
+        return false;
       });
 
       const deletedCount = rows.length - remaining.length;
@@ -418,7 +423,7 @@ describe('Evaluation participations and notification lifecycle', () => {
 
   it('removes evaluation_created only when all eligible students are graded or absent', async () => {
     mockDbState.notifications = [
-      { id: 1, userId: 1, title: 'Devoir publié', body: '...', type: 'grade', category: 'evaluation_created', evaluationId: 200 },
+      { id: 1, userId: 1, title: 'Devoir publié', body: '...', type: 'info', category: 'evaluation_created', evaluationId: 200 },
     ];
 
     await request(app)
@@ -442,7 +447,7 @@ describe('Evaluation participations and notification lifecycle', () => {
 
   it('keeps the evaluation_created notification when a student remains pending', async () => {
     mockDbState.notifications = [
-      { id: 2, userId: 1, title: 'Devoir publié', body: '...', type: 'grade', category: 'evaluation_created', evaluationId: 200 },
+      { id: 2, userId: 1, title: 'Devoir publié', body: '...', type: 'info', category: 'evaluation_created', evaluationId: 200 },
     ];
 
     await request(app)
@@ -460,7 +465,7 @@ describe('Evaluation participations and notification lifecycle', () => {
 
   it('does not delete grade_created notification when evaluation_created is removed', async () => {
     mockDbState.notifications = [
-      { id: 3, userId: 1, title: 'Devoir publié', body: '...', type: 'grade', category: 'evaluation_created', evaluationId: 200 },
+      { id: 3, userId: 1, title: 'Devoir publié', body: '...', type: 'info', category: 'evaluation_created', evaluationId: 200 },
       { id: 4, userId: 1, title: 'Note enregistrée', body: '...', type: 'grade', category: 'grade_created', evaluationId: 200 },
     ];
 

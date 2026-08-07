@@ -69,8 +69,7 @@ const createBuilder = (table: any, rows: any[]) => ({
 const mockDb = {
   select: () => createBuilder(null, []),
   insert: () => ({ values: (values: any) => ({ returning: async () => { const inserted = { id: mockDbState.grades.length + 1, ...values }; mockDbState.grades.push(inserted); return [inserted]; } }) }),
-  update: () => ({ set: (values: any) => ({ where: () => ({ returning: async () => { const updated = { id: 1, ...values }; return [updated]; } }) }) }),
-};
+  update: () => ({ set: (values: any) => ({ where: () => ({ returning: async () => { const updated = { id: 1, ...values }; return [updated]; } }) }) }),  execute: async (_sql: any) => [],};
 
 vi.mock('../src/db/index.ts', () => ({ db: mockDb }));
 vi.mock('../src/db', () => ({ db: mockDb }));

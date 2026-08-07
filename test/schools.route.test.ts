@@ -151,6 +151,7 @@ const mockDb = {
     }),
   }),
   delete: () => ({ where: async () => [] }),
+  execute: async (_sql: any) => [],
 };
 
 vi.mock('../src/db/index.ts', () => ({ db: mockDb }));
