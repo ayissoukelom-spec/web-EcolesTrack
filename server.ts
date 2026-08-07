@@ -501,11 +501,11 @@ export async function createApp() {
   const uploadStorageDir = path.join(process.cwd(), 'uploads', 'absence-justifications');
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
 
-  if (process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
     try {
       await ensureTokenBlacklistTableExists();
     } catch (err: any) {
-      console.error('Failed to initialize token_blacklist table in test environment:', err?.message || err);
+      console.error('Failed to initialize token_blacklist table in test or production environment:', err?.message || err);
       throw err;
     }
   }
