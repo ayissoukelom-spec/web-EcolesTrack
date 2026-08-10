@@ -72,11 +72,11 @@ export default function AdminModal(props: any) {
     value: String(index + 1).padStart(2, '0'),
     label: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'][index],
   }));
-  const birthYearRangeStart = 1970;
-  const birthYearRangeEnd = new Date().getFullYear() - 3;
+  const birthYearRangeStart = 2017;
+  const birthYearRangeEnd = 1900;
   const birthDateYearOptions = Array.from(
-    { length: birthYearRangeEnd - birthYearRangeStart + 1 },
-    (_, index) => String(birthYearRangeStart + index),
+    { length: birthYearRangeStart - birthYearRangeEnd + 1 },
+    (_, index) => String(birthYearRangeStart - index),
   );
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId, 10) : undefined;
