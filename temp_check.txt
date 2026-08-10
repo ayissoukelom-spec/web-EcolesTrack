@@ -1,0 +1,120 @@
+        email: teacherForm.email,
+        phone: `+228 ${phoneDigits}`,
+        specialization: teacherForm.specializations,
+        schoolId: teacherSchoolId,
+        classIds: teacherForm.assignedClassIds,
+        gender: teacherForm.gender,
+      });
+      setTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
+    } else if (activeTab === 'parents') {
+      if (!parentForm.parentType) {
+        setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
+        return;
+      }
+      const parentGender = parentForm.parentType === 'pere'
+        ? 'M'
+        : parentForm.parentType === 'mere'
+          ? 'F'
+          : parentForm.gender;
+      if (parentForm.parentType === 'tuteur' && !parentGender) {
+        setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
+        return;
+      }
+      if (!parentForm.schoolId) {
+        setStudentError('Veuillez sélectionner une école pour le parent.');
+        return;
+      }
+      if (!parentForm.studentId) {
+        setStudentError('Veuillez sélectionner l’élève rattaché.');
+        return;
+      }
+      const parentPhoneDigits = parentForm.phone.replace(/\D/g, '');
+      if (parentForm.phonePrefix === '+228' && !/^[0-9]{8}$/.test(parentPhoneDigits)) {
+        setStudentError('Le numéro de téléphone du parent doit contenir exactement 8 chiffres pour +228.');
+        return;
+      }
+      await onAddParent({
+        name: parentForm.name,
+        email: parentForm.email,
+        phone: `${parentForm.phonePrefix} ${parentPhoneDigits}`,
+        address: parentForm.address,
+        schoolId: parseInt(parentForm.schoolId),
+        studentId: parseInt(parentForm.studentId),
+        gender: parentGender,
+      });
+      setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '', parentType: '' });
+    } else if (activeTab === 'students') {
+      const simSchoolId = getSimulatedSchoolId();
+      const targetSchoolId = parseInt(studentForm.schoolId) || (userRole === 'school_admin' ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id) : schoolsList[0]?.id);
+      const selectedSchoolAdminId = studentForm.schoolAdminId ? parseInt(studentForm.schoolAdminId) : undefined;
+
+      if (newParentMode) {
+        if (!newParentForm.name.trim() || !newParentForm.email.trim() || !newParentForm.phone.trim()) {
+          setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
+          return;
+        }
+        if (!newParentForm.parentType) {
+          setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
+          return;
+        }
+        const newParentGender = newParentForm.parentType === 'pere'
+          ? 'M'
+          : newParentForm.parentType === 'mere'
+            ? 'F'
+            : newParentForm.gender;
+        if (newParentForm.parentType === 'tuteur' && !newParentGender) {
+          setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
+          return;
+        }
+        const createdParent = await onAddParent({
+          name: newParentForm.name,
+          email: newParentForm.email,
+          phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
+          address: newParentForm.address,
+          schoolId: targetSchoolId,
+          gender: newParentGender,
+        });
+        const resolvedParentId = createdParent?.parentId || createdParent?.id;
+        if (!resolvedParentId) {
+          setStudentError('Impossible de créer le parent rattaché.');
+          return;
+        }
+        setStudentForm({ ...studentForm, parentId: String(resolvedParentId) });
+        setNewParentMode(false);
+        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
+        setStudentError(null);
+        return;
+      }
+
+      if (newTeacherMode) {
+        if (!newTeacherForm.name.trim() || !newTeacherForm.email.trim() || !newTeacherForm.phone.trim()) {
+          setStudentError('L’enseignant doit contenir un nom, un email et un téléphone.');
+          return;
+        }
+        const createdTeacher = await onAddTeacher({
+          name: newTeacherForm.name,
+          email: newTeacherForm.email,
+          phone: newTeacherForm.phone,
+          specialization: newTeacherForm.specializations,
+          schoolId: targetSchoolId,
+          classIds: newTeacherForm.assignedClassIds,
+          gender: newTeacherForm.gender,
+        });
+        const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
+        if (!resolvedTeacherId) {
+          setStudentError('Impossible de créer l’enseignant.');
+          return;
+        }
+        setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
+        setNewTeacherMode(false);
+        setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+        setStudentError(null);
+        return;
+      }
+
+      if (userRole === 'super_admin' && !selectedSchoolAdminId) {
+        setStudentError('Un compte Admin École doit être sélectionné pour chaque élève.');
+        return;
+      }
+
+      const resolvedParentId = studentForm.parentId ? parseInt(studentForm.parentId) : undefined;

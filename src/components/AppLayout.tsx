@@ -240,15 +240,17 @@ export default function AppLayout({
             </nav>
           </div>
 
-          <div className="mt-8 pt-4 border-t border-slate-100 flex flex-col gap-2 p-1">
-            <div className="text-[10px] text-slate-400 space-y-1">
-              <span className="font-bold text-slate-500 block">BASE DE DONNÉES :</span>
-              <p className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full inline-block" />
-                PostgreSQL Connecté (Cloud SQL)
-              </p>
+          {currentRole === 'super_admin' && (
+            <div className="mt-8 pt-4 border-t border-slate-100 flex flex-col gap-2 p-1">
+              <div className="text-[10px] text-slate-400 space-y-1">
+                <span className="font-bold text-slate-500 block">BASE DE DONNÉES :</span>
+                <p className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full inline-block" />
+                  PostgreSQL Connecté (Cloud SQL)
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </aside>
 
         <main className="flex-1 min-w-0" id="main-viewport">

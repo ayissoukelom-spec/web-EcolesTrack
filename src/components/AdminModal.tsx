@@ -830,9 +830,24 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      <RequiredLabel label="Lien parental" required />
+                    </label>
+                    <select required value={newParentForm.parentType} onChange={e => {
+                      const parentType = e.target.value;
+                      const gender = parentType === 'pere' ? 'M' : parentType === 'mere' ? 'F' : '';
+                      setNewParentForm({ ...newParentForm, parentType, gender });
+                    }} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                      <option value="">-- Choisissez le lien parental --</option>
+                      <option value="pere">Père</option>
+                      <option value="mere">Mère</option>
+                      <option value="tuteur">Tuteur</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                       <RequiredLabel label="Sexe" required />
                     </label>
-                    <select required value={newParentForm.gender} onChange={e => setNewParentForm({...newParentForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                    <select required value={newParentForm.gender} onChange={e => setNewParentForm({...newParentForm, gender: e.target.value})} disabled={newParentForm.parentType !== 'tuteur'} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                       <option value="">-- Choisissez le sexe --</option>
                       <option value="M">Masculin</option>
                       <option value="F">Féminin</option>
@@ -1229,8 +1244,23 @@ export default function AdminModal(props: any) {
                 <input type="text" value={parentForm.address} onChange={e => setParentForm({...parentForm, address: e.target.value})} placeholder="Paris..." className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Lien parental" required />
+                </label>
+                <select required value={parentForm.parentType} onChange={e => {
+                  const parentType = e.target.value;
+                  const gender = parentType === 'pere' ? 'M' : parentType === 'mere' ? 'F' : '';
+                  setParentForm({ ...parentForm, parentType, gender });
+                }} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                  <option value="">-- Choisissez le lien parental --</option>
+                  <option value="pere">Père</option>
+                  <option value="mere">Mère</option>
+                  <option value="tuteur">Tuteur</option>
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Sexe</label>
-                <select required value={parentForm.gender} onChange={e => setParentForm({...parentForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                <select required value={parentForm.gender} onChange={e => setParentForm({...parentForm, gender: e.target.value})} disabled={parentForm.parentType !== 'tuteur'} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                   <option value="">-- Choisissez le sexe --</option>
                   <option value="M">Masculin</option>
                   <option value="F">Féminin</option>

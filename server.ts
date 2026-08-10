@@ -6462,7 +6462,7 @@ if (uniqueParentIds.length > 0) {
 
       if (actor.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
 
         studentCountQuery = studentCountQuery.where(inArray(students.id, parentChildIds)) as any;
@@ -6480,12 +6480,12 @@ if (uniqueParentIds.length > 0) {
           .where(inArray(absences.studentId, parentChildIds)) as any;
       } else if (actor.role === 'teacher') {
         if (!teacherClassIds || teacherClassIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
 
         const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
         if (authorizedStudentIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 }, recentAbsences: [], recentGrades: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [] });
         }
 
         studentCountQuery = studentCountQuery.where(inArray(students.id, authorizedStudentIds)) as any;
@@ -6540,9 +6540,8 @@ if (uniqueParentIds.length > 0) {
         const normalized = normalizeGenderValue(row.gender);
         if (normalized === 'male') acc.maleStudents += 1;
         else if (normalized === 'female') acc.femaleStudents += 1;
-        else acc.unknownGenderStudents += 1;
         return acc;
-      }, { maleStudents: 0, femaleStudents: 0, unknownGenderStudents: 0 });
+      }, { maleStudents: 0, femaleStudents: 0 });
       const totalAbsences = absenceCountResult[0]?.count || 0;
       const totalClasses = classCountResult[0]?.count || 0;
 
@@ -6637,7 +6636,6 @@ if (uniqueParentIds.length > 0) {
         attendanceRate: Math.round(attendanceRate * 100) / 100,
         maleStudents: genderCounts.maleStudents,
         femaleStudents: genderCounts.femaleStudents,
-        unknownGenderStudents: genderCounts.unknownGenderStudents,
       };
 
       console.log('Statistiques envoyées :', stats);

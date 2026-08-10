@@ -47,7 +47,6 @@ interface DashboardViewProps {
     attendanceRate: number;
     maleStudents?: number;
     femaleStudents?: number;
-    unknownGenderStudents?: number;
   };
   recentAbsences: any[];
   recentGrades: any[];
@@ -116,9 +115,6 @@ export default function DashboardView({
                   <p className="text-2xl font-bold text-slate-800">{stats.femaleStudents || 0}</p>
                 </div>
               </div>
-              {stats.unknownGenderStudents && stats.unknownGenderStudents > 0 && (
-                <p className="text-[11px] text-slate-500">{stats.unknownGenderStudents} non renseigné{stats.unknownGenderStudents > 1 ? 's' : ''}</p>
-              )}
             </div>
           </div>
         )}

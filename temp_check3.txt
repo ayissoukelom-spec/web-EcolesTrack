@@ -1,0 +1,140 @@
+                      <div className="w-full p-2 border rounded bg-slate-50 text-slate-600">
+                        {schoolsList.find((s) => s.id === simUser?.schoolId)?.name || 'École assignée automatiquement'}
+                      </div>
+                    ) : (
+                      <select className="w-full p-2 border rounded" value={createParentSchoolId} onChange={(e) => {
+                        setCreateParentSchoolId(e.target.value);
+                      }}>
+                        <option value="">-- Choisir une école --</option>
+                        {schoolsList.length > 0 ? (
+                          schoolsList.map((school) => (
+                            <option key={school.id} value={String(school.id)}>{school.name}</option>
+                          ))
+                        ) : (
+                          <option value="">Aucune école disponible</option>
+                        )}
+                      </select>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Lien parental" required />
+                    </label>
+                    <select className="w-full p-2 border rounded" value={createParentType} onChange={(e) => {
+                      const selectedType = e.target.value;
+                      setCreateParentType(selectedType);
+                      if (selectedType === 'pere') {
+                        setCreateGender('M');
+                      } else if (selectedType === 'mere') {
+                        setCreateGender('F');
+                      } else {
+                        setCreateGender('');
+                      }
+                    }}>
+                      <option value="">-- Choisissez le lien parental --</option>
+                      <option value="pere">Père</option>
+                      <option value="mere">Mère</option>
+                      <option value="tuteur">Tuteur</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label className="block text-xs">
+                  <RequiredLabel label="Email" required />
+                </label>
+                <input className="w-full p-2 border rounded" value={createEmail} onChange={(e) => setCreateEmail(e.target.value)} placeholder="email@exemple.fr" />
+              </div>
+
+              <div>
+                <label className="block text-xs">
+                  <RequiredLabel label="Nom" required />
+                </label>
+                <input className="w-full p-2 border rounded" value={createLastName} onChange={(e) => setCreateLastName(e.target.value)} placeholder="Dupont" />
+              </div>
+
+              <div>
+                <label className="block text-xs">
+                  <RequiredLabel label="Prénom(s)" required />
+                </label>
+                <input className="w-full p-2 border rounded" value={createFirstName} onChange={(e) => setCreateFirstName(e.target.value)} placeholder="Jean" />
+              </div>
+
+              <div>
+                <label className="block text-xs">
+                  <RequiredLabel label="Numéro de téléphone" required />
+                </label>
+                <div className="flex items-stretch border rounded overflow-hidden">
+                  <CustomDropdown
+                    options={countryOptions.map((c) => ({
+                      value: c.code,
+                      label: (
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap" title={`${c.name} ${c.code}`}>
+                          <img
+                            src={getFlagImageUrl(c.flag)}
+                            alt={c.name}
+                            className="h-4 w-6 rounded-sm object-cover shrink-0"
+                            loading="lazy"
+                          />
+                          <span className="text-xs font-semibold text-slate-700">{c.code}</span>
+                        </span>
+                      ),
+                    }))}
+                    value={createPhonePrefix}
+                    onChange={setCreatePhonePrefix}
+                    placeholder="Pays"
+                    className="w-[96px] shrink-0 sm:w-[108px]"
+                  />
+                  <input className="flex-1 min-w-0 p-2 border-0 outline-none" type="tel" value={createPhone} onChange={(e) => setCreatePhone(e.target.value.replace(/\D/g, '').slice(0, createPhonePrefix === '+228' ? 8 : 20))} placeholder="90000000" maxLength={createPhonePrefix === '+228' ? 8 : 20} />
+                </div>
+              </div>
+
+              {createRole === 'teacher' && (
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Sexe" required />
+                  </label>
+                  <select className="w-full p-2 border rounded" value={createGender} onChange={(e) => setCreateGender(e.target.value)}>
+                    <option value="">-- Choisir le sexe --</option>
+                    <option value="M">Masculin</option>
+                    <option value="F">Féminin</option>
+                  </select>
+                </div>
+              )}
+              {createRole === 'parent' && (
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Sexe" required />
+                  </label>
+                  <select className="w-full p-2 border rounded" value={createGender} onChange={(e) => setCreateGender(e.target.value)} disabled={createParentType !== 'tuteur'}>
+                    <option value="">-- Choisir le sexe --</option>
+                    <option value="M">Masculin</option>
+                    <option value="F">Féminin</option>
+                  </select>
+                </div>
+              )}
+
+              {createRole === 'teacher' && (
+                <>
+                  <div>
+                    <label className="block text-xs">
+                      <RequiredLabel label="École" required />
+                    </label>
+                    {currentRole === 'school_admin' ? (
+                      <div className="w-full p-2 border rounded bg-slate-50 text-slate-600">
+                        {schoolsList.find((s) => s.id === simUser?.schoolId)?.name || 'École assignée automatiquement'}
+                      </div>
+                    ) : (
+                      <select
+                        className="w-full p-2 border rounded"
+                        value={createSchoolId}
+                        onChange={(e) => {
+                          setCreateSchoolId(e.target.value);
+                          setCreateAssignedClassIds([]);
+                        }}
+                      >
+                        <option value="">-- Choisir une école --</option>
+                        {schoolsList.map((school) => (
+                          <option key={school.id} value={String(school.id)}>{school.name}</option>
+                        ))}

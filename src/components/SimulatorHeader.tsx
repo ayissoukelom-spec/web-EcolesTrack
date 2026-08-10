@@ -171,6 +171,7 @@ export default function SimulatorHeader({
   const [createPasswordConfirm, setCreatePasswordConfirm] = useState('123456');
   const [createRole, setCreateRole] = useState('teacher');
   const [createGender, setCreateGender] = useState('');
+  const [createParentType, setCreateParentType] = useState('');
   const [createSchoolId, setCreateSchoolId] = useState('');
   const [createAcademicYearId, setCreateAcademicYearId] = useState('');
   const [createParentSchoolId, setCreateParentSchoolId] = useState('');
@@ -693,8 +694,10 @@ export default function SimulatorHeader({
                     if (selectedRole !== 'teacher') {
                       setCreateAssignedClassIds([]);
                     }
+                    setCreateGender('');
                     if (selectedRole !== 'parent') {
                       setCreateParentSchoolId('');
+                      setCreateParentType('');
                     }
                   }}
                 >
@@ -774,6 +777,27 @@ export default function SimulatorHeader({
                       </select>
                     )}
                   </div>
+                  <div>
+                    <label className="block text-xs">
+                      <RequiredLabel label="Lien parental" required />
+                    </label>
+                    <select className="w-full p-2 border rounded" value={createParentType} onChange={(e) => {
+                      const selectedType = e.target.value;
+                      setCreateParentType(selectedType);
+                      if (selectedType === 'pere') {
+                        setCreateGender('M');
+                      } else if (selectedType === 'mere') {
+                        setCreateGender('F');
+                      } else {
+                        setCreateGender('');
+                      }
+                    }}>
+                      <option value="">-- Choisissez le lien parental --</option>
+                      <option value="pere">Père</option>
+                      <option value="mere">Mère</option>
+                      <option value="tuteur">Tuteur</option>
+                    </select>
+                  </div>
                 </>
               )}
 
@@ -827,7 +851,7 @@ export default function SimulatorHeader({
                 </div>
               </div>
 
-              {(createRole === 'teacher' || createRole === 'parent') && (
+              {createRole === 'teacher' && (
                 <div>
                   <label className="block text-xs">
                     <RequiredLabel label="Sexe" required />
@@ -836,7 +860,18 @@ export default function SimulatorHeader({
                     <option value="">-- Choisir le sexe --</option>
                     <option value="M">Masculin</option>
                     <option value="F">Féminin</option>
-                    <option value="other">Autre</option>
+                  </select>
+                </div>
+              )}
+              {createRole === 'parent' && (
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Sexe" required />
+                  </label>
+                  <select className="w-full p-2 border rounded" value={createGender} onChange={(e) => setCreateGender(e.target.value)} disabled={createParentType !== 'tuteur'}>
+                    <option value="">-- Choisir le sexe --</option>
+                    <option value="M">Masculin</option>
+                    <option value="F">Féminin</option>
                   </select>
                 </div>
               )}
@@ -992,6 +1027,10 @@ export default function SimulatorHeader({
                     setCreateError('Une école est requise pour un parent');
                     return;
                   }
+                  if (createRole === 'parent' && !createParentType) {
+                    setCreateError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur) pour un parent.');
+                    return;
+                  }
                   if (createRole === 'teacher' || createRole === 'parent') {
                     if (!createGender) {
                       setCreateError('Le sexe est requis pour les parents et les enseignants');
@@ -1037,8 +1076,14 @@ export default function SimulatorHeader({
                     payload.schoolId = parseInt(createParentSchoolId);
                   }
 
-                  if (createRole === 'teacher' || createRole === 'parent') {
+                  if (createRole === 'teacher') {
                     payload.gender = createGender;
+                  } else if (createRole === 'parent') {
+                    payload.gender = createParentType === 'pere'
+                      ? 'M'
+                      : createParentType === 'mere'
+                        ? 'F'
+                        : createGender;
                   }
 
                   const createdUser = await apiFetch('/api/admin/users', {
@@ -1055,6 +1100,7 @@ export default function SimulatorHeader({
                   setCreatePassword('');
                   setCreatePasswordConfirm('');
                   setCreateRole('teacher');
+                  setCreateParentType('');
                   setCreateSchoolId('');
                   setCreateAcademicYearId('');
                   setCreateParentSchoolId('');

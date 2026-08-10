@@ -542,12 +542,12 @@ export default function AdminView({
   const [termEndDate, setTermEndDate] = useState<string>('');
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
-  const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '' });
+  const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '' });
   const [studentError, setStudentError] = useState<string | null>(null);
   const [termNotice, setTermNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [newParentMode, setNewParentMode] = useState(false);
-  const [newParentForm, setNewParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
+  const [newParentForm, setNewParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
   const [newTeacherMode, setNewTeacherMode] = useState(false);
   const [newTeacherForm, setNewTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
@@ -924,6 +924,19 @@ export default function AdminView({
       setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
       return;
     }
+    if (!newParentForm.parentType) {
+      setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
+      return;
+    }
+    const newParentGender = newParentForm.parentType === 'pere'
+      ? 'M'
+      : newParentForm.parentType === 'mere'
+        ? 'F'
+        : newParentForm.gender;
+    if (newParentForm.parentType === 'tuteur' && !newParentGender) {
+      setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
+      return;
+    }
     const newParentPhoneDigits = newParentForm.phone.replace(/\D/g, '');
     if (newParentForm.phonePrefix === '+228' && !/^[0-9]{8}$/.test(newParentPhoneDigits)) {
       setStudentError('Le numéro de téléphone du parent doit contenir exactement 8 chiffres pour +228.');
@@ -945,7 +958,7 @@ export default function AdminView({
         phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
         address: newParentForm.address,
         schoolId: targetSchoolId,
-        gender: newParentForm.gender,
+        gender: newParentGender,
       });
       const resolvedParentId = createdParent?.parentId || createdParent?.id;
       if (!resolvedParentId) {
@@ -955,7 +968,7 @@ export default function AdminView({
 
       setStudentForm((prev) => ({ ...prev, parentId: String(resolvedParentId) }));
       setNewParentMode(false);
-      setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
+      setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
     } catch (err: any) {
       setStudentError(err?.message || 'Erreur lors de la création du parent.');
       console.error('Failed to save new parent:', err);
@@ -1174,6 +1187,19 @@ export default function AdminView({
       });
       setTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
     } else if (activeTab === 'parents') {
+      if (!parentForm.parentType) {
+        setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
+        return;
+      }
+      const parentGender = parentForm.parentType === 'pere'
+        ? 'M'
+        : parentForm.parentType === 'mere'
+          ? 'F'
+          : parentForm.gender;
+      if (parentForm.parentType === 'tuteur' && !parentGender) {
+        setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
+        return;
+      }
       if (!parentForm.schoolId) {
         setStudentError('Veuillez sélectionner une école pour le parent.');
         return;
@@ -1194,9 +1220,9 @@ export default function AdminView({
         address: parentForm.address,
         schoolId: parseInt(parentForm.schoolId),
         studentId: parseInt(parentForm.studentId),
-        gender: parentForm.gender,
+        gender: parentGender,
       });
-      setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '' });
+      setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '', parentType: '' });
     } else if (activeTab === 'students') {
       const simSchoolId = getSimulatedSchoolId();
       const targetSchoolId = parseInt(studentForm.schoolId) || (userRole === 'school_admin' ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id) : schoolsList[0]?.id);
@@ -1207,13 +1233,26 @@ export default function AdminView({
           setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
           return;
         }
+        if (!newParentForm.parentType) {
+          setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
+          return;
+        }
+        const newParentGender = newParentForm.parentType === 'pere'
+          ? 'M'
+          : newParentForm.parentType === 'mere'
+            ? 'F'
+            : newParentForm.gender;
+        if (newParentForm.parentType === 'tuteur' && !newParentGender) {
+          setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
+          return;
+        }
         const createdParent = await onAddParent({
           name: newParentForm.name,
           email: newParentForm.email,
           phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
           address: newParentForm.address,
           schoolId: targetSchoolId,
-          gender: newParentForm.gender,
+          gender: newParentGender,
         });
         const resolvedParentId = createdParent?.parentId || createdParent?.id;
         if (!resolvedParentId) {
@@ -1222,7 +1261,7 @@ export default function AdminView({
         }
         setStudentForm({ ...studentForm, parentId: String(resolvedParentId) });
         setNewParentMode(false);
-        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
+        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
         setStudentError(null);
         return;
       }
@@ -3268,7 +3307,6 @@ export default function AdminView({
                     <option value="">-- Choisissez un genre --</option>
                     <option value="male">Masculin</option>
                     <option value="female">Féminin</option>
-                    <option value="other">Autre</option>
                   </select>
                 </div>
 
