@@ -1076,7 +1076,7 @@ export default function AdminModal(props: any) {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Parent rattaché (optionnel)</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Parent rattaché</label>
                     <input
                       type="text"
                       list="parent-search-options"

@@ -803,13 +803,6 @@ export default function SimulatorHeader({
 
               <div>
                 <label className="block text-xs">
-                  <RequiredLabel label="Email" required />
-                </label>
-                <input className="w-full p-2 border rounded" value={createEmail} onChange={(e) => setCreateEmail(e.target.value)} placeholder="email@exemple.fr" />
-              </div>
-
-              <div>
-                <label className="block text-xs">
                   <RequiredLabel label="Nom" required />
                 </label>
                 <input className="w-full p-2 border rounded" value={createLastName} onChange={(e) => setCreateLastName(e.target.value)} placeholder="Dupont" />
@@ -820,6 +813,13 @@ export default function SimulatorHeader({
                   <RequiredLabel label="Prénom(s)" required />
                 </label>
                 <input className="w-full p-2 border rounded" value={createFirstName} onChange={(e) => setCreateFirstName(e.target.value)} placeholder="Jean" />
+              </div>
+
+              <div>
+                <label className="block text-xs">
+                  <RequiredLabel label="Email" required />
+                </label>
+                <input className="w-full p-2 border rounded" value={createEmail} onChange={(e) => setCreateEmail(e.target.value)} placeholder="email@exemple.fr" />
               </div>
 
               <div>
