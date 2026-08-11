@@ -1296,6 +1296,10 @@ export default function AdminView({
         setStudentError('Un compte Admin École doit être sélectionné pour chaque élève.');
         return;
       }
+      if (!studentForm.gender || !studentForm.gender.trim()) {
+        setStudentError('Veuillez sélectionner le sexe de l’élève avant de l’enregistrer.');
+        return;
+      }
 
       const resolvedParentId = studentForm.parentId ? parseInt(studentForm.parentId) : undefined;
       const resolvedTeacherIds = studentForm.teacherIds && studentForm.teacherIds.length > 0 ? studentForm.teacherIds : undefined;

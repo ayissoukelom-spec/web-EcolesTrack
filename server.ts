@@ -2545,6 +2545,8 @@ export async function createApp() {
       const payload = req.body;
       if (!Array.isArray(payload)) return res.status(400).json({ error: 'Expected an array of students' });
 
+      const validGenderValues = ['M', 'F', 'Masculin', 'Féminin', 'Feminin', 'm', 'f', 'male', 'female', 'masculin', 'feminin', 'homme', 'femme', 'garcon', 'fille'];
+
       // Pre-validate referenced IDs to provide clear errors instead of DB constraint failures
       const schoolIds = Array.from(new Set(payload.map((p: any) => p.schoolId).filter(Boolean).map((v: any) => parseInt(v))));
       const classIds = Array.from(new Set(payload.map((p: any) => p.classId).filter(Boolean).map((v: any) => parseInt(v))));
@@ -2585,6 +2587,15 @@ export async function createApp() {
 
         if (!firstName || !lastName) {
           errors.push({ row: i, reason: 'Missing firstName or lastName', data: s });
+          continue;
+        }
+        if (!gender) {
+          errors.push({ row: i, reason: 'Gender is required for each student', data: s });
+          continue;
+        }
+        const normalizedGenderKey = gender.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (!validGenderValues.includes(gender) && !validGenderValues.includes(normalizedGenderKey)) {
+          errors.push({ row: i, reason: 'Invalid gender value. Use M or F / Masculin or Féminin.', data: s });
           continue;
         }
         if (!schoolId || !existingSchoolIds.has(schoolId)) {
@@ -4412,6 +4423,17 @@ export async function createApp() {
         return res.status(400).json({ error: `Missing compulsory student parameters. Received firstName=${firstName}, lastName=${lastName}, schoolId=${schoolId}, classId=${classId}` });
       }
 
+      const normalizedGender = typeof gender === 'string' ? gender.trim() : '';
+      if (!normalizedGender) {
+        return res.status(400).json({ error: 'Gender is required when creating a student.' });
+      }
+
+      const validGenderValues = ['M', 'F', 'Masculin', 'Féminin', 'Feminin', 'm', 'f', 'male', 'female', 'masculin', 'feminin', 'homme', 'femme', 'garcon', 'fille'];
+      const normalizedGenderKey = normalizedGender.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (!validGenderValues.includes(normalizedGender) && !validGenderValues.includes(normalizedGenderKey)) {
+        return res.status(400).json({ error: 'Invalid gender value. Use M or F / Masculin or Féminin.' });
+      }
+
       const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, parsedClassId));
       if (!classRecord) {
         return res.status(404).json({ error: 'Class not found' });
@@ -4495,7 +4517,7 @@ export async function createApp() {
         firstName,
         lastName,
         birthDate,
-        gender: gender ?? null,
+        gender: normalizedGender,
         schoolId: effectiveSchoolId,
         classId: parsedClassId,
         parentId: parsedParentId,

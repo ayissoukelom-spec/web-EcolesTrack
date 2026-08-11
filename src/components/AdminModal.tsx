@@ -1165,11 +1165,20 @@ export default function AdminModal(props: any) {
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                       <RequiredLabel label="Sexe de l'élève" required />
                     </label>
-                    <select required value={studentForm.gender} onChange={e => setStudentForm({...studentForm, gender: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                    <select
+                      required
+                      value={studentForm.gender}
+                      onChange={e => setStudentForm({...studentForm, gender: e.target.value})}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                      aria-invalid={studentForm.gender ? 'false' : 'true'}
+                    >
                       <option value="">-- Choisissez le sexe --</option>
                       <option value="M">Masculin</option>
                       <option value="F">Féminin</option>
                     </select>
+                    {!studentForm.gender && (
+                      <p className="mt-1 text-rose-600 text-xs">Le sexe est obligatoire pour créer un élève.</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Enseignants de la classe (assignés automatiquement)</label>
