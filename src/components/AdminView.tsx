@@ -2954,107 +2954,71 @@ export default function AdminView({
 
       {/* Tabs navigation panel */}
       <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
-        {userRole === 'super_admin' && (
-          <button
-            onClick={() => { setActiveTab('schools'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'schools' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-schools"
-          >
-            <Building2 className="h-4 w-4" />
-            Écoles
-          </button>
-        )}
-
-        {['super_admin', 'school_admin'].includes(userRole) && (
-          <button
-            onClick={() => { setActiveTab('years'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'years' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-years"
-          >
-            <Calendar className="h-4 w-4" />
-            Années Scolaires
-          </button>
-        )}
-
-        {userRole !== 'parent' && (
-          <button
-            onClick={() => { setActiveTab('teachers'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'teachers' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-teachers"
-          >
-            <UserCheck className="h-4 w-4" />
-            Enseignants
-          </button>
-        )}
-
-        {['super_admin', 'school_admin'].includes(userRole) && (
-          <button
-            onClick={() => { setActiveTab('classes'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'classes' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-classes"
-          >
-            <Layers className="h-4 w-4" />
-            Classes
-          </button>
-        )}
-
-        <button
-          onClick={() => { setActiveTab('students'); setSearchQuery(''); }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-            activeTab === 'students' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-          }`}
-          id="tab-admin-students"
-        >
-          <GraduationCap className="h-4 w-4" />
-          Élèves
-        </button>
-
-        {userRole !== 'teacher' && (
-          <button
-            onClick={() => { setActiveTab('parents'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'parents' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-parents"
-          >
-            <Users2 className="h-4 w-4" />
-            Parents & Tuteurs
-          </button>
-        )}
-
-        {['super_admin', 'school_admin'].includes(userRole) && (
-          <button
-            onClick={() => { setActiveTab('accounts'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'accounts' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-accounts"
-          >
-            <Settings className="h-4 w-4" />
-            Comptes
-          </button>
-        )}
-
-        {['super_admin', 'school_admin'].includes(userRole) && (
-          <button
-            onClick={() => { setActiveTab('matieres'); setSearchQuery(''); }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-              activeTab === 'matieres' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-            id="tab-admin-matieres"
-          >
-            <BookOpen className="h-4 w-4" />
-            Matières
-          </button>
-        )}
+        {[
+          {
+            key: 'schools',
+            label: 'Écoles',
+            icon: <Building2 className="h-4 w-4" />,
+            visible: userRole === 'super_admin',
+          },
+          {
+            key: 'years',
+            label: 'Années Scolaires',
+            icon: <Calendar className="h-4 w-4" />,
+            visible: ['super_admin', 'school_admin'].includes(userRole),
+          },
+          {
+            key: 'teachers',
+            label: 'Enseignants',
+            icon: <UserCheck className="h-4 w-4" />,
+            visible: userRole !== 'parent',
+          },
+          {
+            key: 'classes',
+            label: 'Classes',
+            icon: <Layers className="h-4 w-4" />,
+            visible: ['super_admin', 'school_admin'].includes(userRole),
+          },
+          {
+            key: 'students',
+            label: 'Élèves',
+            icon: <GraduationCap className="h-4 w-4" />,
+            visible: true,
+          },
+          {
+            key: 'parents',
+            label: 'Parents & Tuteurs',
+            icon: <Users2 className="h-4 w-4" />,
+            visible: userRole !== 'teacher',
+          },
+          {
+            key: 'accounts',
+            label: 'Comptes',
+            icon: <Settings className="h-4 w-4" />,
+            visible: ['super_admin', 'school_admin'].includes(userRole),
+          },
+          {
+            key: 'matieres',
+            label: 'Matières',
+            icon: <BookOpen className="h-4 w-4" />,
+            visible: ['super_admin', 'school_admin'].includes(userRole),
+          },
+        ]
+          .filter((tab) => tab.visible)
+          .sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base', ignorePunctuation: true }))
+          .map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => { setActiveTab(tab.key as typeof activeTab); setSearchQuery(''); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                activeTab === tab.key ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-500 hover:bg-slate-50'
+              }`}
+              id={`tab-admin-${tab.key}`}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
       </div>
 
       {/* Create User Modal */}
