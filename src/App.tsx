@@ -70,6 +70,10 @@ export default function App() {
     totalClasses: 0,
     totalTeachers: 0,
     attendanceRate: 94.5,
+    absenceStatusCounts: {
+      justified: 0,
+      unjustified: 0,
+    },
   });
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
   const [schoolsList, setSchoolsList] = useState<School[]>([]);
@@ -186,7 +190,13 @@ export default function App() {
       console.log('RAW API RESPONSE DASHBOARD:', summary);
       console.log('chartData reçu:', (summary as any)?.chartData);
       if (summary && typeof summary === 'object') {
-        if ('stats' in summary) setStats(summary.stats);
+        if ('stats' in summary) setStats((prev) => ({ ...prev, ...summary.stats }));
+        if ('absenceStatusCounts' in summary) {
+          setStats((prev) => ({
+            ...prev,
+            absenceStatusCounts: summary.absenceStatusCounts || prev.absenceStatusCounts,
+          }));
+        }
         if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
         if ('recentAbsences' in summary) {
           setSummaryRecentAbsences(summary.recentAbsences);
@@ -1091,6 +1101,7 @@ export default function App() {
                   recentGrades={summaryRecentGrades}
                   userRole={currentRole}
                   chartData={chartData}
+                  absenceStatusCounts={stats.absenceStatusCounts}
                 />
               )}
 

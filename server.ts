@@ -6553,6 +6553,43 @@ if (uniqueParentIds.length > 0) {
       const chartStudentsRows = await chartStudentsQuery;
       const chartAbsencesRows = await chartAbsencesQuery;
 
+      let absenceStatusCountsQuery = db
+        .select({
+          justified: sql<number>`count(case when ${absences.isJustified} = true then 1 end)::integer`,
+          unjustified: sql<number>`count(case when ${absences.isJustified} = false then 1 end)::integer`,
+        })
+        .from(absences);
+
+      if (actor.role === 'parent') {
+        if (!parentChildIds || parentChildIds.length === 0) {
+          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer` }) as any;
+        } else {
+          absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, parentChildIds)) as any;
+        }
+      } else if (actor.role === 'teacher') {
+        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds || [] });
+        if (authorizedStudentIds.length === 0) {
+          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer` }) as any;
+        } else {
+          absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, authorizedStudentIds)) as any;
+        }
+      } else if (schoolFilter) {
+        absenceStatusCountsQuery = db
+          .select({
+            justified: sql<number>`count(case when ${absences.isJustified} = true then 1 end)::integer`,
+            unjustified: sql<number>`count(case when ${absences.isJustified} = false then 1 end)::integer`,
+          })
+          .from(absences)
+          .innerJoin(students, eq(absences.studentId, students.id))
+          .where(eq(students.schoolId, schoolFilter)) as any;
+      }
+
+      const absenceStatusCountsResult = await absenceStatusCountsQuery;
+      const absenceStatusCounts = {
+        justified: Number(absenceStatusCountsResult[0]?.justified || 0),
+        unjustified: Number(absenceStatusCountsResult[0]?.unjustified || 0),
+      };
+
       console.log('Nombre d\'élèves :', studentCountResult[0]?.count || 0);
       console.log('Premier élève :', studentGenderRows[0]);
       console.log('Valeurs de genre observées :', studentGenderRows.slice(0, 10).map((row) => row.gender));
@@ -6667,6 +6704,7 @@ if (uniqueParentIds.length > 0) {
         recentAbsences,
         recentGrades,
         chartData,
+        absenceStatusCounts,
       });
     } catch (err: any) {
       console.error('Error loading dashboard summary:', err);
