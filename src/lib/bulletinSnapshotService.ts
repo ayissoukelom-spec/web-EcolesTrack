@@ -274,6 +274,13 @@ class StudentAuthorizationError extends Error {
   }
 }
 
+const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
+};
+
 export const registerBulletinGenerateRoute = (
   app: express.Express,
   options: RegisterBulletinGenerateRouteOptions,
@@ -281,7 +288,7 @@ export const registerBulletinGenerateRoute = (
   const {
     resolveActor,
     verifyMiddleware = verifyToken as any,
-    accessMiddleware = requireRole(['admin']) as any,
+    accessMiddleware = requireBulletinSuperAdmin as any,
     generateHandler = async (studentId, termId, persistence) => generateBulletinSnapshot(studentId, termId, persistence),
   } = options;
 

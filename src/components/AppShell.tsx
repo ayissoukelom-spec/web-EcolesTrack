@@ -455,6 +455,9 @@ export default function AppShell() {
     }
 
     if (activeTab === 'bulletins') {
+      if (currentRole !== 'super_admin') {
+        return null;
+      }
       return <BulletinsView schoolsList={schoolsList} classesList={classesList} studentsList={studentsList} evaluationsList={activeEvaluations} gradesList={gradesList} teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []} />;
     }
 

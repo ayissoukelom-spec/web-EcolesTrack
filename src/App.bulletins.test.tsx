@@ -110,7 +110,10 @@ describe('App bulletin navigation', () => {
     });
   });
 
-  it('shows a dedicated Bulletin entry and opens the bulletin view', async () => {
+  it('allows only the super_admin role to access the Bulletin entry and page', async () => {
+    mockGetSimulatedRole.mockReturnValue('super_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-super-admin', email: 'superadmin@example.com', name: 'Super Admin', schoolId: null, role: 'super_admin', id: 1 });
+
     render(
       <AuthProvider>
         <App />
@@ -118,13 +121,35 @@ describe('App bulletin navigation', () => {
     );
 
     const bulletinButton = await screen.findByRole('button', { name: /^Bulletins$/i });
+    expect(bulletinButton).toBeEnabled();
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
   });
 
-  it('shows a sidebar badge when overdue evaluations exist', async () => {
+  it('keeps the Bulletin menu visible but disabled for non-super_admin roles and does not navigate on click', async () => {
+    for (const role of ['school_admin', 'teacher', 'parent']) {
+      mockGetSimulatedRole.mockReturnValue(role);
+      mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: role === 'parent' ? null : 1, role, id: 1 });
+
+      const { unmount } = render(
+        <AuthProvider>
+          <App />
+        </AuthProvider>,
+      );
+
+      const bulletinButton = await screen.findByRole('button', { name: /^Bulletins$/i });
+      expect(bulletinButton).toBeDisabled();
+      fireEvent.click(bulletinButton);
+      expect(screen.queryByText('BulletinsView')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('shows the overdue count on the Notes & Bulletins entry for non-super_admin roles while Bulletin remains blocked', async () => {
     mockCountOverdueEvaluations.mockReturnValue(2);
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
 
     render(
       <AuthProvider>
@@ -132,7 +157,31 @@ describe('App bulletin navigation', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findAllByText('2')).toHaveLength(2);
+    expect(await screen.findAllByText('2')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
+  });
+
+  it('hides the mobile app entry from the visible menu for all roles', async () => {
+    for (const role of ['super_admin', 'school_admin', 'teacher', 'parent', 'student']) {
+      mockGetSimulatedRole.mockReturnValue(role);
+      mockGetSimulatedUser.mockReturnValue({
+        uid: `sim-${role}`,
+        email: `${role}@example.com`,
+        name: `Sim ${role}`,
+        schoolId: role === 'parent' ? null : 1,
+        role,
+        id: 1,
+      });
+
+      const { unmount } = render(
+        <AuthProvider>
+          <App />
+        </AuthProvider>,
+      );
+
+      expect(screen.queryByRole('button', { name: /Application Mobile/i })).toBeNull();
+      unmount();
+    }
   });
 
   const setupAbsencesResponse = (absences: any[]) => {

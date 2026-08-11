@@ -473,6 +473,13 @@ interface RegisterBulletinPdfRouteOptions {
   batchAccessMiddleware?: express.RequestHandler;
 }
 
+const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
+};
+
 export const registerBulletinPdfRoute = (app: express.Express, options: RegisterBulletinPdfRouteOptions) => {
   const {
     resolveActor,
@@ -480,8 +487,8 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
     pdfGenerator,
     template,
     verifyMiddleware = verifyToken as any,
-    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser(resolveActor), { bypassRoles: ['admin', 'teacher'] }) as any,
-    batchAccessMiddleware = requireRole(['admin', 'teacher']) as any,
+    detailAccessMiddleware = requireBulletinSuperAdmin as any,
+    batchAccessMiddleware = requireBulletinSuperAdmin as any,
   } = options;
 
   const buildPdf = pdfGenerator ?? ((data: BulletinPdfData) => createBulletinPdfDocument(data, template));

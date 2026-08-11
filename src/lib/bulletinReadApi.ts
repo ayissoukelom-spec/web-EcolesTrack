@@ -354,13 +354,20 @@ const parseOptionalPositiveInt = (value: unknown): number | undefined => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 };
 
+const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
+};
+
 export const registerBulletinReadRoutes = (app: express.Express, options: RegisterBulletinReadRoutesOptions) => {
   const {
     resolveActor,
     readService = createDbBulletinReadService(),
     verifyMiddleware = verifyToken as any,
-    listAccessMiddleware = requireRole(['admin', 'teacher']) as any,
-    detailAccessMiddleware = requireOwnership(isBulletinOwnedByCurrentUser(resolveActor), { bypassRoles: ['admin', 'teacher'] }) as any,
+    listAccessMiddleware = requireBulletinSuperAdmin as any,
+    detailAccessMiddleware = requireBulletinSuperAdmin as any,
   } = options;
 
   app.get('/api/bulletins', verifyMiddleware, listAccessMiddleware, async (req: any, res) => {
