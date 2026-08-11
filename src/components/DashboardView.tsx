@@ -111,20 +111,22 @@ export default function DashboardView({
 
         {userRole !== 'parent' && (
           <div
-            className="rounded-3xl border border-sky-200/80 bg-gradient-to-br from-sky-50 via-white to-cyan-50 p-5 shadow-[0_12px_30px_rgba(14,116,144,0.09)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_18px_32px_rgba(14,116,144,0.14)]"
+            className="relative overflow-hidden rounded-3xl border border-fuchsia-500/20 bg-gradient-to-br from-[#12031f] via-[#3d0d45] to-[#62125d] p-5 shadow-[0_22px_50px_rgba(99,35,126,0.22)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_24px_55px_rgba(99,35,126,0.32)]"
             id="card-stats-gender"
           >
-            <div className="space-y-4">
+            <div className="pointer-events-none absolute -right-12 top-0 h-36 w-36 rounded-full bg-fuchsia-500/15 blur-3xl" />
+            <div className="pointer-events-none absolute left-0 bottom-0 h-28 w-28 rounded-full bg-violet-600/10 blur-3xl" />
+            <div className="relative space-y-4">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-500">Répartition par genre</span>
-                <div className="rounded-full bg-sky-100 px-2 py-1 text-[0.6rem] font-semibold text-sky-700">Live</div>
+                <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-100">Répartition par genre</span>
+                <div className="rounded-full bg-fuchsia-500/15 px-2 py-1 text-[0.6rem] font-semibold text-fuchsia-200 ring-1 ring-white/10">Live</div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-400 p-4 text-white shadow-[0_12px_24px_rgba(14,116,144,0.25)]">
+                <div className="rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-500 p-4 text-white shadow-[0_12px_24px_rgba(14,116,144,0.25)] ring-1 ring-white/10">
                   <p className="text-[0.6rem] uppercase tracking-[0.18em] text-sky-100">Garçons</p>
                   <p className="mt-2 text-3xl font-black leading-none">{stats.maleStudents || 0}</p>
                 </div>
-                <div className="rounded-2xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-4 text-white shadow-[0_12px_24px_rgba(217,70,239,0.22)]">
+                <div className="rounded-2xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-4 text-white shadow-[0_12px_24px_rgba(217,70,239,0.22)] ring-1 ring-white/10">
                   <p className="text-[0.6rem] uppercase tracking-[0.18em] text-pink-100">Filles</p>
                   <p className="mt-2 text-3xl font-black leading-none">{stats.femaleStudents || 0}</p>
                 </div>
