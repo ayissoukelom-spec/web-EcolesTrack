@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import type { Parent } from '../types.ts';
 import { getSimulatedSchoolId, apiFetch } from '../lib/api.ts';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
@@ -93,7 +94,7 @@ export default function AdminModal(props: any) {
     : teachersList.filter((t: any) => !currentStudentSchoolId || t.schoolId === currentStudentSchoolId);
   const disableStudentSchoolSelection = userRole === 'school_admin' && currentSchoolId != null;
   const selectedStudentParentId = studentForm.parentId ? parseInt(studentForm.parentId, 10) : undefined;
-  const [localParents, setLocalParents] = useState<any[] | null>(null);
+  const [localParents, setLocalParents] = useState<Parent[] | null>(null);
   const [parentSearchQuery, setParentSearchQuery] = useState('');
   const [subjectSearchQuery, setSubjectSearchQuery] = useState('');
   const availableClassesForSchool = userRole === 'school_admin' && currentSchoolId
@@ -152,7 +153,7 @@ export default function AdminModal(props: any) {
     ? visibleSubjectNames.filter((name) => name.toLowerCase().includes(subjectSearchQuery.trim().toLowerCase()))
     : visibleSubjectNames;
 
-  const filteredParents = parentsList.filter((p: any) => {
+  const filteredParents: Parent[] = parentsList.filter((p: any) => {
     if (currentStudentSchoolId) {
       const parentSchoolId = Number(p.studentSchoolId ?? p.schoolId ?? 0);
       return parentSchoolId === Number(currentStudentSchoolId);
@@ -160,9 +161,9 @@ export default function AdminModal(props: any) {
     return true;
   });
 
-  const parentOptions = localParents ?? filteredParents;
-  const uniqueParentOptions = Array.from(
-    new Map(parentOptions.map((p: any) => [p.id, p])).values(),
+  const parentOptions: Parent[] = localParents ?? filteredParents;
+  const uniqueParentOptions: Parent[] = Array.from(
+    new Map(parentOptions.map((p: Parent) => [p.id, p])).values(),
   );
   const parentQuery = parentSearchQuery.trim();
   const normalizedParentSearchQuery = parentQuery.toLowerCase();
@@ -189,7 +190,9 @@ export default function AdminModal(props: any) {
 
   const handleParentSearchInput = (query: string) => {
     setParentSearchQuery(query);
-    const matchedParent = uniqueParentOptions.find((p: any) => parentOptionLabel(p).toLowerCase() === query.trim().toLowerCase());
+    const matchedParent: Parent | undefined = uniqueParentOptions.find(
+      (p: Parent) => parentOptionLabel(p).toLowerCase() === query.trim().toLowerCase(),
+    );
     if (matchedParent) {
       setStudentForm({ ...studentForm, parentId: String(matchedParent.id) });
     } else if (query.trim() === '') {
@@ -199,7 +202,9 @@ export default function AdminModal(props: any) {
 
   useEffect(() => {
     if (studentForm.parentId) {
-      const selectedParent = uniqueParentOptions.find((p: any) => String(p.id) === studentForm.parentId);
+      const selectedParent: Parent | undefined = uniqueParentOptions.find(
+        (p: Parent) => String(p.id) === studentForm.parentId,
+      );
       if (selectedParent) {
         setParentSearchQuery(parentOptionLabel(selectedParent));
       }

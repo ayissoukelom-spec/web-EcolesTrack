@@ -3,8 +3,6 @@ import React from 'react';
 type State = { hasError: boolean; error?: Error | null };
 
 export default class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
-  public state: State;
-
   constructor(props: any) {
     super(props as any);
     this.state = { hasError: false, error: null };

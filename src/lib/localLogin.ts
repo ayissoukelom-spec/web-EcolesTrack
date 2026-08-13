@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getJwtSecret, signJwt } from './jwt.ts';
+import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
 import { users, localAuths } from '../db/schema.ts';
 import { eq, sql } from 'drizzle-orm';
@@ -7,6 +7,23 @@ import { eq, sql } from 'drizzle-orm';
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
 const DEFAULT_JWT_AUDIENCE = 'ecoletrack-api';
 const DEFAULT_JWT_EXPIRES_IN = '1h';
+
+function normalizeJwtExpiresIn(rawValue: string | undefined): JwtExpiresIn {
+  const value = rawValue?.trim();
+  if (!value) {
+    return DEFAULT_JWT_EXPIRES_IN;
+  }
+
+  if (/^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  if (/^(?:\d+(?:\.\d+)?)(ms|s|m|h|d|w|y)$/.test(value)) {
+    return value as JwtExpiresIn;
+  }
+
+  return DEFAULT_JWT_EXPIRES_IN;
+}
 
 export async function handleLocalLogin(req: Request, res: Response) {
   try {
@@ -63,7 +80,7 @@ export async function handleLocalLogin(req: Request, res: Response) {
     }
 
     const token = signJwt(payload, secret, {
-      expiresIn: process.env.JWT_EXPIRES_IN ?? DEFAULT_JWT_EXPIRES_IN,
+      expiresIn: normalizeJwtExpiresIn(process.env.JWT_EXPIRES_IN),
       issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,
       audience: process.env.JWT_AUDIENCE ?? DEFAULT_JWT_AUDIENCE,
       subject: String(userRecord.id),

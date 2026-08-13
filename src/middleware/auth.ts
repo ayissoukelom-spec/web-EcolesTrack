@@ -123,7 +123,9 @@ export const verifyToken = async (
       return res.status(401).json({ error: 'Unauthorized: Token revoked' });
     }
 
-    const [dbUser] = await db.select().from(users).where(eq(users.uid, uid), eq(users.isDeleted, false));
+    const [dbUser] = await db.select().from(users).where(
+      and(eq(users.uid, uid), eq(users.isDeleted, false)),
+    );
     if (!dbUser) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }

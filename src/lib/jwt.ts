@@ -9,17 +9,21 @@ export interface JwtPayload {
   [key: string]: unknown;
 }
 
+export type JwtExpiresIn = number | `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`;
+export type JwtSignAudience = string | string[];
+export type JwtVerifyAudience = string | RegExp | [string | RegExp, ...(string | RegExp)[]];
+
 export interface JwtSignOptions {
-  expiresIn?: string | number;
+  expiresIn?: JwtExpiresIn;
   issuer?: string;
-  audience?: string;
+  audience?: JwtSignAudience;
   subject?: string;
   jwtid?: string;
 }
 
 export interface JwtVerifyOptions {
   issuer?: string;
-  audience?: string | string[];
+  audience?: JwtVerifyAudience;
   subject?: string;
 }
 

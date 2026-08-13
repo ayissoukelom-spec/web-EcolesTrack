@@ -3,7 +3,15 @@ import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
-import { getEligibleStudentsForEvaluation, getEligibleStudentsForEvaluationWithGrades, getDateOnlyMs, isEvaluationArchived as isEvaluationArchivedUtil, parseDateValue } from '../lib/evaluationUtils';
+import {
+  getEligibleStudentsForEvaluation,
+  getEligibleStudentsForEvaluationWithGrades,
+  getDateOnlyMs,
+  isEvaluationArchived as isEvaluationArchivedUtil,
+  isEvaluationCompleted as isEvaluationCompletedUtil,
+  isEvaluationFullyGraded as isEvaluationFullyGradedUtil,
+  parseDateValue,
+} from '../lib/evaluationUtils';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import * as XLSX from 'xlsx';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';

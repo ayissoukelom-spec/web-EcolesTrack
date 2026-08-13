@@ -157,7 +157,8 @@ describe('App bulletin navigation', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findAllByText('2')).toHaveLength(1);
+    const notesAndBulletinsButton = await screen.findByRole('button', { name: /Notes & Bulletins/i });
+    expect(within(notesAndBulletinsButton).getByText('2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
   });
 

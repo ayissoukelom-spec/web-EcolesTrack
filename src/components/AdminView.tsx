@@ -485,7 +485,7 @@ export default function AdminView({
     { id: 'lycee', name: 'Lycée (2nde à Tle)', classNames: ['2nde', '1ère', 'Tle'] },
   ];
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [classGroups, setClassGroups] = useState<any[]>(() => {
     if (typeof window === 'undefined') return defaultClassGroups;
     try {
@@ -707,8 +707,7 @@ export default function AdminView({
 
   const parentBelongsToSchool = (parent: Parent, schoolId: number | null | undefined) => {
     if (!schoolId) return true;
-    if (parent.schoolId === schoolId) return true;
-    return Array.isArray(parent.schoolIds) && parent.schoolIds.includes(schoolId);
+    return parent.schoolId === schoolId;
   };
 
   const filteredTeachersList = teachersList.filter((t) => {
@@ -1083,10 +1082,12 @@ export default function AdminView({
           selectedClassNames: [],
           selectedClassGroups: [],
           manuallySelectedClassNames: [],
+          manuallyDeselectedClassNames: [],
           subjectNames: '',
           selectedSubjectNames: [],
           selectedSubjectGroups: [],
           manuallySelectedSubjectNames: [],
+          manuallyDeselectedSubjectNames: [],
         });
         setStudentError(null);
         setIsModalOpen(false);
@@ -1319,7 +1320,7 @@ export default function AdminView({
       });
       setStudentForm({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [], schoolAdminId: '', gender: '' });
       setNewParentMode(false);
-      setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '' });
+      setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
       setNewTeacherMode(false);
       setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
     }
@@ -1712,7 +1713,7 @@ export default function AdminView({
   const [multiSchoolSelectedSchoolId, setMultiSchoolSelectedSchoolId] = useState<number | ''>('');
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
-  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '' , academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[] });
+  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[] });
   const [editUserPassword, setEditUserPassword] = useState('');
   const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
   const [editUserError, setEditUserError] = useState<string | null>(null);
@@ -2402,7 +2403,6 @@ export default function AdminView({
                           academicYearId: editStudentForm.academicYearId ? parseInt(editStudentForm.academicYearId) : undefined,
                           teacherIds: editStudentForm.teacherIds && editStudentForm.teacherIds.length > 0 ? editStudentForm.teacherIds : undefined,
                           schoolAdminId: editStudentForm.schoolAdminId ? parseInt(editStudentForm.schoolAdminId) : undefined,
-                          gender: editStudentForm.gender || undefined,
                         });
                         setEditStudentOpen(false);
                         setStudentToEdit(null);
@@ -3600,7 +3600,21 @@ export default function AdminView({
               <div className="flex justify-end mb-3">
                 <button
                   onClick={() => {
-                    setSchoolForm({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [], subjectNames: '', selectedSubjectNames: [] });
+                    setSchoolForm({
+                      name: '',
+                      address: '',
+                      phone: '',
+                      phoneDigits: '',
+                      selectedClassNames: [],
+                      selectedClassGroups: [],
+                      manuallySelectedClassNames: [],
+                      manuallyDeselectedClassNames: [],
+                      subjectNames: '',
+                      selectedSubjectNames: [],
+                      selectedSubjectGroups: [],
+                      manuallySelectedSubjectNames: [],
+                      manuallyDeselectedSubjectNames: [],
+                    });
                     setActiveTab('schools');
                     setStudentError(null);
                     setIsModalOpen(true);
@@ -4175,6 +4189,7 @@ export default function AdminView({
                                   name: user.name,
                                   role: 'teacher',
                                   schoolId: user.schoolId ? String(user.schoolId) : '',
+                                  schoolSearch: '',
                                   academicYearId: '',
                                   phone: (user as any).phone || '',
                                   specialization: Array.isArray((user as any).specialization)
@@ -4184,6 +4199,8 @@ export default function AdminView({
                                         .map((s) => s.trim())
                                         .filter(Boolean),
                                   gender: (user as any).gender || '',
+                                  address: '',
+                                  studentId: '',
                                   assignedClassIds,
                                 });
                                 setEditUserOpen(true);
@@ -4576,6 +4593,7 @@ export default function AdminView({
                               name: user.name,
                               role: 'parent',
                               schoolId: user.schoolId ? String(user.schoolId) : String(pt.schoolId || ''),
+                              schoolSearch: '',
                               academicYearId: '',
                               phone: normalizedPhone,
                               address: pt.address || '',
@@ -4710,10 +4728,13 @@ export default function AdminView({
                               name: user.name,
                               role: user.role,
                               schoolId: user.schoolId ? String(user.schoolId) : '',
+                              schoolSearch: '',
                               academicYearId: (user as any).academicYearId ? String((user as any).academicYearId) : '',
                               phone: normalizedPhone,
                               specialization: (user as any).specialization || '',
                               gender: (user as any).gender || '',
+                              address: '',
+                              studentId: '',
                               assignedClassIds,
                             });
                             setEditUserOpen(true);

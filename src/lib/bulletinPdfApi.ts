@@ -488,7 +488,7 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
     template,
     verifyMiddleware = verifyToken as any,
     detailAccessMiddleware = requireBulletinSuperAdmin as any,
-    batchAccessMiddleware = requireBulletinSuperAdmin as any,
+    batchAccessMiddleware = detailAccessMiddleware,
   } = options;
 
   const buildPdf = pdfGenerator ?? ((data: BulletinPdfData) => createBulletinPdfDocument(data, template));
