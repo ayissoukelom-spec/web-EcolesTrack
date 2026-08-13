@@ -492,6 +492,26 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
   }
 }
 
+/**
+ * Sign payload for internal server-to-server communication
+ * Used for /api/internal/* endpoints
+ * Returns: { signature: string, timestamp: string }
+ */
+function signInternalPayload(payload: any): { signature: string; timestamp: string } {
+  const INTERNAL_SECRET = process.env.INTERNAL_SECRET;
+  if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
+    throw new Error('INTERNAL_SECRET environment variable is required for internal endpoint communication');
+  }
+
+  const timestamp = Date.now().toString();
+  const body = JSON.stringify(payload);
+  const messageToSign = `${body}${timestamp}`;
+  const hmac = crypto.createHmac('sha256', INTERNAL_SECRET);
+  hmac.update(messageToSign);
+  const signature = hmac.digest('hex');
+  return { signature, timestamp };
+}
+
 export async function createApp() {
   const app = express();
 
@@ -4936,10 +4956,13 @@ export async function createApp() {
         console.log("[ABSENCE_TRACE] calling internal absence notification", { url: notificationUrl, payload: notificationPayload });
 
         try {
+          const { signature, timestamp } = signInternalPayload(notificationPayload);
           const notificationResponse = await fetch(notificationUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              "X-Internal-Signature": signature,
+              "X-Internal-Timestamp": timestamp,
             },
             body: JSON.stringify(notificationPayload),
           });
@@ -5986,25 +6009,29 @@ if (uniqueParentIds.length > 0) {
   evaluationId: createdEvaluation.id,
   title
 });
+    const evaluationNotificationPayload = {
+      parentId: parentUserId,
+      title: `Nouveau devoir à venir : ${title}`,
+      message: evaluationMessage,
+      category: "evaluation",
+      metadata: {
+        target: "homework",
+        evaluationId: createdEvaluation.id,
+        subject,
+        title,
+        classId,
+      },
+      dedupeKey: `evaluation-${createdEvaluation.id}-${parentUserId}`,
+    };
+    const { signature, timestamp } = signInternalPayload(evaluationNotificationPayload);
     await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/evaluation-notification`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "X-Internal-Signature": signature,
+        "X-Internal-Timestamp": timestamp,
       },
-      body: JSON.stringify({
-        parentId: parentUserId,
-        title: `Nouveau devoir à venir : ${title}`,
-        message: evaluationMessage,
-        category: "evaluation",
-        metadata: {
-          target: "homework",
-          evaluationId: createdEvaluation.id,
-          subject,
-          title,
-          classId,
-        },
-        dedupeKey: `evaluation-${createdEvaluation.id}-${parentUserId}`,
-      }),
+      body: JSON.stringify(evaluationNotificationPayload),
     });
   } catch (notificationError) {
     console.error("Erreur notification devoir mobile :", notificationError);
@@ -6266,38 +6293,37 @@ if (uniqueParentIds.length > 0) {
             .where(eq(parents.id, studentRecord.parentId));
 
           if (parentRecord?.userId) {
+            const gradeNotificationPayload = {
+              parentId: parentRecord.userId,
+              title: isGradeModification
+                ? "Note modifiée"
+                : "Nouvelle note disponible",
+              message: buildGradeNotificationMessage({
+                studentName: studentRecord.firstName,
+                score,
+                maxScore: evaluation.maxScore,
+                subjectName: evaluation.subject.toLowerCase(),
+                evaluationName: evaluation.title,
+              }),
+              category: "grade",
+              metadata: {
+                target: "notes",
+                gradeId: savedGrade.id,
+                studentId,
+                evaluationId,
+                isGradeModification,
+              },
+              dedupeKey: `grade-${savedGrade.id}`,
+            };
+            const { signature, timestamp } = signInternalPayload(gradeNotificationPayload);
             await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                "X-Internal-Signature": signature,
+                "X-Internal-Timestamp": timestamp,
               },
-              body: JSON.stringify({
-  parentId: parentRecord.userId,
-
-  title: isGradeModification
-    ? "Note modifiée"
-    : "Nouvelle note disponible",
-
-  message: buildGradeNotificationMessage({
-        studentName: studentRecord.firstName,
-        score,
-        maxScore: evaluation.maxScore,
-        subjectName: evaluation.subject.toLowerCase(),
-        evaluationName: evaluation.title,
-      }),
-
-  category: "grade",
-
-  metadata: {
-    target: "notes",
-    gradeId: savedGrade.id,
-    studentId,
-    evaluationId,
-    isGradeModification,
-  },
-
-  dedupeKey: `grade-${savedGrade.id}`,
-}),
+              body: JSON.stringify(gradeNotificationPayload),
             });
           }
         }
@@ -6833,12 +6859,7 @@ if (uniqueParentIds.length > 0) {
     type,
   });
 
-  await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
+  const infoNotificationPayload = {
     parentId: String(id),
     title,
     message: body,
@@ -6848,7 +6869,16 @@ if (uniqueParentIds.length > 0) {
       deepLink: "ecoletrack://dashboard",
     },
     dedupeKey: `info-${Date.now()}-${id}`,
-  }),
+  };
+  const { signature, timestamp } = signInternalPayload(infoNotificationPayload);
+  await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Internal-Signature": signature,
+    "X-Internal-Timestamp": timestamp,
+  },
+  body: JSON.stringify(infoNotificationPayload),
 });
 }
 
