@@ -1135,7 +1135,9 @@ export default function SimulatorHeader({
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
               <span className="text-emerald-400">Ecoles</span> Track <span className="text-xs bg-slate-800 border border-slate-700 text-indigo-400 px-2 py-0.5 rounded-full">v1.0-STABLE</span>
             </h1>
-            <p className="text-xs text-slate-400">Architecture REST, PostgreSQL, Firebase Messaging</p>
+            {currentRole === 'super_admin' && (
+              <p className="text-xs text-slate-400">Architecture REST, PostgreSQL, Firebase Messaging</p>
+            )}
           </div>
         </div>
 
