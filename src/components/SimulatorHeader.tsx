@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, Settings, BookOpen, Users, Bell, Smartphone, RefreshCw } from 'lucide-react';
+import { Shield, Settings, Users, Bell, Smartphone, RefreshCw } from 'lucide-react';
+import logoImage from '../assets/logo.png';
 import { setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
 import { School, AcademicYear, Class, Teacher, Student, Parent, User, UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext.tsx';
@@ -1125,12 +1126,14 @@ export default function SimulatorHeader({
       <div className="max-w-7xl mx-auto p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         {/* Title */}
         <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-indigo-600 rounded-xl leading-none">
-            <BookOpen className="h-6 w-6 text-white" />
-          </div>
+          <img
+            src={logoImage}
+            alt="Ecoles Track logo"
+            className="h-10 w-auto object-contain rounded-md"
+          />
           <div>
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              EcoleTrack <span className="text-xs bg-slate-800 border border-slate-700 text-indigo-400 px-2 py-0.5 rounded-full">v1.0-STABLE</span>
+              <span className="text-emerald-400">Ecoles</span> Track <span className="text-xs bg-slate-800 border border-slate-700 text-indigo-400 px-2 py-0.5 rounded-full">v1.0-STABLE</span>
             </h1>
             <p className="text-xs text-slate-400">Architecture REST, PostgreSQL, Firebase Messaging</p>
           </div>
