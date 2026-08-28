@@ -17,8 +17,27 @@ import {
   schools,
   schoolTerms,
   students,
+  studentAcademicYearStatuses,
 } from '../db/schema.ts';
 import studentAccess from './studentAccess';
+
+export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
+  const abbreviations: Record<string, string> = {
+    Nouveau: 'N',
+    Doublant: 'D',
+    Triplant: 'T',
+    Quadruplant: 'Q',
+    Quintuplant: '5',
+    Sextuplant: '6',
+  };
+  return status ? abbreviations[status] ?? null : null;
+};
+
+export const resolveStudentStatusForAcademicYear = (
+  rows: Array<{ studentId: number; academicYearId: number; status: string | null }>,
+  studentId: number,
+  academicYearId: number,
+): string | null => rows.find((row) => row.studentId === studentId && row.academicYearId === academicYearId)?.status ?? null;
 
 export interface BulletinPdfActor {
   id?: number | null;
@@ -42,6 +61,7 @@ export interface BulletinPdfData {
   studentId: number;
   studentName: string;
   studentGender: string | null;
+  studentStatus: string | null;
   classId: number;
   className: string;
   classStudentCount: number;
@@ -212,6 +232,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       studentFirstName: students.firstName,
       studentLastName: students.lastName,
       studentGender: students.gender,
+      studentStatus: studentAcademicYearStatuses.status,
       classId: bulletins.classId,
       className: classes.name,
       schoolName: schools.name,
@@ -265,6 +286,13 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     )
     .innerJoin(academicYears, eq(bulletins.schoolYearId, academicYears.id))
     .innerJoin(schoolTerms, eq(bulletins.termId, schoolTerms.id))
+    .leftJoin(
+      studentAcademicYearStatuses,
+      and(
+        eq(studentAcademicYearStatuses.studentId, bulletins.studentId),
+        eq(studentAcademicYearStatuses.academicYearId, bulletins.schoolYearId),
+      ),
+    )
     .where(eq(bulletins.id, bulletinId));
 
   if (!header) return null;
@@ -371,6 +399,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       studentId: header.studentId,
       studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
       studentGender: header.studentGender,
+      studentStatus: header.studentStatus,
       classId: header.classId,
       className: header.className,
       classStudentCount: header.classStudentCount,
@@ -580,20 +609,25 @@ export const createBulletinPdfDocument = async (
       const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
       drawText(page, studentLabel, tableX + 12, cursorY - 51, studentLabelSize, muted, fontRegular);
       drawText(page, studentName, studentNameX, cursorY - 51, studentNameSize, text, fontBold);
-      if (data.studentGender?.trim()) {
-        const genderLabel = 'SEXE :';
-        const genderGap = 12;
-        const genderValue = sanitizePdfText(data.studentGender);
-        const genderLabelWidth = fontRegular.widthOfTextAtSize(genderLabel, studentLabelSize);
-        const genderValueWidth = fontBold.widthOfTextAtSize(genderValue, studentNameSize);
-        const genderBlockWidth = genderLabelWidth + studentGap + genderValueWidth;
-        const rightEdge = tableX + tableWidth - 12;
-        const rightAlignedGenderX = rightEdge - genderBlockWidth;
-        const minimumGenderX = studentNameX + studentNameWidth + genderGap;
-        const genderX = Math.max(rightAlignedGenderX, minimumGenderX);
-        drawText(page, genderLabel, genderX, cursorY - 51, studentLabelSize, muted, fontRegular);
-        drawText(page, genderValue, genderX + genderLabelWidth + studentGap, cursorY - 51, studentNameSize, text, fontBold);
-      }
+      const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
+      const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
+      const genderValue = data.studentGender?.trim() ? sanitizePdfText(data.studentGender) : null;
+      const rightEdge = tableX + tableWidth - 12;
+      const rightBlocks = [
+        statusValue ? { label: 'STATUT :', value: statusValue } : null,
+        genderValue ? { label: 'SEXE :', value: genderValue } : null,
+      ].filter((block): block is { label: string; value: string } => block !== null);
+      rightBlocks.forEach((block, index) => {
+        const labelWidth = fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
+        const valueWidth = fontBold.widthOfTextAtSize(block.value, studentNameSize);
+        const blockWidth = labelWidth + studentGap + valueWidth;
+        const blockY = cursorY - 51 - index * 16;
+        const rightAlignedX = rightEdge - blockWidth;
+        const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
+        const blockX = Math.max(rightAlignedX, minimumX);
+        drawText(page, block.label, blockX, blockY, studentLabelSize, muted, fontRegular);
+        drawText(page, block.value, blockX + labelWidth + studentGap, blockY, studentNameSize, text, fontBold);
+      });
       cursorY -= 96;
     }
     return { page, cursorY };

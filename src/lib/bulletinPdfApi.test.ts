@@ -5,6 +5,8 @@ import { inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
   createBulletinPdfDocument,
+  formatStudentStatusForPdf,
+  resolveStudentStatusForAcademicYear,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -20,6 +22,7 @@ const snapshotData: BulletinPdfData = {
   studentId: 10,
   studentName: 'Alice Dupont',
   studentGender: 'F',
+  studentStatus: 'Doublant',
   classId: 3,
   className: '3ème A',
   classStudentCount: 42,
@@ -108,6 +111,62 @@ const withServer = async (app: express.Express): Promise<string> => {
 };
 
 describe('bulletin PDF API', () => {
+  it.each([
+    ['Nouveau', 'N'],
+    ['Doublant', 'D'],
+    ['Triplant', 'T'],
+    ['Quadruplant', 'Q'],
+    ['Quintuplant', '5'],
+    ['Sextuplant', '6'],
+  ])('convertit %s en %s uniquement pour le rendu PDF', (status, abbreviation) => {
+    expect(formatStudentStatusForPdf(status)).toBe(abbreviation);
+  });
+
+  it('ne produit aucune étiquette de statut lorsqu il est absent', () => {
+    expect(formatStudentStatusForPdf(null)).toBeNull();
+  });
+
+  it('conserve les statuts distincts du même élève selon chaque année scolaire', () => {
+    const rows = [
+      { studentId: 10, academicYearId: 100, status: 'Nouveau' },
+      { studentId: 10, academicYearId: 101, status: 'Doublant' },
+    ];
+    expect(resolveStudentStatusForAcademicYear(rows, 10, 100)).toBe('Nouveau');
+    expect(resolveStudentStatusForAcademicYear(rows, 10, 101)).toBe('Doublant');
+    expect(resolveStudentStatusForAcademicYear(rows, 10, 999)).toBeNull();
+  });
+
+  it('affiche le statut sur la ligne du nom et au-dessus du sexe dans le PDF', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const raw = Buffer.from(pdfBytes).toString('latin1');
+    const streams: string[] = [];
+    for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      try {
+        streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+      } catch {
+        streams.push(match[1]);
+      }
+    }
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    expect(text).toContain('STATUT :');
+    expect(text).toMatch(/STATUT :[\s\S]*SEXE :/);
+  });
+
+  it('n affiche pas le bloc statut dans le PDF si le statut est absent', async () => {
+    const pdfBytes = await createBulletinPdfDocument({ ...snapshotData, studentStatus: null });
+    const raw = Buffer.from(pdfBytes).toString('latin1');
+    const streams: string[] = [];
+    for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      try {
+        streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+      } catch {
+        streams.push(match[1]);
+      }
+    }
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    expect(text).not.toContain('STATUT :');
+    expect(text).toContain('SEXE :');
+  });
   it('génère un PDF avec succès depuis un snapshot persistant', async () => {
     const provider: BulletinPdfDataProvider = {
       getById: async () => snapshotData,
