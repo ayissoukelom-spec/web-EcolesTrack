@@ -88,11 +88,11 @@ export interface BulletinPdfTemplate {
 }
 
 const DEFAULT_TEMPLATE: BulletinPdfTemplate = {
-  primaryColor: '#1f3a8a',
-  secondaryColor: '#e2e8f0',
-  textColor: '#0f172a',
+  primaryColor: '#1f2937',
+  secondaryColor: '#e5e7eb',
+  textColor: '#111827',
   labels: {
-    title: 'Bulletin scolaire',
+    title: 'BULLETIN DE NOTES',
     schoolYear: 'Année scolaire',
     term: 'Trimestre',
     student: 'Élève',
@@ -387,8 +387,8 @@ export const createBulletinPdfDocument = async (
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 40;
 
-  const fontRegular = await pdf.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const fontRegular = await pdf.embedFont(StandardFonts.TimesRoman);
+  const fontBold = await pdf.embedFont(StandardFonts.TimesRomanBold);
   let logo: any = null;
   if (template.logoFilePath) {
     try {
@@ -441,20 +441,24 @@ export const createBulletinPdfDocument = async (
   const drawHeader = (page: any, includeStudentBlock: boolean) => {
     const width = page.getWidth();
     const height = page.getHeight();
-    page.drawRectangle({ x: 0, y: height - 112, width, height: 112, color: primary });
+    page.drawRectangle({ x: 0, y: height - 112, width, height: 112, color: white });
+    page.drawLine({ start: { x: margin, y: height - 16 }, end: { x: width - margin, y: height - 16 }, color: primary, thickness: 1.2 });
+    page.drawLine({ start: { x: margin, y: height - 108 }, end: { x: width - margin, y: height - 108 }, color: primary, thickness: 1.2 });
     if (logo) {
       const scaled = logo.scale(0.16);
       page.drawImage(logo, {
-        x: width - margin - scaled.width,
-        y: height - 92,
+        x: width / 2 - scaled.width / 2,
+        y: height - 88,
         width: scaled.width,
         height: scaled.height,
       });
     }
-    drawText(page, data.schoolName, margin, height - 42, 16, white, fontBold);
-    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, margin, height - 65, 10, white, fontRegular);
-    drawText(page, `${template.labels.term}: ${data.termName}`, margin, height - 82, 10, white, fontRegular);
-    drawText(page, 'BULLETIN DE NOTES', width / 2 - 76, height - 104, 13, white, fontBold);
+    drawText(page, data.schoolName, margin, height - 42, 15, text, fontBold);
+    drawText(page, 'ETABLISSEMENT SCOLAIRE', margin, height - 62, 8, muted, fontRegular);
+    const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(template.labels.title), 13);
+    drawText(page, template.labels.title, width / 2 - titleWidth / 2, height - 49, 13, text, fontBold);
+    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, width - margin - 145, height - 42, 9, text, fontRegular);
+    drawText(page, `${template.labels.term}: ${data.termName}`, width - margin - 145, height - 61, 9, text, fontRegular);
 
     if (includeStudentBlock) {
       const infoY = height - 142;

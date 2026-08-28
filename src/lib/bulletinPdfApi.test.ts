@@ -1,7 +1,9 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
 import {
   registerBulletinPdfRoute,
+  createBulletinPdfDocument,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -171,5 +173,22 @@ describe('bulletin PDF API', () => {
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe('Forbidden');
+  });
+
+  it('gère un bulletin long sur plusieurs pages avec les données optionnelles absentes', async () => {
+    const longData: BulletinPdfData = {
+      ...snapshotData,
+      appreciation: 'Appreciation longue '.repeat(20),
+      lines: Array.from({ length: 45 }, (_, index) => ({
+        ...snapshotData.lines[0],
+        id: index + 1,
+        subjectName: `Matiere ${index + 1}`,
+        teacherComment: index % 3 === 0 ? 'Travail regulier et participation satisfaisante.' : null,
+      })),
+    };
+    const pdfBytes = await createBulletinPdfDocument(longData);
+    const document = await PDFDocument.load(pdfBytes);
+
+    expect(document.getPageCount()).toBeGreaterThan(1);
   });
 });
