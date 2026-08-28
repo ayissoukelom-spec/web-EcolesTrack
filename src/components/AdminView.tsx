@@ -464,8 +464,35 @@ export default function AdminView({
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
   const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
+  const [studentFilterClasses, setStudentFilterClasses] = useState<Class[] | null>(null);
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
-  
+
+  useEffect(() => {
+    if (userRole !== 'super_admin' || superAdminSchoolFilterId == null) {
+      setStudentFilterClasses(null);
+      return;
+    }
+
+    let cancelled = false;
+    setStudentFilterClasses([]);
+    apiFetch(`/api/classes?schoolId=${superAdminSchoolFilterId}`)
+      .then((payload) => {
+        if (cancelled) return;
+        const uniqueClasses = new Map<number, Class>();
+        for (const klass of Array.isArray(payload) ? payload : []) {
+          if (klass?.id != null) uniqueClasses.set(Number(klass.id), klass);
+        }
+        setStudentFilterClasses(Array.from(uniqueClasses.values()));
+      })
+      .catch(() => {
+        if (!cancelled) setStudentFilterClasses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [superAdminSchoolFilterId, userRole]);
+
   // Teacher assignment state
   const [assignmentMode, setAssignmentMode] = useState<'list' | 'assign'>('list');
   const [assignmentSchoolFilter, setAssignmentSchoolFilter] = useState<number | null>(null);
@@ -4169,7 +4196,7 @@ export default function AdminView({
                   onChange={(e) => setTeacherClassFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
                 >
                   <option value="">Toutes les classes</option>
-                  {classesList
+                  {(studentFilterClasses ?? classesList)
                     .filter((c) => !superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId))
                     .map((cls) => (
                       <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
@@ -4444,7 +4471,7 @@ export default function AdminView({
                       onChange={(e) => setStudentClassFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
                     >
                       <option value="">Toutes les classes</option>
-                      {classesList
+                      {(studentFilterClasses ?? classesList)
                         .filter((c) => !superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId))
                         .sort((a, b) => a.name.localeCompare(b.name, 'fr'))
                         .map((cls) => (

@@ -41,6 +41,7 @@ export interface BulletinPdfData {
   id: number;
   studentId: number;
   studentName: string;
+  studentGender: string | null;
   classId: number;
   className: string;
   classStudentCount: number;
@@ -210,6 +211,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       studentId: bulletins.studentId,
       studentFirstName: students.firstName,
       studentLastName: students.lastName,
+      studentGender: students.gender,
       classId: bulletins.classId,
       className: classes.name,
       schoolName: schools.name,
@@ -368,6 +370,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       id: header.id,
       studentId: header.studentId,
       studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
+      studentGender: header.studentGender,
       classId: header.classId,
       className: header.className,
       classStudentCount: header.classStudentCount,
@@ -563,10 +566,34 @@ export const createBulletinPdfDocument = async (
       const title = `${template.labels.title} DU ${data.termName}`;
       const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
       drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
-      drawText(page, `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`, margin, cursorY - 22, 10, text, fontBold);
+      const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
+      const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
+      drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 22, 10, text, fontBold);
       page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-      drawText(page, 'NOM ET PRENOMS DE L ELEVE', margin + 12, cursorY - 51, 8, muted, fontBold);
-      drawText(page, data.studentName, margin + 185, cursorY - 51, 10.5, text, fontBold);
+      const studentLabel = 'NOM ET PRENOMS DE L ELEVE :';
+      const studentName = sanitizePdfText(data.studentName);
+      const studentLabelSize = 8;
+      const studentNameSize = 10.5;
+      const studentGap = 4;
+      const studentLabelWidth = fontRegular.widthOfTextAtSize(studentLabel, studentLabelSize);
+      const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
+      const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
+      drawText(page, studentLabel, tableX + 12, cursorY - 51, studentLabelSize, muted, fontRegular);
+      drawText(page, studentName, studentNameX, cursorY - 51, studentNameSize, text, fontBold);
+      if (data.studentGender?.trim()) {
+        const genderLabel = 'SEXE :';
+        const genderGap = 12;
+        const genderValue = sanitizePdfText(data.studentGender);
+        const genderLabelWidth = fontRegular.widthOfTextAtSize(genderLabel, studentLabelSize);
+        const genderValueWidth = fontBold.widthOfTextAtSize(genderValue, studentNameSize);
+        const genderBlockWidth = genderLabelWidth + studentGap + genderValueWidth;
+        const rightEdge = tableX + tableWidth - 12;
+        const rightAlignedGenderX = rightEdge - genderBlockWidth;
+        const minimumGenderX = studentNameX + studentNameWidth + genderGap;
+        const genderX = Math.max(rightAlignedGenderX, minimumGenderX);
+        drawText(page, genderLabel, genderX, cursorY - 51, studentLabelSize, muted, fontRegular);
+        drawText(page, genderValue, genderX + genderLabelWidth + studentGap, cursorY - 51, studentNameSize, text, fontBold);
+      }
       cursorY -= 96;
     }
     return { page, cursorY };

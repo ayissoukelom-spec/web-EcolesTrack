@@ -213,7 +213,9 @@ export default function App() {
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
-        '/api/classes',
+        currentRole !== 'super_admin' && currentSchoolId != null
+          ? `/api/classes?schoolId=${currentSchoolId}`
+          : '/api/classes',
         '/api/teachers',
         '/api/students',
         '/api/parents',

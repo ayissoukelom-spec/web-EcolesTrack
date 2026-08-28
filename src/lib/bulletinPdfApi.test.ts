@@ -19,6 +19,7 @@ const snapshotData: BulletinPdfData = {
   id: 1,
   studentId: 10,
   studentName: 'Alice Dupont',
+  studentGender: 'F',
   classId: 3,
   className: '3ème A',
   classStudentCount: 42,
@@ -218,11 +219,13 @@ describe('bulletin PDF API', () => {
       ...snapshotData,
       schoolName: 'ECOLE B',
       classStudentCount: 2,
+      studentGender: 'M',
       school: { name: 'ECOLE B', officialName: 'COLLEGE B', motto: 'Travail', phone: '+228 90000002' },
     });
     const legacySchool = await createBulletinPdfDocument({
       ...snapshotData,
       classStudentCount: 0,
+      studentGender: null,
       school: { name: 'ECOLE ANCIENNE' },
     });
 
@@ -244,6 +247,8 @@ describe('bulletin PDF API', () => {
     const textB = extractContent(schoolB);
     const legacyText = extractContent(legacySchool);
     expect(textA).toContain('EFFECTIF : 3');
+    expect(textA).toContain('SEXE :');
+    expect(textA).toMatch(/(?:^|\s)F(?:\s|$)/);
     expect(textA).toContain('COLLEGE A');
     expect(textA).toContain("DIRECTION RE GIONALE DE L'E DUCATION GRAND LOME");
     expect(textA).not.toContain('Excellence');
@@ -252,11 +257,14 @@ describe('bulletin PDF API', () => {
     expect(textA).not.toContain('District');
     expect(textA).not.toContain('COLLEGE B');
     expect(textB).toContain('EFFECTIF : 2');
+    expect(textB).toContain('SEXE :');
+    expect(textB).toMatch(/(?:^|\s)M(?:\s|$)/);
     expect(textB).toContain('COLLEGE B');
     expect(textB).toContain('Travail');
     expect(textB).not.toContain('COLLEGE A');
     expect(legacyText).toContain('EFFECTIF : 0');
     expect(legacyText).toContain('ECOLE ANCIENNE');
+    expect(legacyText).not.toContain('SEXE :');
     expect(legacyText).not.toContain('undefined');
     expect(legacyText).not.toContain('null');
   });

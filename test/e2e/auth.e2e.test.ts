@@ -1290,6 +1290,22 @@ describe('E2E security: auth & privilege checks', () => {
     expect(Array.isArray(res.body)).toBe(true);
   });
 
+  it('9. school admin and super admin see the same school class set', async () => {
+    const schoolAdminResponse = await request(app)
+      .get('/api/classes')
+      .set('Authorization', 'Bearer token-school');
+    const superAdminResponse = await request(app)
+      .get('/api/classes?schoolId=10')
+      .set('Authorization', 'Bearer token-super');
+
+    expect(schoolAdminResponse.status).toBe(200);
+    expect(superAdminResponse.status).toBe(200);
+    const schoolAdminClassIds = schoolAdminResponse.body.map((klass: any) => klass.id).sort((a: number, b: number) => a - b);
+    const superAdminClassIds = superAdminResponse.body.map((klass: any) => klass.id).sort((a: number, b: number) => a - b);
+    expect(superAdminClassIds).toEqual(schoolAdminClassIds);
+    expect(new Set(superAdminClassIds).size).toBe(superAdminClassIds.length);
+  });
+
   it('9. school_admin without schoolId is rejected', async () => {
     const res = await request(app)
       .get('/api/classes')
