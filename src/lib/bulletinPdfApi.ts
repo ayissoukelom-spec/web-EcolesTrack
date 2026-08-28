@@ -384,96 +384,167 @@ export const createBulletinPdfDocument = async (
   const text = hexToRgb(template.textColor);
 
   const pdf = await PDFDocument.create();
-  const page = pdf.addPage([595.28, 841.89]);
-  const width = page.getWidth();
-  const height = page.getHeight();
+  const pageSize: [number, number] = [595.28, 841.89];
   const margin = 40;
 
   const fontRegular = await pdf.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
-
-  page.drawRectangle({ x: 0, y: height - 90, width, height: 90, color: primary });
-  drawText(page, template.labels.title, margin, height - 52, 20, rgb(1, 1, 1), fontBold);
-  drawText(page, data.schoolName, margin, height - 76, 12, rgb(1, 1, 1), fontRegular);
-
+  let logo: any = null;
   if (template.logoFilePath) {
     try {
       const logoBytes = await readFile(template.logoFilePath);
-      const logo = template.logoFilePath.toLowerCase().endsWith('.png')
+      logo = template.logoFilePath.toLowerCase().endsWith('.png')
         ? await pdf.embedPng(logoBytes)
         : await pdf.embedJpg(logoBytes);
-      const scaled = logo.scale(0.2);
-      page.drawImage(logo, {
-        x: width - margin - scaled.width,
-        y: height - 80,
-        width: scaled.width,
-        height: scaled.height,
-      });
     } catch {
       // Ignore logo loading errors to keep PDF generation robust.
     }
   }
 
-  let cursorY = height - 120;
-  const lineGap = 18;
-
-  page.drawRectangle({ x: margin, y: cursorY - 62, width: width - margin * 2, height: 62, color: secondary });
-  drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, margin + 10, cursorY - 20, 11, text, fontRegular);
-  drawText(page, `${template.labels.term}: ${data.termName}`, margin + 10, cursorY - 38, 11, text, fontRegular);
-  drawText(page, `${template.labels.student}: ${data.studentName}`, margin + 250, cursorY - 20, 11, text, fontRegular);
-  drawText(page, `${template.labels.class}: ${data.className}`, margin + 250, cursorY - 38, 11, text, fontRegular);
-
-  cursorY -= 90;
-
+  const pages: any[] = [];
+  const white = rgb(1, 1, 1);
+  const muted = hexToRgb('#475569');
+  const lightBorder = hexToRgb('#cbd5e1');
+  const softBackground = hexToRgb('#f8fafc');
   const tableX = margin;
-  const colSubject = 220;
-  const colCoef = 70;
-  const colAvg = 80;
-  const colComment = width - margin * 2 - colSubject - colCoef - colAvg;
-  const tableWidth = width - margin * 2;
+  const tableWidth = pageSize[0] - margin * 2;
+  const columns = [
+    { label: template.labels.subject, width: 205 },
+    { label: template.labels.coefficient, width: 52 },
+    { label: template.labels.subjectAverage, width: 78 },
+    { label: template.labels.rank, width: 48 },
+    { label: template.labels.teacherComment, width: tableWidth - 205 - 52 - 78 - 48 },
+  ];
 
-  page.drawRectangle({ x: tableX, y: cursorY, width: tableWidth, height: 22, color: primary });
-  drawText(page, template.labels.subject, tableX + 8, cursorY + 6, 10, rgb(1, 1, 1), fontBold);
-  drawText(page, template.labels.coefficient, tableX + colSubject + 8, cursorY + 6, 10, rgb(1, 1, 1), fontBold);
-  drawText(page, template.labels.subjectAverage, tableX + colSubject + colCoef + 8, cursorY + 6, 10, rgb(1, 1, 1), fontBold);
-  drawText(page, template.labels.teacherComment, tableX + colSubject + colCoef + colAvg + 8, cursorY + 6, 10, rgb(1, 1, 1), fontBold);
+  const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => {
+    const words = sanitizePdfText(value || '-').split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth || !current) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+    return lines.length > 0 ? lines : ['-'];
+  };
 
-  cursorY -= 24;
+  const drawWrappedText = (page: any, value: string, x: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines = 2) => {
+    const lines = wrapText(value, maxWidth, font, size).slice(0, maxLines);
+    lines.forEach((line, index) => drawText(page, line, x, y - index * (size + 2), size, color, font));
+  };
+
+  const drawHeader = (page: any, includeStudentBlock: boolean) => {
+    const width = page.getWidth();
+    const height = page.getHeight();
+    page.drawRectangle({ x: 0, y: height - 112, width, height: 112, color: primary });
+    if (logo) {
+      const scaled = logo.scale(0.16);
+      page.drawImage(logo, {
+        x: width - margin - scaled.width,
+        y: height - 92,
+        width: scaled.width,
+        height: scaled.height,
+      });
+    }
+    drawText(page, data.schoolName, margin, height - 42, 16, white, fontBold);
+    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, margin, height - 65, 10, white, fontRegular);
+    drawText(page, `${template.labels.term}: ${data.termName}`, margin, height - 82, 10, white, fontRegular);
+    drawText(page, 'BULLETIN DE NOTES', width / 2 - 76, height - 104, 13, white, fontBold);
+
+    if (includeStudentBlock) {
+      const infoY = height - 142;
+      page.drawRectangle({ x: margin, y: infoY - 62, width: tableWidth, height: 62, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
+      drawText(page, template.labels.student, margin + 12, infoY - 20, 8, muted, fontBold);
+      drawText(page, data.studentName, margin + 12, infoY - 37, 11, text, fontBold);
+      drawText(page, template.labels.class, margin + 275, infoY - 20, 8, muted, fontBold);
+      drawText(page, data.className, margin + 275, infoY - 37, 11, text, fontBold);
+      return infoY - 82;
+    }
+    return height - 132;
+  };
+
+  const drawTableHeader = (page: any, y: number) => {
+    page.drawRectangle({ x: tableX, y: y - 20, width: tableWidth, height: 20, color: primary });
+    let x = tableX;
+    columns.forEach((column) => {
+      drawText(page, column.label, x + 7, y - 14, 8.5, white, fontBold);
+      x += column.width;
+    });
+    return y - 24;
+  };
+
+  const createPage = (includeStudentBlock: boolean) => {
+    const page = pdf.addPage(pageSize);
+    pages.push(page);
+    return { page, cursorY: drawHeader(page, includeStudentBlock) };
+  };
+
+  let { page, cursorY } = createPage(true);
+  const summaryY = cursorY;
+  page.drawRectangle({ x: tableX, y: summaryY - 78, width: tableWidth, height: 70, color: secondary, borderColor: lightBorder, borderWidth: 0.7 });
+  drawText(page, template.labels.average, tableX + 14, summaryY - 22, 9, muted, fontBold);
+  drawText(page, data.average == null ? '-' : data.average.toFixed(2), tableX + 14, summaryY - 53, 24, primary, fontBold);
+  drawText(page, 'Total points', tableX + 180, summaryY - 22, 8, muted, fontBold);
+  drawText(page, data.totalPoints.toFixed(2), tableX + 180, summaryY - 43, 12, text, fontBold);
+  drawText(page, 'Total coefficients', tableX + 180, summaryY - 59, 8, muted, fontBold);
+  drawText(page, data.totalCoefficients.toFixed(2), tableX + 180, summaryY - 75, 10, text, fontBold);
+  drawText(page, template.labels.rank, tableX + 330, summaryY - 22, 8, muted, fontBold);
+  drawText(page, data.rank == null ? '-' : String(data.rank), tableX + 330, summaryY - 43, 12, text, fontBold);
+  drawText(page, template.labels.mention, tableX + 410, summaryY - 22, 8, muted, fontBold);
+  drawWrappedText(page, data.mention || '-', tableX + 410, summaryY - 43, 88, 10, text, fontBold, 2);
+
+  cursorY = drawTableHeader(page, summaryY - 94);
   for (const line of data.lines) {
-    page.drawRectangle({ x: tableX, y: cursorY, width: tableWidth, height: 22, borderColor: secondary, borderWidth: 0.6 });
-    drawText(page, line.subjectName, tableX + 8, cursorY + 6, 9, text, fontRegular);
-    drawText(page, String(line.coefficient), tableX + colSubject + 8, cursorY + 6, 9, text, fontRegular);
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), tableX + colSubject + colCoef + 8, cursorY + 6, 9, text, fontRegular);
-    drawText(page, line.teacherComment || '-', tableX + colSubject + colCoef + colAvg + 8, cursorY + 6, 9, text, fontRegular);
-    cursorY -= 22;
-    if (cursorY < 160) break;
+    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 8.5).slice(0, 2);
+    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 8.5).slice(0, 2);
+    const rowHeight = Math.max(26, Math.max(subjectLines.length, commentLines.length) * 11 + 8);
+    if (cursorY - rowHeight < 82) {
+      ({ page, cursorY } = createPage(false));
+      cursorY = drawTableHeader(page, cursorY);
+    }
+    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: data.lines.indexOf(line) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
+    let x = tableX;
+    drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 8.5, text, fontRegular, 2);
+    x += columns[0].width;
+    drawText(page, String(line.coefficient), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[1].width;
+    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[2].width;
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[3].width;
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[4].width - 14, 8.5, text, fontRegular, 2);
+    cursorY -= rowHeight;
   }
 
-  cursorY -= 16;
-  drawText(page, `${template.labels.average}: ${data.average == null ? '-' : data.average.toFixed(2)}`, margin, cursorY, 11, text, fontBold);
-  cursorY -= lineGap;
-  drawText(page, `${template.labels.rank}: ${data.rank ?? '-'}`, margin, cursorY, 11, text, fontRegular);
-  cursorY -= lineGap;
-  drawText(page, `${template.labels.mention}: ${data.mention ?? '-'}`, margin, cursorY, 11, text, fontRegular);
-  cursorY -= lineGap;
-  drawText(page, `${template.labels.appreciation}: ${data.appreciation ?? '-'}`, margin, cursorY, 11, text, fontRegular);
-  cursorY -= lineGap;
-  drawText(page, `${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, cursorY, 10, text, fontRegular);
+  const appreciationText = data.appreciation || '-';
+  const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 9);
+  const appreciationHeight = 34 + Math.min(appreciationLines.length, 5) * 12;
+  if (cursorY - appreciationHeight < 82) {
+    ({ page, cursorY } = createPage(false));
+  }
+  page.drawRectangle({ x: tableX, y: cursorY - appreciationHeight, width: tableWidth, height: appreciationHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
+  drawText(page, template.labels.appreciation, tableX + 12, cursorY - 17, 9, primary, fontBold);
+  drawWrappedText(page, appreciationText, tableX + 12, cursorY - 34, tableWidth - 24, 9, text, fontRegular, 5);
+  cursorY -= appreciationHeight + 58;
+  if (cursorY < 82) {
+    ({ page, cursorY } = createPage(false));
+  }
+  page.drawLine({ start: { x: margin, y: cursorY }, end: { x: margin + 190, y: cursorY }, color: lightBorder, thickness: 0.8 });
+  page.drawLine({ start: { x: page.getWidth() - margin - 190, y: cursorY }, end: { x: page.getWidth() - margin, y: cursorY }, color: lightBorder, thickness: 0.8 });
+  drawText(page, template.labels.signatureSchool, margin, cursorY - 16, 8.5, muted, fontRegular);
+  drawText(page, template.labels.signatureParent, page.getWidth() - margin - 190, cursorY - 16, 8.5, muted, fontRegular);
 
-  page.drawLine({
-    start: { x: margin, y: 100 },
-    end: { x: margin + 190, y: 100 },
-    color: secondary,
-    thickness: 1,
-  });
-  page.drawLine({
-    start: { x: width - margin - 190, y: 100 },
-    end: { x: width - margin, y: 100 },
-    color: secondary,
-    thickness: 1,
-  });
-  drawText(page, template.labels.signatureSchool, margin, 84, 10, text, fontRegular);
-  drawText(page, template.labels.signatureParent, width - margin - 190, 84, 10, text, fontRegular);
+  for (const currentPage of pages) {
+    const width = currentPage.getWidth();
+    currentPage.drawLine({ start: { x: margin, y: 54 }, end: { x: width - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
+    drawText(currentPage, `${data.schoolName} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
+    drawText(currentPage, `Page ${pages.indexOf(currentPage) + 1}/${pages.length}`, width - margin - 55, 38, 7.5, muted, fontRegular);
+  }
 
   return pdf.save({ useObjectStreams: false });
 };

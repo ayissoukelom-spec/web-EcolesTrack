@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ChevronDown, ShieldCheck } from 'lucide-react';
 import type {
   BulletinDetail,
   BulletinListFilters,
@@ -85,6 +85,10 @@ export default function BulletinsView({
   const [parentKnownItems, setParentKnownItems] = useState<BulletinListItem[]>([]);
   const [lastGeneratedClassSummary, setLastGeneratedClassSummary] = useState<Array<{ id: number; studentName: string; className: string; termName: string }>>([]);
   const [lastGeneratedClassIds, setLastGeneratedClassIds] = useState<number[]>([]);
+  const [evaluationValidationOverrides, setEvaluationValidationOverrides] = useState<Record<number, boolean>>({});
+  const [validationBusyId, setValidationBusyId] = useState<number | null>(null);
+  const [openEvaluationSubjects, setOpenEvaluationSubjects] = useState<Record<string, boolean>>({});
+  const allEvaluationsCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   const visibleClasses = useMemo(() => {
     if (!isTeacher) return classesList;
@@ -195,6 +199,88 @@ export default function BulletinsView({
     return options.sort((a, b) => a.id - b.id);
   }, [evaluationsList, termsFromApi]);
 
+  const generateEvaluations = useMemo(() => {
+    const classId = generateClassId ? Number(generateClassId) : null;
+    const termId = generateTermId ? Number(generateTermId) : null;
+    if (classId == null || termId == null) return [];
+    const selectedTerm = termsFromApi.find((term) => term.id === termId);
+    return evaluationsList.filter((evaluation) => {
+      if (evaluation.classId !== classId) return false;
+      if (evaluation.termId != null) return evaluation.termId === termId;
+      if (!selectedTerm?.startDate || !selectedTerm.endDate) return false;
+      const date = String(evaluation.date || '').slice(0, 10);
+      return date >= selectedTerm.startDate && date <= selectedTerm.endDate;
+    });
+  }, [evaluationsList, generateClassId, generateTermId, termsFromApi]);
+
+  const evaluationGroups = useMemo(() => {
+    const groups = new Map<string, Evaluation[]>();
+    generateEvaluations.forEach((evaluation) => {
+      const subject = String(evaluation.subject || '').trim() || 'Matiere non renseignee';
+      const group = groups.get(subject) ?? [];
+      group.push(evaluation);
+      groups.set(subject, group);
+    });
+    return Array.from(groups.entries()).map(([subject, evaluations]) => ({ subject, evaluations }));
+  }, [generateEvaluations]);
+
+  const isEvaluationValidated = (evaluation: Evaluation) =>
+    evaluationValidationOverrides[evaluation.id] ?? evaluation.countInBulletin !== false;
+
+  const missingGradeCount = (evaluation: Evaluation) => {
+    const classStudents = generateStudents.filter((student) => student.classId === evaluation.classId);
+    const gradedStudentIds = new Set(
+      gradesList.filter((grade) => grade.evaluationId === evaluation.id).map((grade) => grade.studentId),
+    );
+    return Math.max(0, classStudents.length - classStudents.filter((student) => gradedStudentIds.has(student.id)).length);
+  };
+
+  const handleToggleEvaluation = async (evaluation: Evaluation) => {
+    const nextValue = !isEvaluationValidated(evaluation);
+    setValidationBusyId(evaluation.id);
+    try {
+      await apiFetch(`/api/evaluations/${evaluation.id}/bulletin-status`, {
+        method: 'PUT',
+        body: JSON.stringify({ countInBulletin: nextValue }),
+      });
+      setEvaluationValidationOverrides((previous) => ({ ...previous, [evaluation.id]: nextValue }));
+    } catch (error: any) {
+      generateHook.setError(error?.message || 'Impossible de modifier la validation de l evaluation.');
+    } finally {
+      setValidationBusyId(null);
+    }
+  };
+
+  const setEvaluationsValidation = async (evaluations: Evaluation[], countInBulletin: boolean) => {
+    if (evaluations.length === 0) return;
+    setValidationBusyId(evaluations[0].id);
+    try {
+      await Promise.all(evaluations.map((evaluation) => apiFetch(`/api/evaluations/${evaluation.id}/bulletin-status`, {
+        method: 'PUT',
+        body: JSON.stringify({ countInBulletin }),
+      })));
+      setEvaluationValidationOverrides((previous) => {
+        const next = { ...previous };
+        evaluations.forEach((evaluation) => {
+          next[evaluation.id] = countInBulletin;
+        });
+        return next;
+      });
+    } catch (error: any) {
+      generateHook.setError(error?.message || 'Impossible de modifier la validation des evaluations.');
+    } finally {
+      setValidationBusyId(null);
+    }
+  };
+
+  const selectedEvaluationCount = generateEvaluations.filter(isEvaluationValidated).length;
+
+  useEffect(() => {
+    if (!allEvaluationsCheckboxRef.current) return;
+    allEvaluationsCheckboxRef.current.indeterminate = selectedEvaluationCount > 0
+      && selectedEvaluationCount < generateEvaluations.length;
+  }, [generateEvaluations.length, selectedEvaluationCount]);
+
   const suggestedParentStudentId = useMemo(() => {
     if (!isParent) return null;
     const parentName = String(simulated?.name || '').trim().toLowerCase();
@@ -265,6 +351,7 @@ export default function BulletinsView({
     const notes = evaluationsList
       .filter((ev) => {
         if (ev.classId !== detail.classId) return false;
+        if (ev.countInBulletin === false) return false;
 
         if (ev.termId != null) return ev.termId === detail.termId;
 
@@ -528,6 +615,98 @@ export default function BulletinsView({
         onParentLookupSubmit={handleParentLookupSubmit}
         onReloadParentKnown={loadParentCached}
       />
+
+      {canGenerate && generateEvaluations.length > 0 && (
+        <section className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-700">Evaluations a prendre en compte</h3>
+              <p className="text-xs text-slate-500">La validation s applique a toute la classe selectionnee.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-indigo-700">
+              <input
+                ref={allEvaluationsCheckboxRef}
+                type="checkbox"
+                checked={selectedEvaluationCount === generateEvaluations.length}
+                disabled={validationBusyId != null}
+                onChange={() => setEvaluationsValidation(generateEvaluations, selectedEvaluationCount !== generateEvaluations.length)}
+              />
+              Toutes les evaluations
+            </label>
+          </div>
+          <div className="space-y-2">
+            {evaluationGroups.map(({ subject, evaluations }) => {
+              const selectedCount = evaluations.filter(isEvaluationValidated).length;
+              const isOpen = openEvaluationSubjects[subject] ?? true;
+              const allSelected = selectedCount === evaluations.length;
+              return (
+                <div key={subject} className="rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 bg-slate-50 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setOpenEvaluationSubjects((previous) => ({ ...previous, [subject]: !isOpen }))}
+                      className="flex min-w-0 items-center gap-2 text-left text-sm font-semibold text-slate-700"
+                      aria-expanded={isOpen}
+                    >
+                      <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? '' : '-rotate-90'}`} />
+                      <span className="truncate">{subject}</span>
+                    </button>
+                    <span className="shrink-0 text-xs font-semibold text-slate-500">
+                      {selectedCount}/{evaluations.length} selectionnees
+                    </span>
+                  </div>
+                  {isOpen && (
+                    <div className="space-y-2 p-2">
+                      <div className="flex flex-wrap gap-2 px-1">
+                        <button
+                          type="button"
+                          disabled={allSelected || validationBusyId != null}
+                          onClick={() => setEvaluationsValidation(evaluations, true)}
+                          className="rounded-lg border border-emerald-200 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-50"
+                        >
+                          Tout selectionner
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedCount === 0 || validationBusyId != null}
+                          onClick={() => setEvaluationsValidation(evaluations, false)}
+                          className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 disabled:opacity-50"
+                        >
+                          Tout deselectionner
+                        </button>
+                      </div>
+                      {evaluations.map((evaluation) => {
+                        const validated = isEvaluationValidated(evaluation);
+                        const missing = missingGradeCount(evaluation);
+                        const gradeCount = gradesList.filter((grade) => grade.evaluationId === evaluation.id).length;
+                        const classStudentCount = generateStudents.filter((student) => student.classId === evaluation.classId).length;
+                        return (
+                          <label key={evaluation.id} className="flex items-start gap-3 rounded-lg border border-slate-100 p-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={validated}
+                              disabled={validationBusyId != null}
+                              onChange={() => handleToggleEvaluation(evaluation)}
+                              className="mt-1"
+                            />
+                            <span className="min-w-0 text-sm text-slate-700">
+                              <span className="block font-semibold">{evaluation.title || 'Evaluation sans titre'}</span>
+                              <span className="block text-xs text-slate-500">{evaluation.date} · Coef. {evaluation.coefficient}</span>
+                              <span className={`block text-xs ${missing > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                {gradeCount}/{classStudentCount} notes{missing > 0 ? ` · ${missing} manquante(s)` : ''}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {generateSchoolId && (schoolScopedClassesLoading || schoolScopedClassesError) && (
         <p className="text-xs text-slate-500">

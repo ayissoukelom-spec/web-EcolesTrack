@@ -118,6 +118,24 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.map((line) => line.subjectName).sort()).toEqual(['Français', 'Math']);
   });
 
+  it('ne prend en compte que les évaluations validées et ignore les notes absentes', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      evaluations: baseState.evaluations.map((evaluation) => ({
+        ...evaluation,
+        countInBulletin: evaluation.id === 1,
+      })),
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(result.average).toBe(14);
+    expect(result.totalCoefficients).toBe(2);
+    expect(state.bulletinLines.map((line) => line.subjectName)).toEqual(['Math']);
+    expect(state.bulletinLines.some((line) => line.subjectName === 'Français')).toBe(false);
+    expect(state.bulletinLines.some((line) => line.subjectName === 'Histoire')).toBe(false);
+  });
+
   it('n enregistre rien si une erreur survient pendant les lignes (transaction atomique)', async () => {
     const { persistence, state } = createFakePersistence(baseState, true);
 

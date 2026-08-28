@@ -5665,6 +5665,7 @@ export async function createApp() {
           title: evaluations.title,
           coefficient: evaluations.coefficient,
           maxScore: evaluations.maxScore,
+          countInBulletin: evaluations.countInBulletin,
           date: evaluations.date,
           createdAt: evaluations.createdAt,
           schoolId: classes.schoolId,
@@ -5719,6 +5720,43 @@ export async function createApp() {
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to load evaluations list' });
+    }
+  });
+
+  app.put('/api/evaluations/:id/bulletin-status', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Only school administrators can validate evaluations' });
+      }
+
+      const evaluationId = Number(req.params.id);
+      const countInBulletin = req.body?.countInBulletin;
+      if (!Number.isInteger(evaluationId) || evaluationId <= 0 || typeof countInBulletin !== 'boolean') {
+        return res.status(400).json({ error: 'evaluation id and countInBulletin are required' });
+      }
+
+      const [evaluation] = await db.select({ id: evaluations.id, classId: evaluations.classId })
+        .from(evaluations).where(eq(evaluations.id, evaluationId));
+      if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
+
+      if (actor.role === 'school_admin' && actor.schoolId != null) {
+        const [classRecord] = await db.select({ schoolId: classes.schoolId })
+          .from(classes).where(eq(classes.id, evaluation.classId));
+        const allowed = classRecord?.schoolId === actor.schoolId
+          || await isApprovedClassForSchool(evaluation.classId, actor.schoolId);
+        if (!allowed) return res.status(403).json({ error: 'Cannot validate an evaluation for another school' });
+      }
+
+      const [updated] = await db.update(evaluations)
+        .set({ countInBulletin })
+        .where(eq(evaluations.id, evaluationId))
+        .returning({ id: evaluations.id, countInBulletin: evaluations.countInBulletin });
+      return res.json(updated);
+    } catch (err: any) {
+      console.error('PUT /api/evaluations/:id/bulletin-status error:', err);
+      return res.status(500).json({ error: 'Failed to update evaluation bulletin status' });
     }
   });
 
@@ -5942,6 +5980,7 @@ export async function createApp() {
         title,
         coefficient: coefficient ? parseInt(coefficient) : 1,
         maxScore: maxScore ? parseInt(maxScore) : 20,
+        countInBulletin: false,
         date,
       }).returning();
 
