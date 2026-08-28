@@ -148,6 +148,7 @@ export const students = pgTable('students', {
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   firstName: text('first_name').notNull(),
   lastName: text('last_name').notNull(),
+  matricule: text('matricule').notNull().default('').unique('students_matricule_unique'),
   birthDate: text('birth_date'), // YYYY-MM-DD
   gender: text('gender'),
   parentId: integer('parent_id').references(() => parents.id, { onDelete: 'set null' }),

@@ -3,7 +3,7 @@ import * as dotenv from "dotenv";
 
 // Load environment variables
 dotenv.config({
-  path: ".env.render"
+  path: ".env"
 });
 
 const sqlHost = process.env.SQL_HOST;

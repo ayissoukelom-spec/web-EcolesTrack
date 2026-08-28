@@ -21,6 +21,7 @@ const snapshotData: BulletinPdfData = {
   id: 1,
   studentId: 10,
   studentName: 'Alice Dupont',
+  studentMatricule: '00001N',
   studentGender: 'F',
   studentStatus: 'Doublant',
   classId: 3,
@@ -306,6 +307,7 @@ describe('bulletin PDF API', () => {
     const textB = extractContent(schoolB);
     const legacyText = extractContent(legacySchool);
     expect(textA).toContain('EFFECTIF : 3');
+    expect(textA).toContain('N° Mle : 00001N');
     expect(textA).toContain('SEXE :');
     expect(textA).toMatch(/(?:^|\s)F(?:\s|$)/);
     expect(textA).toContain('COLLEGE A');

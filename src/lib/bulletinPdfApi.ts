@@ -60,6 +60,7 @@ export interface BulletinPdfData {
   id: number;
   studentId: number;
   studentName: string;
+  studentMatricule?: string | null;
   studentGender: string | null;
   studentStatus: string | null;
   classId: number;
@@ -219,7 +220,7 @@ const sanitizePdfText = (value: string): string => {
     .normalize('NFKD')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/[^\x20-\x7E\u00B0]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 };
@@ -231,6 +232,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       studentId: bulletins.studentId,
       studentFirstName: students.firstName,
       studentLastName: students.lastName,
+      studentMatricule: students.matricule,
       studentGender: students.gender,
       studentStatus: studentAcademicYearStatuses.status,
       classId: bulletins.classId,
@@ -398,6 +400,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       id: header.id,
       studentId: header.studentId,
       studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
+      studentMatricule: header.studentMatricule,
       studentGender: header.studentGender,
       studentStatus: header.studentStatus,
       classId: header.classId,
@@ -607,8 +610,14 @@ export const createBulletinPdfDocument = async (
       const studentLabelWidth = fontRegular.widthOfTextAtSize(studentLabel, studentLabelSize);
       const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
       const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
+      const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
       drawText(page, studentLabel, tableX + 12, cursorY - 51, studentLabelSize, muted, fontRegular);
       drawText(page, studentName, studentNameX, cursorY - 51, studentNameSize, text, fontBold);
+      if (data.studentMatricule?.trim()) {
+        const matriculeText = `N° Mle : ${sanitizePdfText(data.studentMatricule)}`;
+        const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
+        drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67, studentLabelSize, text, fontRegular);
+      }
       const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
       const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
       const genderValue = data.studentGender?.trim() ? sanitizePdfText(data.studentGender) : null;

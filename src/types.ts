@@ -119,6 +119,7 @@ export interface Student {
   id: number;
   schoolId: number;
   classId: number;
+  matricule?: string;
   className: string;
   yearId?: number;
   yearName?: string;

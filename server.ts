@@ -27,7 +27,7 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
@@ -4362,6 +4362,7 @@ export async function createApp() {
           birthDate: students.birthDate,
           schoolId: students.schoolId,
           classId: students.classId,
+          matricule: students.matricule,
           className: classes.name,
           yearId: academicYears.id,
           yearName: academicYears.name,
@@ -7083,6 +7084,7 @@ export async function startServer() {
   try {
     await seedDatabaseIfEmpty();
     await ensureSchoolsTableSchema();
+    await ensureStudentMatriculesSchema();
     await ensureStudentAcademicYearStatusesTableExists();
     await ensureSchoolClassesTableExists();
     await ensureUsersTableSchema();
