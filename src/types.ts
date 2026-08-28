@@ -5,6 +5,14 @@ export interface School {
   name: string;
   address?: string;
   phone?: string;
+  officialName?: string | null;
+  abbreviation?: string | null;
+  motto?: string | null;
+  postalBox?: string | null;
+  email?: string | null;
+  city?: string | null;
+  region?: string | null;
+  educationDirection?: string | null;
   studentsCreationLocked?: boolean;
   createdAt?: string;
 }

@@ -1988,6 +1988,14 @@ export async function createApp() {
       const name = String(req.body?.name || '').trim();
       const address = req.body?.address != null ? String(req.body.address).trim() : '';
       const phone = String(req.body?.phone || '').trim();
+      const officialName = req.body?.officialName != null ? String(req.body.officialName).trim() : null;
+      const abbreviation = req.body?.abbreviation != null ? String(req.body.abbreviation).trim() : null;
+      const motto = req.body?.motto != null ? String(req.body.motto).trim() : null;
+      const postalBox = req.body?.postalBox != null ? String(req.body.postalBox).trim() : null;
+      const email = req.body?.email != null ? String(req.body.email).trim() : null;
+      const city = req.body?.city != null ? String(req.body.city).trim() : null;
+      const region = req.body?.region != null ? String(req.body.region).trim() : null;
+      const educationDirection = req.body?.educationDirection != null ? String(req.body.educationDirection).trim() : null;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 
@@ -2021,7 +2029,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -2237,6 +2245,7 @@ export async function createApp() {
       const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
       const phoneRaw = req.body?.phone;
       const phone = phoneRaw != null ? String(phoneRaw).trim() : undefined;
+      const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection'] as const;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 
@@ -2270,9 +2279,11 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin can modify schools (school_admin should not be able to modify school info)
-      if (actor.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Only super admin can modify school information' });
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Only school administrators can modify school information' });
+      }
+      if (actor.role === 'school_admin' && actor.schoolId !== id) {
+        return res.status(403).json({ error: 'Cannot modify another school' });
       }
 
       // Fetch existing school to track changes
@@ -2284,6 +2295,9 @@ export async function createApp() {
       const updatePayload: any = { name };
       if (address !== undefined) updatePayload.address = address;
       if (phone !== undefined) updatePayload.phone = phone;
+      administrativeFields.forEach((field) => {
+        if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
+      });
       // allow updating the student creation lock (accept snake_case or camelCase)
       const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
       if (studentsCreationLockedRaw !== undefined) {

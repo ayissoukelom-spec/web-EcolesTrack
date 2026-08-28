@@ -362,7 +362,7 @@ interface AdminViewProps {
   usersList: User[];
   subjectsList?: any[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
@@ -485,7 +485,7 @@ export default function AdminView({
     { id: 'lycee', name: 'Lycée (2nde à Tle)', classNames: ['2nde', '1ère', 'Tle'] },
   ];
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [classGroups, setClassGroups] = useState<any[]>(() => {
     if (typeof window === 'undefined') return defaultClassGroups;
     try {
@@ -534,7 +534,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', classNames: [] as string[], subjectNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
@@ -1071,6 +1071,14 @@ export default function AdminView({
           name: normalizedName,
           address: String(schoolForm.address || '').trim(),
           phone: fullPhone,
+          officialName: String(schoolForm.officialName || '').trim() || null,
+          abbreviation: String(schoolForm.abbreviation || '').trim() || null,
+          motto: String(schoolForm.motto || '').trim() || null,
+          postalBox: String(schoolForm.postalBox || '').trim() || null,
+          email: String(schoolForm.email || '').trim() || null,
+          city: String(schoolForm.city || '').trim() || null,
+          region: String(schoolForm.region || '').trim() || null,
+          educationDirection: String(schoolForm.educationDirection || '').trim() || null,
           classNames: finalClassNames,
           subjectNames: finalSubjectNames,
         });
@@ -1079,6 +1087,14 @@ export default function AdminView({
           address: '',
           phone: '',
           phoneDigits: '',
+          officialName: '',
+          abbreviation: '',
+          motto: '',
+          postalBox: '',
+          email: '',
+          city: '',
+          region: '',
+          educationDirection: '',
           selectedClassNames: [],
           selectedClassGroups: [],
           manuallySelectedClassNames: [],
@@ -2011,6 +2027,31 @@ export default function AdminView({
                       />
                     </div>
                   </div>
+                  <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {[
+                        ['officialName', 'Nom officiel'],
+                        ['abbreviation', 'District'],
+                        ['motto', 'Devise'],
+                        ['postalBox', 'Boîte postale'],
+                        ['email', 'Email'],
+                        ['city', 'Ville'],
+                        ['region', 'Région'],
+                        ['educationDirection', 'Direction régionale de l’éducation'],
+                      ].map(([field, label]) => (
+                        <label key={field} className="text-xs font-semibold text-slate-600">
+                          {label}
+                          <input
+                            type="text"
+                            value={editSchoolForm[field] || ''}
+                            onChange={(e) => setEditSchoolForm({ ...editSchoolForm, [field]: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classes déjà assignées</label>
                     <div className="flex flex-wrap gap-2">
@@ -2128,6 +2169,14 @@ export default function AdminView({
                         const editPayload: any = {
                           name: editSchoolForm.name.trim(),
                           address: editSchoolForm.address.trim(),
+                          officialName: editSchoolForm.officialName.trim() || null,
+                          abbreviation: editSchoolForm.abbreviation.trim() || null,
+                          motto: editSchoolForm.motto.trim() || null,
+                          postalBox: editSchoolForm.postalBox.trim() || null,
+                          email: editSchoolForm.email.trim() || null,
+                          city: editSchoolForm.city.trim() || null,
+                          region: editSchoolForm.region.trim() || null,
+                          educationDirection: editSchoolForm.educationDirection.trim() || null,
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
                         };
                         const subjectNames = editSchoolForm.subjectNames?.filter((name) => name.trim() !== '');
@@ -3605,6 +3654,14 @@ export default function AdminView({
                       address: '',
                       phone: '',
                       phoneDigits: '',
+                      officialName: '',
+                      abbreviation: '',
+                      motto: '',
+                      postalBox: '',
+                      email: '',
+                      city: '',
+                      region: '',
+                      educationDirection: '',
                       selectedClassNames: [],
                       selectedClassGroups: [],
                       manuallySelectedClassNames: [],
@@ -3643,13 +3700,13 @@ export default function AdminView({
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.address || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.phone || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-right">
-                        {userRole === 'super_admin' ? (
+                        {userRole === 'super_admin' || (userRole === 'school_admin' && sc.id === currentSchoolId) ? (
                           <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => {
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, classNames: [], subjectNames: [] });
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}

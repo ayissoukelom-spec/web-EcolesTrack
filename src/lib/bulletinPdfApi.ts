@@ -44,6 +44,20 @@ export interface BulletinPdfData {
   classId: number;
   className: string;
   schoolName: string;
+  school?: {
+    name: string;
+    officialName?: string | null;
+    abbreviation?: string | null;
+    motto?: string | null;
+    address?: string | null;
+    postalBox?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    city?: string | null;
+    region?: string | null;
+    educationDirection?: string | null;
+    logo?: string | null;
+  };
   schoolYearId: number;
   schoolYearName: string;
   termId: number;
@@ -198,6 +212,19 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       classId: bulletins.classId,
       className: classes.name,
       schoolName: schools.name,
+      school: {
+        name: schools.name,
+        officialName: schools.officialName,
+        abbreviation: schools.abbreviation,
+        motto: schools.motto,
+        address: schools.address,
+        postalBox: schools.postalBox,
+        phone: schools.phone,
+        email: schools.email,
+        city: schools.city,
+        region: schools.region,
+        educationDirection: schools.educationDirection,
+      },
       schoolYearId: bulletins.schoolYearId,
       schoolYearName: academicYears.name,
       termId: bulletins.termId,
@@ -331,6 +358,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       classId: header.classId,
       className: header.className,
       schoolName: header.schoolName,
+      school: header.school ? { ...header.school, logo: null } : { name: header.schoolName },
       schoolYearId: header.schoolYearId,
       schoolYearName: header.schoolYearName,
       termId: header.termId,
@@ -402,6 +430,7 @@ export const createBulletinPdfDocument = async (
   }
 
   const pages: any[] = [];
+  const school = data.school ?? { name: data.schoolName };
   const white = rgb(1, 1, 1);
   const muted = hexToRgb('#475569');
   const lightBorder = hexToRgb('#cbd5e1');
@@ -438,38 +467,68 @@ export const createBulletinPdfDocument = async (
     lines.forEach((line, index) => drawText(page, line, x, y - index * (size + 2), size, color, font));
   };
 
-  const drawHeader = (page: any, includeStudentBlock: boolean) => {
+  const drawCenteredWrappedText = (page: any, value: string, centerX: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines = 2) => {
+    const lines = wrapText(value, maxWidth, font, size).slice(0, maxLines);
+    lines.forEach((line, index) => {
+      const lineWidth = font.widthOfTextAtSize(sanitizePdfText(line), size);
+      drawText(page, line, centerX - lineWidth / 2, y - index * (size + 2), size, color, font);
+    });
+  };
+
+  const drawCenteredSingleLine = (page: any, value: string, centerX: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any) => {
+    let size = initialSize;
+    const safeValue = sanitizePdfText(value);
+    while (size > minSize && font.widthOfTextAtSize(safeValue, size) > maxWidth) {
+      size -= 0.2;
+    }
+    if (font.widthOfTextAtSize(safeValue, size) <= maxWidth) {
+      drawText(page, value, centerX - font.widthOfTextAtSize(safeValue, size) / 2, y, size, color, font);
+      return;
+    }
+    drawCenteredWrappedText(page, value, centerX, y, maxWidth, minSize, color, font, 2);
+  };
+
+  const drawHeader = (page: any, _includeStudentBlock: boolean) => {
     const width = page.getWidth();
     const height = page.getHeight();
-    page.drawRectangle({ x: 0, y: height - 112, width, height: 112, color: white });
-    page.drawLine({ start: { x: margin, y: height - 16 }, end: { x: width - margin, y: height - 16 }, color: primary, thickness: 1.2 });
-    page.drawLine({ start: { x: margin, y: height - 108 }, end: { x: width - margin, y: height - 108 }, color: primary, thickness: 1.2 });
+    const headerTop = height - 18;
+    const headerBottom = height - 132;
+    const leftX = margin + 6;
+    const centerX = width / 2;
+    const rightX = width - margin - 145;
+    page.drawRectangle({ x: margin, y: headerBottom, width: tableWidth, height: 114, color: white, borderColor: lightBorder, borderWidth: 0.8 });
+    page.drawLine({ start: { x: margin, y: headerTop }, end: { x: width - margin, y: headerTop }, color: primary, thickness: 1.2 });
+    page.drawLine({ start: { x: margin, y: headerBottom }, end: { x: width - margin, y: headerBottom }, color: primary, thickness: 1.2 });
+    page.drawLine({ start: { x: margin + 178, y: headerBottom }, end: { x: margin + 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
+    page.drawLine({ start: { x: width - margin - 178, y: headerBottom }, end: { x: width - margin - 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
     if (logo) {
       const scaled = logo.scale(0.16);
       page.drawImage(logo, {
-        x: width / 2 - scaled.width / 2,
-        y: height - 88,
+        x: centerX - scaled.width / 2,
+        y: height - 78,
         width: scaled.width,
         height: scaled.height,
       });
     }
-    drawText(page, data.schoolName, margin, height - 42, 15, text, fontBold);
-    drawText(page, 'ETABLISSEMENT SCOLAIRE', margin, height - 62, 8, muted, fontRegular);
-    const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(template.labels.title), 13);
-    drawText(page, template.labels.title, width / 2 - titleWidth / 2, height - 49, 13, text, fontBold);
-    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, width - margin - 145, height - 42, 9, text, fontRegular);
-    drawText(page, `${template.labels.term}: ${data.termName}`, width - margin - 145, height - 61, 9, text, fontRegular);
-
-    if (includeStudentBlock) {
-      const infoY = height - 142;
-      page.drawRectangle({ x: margin, y: infoY - 62, width: tableWidth, height: 62, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-      drawText(page, template.labels.student, margin + 12, infoY - 20, 8, muted, fontBold);
-      drawText(page, data.studentName, margin + 12, infoY - 37, 11, text, fontBold);
-      drawText(page, template.labels.class, margin + 275, infoY - 20, 8, muted, fontBold);
-      drawText(page, data.className, margin + 275, infoY - 37, 11, text, fontBold);
-      return infoY - 82;
+    const leftColumnCenter = margin + 89;
+    const regionalLabel = school.region?.trim()
+      ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
+      : "DIRECTION RÉGIONALE DE L'ÉDUCATION";
+    drawText(page, 'MINISTERE DE L EDUCATION NATIONALE', leftX, height - 34, 7.5, text, fontBold);
+    drawCenteredSingleLine(page, regionalLabel, leftColumnCenter, height - 55, 170, 7.5, 5.5, muted, fontRegular);
+    if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
+    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);
+    const postalAndPhone = [
+      school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
+      school.phone?.trim() ? `Tél : ${school.phone.trim()}` : null,
+    ].filter((value): value is string => Boolean(value));
+    if (postalAndPhone.length > 0) {
+      drawCenteredSingleLine(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, 5.5, muted, fontRegular);
     }
-    return height - 132;
+    drawText(page, 'REPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
+    drawText(page, 'Travail-Liberte-Patrie', rightX, height - 56, 8, muted, fontRegular);
+    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, rightX, height - 79, 8.5, text, fontBold);
+    return height - 144;
   };
 
   const drawTableHeader = (page: any, y: number) => {
@@ -485,7 +544,18 @@ export const createBulletinPdfDocument = async (
   const createPage = (includeStudentBlock: boolean) => {
     const page = pdf.addPage(pageSize);
     pages.push(page);
-    return { page, cursorY: drawHeader(page, includeStudentBlock) };
+    let cursorY = drawHeader(page, includeStudentBlock);
+    if (includeStudentBlock) {
+      const title = `${template.labels.title} DU ${data.termName}`;
+      const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
+      drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
+      drawText(page, `${template.labels.class}: ${data.className}`, margin, cursorY - 22, 10, text, fontBold);
+      page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
+      drawText(page, 'NOM ET PRENOMS DE L ELEVE', margin + 12, cursorY - 51, 8, muted, fontBold);
+      drawText(page, data.studentName, margin + 185, cursorY - 51, 10.5, text, fontBold);
+      cursorY -= 96;
+    }
+    return { page, cursorY };
   };
 
   let { page, cursorY } = createPage(true);
@@ -546,7 +616,7 @@ export const createBulletinPdfDocument = async (
   for (const currentPage of pages) {
     const width = currentPage.getWidth();
     currentPage.drawLine({ start: { x: margin, y: 54 }, end: { x: width - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
-    drawText(currentPage, `${data.schoolName} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
+    drawText(currentPage, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
     drawText(currentPage, `Page ${pages.indexOf(currentPage) + 1}/${pages.length}`, width - margin - 55, 38, 7.5, muted, fontRegular);
   }
 

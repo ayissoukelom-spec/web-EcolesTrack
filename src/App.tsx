@@ -370,7 +370,7 @@ export default function App() {
   // HANDLERS FOR CREATIONS (POSTS REST API)
   // ==========================================
 
-  const handleAddSchool = async (data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => {
+  const handleAddSchool = async (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => {
     try {
       const createdSchool = await apiFetch('/api/schools', {
         method: 'POST',
@@ -486,7 +486,7 @@ export default function App() {
       }
     }
   };
-  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone: string; classNames?: string[]; subjectNames?: string[] }) => {
+  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone?: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => {
     try {
       await apiFetch(`/api/schools/${id}`, {
         method: 'PUT',

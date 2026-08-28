@@ -1,6 +1,7 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
+import { inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
   createBulletinPdfDocument,
@@ -21,6 +22,19 @@ const snapshotData: BulletinPdfData = {
   classId: 3,
   className: '3ème A',
   schoolName: 'C.S LE SAVOIR',
+  school: {
+    name: 'C.S LE SAVOIR',
+    officialName: 'COLLEGE LE SAVOIR',
+    abbreviation: 'CLS',
+    motto: 'Le travail et la reussite',
+    address: 'Lome',
+    postalBox: 'BP 12',
+    phone: '+228 90000000',
+    email: 'contact@lessavoir.test',
+    city: 'Lome',
+    region: 'Maritime',
+    educationDirection: 'Direction regionale Maritime',
+  },
   schoolYearId: 100,
   schoolYearName: '2025-2026',
   termId: 7,
@@ -190,5 +204,75 @@ describe('bulletin PDF API', () => {
     const document = await PDFDocument.load(pdfBytes);
 
     expect(document.getPageCount()).toBeGreaterThan(1);
+  });
+
+  it('utilise les informations propres à chaque établissement et tolère les champs absents', async () => {
+    const schoolA = await createBulletinPdfDocument({
+      ...snapshotData,
+      schoolName: 'ECOLE A',
+      school: { name: 'ECOLE A', officialName: 'COLLEGE A', motto: 'Excellence', region: 'GRAND LOMÉ', address: 'ADRESSE A', postalBox: '1234', phone: '90 00 00 01' },
+    });
+    const schoolB = await createBulletinPdfDocument({
+      ...snapshotData,
+      schoolName: 'ECOLE B',
+      school: { name: 'ECOLE B', officialName: 'COLLEGE B', motto: 'Travail', phone: '+228 90000002' },
+    });
+    const legacySchool = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: { name: 'ECOLE ANCIENNE' },
+    });
+
+    const extractContent = (bytes: Uint8Array) => {
+      const raw = Buffer.from(bytes).toString('latin1');
+      const content: string[] = [];
+      const streamPattern = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+      for (const match of raw.matchAll(streamPattern)) {
+        try {
+          content.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+        } catch {
+          content.push(match[1]);
+        }
+      }
+      return content.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    };
+
+    const textA = extractContent(schoolA);
+    const textB = extractContent(schoolB);
+    const legacyText = extractContent(legacySchool);
+    expect(textA).toContain('COLLEGE A');
+    expect(textA).toContain("DIRECTION RE GIONALE DE L'E DUCATION GRAND LOME");
+    expect(textA).not.toContain('Excellence');
+    expect(textA).toContain('BP : 1234 Te l : 90 00 00 01');
+    expect(textA).not.toContain('ADRESSE A');
+    expect(textA).not.toContain('District');
+    expect(textA).not.toContain('COLLEGE B');
+    expect(textB).toContain('COLLEGE B');
+    expect(textB).toContain('Travail');
+    expect(textB).not.toContain('COLLEGE A');
+    expect(legacyText).toContain('ECOLE ANCIENNE');
+    expect(legacyText).not.toContain('undefined');
+    expect(legacyText).not.toContain('null');
+  });
+
+  it('génère un PDF pour une école existante dont les métadonnées administratives sont nulles', async () => {
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: {
+        name: 'ECOLE ANCIENNE',
+        officialName: null,
+        abbreviation: null,
+        motto: null,
+        address: null,
+        postalBox: null,
+        phone: null,
+        email: null,
+        city: null,
+        region: null,
+        educationDirection: null,
+        logo: null,
+      },
+    });
+
+    expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
   });
 });

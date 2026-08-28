@@ -394,6 +394,31 @@ export default function AdminModal(props: any) {
                   <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                 </div>
               </div>
+              <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {[
+                    ['officialName', 'Nom officiel'],
+                    ['abbreviation', 'District'],
+                    ['motto', 'Devise'],
+                    ['postalBox', 'Boîte postale'],
+                    ['email', 'Email'],
+                    ['city', 'Ville'],
+                    ['region', 'Région'],
+                    ['educationDirection', 'Direction régionale de l’éducation'],
+                  ].map(([field, label]) => (
+                    <label key={field} className="text-xs font-semibold text-slate-600">
+                      {label}
+                      <input
+                        type="text"
+                        value={schoolForm[field] || ''}
+                        onChange={(e) => setSchoolForm({ ...schoolForm, [field]: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <fieldset className="space-y-3">
                 <legend className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de classes</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3">
