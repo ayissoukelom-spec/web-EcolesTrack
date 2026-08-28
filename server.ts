@@ -3165,6 +3165,10 @@ export async function createApp() {
         teacherId: classes.teacherId,
         teacherName: users.name,
       };
+      const schoolScopedSelect = {
+        ...baseSelect,
+        status: schoolClasses.status,
+      };
 
       console.log('DEBUG GET /api/classes actor', { role: actor.role, id: actor.id, schoolId: actor.schoolId, targetSchoolId });
       if (actor.role === 'teacher') {
@@ -3211,7 +3215,7 @@ export async function createApp() {
       if (approvedOnly && !targetSchoolId) {
         if (actor.role === 'super_admin') {
           const approvedRows = await db
-            .select(baseSelect)
+            .select(schoolScopedSelect)
             .from(classes)
             .innerJoin(
               schoolClasses,
@@ -3232,8 +3236,18 @@ export async function createApp() {
       }
 
       let query = db
-        .select(baseSelect)
+        .select(schoolScopedSelect)
         .from(classes)
+        .leftJoin(
+          schoolClasses,
+          schoolIdParam != null
+            ? and(
+              eq(schoolClasses.classId, classes.id),
+              eq(schoolClasses.schoolId, schoolIdParam),
+              eq(schoolClasses.status, 'approved'),
+            )
+            : sql`false`,
+        )
         .leftJoin(teachers, eq(classes.teacherId, teachers.id))
         .leftJoin(users, eq(teachers.userId, users.id))
         .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
@@ -3267,6 +3281,12 @@ export async function createApp() {
         } else {
           return res.json([]);
         }
+      } else if (schoolIdParam != null) {
+        query = query
+          .where(or(
+            eq(classes.schoolId, schoolIdParam),
+            sql`${classes.schoolId} IS NULL AND ${schoolClasses.id} IS NOT NULL`,
+          )) as any;
       }
 
       const allClasses = await query;

@@ -84,8 +84,31 @@ export default function AdminModal(props: any) {
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId, 10) : undefined;
   const currentStudentSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? selectedStudentSchoolId) : selectedStudentSchoolId;
   const selectedStudentClassId = studentForm.classId ? parseInt(studentForm.classId, 10) : undefined;
-  const selectedStudentClass = sortedClasses.find((c: any) => c.id === selectedStudentClassId);
-  const filteredStudentClasses = sortedClasses.filter((c: any) => !currentStudentSchoolId || isClassVisibleToSchool(c, currentStudentSchoolId));
+  const [schoolScopedStudentClasses, setSchoolScopedStudentClasses] = useState<any[] | null>(null);
+  useEffect(() => {
+    if (activeTab !== 'students' || userRole !== 'super_admin' || currentStudentSchoolId == null) {
+      setSchoolScopedStudentClasses(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSchoolScopedStudentClasses([]);
+    apiFetch(`/api/classes?schoolId=${currentStudentSchoolId}`)
+      .then((payload) => {
+        if (!cancelled) setSchoolScopedStudentClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSchoolScopedStudentClasses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, userRole, currentStudentSchoolId]);
+
+  const studentClassesSource = schoolScopedStudentClasses ?? sortedClasses;
+  const selectedStudentClass = studentClassesSource.find((c: any) => c.id === selectedStudentClassId);
+  const filteredStudentClasses = studentClassesSource.filter((c: any) => !currentStudentSchoolId || isClassVisibleToSchool(c, currentStudentSchoolId));
   // Get all teachers assigned to the selected class (via classIds, not just teacherId)
   const teachersInSelectedClass = selectedStudentClass
     ? teachersList.filter((t: any) => (t.classIds || []).includes(selectedStudentClass.id))
@@ -1082,7 +1105,7 @@ export default function AdminModal(props: any) {
                       value={studentForm.classId}
                       onChange={(e) => {
                         const selectedClassId = e.target.value;
-                        const selectedClass = sortedClasses.find((c: any) => String(c.id) === selectedClassId);
+                        const selectedClass = studentClassesSource.find((c: any) => String(c.id) === selectedClassId);
                         const classTeachers = selectedClass
                           ? teachersList.filter((t: any) => (t.classIds || []).includes(selectedClass.id))
                           : [];
