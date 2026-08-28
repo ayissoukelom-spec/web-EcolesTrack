@@ -27,7 +27,7 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
@@ -49,6 +49,7 @@ import {
   classes,
   classTeachers,
   students,
+  studentAcademicYearStatuses,
   subjects,
   schoolSubjects,
   schoolClasses,
@@ -66,6 +67,7 @@ import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
 import studentAccess from './src/lib/studentAccess.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
+import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -2298,6 +2300,9 @@ export async function createApp() {
       administrativeFields.forEach((field) => {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
+      // Track changes for audit
+      const changes: string[] = [];
+
       // allow updating the student creation lock (accept snake_case or camelCase)
       const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
       if (studentsCreationLockedRaw !== undefined) {
@@ -2480,8 +2485,6 @@ export async function createApp() {
         }
       }
 
-      // Track changes for audit
-      const changes: string[] = [];
       if (name && name !== existingSchool.name) {
         changes.push(`name: "${existingSchool.name}" → "${name}"`);
       }
@@ -4424,7 +4427,24 @@ export async function createApp() {
       }
 
       const list = await query;
-      res.json(list);
+      const studentIds = list.map((student: any) => student.id).filter((id: any): id is number => Number.isInteger(id));
+      const statusRows = studentIds.length > 0
+        ? await db
+          .select({ studentId: studentAcademicYearStatuses.studentId, academicYearId: studentAcademicYearStatuses.academicYearId, status: studentAcademicYearStatuses.status })
+          .from(studentAcademicYearStatuses)
+          .where(inArray(studentAcademicYearStatuses.studentId, studentIds))
+        : [];
+      const statusesByStudent = new Map<number, Array<{ academicYearId: number; status: string | null }>>();
+      for (const row of statusRows) {
+        const existing = statusesByStudent.get(row.studentId) || [];
+        existing.push({ academicYearId: row.academicYearId, status: row.status });
+        statusesByStudent.set(row.studentId, existing);
+      }
+      res.json(list.map((student: any) => ({
+        ...student,
+        studentStatus: statusesByStudent.get(student.id)?.find((entry) => entry.academicYearId === student.yearId)?.status ?? null,
+        academicYearStatuses: statusesByStudent.get(student.id) || [],
+      })));
     } catch (err: any) {
       console.error('Error fetching students:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -4434,7 +4454,7 @@ export async function createApp() {
   app.post('/api/students', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { firstName, lastName, birthDate, schoolId, classId, parentId, schoolAdminId, gender, enrolledAt } = req.body;
+      const { firstName, lastName, birthDate, schoolId, classId, parentId, schoolAdminId, gender, enrolledAt, academicYearId, studentStatus } = req.body;
       const parsedSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId).trim() !== '' ? parseInt(String(schoolId)) : null;
       const parsedClassId = classId !== undefined && classId !== null && String(classId).trim() !== '' ? parseInt(String(classId)) : null;
       const parsedParentId = parentId !== undefined && parentId !== null && String(parentId).trim() !== '' ? parseInt(String(parentId)) : null;
@@ -4468,12 +4488,24 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid gender value. Use M or F / Masculin or Féminin.' });
       }
 
-      const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, parsedClassId));
+      const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, parsedClassId));
       if (!classRecord) {
         return res.status(404).json({ error: 'Class not found' });
       }
 
       const targetSchoolId = effectiveSchoolId as number;
+      const selectedAcademicYearId = academicYearId !== undefined && academicYearId !== null && String(academicYearId).trim() !== ''
+        ? parseInt(String(academicYearId), 10)
+        : classRecord.academicYearId;
+      if (!Number.isInteger(selectedAcademicYearId) || selectedAcademicYearId <= 0) {
+        return res.status(400).json({ error: 'Invalid academicYearId' });
+      }
+      const normalizedStudentStatus = studentStatus !== undefined && studentStatus !== null && String(studentStatus).trim() !== ''
+        ? String(studentStatus).trim()
+        : null;
+      if (normalizedStudentStatus !== null && !isStudentAcademicYearStatus(normalizedStudentStatus)) {
+        return res.status(400).json({ error: 'Invalid student status' });
+      }
       // Enforce per-school student creation lock: school_admins cannot create when locked
       const [schoolRow] = await db.select().from(schools).where(eq(schools.id, targetSchoolId));
       if (schoolRow && (schoolRow.studentsCreationLocked ?? false) && actor.role === 'school_admin') {
@@ -4559,6 +4591,12 @@ export async function createApp() {
         enrolledAt: parsedEnrolledAt,
       }).returning();
 
+      await db.insert(studentAcademicYearStatuses).values({
+        studentId: result[0].id,
+        academicYearId: selectedAcademicYearId,
+        status: normalizedStudentStatus,
+      });
+
       res.status(201).json(result[0]);
     } catch (err: any) {
       console.error('Error creating student profile:', err);
@@ -4572,7 +4610,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
 
       const studentId = parseInt(req.params.id, 10);
-      const { firstName, lastName, birthDate, schoolId, classId, parentId, academicYearId, teacherId, schoolAdminId, gender } = req.body;
+      const { firstName, lastName, birthDate, schoolId, classId, parentId, academicYearId, teacherId, schoolAdminId, gender, studentStatus } = req.body;
 
       if (!studentId || !firstName || !lastName || classId == null || parentId == null) {
         return res.status(400).json({ error: 'Missing required fields' });
@@ -4620,12 +4658,32 @@ export async function createApp() {
       }
 
       const [classRecord] = await db
-        .select({ id: classes.id, schoolId: classes.schoolId })
+        .select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId })
         .from(classes)
         .where(eq(classes.id, parsedClassId));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
 
       const resolvedSchoolId = requestedSchoolId ?? classRecord.schoolId;
+      const selectedAcademicYearId = academicYearId !== undefined && academicYearId !== null && String(academicYearId).trim() !== ''
+        ? parseInt(String(academicYearId), 10)
+        : classRecord.academicYearId;
+      if (!Number.isInteger(selectedAcademicYearId) || selectedAcademicYearId <= 0) {
+        return res.status(400).json({ error: 'Invalid academicYearId' });
+      }
+      const statusWasProvided = Object.prototype.hasOwnProperty.call(req.body, 'studentStatus');
+      const [existingStatusRow] = await db
+        .select({ status: studentAcademicYearStatuses.status })
+        .from(studentAcademicYearStatuses)
+        .where(and(
+          eq(studentAcademicYearStatuses.studentId, studentId),
+          eq(studentAcademicYearStatuses.academicYearId, selectedAcademicYearId),
+        ));
+      const newStudentStatus = statusWasProvided
+        ? (studentStatus !== undefined && studentStatus !== null && String(studentStatus).trim() !== '' ? String(studentStatus).trim() : null)
+        : existingStatusRow?.status ?? null;
+      if (newStudentStatus !== null && !isStudentAcademicYearStatus(newStudentStatus)) {
+        return res.status(400).json({ error: 'Invalid student status' });
+      }
       if (actor.role === 'school_admin' && actor.schoolId != null && resolvedSchoolId != null && resolvedSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot assign student to another school' });
       }
@@ -4672,6 +4730,7 @@ export async function createApp() {
       if (existingStudent.classId !== parsedClassId) changes.push(`classId: ${existingStudent.classId} → ${parsedClassId}`);
       if (existingStudent.parentId !== parsedParentId) changes.push(`parentId: ${existingStudent.parentId} → ${parsedParentId}`);
       if ((existingStudent.schoolAdminId ?? null) !== parsedSchoolAdminId) changes.push(`schoolAdminId: ${existingStudent.schoolAdminId ?? 'null'} → ${parsedSchoolAdminId}`);
+      if (statusWasProvided && (existingStatusRow?.status ?? null) !== newStudentStatus) changes.push(`studentStatus: "${existingStatusRow?.status ?? ''}" → "${newStudentStatus ?? ''}"`);
 
       if (changes.length === 0) {
         return res.status(200).json(existingStudent);
@@ -4682,6 +4741,17 @@ export async function createApp() {
         .set({ firstName, lastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
         .where(eq(students.id, studentId))
         .returning();
+
+      if (statusWasProvided) {
+        await db.insert(studentAcademicYearStatuses).values({
+          studentId,
+          academicYearId: selectedAcademicYearId,
+          status: newStudentStatus,
+        }).onConflictDoUpdate({
+          target: [studentAcademicYearStatuses.studentId, studentAcademicYearStatuses.academicYearId],
+          set: { status: newStudentStatus, updatedAt: new Date() },
+        });
+      }
 
       await logAuditEvent(
         actor,
@@ -4797,7 +4867,24 @@ export async function createApp() {
       }
 
       const list = await query;
-      res.json(list);
+      const studentIds = list.map((student: any) => student.id).filter((id: any): id is number => Number.isInteger(id));
+      const statusRows = studentIds.length > 0
+        ? await db
+          .select({ studentId: studentAcademicYearStatuses.studentId, academicYearId: studentAcademicYearStatuses.academicYearId, status: studentAcademicYearStatuses.status })
+          .from(studentAcademicYearStatuses)
+          .where(inArray(studentAcademicYearStatuses.studentId, studentIds))
+        : [];
+      const statusesByStudent = new Map<number, Array<{ academicYearId: number; status: string | null }>>();
+      for (const row of statusRows) {
+        const existing = statusesByStudent.get(row.studentId) || [];
+        existing.push({ academicYearId: row.academicYearId, status: row.status });
+        statusesByStudent.set(row.studentId, existing);
+      }
+      res.json(list.map((student: any) => ({
+        ...student,
+        studentStatus: statusesByStudent.get(student.id)?.find((entry) => entry.academicYearId === student.yearId)?.status ?? null,
+        academicYearStatuses: statusesByStudent.get(student.id) || [],
+      })));
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to load absences' });
     }
@@ -6996,6 +7083,7 @@ export async function startServer() {
   try {
     await seedDatabaseIfEmpty();
     await ensureSchoolsTableSchema();
+    await ensureStudentAcademicYearStatusesTableExists();
     await ensureSchoolClassesTableExists();
     await ensureUsersTableSchema();
     await ensureUserSchoolsTableExists();

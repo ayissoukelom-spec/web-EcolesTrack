@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Schools
 export const schools = pgTable('schools', {
@@ -154,6 +154,18 @@ export const students = pgTable('students', {
   schoolAdminId: integer('school_admin_id').references(() => users.id, { onDelete: 'set null' }),
   enrolledAt: timestamp('enrolled_at').defaultNow().notNull(), // Date when student was enrolled in this class
 });
+
+export const studentAcademicYearStatuses = pgTable('student_academic_year_statuses', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  status: text('status'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  studentAcademicYearUniqueIdx: uniqueIndex('student_academic_year_statuses_student_year_idx').on(table.studentId, table.academicYearId),
+  studentStatusAllowedCheck: check('student_academic_year_statuses_status_check', sql`${table.status} IS NULL OR ${table.status} IN ('Nouveau', 'Doublant', 'Triplant', 'Quadruplant', 'Quintuplant', 'Sextuplant')`),
+}));
 
 // 7b. Subjects (Matières)
 export const subjects = pgTable('subjects', {
@@ -469,6 +481,18 @@ export const studentsRelations = relations(students, ({ one, many }) => ({
   grades: many(grades),
   absences: many(absences),
   bulletins: many(bulletins),
+  academicYearStatuses: many(studentAcademicYearStatuses),
+}));
+
+export const studentAcademicYearStatusesRelations = relations(studentAcademicYearStatuses, ({ one }) => ({
+  student: one(students, {
+    fields: [studentAcademicYearStatuses.studentId],
+    references: [students.id],
+  }),
+  academicYear: one(academicYears, {
+    fields: [studentAcademicYearStatuses.academicYearId],
+    references: [academicYears.id],
+  }),
 }));
 
 export const bulletinsRelations = relations(bulletins, ({ one, many }) => ({

@@ -126,6 +126,8 @@ export interface Student {
   lastName: string;
   birthDate?: string;
   gender?: string;
+  studentStatus?: string | null;
+  academicYearStatuses?: Array<{ academicYearId: number; status: string | null }>;
   parentId?: number;
   parentName?: string;
   schoolAdminId?: number;

@@ -25,6 +25,7 @@ import {
 
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
+import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
@@ -364,7 +365,7 @@ interface AdminViewProps {
   approvedSubjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
-  onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number }) => Promise<any>;
+  onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onSetActiveYear?: (id: number) => Promise<any>;
   onDeleteYear?: (id: number) => Promise<any>;
@@ -373,7 +374,7 @@ interface AdminViewProps {
   onApproveClass?: (id: number) => Promise<any>;
   onRejectClass?: (id: number) => Promise<any>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
-  onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string }) => void;
+  onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string; studentStatus?: string | null }) => void;
   onBatchCreateStudents?: (records: any[]) => void;
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
@@ -570,7 +571,7 @@ export default function AdminView({
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
-  const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '' });
+  const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
   const [studentError, setStudentError] = useState<string | null>(null);
   const [termNotice, setTermNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [newParentMode, setNewParentMode] = useState(false);
@@ -1360,8 +1361,9 @@ export default function AdminView({
         teacherIds: resolvedTeacherIds,
         schoolAdminId: selectedSchoolAdminId,
         gender: studentForm.gender,
+        studentStatus: studentForm.studentStatus || null,
       });
-      setStudentForm({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [], schoolAdminId: '', gender: '' });
+      setStudentForm({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [], schoolAdminId: '', gender: '', studentStatus: '' });
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
       setNewTeacherMode(false);
@@ -1787,7 +1789,7 @@ export default function AdminView({
   // States for student editing
   const [editStudentOpen, setEditStudentOpen] = useState(false);
   const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
-  const [editStudentForm, setEditStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '' });
+  const [editStudentForm, setEditStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
   const [editStudentError, setEditStudentError] = useState<string | null>(null);
 
   // treat any open modal/panel as blocking the global search input
@@ -1866,6 +1868,7 @@ export default function AdminView({
       teacherIds: [],
       schoolAdminId: student.schoolAdminId ? String(student.schoolAdminId) : '',
       gender: (student as any).gender || '',
+      studentStatus: student.studentStatus || '',
     });
     setEditBDay(parsedBirth.day || '');
     setEditBMonth(parsedBirth.month || '');
@@ -2280,6 +2283,19 @@ export default function AdminView({
                   </select>
                 </div>
                 <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Statut de l'élève</label>
+                  <select
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500"
+                    value={editStudentForm.studentStatus || ''}
+                    onChange={(e) => setEditStudentForm({ ...editStudentForm, studentStatus: e.target.value })}
+                  >
+                    <option value="">Non renseigné</option>
+                    {STUDENT_ACADEMIC_YEAR_STATUSES.map((status) => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date de naissance</label>
                   <div className="grid grid-cols-3 gap-2">
                     <CustomDropdown
@@ -2334,7 +2350,11 @@ export default function AdminView({
                   <select
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 focus:outline-indigo-500 mb-2"
                     value={editStudentForm.academicYearId}
-                    onChange={(e) => setEditStudentForm({ ...editStudentForm, academicYearId: e.target.value })}
+                    onChange={(e) => {
+                      const academicYearId = e.target.value;
+                      const status = studentToEdit?.academicYearStatuses?.find((entry) => String(entry.academicYearId) === academicYearId)?.status || '';
+                      setEditStudentForm({ ...editStudentForm, academicYearId, studentStatus: status });
+                    }}
                   >
                     <option value="">-- Sélectionner une année --</option>
                     {getYearsForSchool(editStudentForm.schoolId).map((y) => (
@@ -2479,6 +2499,7 @@ export default function AdminView({
                           academicYearId: editStudentForm.academicYearId ? parseInt(editStudentForm.academicYearId) : undefined,
                           teacherIds: editStudentForm.teacherIds && editStudentForm.teacherIds.length > 0 ? editStudentForm.teacherIds : undefined,
                           schoolAdminId: editStudentForm.schoolAdminId ? parseInt(editStudentForm.schoolAdminId) : undefined,
+                          studentStatus: editStudentForm.studentStatus || null,
                         });
                         setEditStudentOpen(false);
                         setStudentToEdit(null);
@@ -4534,6 +4555,7 @@ export default function AdminView({
                         teacherIds: [],
                         schoolAdminId: userRole === 'school_admin' ? String(currentUserId || '') : '',
                         gender: '',
+                        studentStatus: '',
                       });
                       setStudentError(null);
                       setActiveTab('students');

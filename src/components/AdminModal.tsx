@@ -5,6 +5,7 @@ import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import PortalCustomDropdown from './CustomDropdown';
+import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
 
 export default function AdminModal(props: any) {
   const {
@@ -1190,6 +1191,19 @@ export default function AdminModal(props: any) {
                         ))}
                       </select>
                     )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Statut de l'élève</label>
+                    <select
+                      value={studentForm.studentStatus || ''}
+                      onChange={e => setStudentForm({ ...studentForm, studentStatus: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                    >
+                      <option value="">Non renseigné</option>
+                      {STUDENT_ACADEMIC_YEAR_STATUSES.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">

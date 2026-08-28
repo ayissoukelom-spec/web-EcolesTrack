@@ -287,4 +287,45 @@ describe('GET /api/students (scope)', () => {
     // Due to test DB mock simplifications, assert we get an array back
     expect(Array.isArray(res.body)).toBe(true);
   });
+
+  it('keeps students visible when they have no academic-year status row', async () => {
+    mockState.actorRole = 'super_admin';
+    mockState.actorSchoolId = null;
+    mockState.actorId = 1;
+    mockState.users = [{ id: 1, uid: 'sim_admin', schoolId: null }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 1, firstName: 'Élève', lastName: 'SansStatut' },
+      { id: 102, schoolId: 10, classId: 2, firstName: 'Autre', lastName: 'SansStatut' },
+    ];
+
+    const res = await request(app)
+      .get('/api/students')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(res.body.map((s: any) => s.id).sort()).toEqual([101, 102]);
+  });
+
+  it('keeps both students visible when one has a status and one has no status', async () => {
+    mockState.actorRole = 'super_admin';
+    mockState.actorSchoolId = null;
+    mockState.actorId = 1;
+    mockState.users = [{ id: 1, uid: 'sim_admin', schoolId: null }];
+    mockState.students = [
+      { id: 201, schoolId: 10, classId: 1, firstName: 'Élève', lastName: 'A', studentStatus: 'Nouveau' },
+      { id: 202, schoolId: 10, classId: 1, firstName: 'Élève', lastName: 'B', studentStatus: null },
+    ];
+
+    const res = await request(app)
+      .get('/api/students')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(res.body).toHaveLength(2);
+    expect(res.body.map((s: any) => s.id).sort()).toEqual([201, 202]);
+  });
 });

@@ -127,6 +127,58 @@ export async function ensureSchoolsTableSchema() {
   }
 }
 
+export async function ensureStudentAcademicYearStatusesTableExists() {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS student_academic_year_statuses (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        academic_year_id INTEGER NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
+        status TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT now(),
+        updated_at TIMESTAMP NOT NULL DEFAULT now()
+      );
+    `);
+
+    await db.execute(sql`ALTER TABLE student_academic_year_statuses ADD COLUMN IF NOT EXISTS status TEXT;`);
+    await db.execute(sql`ALTER TABLE student_academic_year_statuses ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();`);
+    await db.execute(sql`ALTER TABLE student_academic_year_statuses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();`);
+
+    await db.execute(sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'student_academic_year_statuses_student_year_unique'
+        ) THEN
+          ALTER TABLE student_academic_year_statuses
+            ADD CONSTRAINT student_academic_year_statuses_student_year_unique UNIQUE (student_id, academic_year_id);
+        END IF;
+      END $$;
+    `);
+
+    await db.execute(sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'student_academic_year_statuses_status_check'
+        ) THEN
+          ALTER TABLE student_academic_year_statuses
+            ADD CONSTRAINT student_academic_year_statuses_status_check CHECK (
+              status IS NULL OR status IN ('Nouveau', 'Doublant', 'Triplant', 'Quadruplant', 'Quintuplant', 'Sextuplant')
+            );
+        END IF;
+      END $$;
+    `);
+  } catch (err: any) {
+    console.error('Failed to ensure student_academic_year_statuses table exists:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureUserSchoolsTableExists() {
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS user_schools (
