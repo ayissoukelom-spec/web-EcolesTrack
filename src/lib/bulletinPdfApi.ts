@@ -1,5 +1,5 @@
 import type express from 'express';
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, or, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import { db } from '../db/index.ts';
@@ -13,6 +13,7 @@ import {
   evaluations,
   grades,
   parents,
+  schoolClasses,
   schools,
   schoolTerms,
   students,
@@ -217,7 +218,21 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     .innerJoin(students, eq(bulletins.studentId, students.id))
     .leftJoin(parents, eq(students.parentId, parents.id))
     .innerJoin(classes, eq(bulletins.classId, classes.id))
-    .innerJoin(schools, eq(classes.schoolId, schools.id))
+    .leftJoin(
+      schoolClasses,
+      and(
+        eq(schoolClasses.classId, bulletins.classId),
+        eq(schoolClasses.schoolId, students.schoolId),
+        eq(schoolClasses.status, 'approved'),
+      ),
+    )
+    .leftJoin(
+      schools,
+      or(
+        eq(classes.schoolId, schools.id),
+        eq(schoolClasses.schoolId, schools.id),
+      ),
+    )
     .innerJoin(academicYears, eq(bulletins.schoolYearId, academicYears.id))
     .innerJoin(schoolTerms, eq(bulletins.termId, schoolTerms.id))
     .where(eq(bulletins.id, bulletinId));
