@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type {
   BulletinDetail,
@@ -77,6 +77,10 @@ export default function BulletinsView({
   const [generateClassId, setGenerateClassId] = useState<string>('');
   const [generateStudentId, setGenerateStudentId] = useState<string>('');
   const [generateTermId, setGenerateTermId] = useState<string>('');
+  const [schoolScopedClasses, setSchoolScopedClasses] = useState<Class[] | null>(null);
+  const [schoolScopedClassesLoading, setSchoolScopedClassesLoading] = useState(false);
+  const [schoolScopedClassesError, setSchoolScopedClassesError] = useState<string | null>(null);
+  const schoolClassesRequestRef = useRef(0);
   const [lookupIdInput, setLookupIdInput] = useState('');
   const [parentKnownItems, setParentKnownItems] = useState<BulletinListItem[]>([]);
   const [lastGeneratedClassSummary, setLastGeneratedClassSummary] = useState<Array<{ id: number; studentName: string; className: string; termName: string }>>([]);
@@ -108,10 +112,9 @@ export default function BulletinsView({
   }, [classesList, schoolsList]);
 
   const generateClasses = useMemo(() => {
-    const schoolId = generateSchoolId ? Number(generateSchoolId) : null;
-    if (schoolId == null) return classesList;
-    return classesList.filter((klass) => klass.schoolId === schoolId);
-  }, [classesList, generateSchoolId]);
+    if (!generateSchoolId) return classesList;
+    return schoolScopedClasses ?? [];
+  }, [classesList, generateSchoolId, schoolScopedClasses]);
 
   const generateStudents = useMemo(() => {
     const classId = generateClassId ? Number(generateClassId) : null;
@@ -125,6 +128,39 @@ export default function BulletinsView({
   }, [generateClassId, generateSchoolId, studentsList]);
 
   const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string; startDate?: string | null; endDate?: string | null }>>([]);
+
+  useEffect(() => {
+    const schoolId = Number(generateSchoolId);
+    if (!generateSchoolId || !Number.isInteger(schoolId) || schoolId <= 0) {
+      schoolClassesRequestRef.current += 1;
+      setSchoolScopedClasses(null);
+      setSchoolScopedClassesLoading(false);
+      setSchoolScopedClassesError(null);
+      return;
+    }
+
+    const requestId = schoolClassesRequestRef.current + 1;
+    schoolClassesRequestRef.current = requestId;
+    setSchoolScopedClasses(null);
+    setSchoolScopedClassesLoading(true);
+    setSchoolScopedClassesError(null);
+
+    apiFetch(`/api/classes?schoolId=${schoolId}`)
+      .then((payload) => {
+        if (schoolClassesRequestRef.current !== requestId) return;
+        setSchoolScopedClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error: any) => {
+        if (schoolClassesRequestRef.current !== requestId) return;
+        setSchoolScopedClasses([]);
+        setSchoolScopedClassesError(error?.message || 'Impossible de charger les classes de cette ecole.');
+      })
+      .finally(() => {
+        if (schoolClassesRequestRef.current === requestId) {
+          setSchoolScopedClassesLoading(false);
+        }
+      });
+  }, [generateSchoolId]);
 
   useEffect(() => {
     (async () => {
@@ -492,6 +528,12 @@ export default function BulletinsView({
         onParentLookupSubmit={handleParentLookupSubmit}
         onReloadParentKnown={loadParentCached}
       />
+
+      {generateSchoolId && (schoolScopedClassesLoading || schoolScopedClassesError) && (
+        <p className="text-xs text-slate-500">
+          {schoolScopedClassesLoading ? 'Chargement des classes de l ecole...' : schoolScopedClassesError}
+        </p>
+      )}
 
       {lastGeneratedClassSummary.length > 0 && (
         <section className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-2">
