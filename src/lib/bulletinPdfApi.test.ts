@@ -21,6 +21,7 @@ const snapshotData: BulletinPdfData = {
   studentName: 'Alice Dupont',
   classId: 3,
   className: '3ème A',
+  classStudentCount: 42,
   schoolName: 'C.S LE SAVOIR',
   school: {
     name: 'C.S LE SAVOIR',
@@ -210,15 +211,18 @@ describe('bulletin PDF API', () => {
     const schoolA = await createBulletinPdfDocument({
       ...snapshotData,
       schoolName: 'ECOLE A',
+      classStudentCount: 3,
       school: { name: 'ECOLE A', officialName: 'COLLEGE A', motto: 'Excellence', region: 'GRAND LOMÉ', address: 'ADRESSE A', postalBox: '1234', phone: '90 00 00 01' },
     });
     const schoolB = await createBulletinPdfDocument({
       ...snapshotData,
       schoolName: 'ECOLE B',
+      classStudentCount: 2,
       school: { name: 'ECOLE B', officialName: 'COLLEGE B', motto: 'Travail', phone: '+228 90000002' },
     });
     const legacySchool = await createBulletinPdfDocument({
       ...snapshotData,
+      classStudentCount: 0,
       school: { name: 'ECOLE ANCIENNE' },
     });
 
@@ -239,6 +243,7 @@ describe('bulletin PDF API', () => {
     const textA = extractContent(schoolA);
     const textB = extractContent(schoolB);
     const legacyText = extractContent(legacySchool);
+    expect(textA).toContain('EFFECTIF : 3');
     expect(textA).toContain('COLLEGE A');
     expect(textA).toContain("DIRECTION RE GIONALE DE L'E DUCATION GRAND LOME");
     expect(textA).not.toContain('Excellence');
@@ -246,12 +251,35 @@ describe('bulletin PDF API', () => {
     expect(textA).not.toContain('ADRESSE A');
     expect(textA).not.toContain('District');
     expect(textA).not.toContain('COLLEGE B');
+    expect(textB).toContain('EFFECTIF : 2');
     expect(textB).toContain('COLLEGE B');
     expect(textB).toContain('Travail');
     expect(textB).not.toContain('COLLEGE A');
+    expect(legacyText).toContain('EFFECTIF : 0');
     expect(legacyText).toContain('ECOLE ANCIENNE');
     expect(legacyText).not.toContain('undefined');
     expect(legacyText).not.toContain('null');
+  });
+
+  it('reflète dynamiquement l ajout d un élève dans l effectif', async () => {
+    const firstPdf = await createBulletinPdfDocument({ ...snapshotData, classStudentCount: 1 });
+    const nextPdf = await createBulletinPdfDocument({ ...snapshotData, classStudentCount: 2 });
+
+    const extractText = (bytes: Uint8Array) => {
+      const raw = Buffer.from(bytes).toString('latin1');
+      const streams: string[] = [];
+      for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+        try {
+          streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+        } catch {
+          streams.push(match[1]);
+        }
+      }
+      return streams.join('\\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    };
+
+    expect(extractText(firstPdf)).toContain('EFFECTIF : 1');
+    expect(extractText(nextPdf)).toContain('EFFECTIF : 2');
   });
 
   it('génère un PDF pour une école existante dont les métadonnées administratives sont nulles', async () => {

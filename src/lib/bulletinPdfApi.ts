@@ -43,6 +43,7 @@ export interface BulletinPdfData {
   studentName: string;
   classId: number;
   className: string;
+  classStudentCount: number;
   schoolName: string;
   school?: {
     name: string;
@@ -265,22 +266,34 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     .where(eq(bulletins.id, bulletinId));
 
   if (!header) return null;
-  if (actor.role === 'super_admin') return header;
+
+  const classStudentCount = header.studentSchoolId == null
+    ? 0
+    : ((await db
+      .select({ count: sql<number>`count(${students.id})::integer` })
+      .from(students)
+      .where(and(
+        eq(students.classId, header.classId),
+        eq(students.schoolId, header.studentSchoolId),
+      ))
+    ))[0]?.count ?? 0;
+
+  if (actor.role === 'super_admin') return { ...header, classStudentCount };
 
   if (actor.role === 'teacher') {
     const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any);
     if (authorizedStudentIds.length === 0 || !authorizedStudentIds.includes(header.studentId)) return null;
-    return header;
+    return { ...header, classStudentCount };
   }
 
   if (actor.role === 'school_admin') {
     if (actor.schoolId == null || header.studentSchoolId !== actor.schoolId) return null;
-    return header;
+    return { ...header, classStudentCount };
   }
 
   if (actor.role === 'parent') {
     if (!actor.id || header.parentUserId !== actor.id) return null;
-    return header;
+    return { ...header, classStudentCount };
   }
 
   return null;
@@ -357,6 +370,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       studentName: `${header.studentLastName} ${header.studentFirstName}`.trim(),
       classId: header.classId,
       className: header.className,
+      classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
       school: header.school ? { ...header.school, logo: null } : { name: header.schoolName },
       schoolYearId: header.schoolYearId,
@@ -549,7 +563,7 @@ export const createBulletinPdfDocument = async (
       const title = `${template.labels.title} DU ${data.termName}`;
       const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
       drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
-      drawText(page, `${template.labels.class}: ${data.className}`, margin, cursorY - 22, 10, text, fontBold);
+      drawText(page, `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`, margin, cursorY - 22, 10, text, fontBold);
       page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
       drawText(page, 'NOM ET PRENOMS DE L ELEVE', margin + 12, cursorY - 51, 8, muted, fontBold);
       drawText(page, data.studentName, margin + 185, cursorY - 51, 10.5, text, fontBold);
