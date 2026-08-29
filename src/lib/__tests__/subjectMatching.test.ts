@@ -30,14 +30,40 @@ describe('subjectMatching helpers', () => {
     ]);
   });
 
-  test('getTeacherAvailableSubjects falls back to all approved subjects when no match', () => {
+  test('getTeacherAvailableSubjects returns no subjects when assigned subjects are not approved', () => {
     const approvedSubjects = [
       { id: 1, name: 'Mathématique' },
       { id: 2, name: 'Histoire et Géographie' },
     ];
 
-    const available = getTeacherAvailableSubjects(approvedSubjects, ['Physique']);
+    const available = getTeacherAvailableSubjects(approvedSubjects, ['Anglais']);
 
-    expect(available).toEqual(['Mathématique', 'Histoire et Géographie']);
+    expect(available).toEqual([]);
+  });
+
+  test('getTeacherAvailableSubjects returns only the approved intersection for one subject', () => {
+    const approvedSubjects = [
+      { id: 1, name: 'Mathématique' },
+      { id: 2, name: 'Anglais' },
+    ];
+
+    expect(getTeacherAvailableSubjects(approvedSubjects, ['Anglais'])).toEqual(['Anglais']);
+  });
+
+  test('getTeacherAvailableSubjects handles multiple assigned subjects', () => {
+    const approvedSubjects = [
+      { id: 1, name: 'Anglais' },
+    ];
+
+    expect(getTeacherAvailableSubjects(approvedSubjects, ['Anglais', 'Education Physique et Sportive'])).toEqual(['Anglais']);
+  });
+
+  test('getTeacherAvailableSubjects returns no subjects for an empty assignment', () => {
+    const approvedSubjects = [
+      { id: 1, name: 'Mathématique' },
+      { id: 2, name: 'Anglais' },
+    ];
+
+    expect(getTeacherAvailableSubjects(approvedSubjects, [])).toEqual([]);
   });
 });

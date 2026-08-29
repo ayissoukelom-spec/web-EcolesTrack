@@ -28,6 +28,7 @@ import {
 } from '../lib/evaluationUtils';
 import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
+import { getTeacherAvailableSubjects } from '../lib/subjectMatching';
 
 interface NotesViewProps {
   evaluationsList: Evaluation[];
@@ -134,17 +135,7 @@ export default function NotesView({
     : [];
 
   const availableSubjects = userRole === 'teacher'
-    ? (() => {
-      const assigned = teacherSpecializations
-        .map((value) => normalizeSubjectName(String(value || '')))
-        .filter(Boolean);
-
-      const filteredByAssigned = approvedSubjectNames.filter((subjectName) =>
-        assigned.some((assignedName) => normalizeSubjectName(subjectName) === assignedName)
-      );
-
-      return filteredByAssigned.length > 0 ? filteredByAssigned : approvedSubjectNames;
-    })()
+    ? getTeacherAvailableSubjects(approvedSubjectsList, teacherSpecializations)
     : approvedSubjectNames;
 
   const currentEvaluation = approvedEvaluations.find((ev) => String(ev.id) === selectedEvalId) || null;

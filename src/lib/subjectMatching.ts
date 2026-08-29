@@ -20,9 +20,7 @@ export function getTeacherAvailableSubjects(
     .map((value) => normalizeSubjectName(String(value || '')))
     .filter(Boolean);
 
-  const filteredByAssigned = approvedSubjectNames.filter((subjectName) =>
+  return approvedSubjectNames.filter((subjectName) =>
     assigned.some((assignedName) => normalizeSubjectName(subjectName) === assignedName)
   );
-
-  return filteredByAssigned.length > 0 ? filteredByAssigned : approvedSubjectNames;
 }
