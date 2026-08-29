@@ -21,6 +21,11 @@ import { useDownloadBulletinPDF } from '../hooks/useDownloadBulletinPDF.ts';
 import BulletinsList from './bulletins/BulletinsList.tsx';
 import BulletinDetailView from './bulletins/BulletinDetail.tsx';
 import BulletinActions from './bulletins/BulletinActions.tsx';
+import {
+  calculateClassAverage,
+  calculateTypeWeightedAverage,
+  normalizeEvaluationType,
+} from '../lib/bulletinService.ts';
 
 interface BulletinsViewProps {
   schoolsList: School[];
@@ -33,34 +38,12 @@ interface BulletinsViewProps {
 
 const parentCacheKey = (uid: string) => `ecoletrack_parent_bulletin_ids_${uid}`;
 
-const normalizeEvaluationType = (value?: string | null): 'interrogation' | 'devoir' | 'composition' | null => {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'interrogation') return 'interrogation';
-  if (normalized === 'devoir') return 'devoir';
-  if (normalized === 'composition') return 'composition';
-  return null;
-};
-
 const parseNumericScore = (score: string | number | null | undefined): number | null => {
   if (score == null) return null;
   const normalized = String(score).trim().replace(',', '.');
   if (!normalized) return null;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
-};
-
-const computeWeightedAverage = (entries: Array<{ coefficient: number; score: number }>): number | null => {
-  let totalWeightedScore = 0;
-  let totalCoefficient = 0;
-
-  for (const entry of entries) {
-    const coefficient = Number(entry.coefficient ?? 0);
-    if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
-    totalWeightedScore += entry.score * coefficient;
-    totalCoefficient += coefficient;
-  }
-
-  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
 };
 
 const toParentListItem = (detail: BulletinDetail): BulletinListItem => ({
@@ -428,11 +411,7 @@ export default function BulletinsView({
       return evalDate >= startDate && evalDate <= endDate;
     });
 
-    const classStudentIds = studentsList
-      .filter((student) => student.classId === detail.classId)
-      .map((student) => student.id);
-
-    const subjectMap = new Map<string, { groups: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>; typeAverages: Record<'interrogation' | 'devoir', number[]> }>();
+    const subjectMap = new Map<string, Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>>();
 
     for (const subjectName of Array.from(new Set(relevantEvaluations.map((ev) => ev.subject.trim() || 'Matiere non renseignee')))) {
       const byType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>> = {
@@ -440,7 +419,6 @@ export default function BulletinsView({
         devoir: [],
         composition: [],
       };
-      const typeAverages: Record<'interrogation' | 'devoir', number[]> = { interrogation: [], devoir: [] };
 
       for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
         const type = normalizeEvaluationType(ev.type);
@@ -454,53 +432,25 @@ export default function BulletinsView({
         byType[type].push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
       }
 
-      for (const studentId of classStudentIds) {
-        const entriesByType: Record<'interrogation' | 'devoir', Array<{ coefficient: number; score: number }>> = {
-          interrogation: [],
-          devoir: [],
-        };
-        for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
-          const type = normalizeEvaluationType(ev.type);
-          if (type !== 'interrogation' && type !== 'devoir') continue;
-          const grade = gradesList.find((g) => g.evaluationId === ev.id && g.studentId === studentId);
-          const rawScore = grade ? parseNumericScore(grade.score) : null;
-          if (rawScore == null) continue;
-          const normalizedScore = (rawScore / (ev.maxScore || 20)) * 20;
-          entriesByType[type].push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
-        }
-        for (const type of ['interrogation', 'devoir'] as const) {
-          const typeAverage = computeWeightedAverage(entriesByType[type]);
-          if (typeAverage != null) typeAverages[type].push(typeAverage);
-        }
-      }
-
-      subjectMap.set(subjectName, {
-        groups: byType,
-        typeAverages,
-      });
+      subjectMap.set(subjectName, byType);
     }
 
     const result: Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }> = {};
-    for (const [subjectName, { groups, typeAverages }] of subjectMap.entries()) {
+    for (const [subjectName, groups] of subjectMap.entries()) {
       const allEntries = Array.from(new Set([
         ...groups.interrogation,
         ...groups.devoir,
         ...groups.composition,
       ]));
-      const currentAverage = computeWeightedAverage(allEntries);
-      const classInterrogationAverage = typeAverages.interrogation.length > 0
-        ? typeAverages.interrogation.reduce((sum, value) => sum + value, 0) / typeAverages.interrogation.length
-        : null;
-      const classDevoirAverage = typeAverages.devoir.length > 0
-        ? typeAverages.devoir.reduce((sum, value) => sum + value, 0) / typeAverages.devoir.length
-        : null;
-      const classAverage = classInterrogationAverage != null && classDevoirAverage != null
-        ? (classInterrogationAverage + classDevoirAverage) / 2
-        : classInterrogationAverage ?? classDevoirAverage;
+      const currentAverage = calculateTypeWeightedAverage(allEntries.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
+      const classAverage = calculateClassAverage(
+        calculateTypeWeightedAverage(groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+        calculateTypeWeightedAverage(groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+      );
       result[subjectName] = {
-        interrogation: computeWeightedAverage(groups.interrogation),
-        devoir: computeWeightedAverage(groups.devoir),
-        composition: computeWeightedAverage(groups.composition),
+        interrogation: calculateTypeWeightedAverage(groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+        devoir: calculateTypeWeightedAverage(groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+        composition: calculateTypeWeightedAverage(groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
         average: currentAverage,
         classAverage,
       };

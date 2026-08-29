@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateStudentTermAverage,
+  calculateClassAverage,
   calculateFinalSubjectAverage,
   selectBulletinEvaluationsForTerm,
   summarizeTypeAveragesBySubject,
@@ -229,5 +230,41 @@ describe('bulletinService', () => {
     expect(summary.devoir).toBeCloseTo(12, 5);
     expect(summary.composition).toBe(15);
     expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1, 2, 4, 5, 7]);
+  });
+
+  it('calcule la moyenne d une matière selon la règle canonique bulletin et ignore les notes exclues', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Philosophie', title: 'Interro 1', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Philosophie', title: 'Interro 2', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: false, date: '2026-06-11' },
+      { id: 3, classId: 10, teacherId: 2, termId: 7, subject: 'Philosophie', title: 'Devoir 1', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-12' },
+      { id: 4, classId: 10, teacherId: 2, termId: 7, subject: 'Philosophie', title: 'Compo 1', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-13' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '9' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '15' },
+      { id: 3, evaluationId: 3, studentId: 1, score: '13' },
+      { id: 4, evaluationId: 4, studentId: 1, score: '11' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+    const summary = summarizeTypeAveragesBySubject(result.snapshots);
+
+    expect(summary.interrogation).toBe(9);
+    expect(summary.devoir).toBe(13);
+    expect(calculateFinalSubjectAverage(
+      summary.interrogation != null && summary.devoir != null ? (summary.interrogation + summary.devoir) / 2 : summary.interrogation ?? summary.devoir,
+      summary.composition,
+    )).toBe(11);
+  });
+
+  it('applique la formule canonique pour des moyennes interro, devoir et composition distinctes', () => {
+    const interro = 11.07;
+    const devoir = 11.21;
+    const composition = 11.86;
+    const expectedClassAverage = calculateClassAverage(interro, devoir);
+    const expectedAverage = calculateFinalSubjectAverage(expectedClassAverage, composition);
+
+    expect(expectedClassAverage).toBe(11.14);
+    expect(expectedAverage).toBe(11.5);
   });
 });

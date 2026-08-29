@@ -85,6 +85,45 @@ export const calculateTypeWeightedAverage = (entries: Array<{ coefficient: numbe
   return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
 };
 
+export const calculateClassAverage = (
+  interrogation: number | null | undefined,
+  devoir: number | null | undefined,
+): number | null => {
+  if (interrogation != null && devoir != null) return (interrogation + devoir) / 2;
+  return interrogation ?? devoir ?? null;
+};
+
+export const calculateSubjectBreakdown = (
+  snapshots: BulletinEvaluationSnapshot[],
+  classAveragesBySubject: Record<string, number | null> = {},
+): Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }> => {
+  const bySubject = new Map<string, BulletinEvaluationSnapshot[]>();
+
+  for (const snapshot of snapshots) {
+    if (!snapshot.countedInAverage || snapshot.normalizedScore == null) continue;
+    const list = bySubject.get(snapshot.subject) ?? [];
+    list.push(snapshot);
+    bySubject.set(snapshot.subject, list);
+  }
+
+  const result: Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }> = {};
+
+  for (const [subjectName, subjectSnapshots] of bySubject.entries()) {
+    const typeSummary = summarizeTypeAveragesBySubject(subjectSnapshots);
+    const classAverage = classAveragesBySubject[subjectName] ?? calculateClassAverage(typeSummary.interrogation, typeSummary.devoir);
+
+    result[subjectName] = {
+      interrogation: typeSummary.interrogation,
+      devoir: typeSummary.devoir,
+      composition: typeSummary.composition,
+      average: calculateFinalSubjectAverage(classAverage, typeSummary.composition),
+      classAverage,
+    };
+  }
+
+  return result;
+};
+
 export const summarizeTypeAveragesBySubject = (subjectSnapshots: BulletinEvaluationSnapshot[]): BulletinTypeAverageSummary => {
   const grouped: Record<BulletinEvaluationType, Array<{ coefficient: number; normalizedScore: number | null }>> = {
     interrogation: [],

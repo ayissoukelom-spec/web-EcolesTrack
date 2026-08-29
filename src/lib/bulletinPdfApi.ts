@@ -20,7 +20,7 @@ import {
   studentAcademicYearStatuses,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
-import { calculateFinalSubjectAverage } from './bulletinService';
+import { calculateClassAverage, calculateFinalSubjectAverage, calculateTypeWeightedAverage } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
 import studentAccess from './studentAccess';
 
@@ -169,18 +169,42 @@ const parseNumericScore = (score: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const computeWeightedAverage = (entries: Array<{ coefficient: number; score: number }>): number | null => {
-  let totalWeightedScore = 0;
-  let totalCoefficient = 0;
+export const calculateStudentSubjectTypeAverages = (
+  rows: Array<{
+    subject: string;
+    studentId: number;
+    type?: string | null;
+    coefficient: number | string;
+    maxScore: number | string;
+    score: number | string | null;
+  }>,
+  studentId: number,
+  subjectName: string,
+): { interrogation: number | null; devoir: number | null; composition: number | null } => {
+  const result: { interrogation: number | null; devoir: number | null; composition: number | null } = {
+    interrogation: null,
+    devoir: null,
+    composition: null,
+  };
 
-  for (const entry of entries) {
-    const coefficient = Number(entry.coefficient ?? 0);
-    if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
-    totalWeightedScore += entry.score * coefficient;
-    totalCoefficient += coefficient;
+  for (const type of ['interrogation', 'devoir', 'composition'] as const) {
+    const entries = rows
+      .filter((row) => row.subject === subjectName && row.studentId === studentId && (row.type ?? '').trim().toLowerCase() === type)
+      .map((row) => {
+        const rawScore = parseNumericScore(String(row.score ?? ''));
+        const maxScore = Number(row.maxScore);
+        if (rawScore == null || !Number.isFinite(maxScore) || maxScore <= 0) return null;
+        return {
+          coefficient: Number(row.coefficient),
+          normalizedScore: (rawScore / maxScore) * 20,
+        };
+      })
+      .filter((entry): entry is { coefficient: number; normalizedScore: number } => entry != null);
+
+    result[type] = calculateTypeWeightedAverage(entries);
   }
 
-  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+  return result;
 };
 
 const buildFallbackLinesFromGrades = (
@@ -209,12 +233,10 @@ const buildFallbackLinesFromGrades = (
   let runningId = 1;
   return Array.from(bySubject.entries()).map(([subjectName, agg]) => ({
     ...(() => {
-      const interrogation = computeWeightedAverage(agg.groups.interrogation);
-      const devoir = computeWeightedAverage(agg.groups.devoir);
+      const interrogation = calculateTypeWeightedAverage(agg.groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
+      const devoir = calculateTypeWeightedAverage(agg.groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
       return {
-        classAverage: interrogation != null && devoir != null
-          ? (interrogation + devoir) / 2
-          : interrogation ?? devoir,
+        classAverage: calculateClassAverage(interrogation, devoir),
       };
     })(),
     id: runningId++,
@@ -223,12 +245,12 @@ const buildFallbackLinesFromGrades = (
     subjectName,
     coefficient: agg.coefficient,
     average: calculateFinalSubjectAverage(
-      interrogation != null && devoir != null ? (interrogation + devoir) / 2 : interrogation ?? devoir,
-      computeWeightedAverage(agg.groups.composition),
+      calculateClassAverage(interrogation, devoir),
+      calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
     ),
-    interrogation: computeWeightedAverage(agg.groups.interrogation),
-    devoir: computeWeightedAverage(agg.groups.devoir),
-    composition: computeWeightedAverage(agg.groups.composition),
+    interrogation: calculateTypeWeightedAverage(agg.groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+    devoir: calculateTypeWeightedAverage(agg.groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
+    composition: calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
     teacherComment: null,
     rank: null,
   }));
@@ -320,52 +342,19 @@ const computeSubjectBreakdown = async (
         .filter((value): value is number => value != null);
       return studentValues.length > 0;
     });
-    const studentAverage = computeWeightedAverage(studentSpecific.length > 0 ? studentSpecific : bucket.studentEntries.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && parseNumericScore(row.score) != null)));
+    const studentAverage = calculateTypeWeightedAverage(
+      (studentSpecific.length > 0 ? studentSpecific : bucket.studentEntries.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && parseNumericScore(row.score) != null)))
+        .map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })),
+    );
     if (studentAverage != null) studentAverageMap.set(subjectName, studentAverage);
   }
 
   const result = new Map<string, { interrogation: number | null; devoir: number | null; composition: number | null; classAverage: number | null }>();
   for (const [subjectName, bucket] of bySubject.entries()) {
-    const studentRows = rows.filter((row) => row.subject === subjectName && row.studentId === studentId);
-    const studentEntries = studentRows
-      .map((row) => {
-        const rawScore = parseNumericScore(row.score);
-        const maxScore = Number(row.maxScore || 0);
-        if (rawScore == null || maxScore <= 0) return null;
-        return { coefficient: Number(row.coefficient || 0), score: (rawScore / maxScore) * 20 };
-      })
-      .filter((value): value is { coefficient: number; score: number } => value != null);
-
-    const studentAverage = computeWeightedAverage(studentEntries);
-    const studentsForSubject = Array.from(new Set(rows.filter((row) => row.subject === subjectName).map((row) => row.studentId)));
-    const classTypeAverage = (type: 'interrogation' | 'devoir'): number | null => {
-      const values = studentsForSubject
-        .map((currentStudentId) => {
-        const entries = rows
-          .filter((row) => row.subject === subjectName && row.studentId === currentStudentId && (row.type ?? '').trim().toLowerCase() === type)
-          .map((row) => {
-            const rawScore = parseNumericScore(row.score);
-            const maxScore = Number(row.maxScore || 0);
-            if (rawScore == null || maxScore <= 0) return null;
-            return { coefficient: Number(row.coefficient || 0), score: (rawScore / maxScore) * 20 };
-          })
-          .filter((value): value is { coefficient: number; score: number } => value != null);
-          return computeWeightedAverage(entries);
-        })
-        .filter((value): value is number => value != null);
-      return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-    };
-    const interrogationClassAverage = classTypeAverage('interrogation');
-    const devoirClassAverage = classTypeAverage('devoir');
-    const classAverage = interrogationClassAverage != null && devoirClassAverage != null
-      ? (interrogationClassAverage + devoirClassAverage) / 2
-      : interrogationClassAverage ?? devoirClassAverage;
-
+    const studentTypeAverages = calculateStudentSubjectTypeAverages(rows, studentId, subjectName);
     result.set(subjectName, {
-      interrogation: computeWeightedAverage(bucket.byType.interrogation.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'interrogation')))),
-      devoir: computeWeightedAverage(bucket.byType.devoir.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'devoir')))),
-      composition: computeWeightedAverage(bucket.byType.composition.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'composition')))),
-      classAverage,
+      ...studentTypeAverages,
+      classAverage: calculateClassAverage(studentTypeAverages.interrogation, studentTypeAverages.devoir),
     });
   }
 

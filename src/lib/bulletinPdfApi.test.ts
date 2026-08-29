@@ -8,6 +8,7 @@ import {
   BULLETIN_FINAL_AVERAGE_LABEL,
   formatStudentStatusForPdf,
   resolveStudentStatusForAcademicYear,
+  calculateStudentSubjectTypeAverages,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -113,6 +114,36 @@ const withServer = async (app: express.Express): Promise<string> => {
 };
 
 describe('bulletin PDF API', () => {
+  it('calcule la Moy. interro uniquement avec les notes de l élève demandé', () => {
+    const rows = [
+      [22, 10], [23, 11], [24, 8], [25, 12], [26, 9], [29, 14], [30, 9],
+    ].map(([studentId, score]) => ({
+      subject: 'Phylosophie',
+      studentId,
+      type: 'interrogation',
+      coefficient: 2,
+      maxScore: 20,
+      score,
+    }));
+
+    const breakdown = calculateStudentSubjectTypeAverages(rows, 26, 'Phylosophie');
+
+    expect(breakdown.interrogation).toBe(9);
+    expect(breakdown.interrogation).not.toBeCloseTo(10.428571, 5);
+  });
+
+  it('pondère plusieurs interrogations du même élève avec leurs coefficients', () => {
+    const rows = [
+      { subject: 'Phylosophie', studentId: 26, type: 'interrogation', coefficient: 2, maxScore: 20, score: 9 },
+      { subject: 'Phylosophie', studentId: 26, type: 'interrogation', coefficient: 1, maxScore: 20, score: 15 },
+      { subject: 'Phylosophie', studentId: 22, type: 'interrogation', coefficient: 2, maxScore: 20, score: 20 },
+    ];
+
+    const breakdown = calculateStudentSubjectTypeAverages(rows, 26, 'Phylosophie');
+
+    expect(breakdown.interrogation).toBe(11);
+  });
+
   it.each([
     ['Nouveau', 'N'],
     ['Doublant', 'D'],

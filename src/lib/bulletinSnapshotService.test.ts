@@ -276,8 +276,8 @@ describe('generateBulletinSnapshot', () => {
 
     const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
 
-    // Alice: Moy. Clas 15/20 (rank 1), Moy. Général 15 because no composition exists
-    expect(mathLine?.average).toBe(15);
+    // Alice: Moy. Clas 20/20 (rank 1), Moy. Général 20 because no composition exists
+    expect(mathLine?.average).toBe(20);
     expect(mathLine?.rank).toBe(1);
   });
 
