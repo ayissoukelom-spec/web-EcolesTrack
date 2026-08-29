@@ -11,6 +11,8 @@ import {
   grades,
   schoolTerms,
   students,
+  teachers,
+  users,
 } from '../db/schema.ts';
 import {
   calculateStudentTermAverage,
@@ -24,8 +26,15 @@ export interface BulletinLineSnapshotInput {
   subjectName: string;
   coefficient: number;
   average: number | null;
+  interrogation?: number | null;
+  devoir?: number | null;
+  composition?: number | null;
+  classAverage?: number | null;
+  noteCoef?: number | null;
+  teacherName?: string | null;
   teacherComment?: string | null;
   rank?: number | null;
+  signature?: string | null;
 }
 
 export interface CreateBulletinInput {
@@ -62,6 +71,7 @@ export interface BulletinSnapshotContext {
   getClassStudents(classId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
   getClassTermEvaluations(classId: number, termId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
+  getTeacherNames(teacherIds: number[]): Promise<Map<number, string>>;
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
@@ -98,32 +108,159 @@ const resolveAppreciation = (average: number | null): string | null => {
   return 'Des efforts supplémentaires sont attendus.';
 };
 
-const computeSubjectLines = (evaluations: BulletinEvaluationLike[], snapshots: ReturnType<typeof calculateStudentTermAverage>['snapshots']): BulletinLineSnapshotInput[] => {
-  const bySubject = new Map<string, { coefficient: number; weighted: number; weightedCoefficient: number }>();
+const buildTeacherNameMap = async (
+  tx: any,
+  teacherIds: number[],
+): Promise<Map<number, string>> => {
+  if (teacherIds.length === 0) return new Map();
 
+  const rows = await tx
+    .select({
+      teacherId: teachers.id,
+      firstName: users.firstName,
+      lastName: users.lastName,
+    })
+    .from(teachers)
+    .innerJoin(users, eq(teachers.userId, users.id))
+    .where(inArray(teachers.id, Array.from(new Set(teacherIds))));
+
+  const map = new Map<number, string>();
+  for (const row of rows) {
+    const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ');
+    map.set(row.teacherId, fullName || `Teacher ${row.teacherId}`);
+  }
+  return map;
+};
+
+const computeSubjectLines = (
+  evaluations: BulletinEvaluationLike[],
+  snapshots: ReturnType<typeof calculateStudentTermAverage>['snapshots'],
+  classStudents: BulletinStudentLike[],
+  allGrades: BulletinGradeLike[],
+  targetStudentId: number,
+  teacherNameMap: Map<number, string> = new Map(),
+): BulletinLineSnapshotInput[] => {
+  const bySubject = new Map<string, {
+    coefficient: number;
+    weighted: number;
+    weightedCoefficient: number;
+    byType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>;
+    teacherIds: number[];
+  }>();
+
+  // Aggregate evaluations by subject and type
   for (const evaluation of evaluations) {
-    const current = bySubject.get(evaluation.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0 };
+    const current = bySubject.get(evaluation.subject) ?? {
+      coefficient: 0,
+      weighted: 0,
+      weightedCoefficient: 0,
+      byType: { interrogation: [], devoir: [], composition: [] },
+      teacherIds: [],
+    };
     current.coefficient += Math.max(0, Number(evaluation.coefficient || 0));
+    if (evaluation.teacherId) current.teacherIds.push(evaluation.teacherId);
     bySubject.set(evaluation.subject, current);
   }
 
+  // Calculate per-type averages for the target student
   for (const snapshot of snapshots) {
     if (!snapshot.countedInAverage || snapshot.normalizedScore == null) continue;
-    const current = bySubject.get(snapshot.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0 };
+    const current = bySubject.get(snapshot.subject) ?? {
+      coefficient: 0,
+      weighted: 0,
+      weightedCoefficient: 0,
+      byType: { interrogation: [], devoir: [], composition: [] },
+      teacherIds: [],
+    };
     current.weighted += snapshot.normalizedScore * snapshot.coefficient;
     current.weightedCoefficient += snapshot.coefficient;
+
+    const type = snapshot.type as 'interrogation' | 'devoir' | 'composition' | null;
+    if (type && (type === 'interrogation' || type === 'devoir' || type === 'composition')) {
+      current.byType[type].push({ coefficient: snapshot.coefficient, score: snapshot.normalizedScore });
+    }
     bySubject.set(snapshot.subject, current);
   }
 
-  return Array.from(bySubject.entries()).map(([subjectName, agg]) => ({
-    subjectId: null,
-    subjectName,
-    coefficient: agg.coefficient,
-    average: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
-    teacherComment: null,
-    rank: null,
-  }));
+  // Compute class averages for each subject
+  const classAveragesBySubject = new Map<string, number | null>();
+  for (const [subjectName, bucket] of bySubject.entries()) {
+    const classEvaluationsForSubject = evaluations.filter((e) => e.subject === subjectName);
+    const subjectClassAverages: number[] = [];
+
+    for (const classStudent of classStudents) {
+      const studentEntries: Array<{ coefficient: number; score: number }> = [];
+      for (const evaluation of classEvaluationsForSubject) {
+        const grade = allGrades.find((g) => g.evaluationId === evaluation.id && g.studentId === classStudent.id);
+        if (!grade) continue;
+        const raw = parseNumericScore(grade.score);
+        if (raw == null) continue;
+        const normalized = (raw / (evaluation.maxScore || 20)) * 20;
+        studentEntries.push({ coefficient: Number(evaluation.coefficient || 0), score: normalized });
+      }
+      const studentAverage = calculateTypeWeightedAverage(studentEntries);
+      if (studentAverage != null) subjectClassAverages.push(studentAverage);
+    }
+
+    const classAverage = subjectClassAverages.length > 0
+      ? subjectClassAverages.reduce((sum, val) => sum + val, 0) / subjectClassAverages.length
+      : null;
+    classAveragesBySubject.set(subjectName, classAverage);
+  }
+
+  return Array.from(bySubject.entries()).map(([subjectName, agg]) => {
+    const interrogationAvg = calculateTypeWeightedAverage(agg.byType.interrogation);
+    const devoirAvg = calculateTypeWeightedAverage(agg.byType.devoir);
+    const compositionAvg = calculateTypeWeightedAverage(agg.byType.composition);
+    const subjectAverage = agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null;
+    const noteCoef = subjectAverage != null ? subjectAverage * agg.coefficient : null;
+    const classAverage = classAveragesBySubject.get(subjectName) ?? null;
+
+    // Get most frequent teacher for this subject
+    const teacherName = agg.teacherIds.length > 0
+      ? teacherNameMap.get(agg.teacherIds[agg.teacherIds.length - 1]) ?? null
+      : null;
+
+    return {
+      subjectId: null,
+      subjectName,
+      coefficient: agg.coefficient,
+      average: subjectAverage,
+      interrogation: interrogationAvg,
+      devoir: devoirAvg,
+      composition: compositionAvg,
+      classAverage,
+      noteCoef,
+      teacherName,
+      teacherComment: null,
+      rank: null,
+      signature: null,
+    };
+  });
 };
+
+const calculateTypeWeightedAverage = (entries: Array<{ coefficient: number; score: number }>): number | null => {
+  let totalWeightedScore = 0;
+  let totalCoefficient = 0;
+
+  for (const entry of entries) {
+    const coefficient = Number(entry.coefficient ?? 0);
+    if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
+    totalWeightedScore += entry.score * coefficient;
+    totalCoefficient += coefficient;
+  }
+
+  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+};
+
+const parseNumericScore = (score: string | number | null | undefined): number | null => {
+  if (score == null) return null;
+  const normalized = String(score).trim().replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 
 const computeRank = (
   targetStudentId: number,
@@ -191,9 +328,11 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           return tx.select({
             id: evaluations.id,
             classId: evaluations.classId,
+            teacherId: evaluations.teacherId,
             termId: evaluations.termId,
             subject: evaluations.subject,
             title: evaluations.title,
+            type: evaluations.type,
             coefficient: evaluations.coefficient,
             maxScore: evaluations.maxScore,
             countInBulletin: evaluations.countInBulletin,
@@ -224,6 +363,22 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             studentId: grades.studentId,
             score: grades.score,
           }).from(grades).where(and(inArray(grades.studentId, studentIds), inArray(grades.evaluationId, evaluationIds)));
+        },
+        async getTeacherNames(teacherIds) {
+          if (teacherIds.length === 0) return new Map();
+          const rows = await tx
+            .select({
+              teacherId: teachers.id,
+              name: users.name,
+            })
+            .from(teachers)
+            .innerJoin(users, eq(teachers.userId, users.id))
+            .where(inArray(teachers.id, Array.from(new Set(teacherIds))));
+          const map = new Map<number, string>();
+          for (const row of rows) {
+            map.set(row.teacherId, row.name || `Teacher ${row.teacherId}`);
+          }
+          return map;
         },
         async insertBulletin(payload) {
           const [inserted] = await tx.insert(bulletins).values({
@@ -352,9 +507,11 @@ export const registerBulletinGenerateRoute = (
                 return tx.select({
                   id: evaluations.id,
                   classId: evaluations.classId,
+                  teacherId: evaluations.teacherId,
                   termId: evaluations.termId,
                   subject: evaluations.subject,
                   title: evaluations.title,
+                  type: evaluations.type,
                   coefficient: evaluations.coefficient,
                   maxScore: evaluations.maxScore,
                   countInBulletin: evaluations.countInBulletin,
@@ -380,6 +537,22 @@ export const registerBulletinGenerateRoute = (
               async getGradesForStudents(studentIds, evaluationIds) {
                 if (studentIds.length === 0 || evaluationIds.length === 0) return [];
                 return tx.select({ id: grades.id, evaluationId: grades.evaluationId, studentId: grades.studentId, score: grades.score }).from(grades).where(and(inArray(grades.studentId, studentIds), inArray(grades.evaluationId, evaluationIds)));
+              },
+              async getTeacherNames(teacherIds) {
+                if (teacherIds.length === 0) return new Map();
+                const rows = await tx
+                  .select({
+                    teacherId: teachers.id,
+                    name: users.name,
+                  })
+                  .from(teachers)
+                  .innerJoin(users, eq(teachers.userId, users.id))
+                  .where(inArray(teachers.id, Array.from(new Set(teacherIds))));
+                const map = new Map<number, string>();
+                for (const row of rows) {
+                  map.set(row.teacherId, row.name || `Teacher ${row.teacherId}`);
+                }
+                return map;
               },
               async insertBulletin(payload) {
                 const [inserted] = await tx.insert(bulletins).values({
@@ -467,7 +640,12 @@ export const generateBulletinSnapshot = async (
     const rank = computeRank(student.id, classStudents, termEvaluations, allGrades, term.id);
     const mention = resolveMention(calculation.average);
     const appreciation = resolveAppreciation(calculation.average);
-    const lines = computeSubjectLines(calculation.selectedEvaluations, calculation.snapshots);
+
+    // Load teacher names for all evaluations
+    const teacherIds = Array.from(new Set(termEvaluations.map((e) => e.teacherId).filter((id) => id != null) as number[]));
+    const teacherNameMap = await ctx.getTeacherNames(teacherIds);
+
+    const lines = computeSubjectLines(calculation.selectedEvaluations, calculation.snapshots, classStudents, allGrades, student.id, teacherNameMap);
 
     const inserted = await ctx.insertBulletin({
       studentId: student.id,

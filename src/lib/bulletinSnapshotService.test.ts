@@ -54,6 +54,10 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
         async getGradesForStudents(studentIds, evaluationIds) {
           return draft.grades.filter((row) => studentIds.includes(row.studentId) && evaluationIds.includes(row.evaluationId));
         },
+        async getTeacherNames(teacherIds) {
+          // Fake implementation: return empty map for testing
+          return new Map();
+        },
         async insertBulletin(payload) {
           const id = draft.bulletins.length + 1;
           draft.bulletins.push({ ...payload, id });
@@ -91,9 +95,9 @@ describe('generateBulletinSnapshot', () => {
     classes: [{ id: 10, academicYearId: 100 }],
     terms: [{ id: 7, academicYearId: 100 }],
     evaluations: [
-      { id: 1, classId: 10, termId: 7, subject: 'Math', title: 'DS 1', coefficient: 2, maxScore: 20, countInBulletin: true },
-      { id: 2, classId: 10, termId: 7, subject: 'Français', title: 'DS 2', coefficient: 1, maxScore: 10, countInBulletin: true },
-      { id: 3, classId: 10, termId: 7, subject: 'Histoire', title: 'DS 3', coefficient: 1, maxScore: 20, countInBulletin: false },
+      { id: 1, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'DS 1', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Français', title: 'DS 2', type: 'interrogation', coefficient: 1, maxScore: 10, countInBulletin: true },
+      { id: 3, classId: 10, teacherId: 1, termId: 7, subject: 'Histoire', title: 'DS 3', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: false },
     ],
     grades: [
       { id: 1, evaluationId: 1, studentId: 1, score: '14' },

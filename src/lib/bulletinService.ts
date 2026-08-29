@@ -25,6 +25,7 @@ export type BulletinEvaluationType = 'interrogation' | 'devoir' | 'composition';
 export interface BulletinEvaluationLike {
   id: number;
   classId: number;
+  teacherId?: number | null;
   termId?: number | null;
   subject: string;
   title: string;

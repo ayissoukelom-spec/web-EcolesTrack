@@ -635,15 +635,34 @@ export const createBulletinPdfDocument = async (
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
   const columns = [
-    { label: template.labels.subject, width: 155 },
-    { label: template.labels.coefficient, width: 42 },
-    { label: 'Inter.', width: 52 },
-    { label: 'Dev.', width: 52 },
-    { label: 'Compo.', width: 52 },
-    { label: template.labels.subjectAverage, width: 62 },
-    { label: 'M. Clas', width: 62 },
-    { label: template.labels.rank, width: 38 },
-    { label: template.labels.teacherComment, width: tableWidth - 155 - 42 - 52 - 52 - 52 - 62 - 62 - 38 },
+    { label: 'Matières', width: 70 },
+    { label: 'Inter.', width: 30 },
+    { label: 'Dev.', width: 30 },
+    { label: 'Moy. Clas', width: 35 },
+    { label: 'Compo.', width: 30 },
+    { label: 'Note /20', width: 35 },
+    { label: 'Coef.', width: 28 },
+    { label: 'Note coef.', width: 40 },
+    { label: 'Rang', width: 28 },
+    { label: 'Prof.', width: 40 },
+    { label: 'Appréciation', width: 50 },
+    { label: 'Signature', width: 40 },
+  ];
+
+  // Define multi-line headers for better space usage
+  const headerLines = [
+    ['Matières'],
+    ['Inter.'],
+    ['Dev.'],
+    ['Moy.', 'Clas'],
+    ['Compo.'],
+    ['Note', '/20'],
+    ['Coef.'],
+    ['Note', 'coef.'],
+    ['Rang'],
+    ['Prof.'],
+    ['Appréciation'],
+    ['Signature'],
   ];
 
   const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => {
@@ -733,13 +752,28 @@ export const createBulletinPdfDocument = async (
   };
 
   const drawTableHeader = (page: any, y: number) => {
-    page.drawRectangle({ x: tableX, y: y - 20, width: tableWidth, height: 20, color: primary });
+    // Header height accommodates up to 2 lines of text
+    const headerHeight = 28;
+    page.drawRectangle({ x: tableX, y: y - headerHeight, width: tableWidth, height: headerHeight, color: primary });
     let x = tableX;
-    columns.forEach((column) => {
-      drawText(page, column.label, x + 7, y - 14, 8.5, white, fontBold);
+    columns.forEach((column, index) => {
+      const lines = headerLines[index];
+      const columnCenterX = x + column.width / 2;
+      if (lines.length === 1) {
+        // Single line: center vertically
+        const lineWidth = fontBold.widthOfTextAtSize(lines[0], 8);
+        drawText(page, lines[0], columnCenterX - lineWidth / 2, y - 18, 8, white, fontBold);
+      } else {
+        // Multi-line: spread across height
+        lines.forEach((line, lineIndex) => {
+          const lineWidth = fontBold.widthOfTextAtSize(line, 7.5);
+          const verticalOffset = 21 - lineIndex * 8;
+          drawText(page, line, columnCenterX - lineWidth / 2, y - verticalOffset, 7.5, white, fontBold);
+        });
+      }
       x += column.width;
     });
-    return y - 24;
+    return y - (headerHeight + 4);
   };
 
   const createPage = (includeStudentBlock: boolean) => {
@@ -825,23 +859,58 @@ export const createBulletinPdfDocument = async (
       composition: line.composition ?? null,
       classAverage: line.classAverage ?? null,
     };
+    const noteCoef = line.average != null && line.coefficient != null
+      ? (parseFloat(String(line.average)) * line.coefficient).toFixed(2)
+      : '-';
+
+    // Column 1: Matières
     drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 8.5, text, fontRegular, 2);
     x += columns[0].width;
-    drawText(page, String(line.coefficient), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 2: Inter.
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[1].width;
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 3: Dev.
+    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[2].width;
-    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 4: Moy. Clas
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[3].width;
-    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 5: Compo.
+    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[4].width;
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 6: Note /20
+    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[5].width;
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 7: Coef.
+    drawText(page, String(line.coefficient), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[6].width;
-    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8.5, text, fontRegular);
+
+    // Column 8: Note coef.
+    drawText(page, String(noteCoef), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[7].width;
-    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[8].width - 14, 8.5, text, fontRegular, 2);
+
+    // Column 9: Rang
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8, text, fontRegular);
+    x += columns[8].width;
+
+    // Column 10: Prof. (Teacher name)
+    const teacherName = line.teacherName || '-';
+    drawWrappedText(page, teacherName, x + 7, cursorY - 13, columns[9].width - 14, 7.5, text, fontRegular, 2);
+    x += columns[9].width;
+
+    // Column 11: Appréciation
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.5, text, fontRegular, 2);
+    x += columns[10].width;
+
+    // Column 12: Signature (leave empty for signature)
+    drawText(page, '', x + 7, cursorY - 13, 8.5, text, fontRegular);
+
     cursorY -= rowHeight;
   }
 

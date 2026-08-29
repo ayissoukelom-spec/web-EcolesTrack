@@ -143,17 +143,21 @@ export default function BulletinDetail({
           )}
 
           <div className="overflow-x-auto border border-slate-100 rounded-xl">
-            <table className="w-full text-xs min-w-[760px]">
+            <table className="w-full text-xs min-w-[1000px]">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
-                  <th className="text-left px-3 py-2">Matiere</th>
-                  <th className="text-left px-3 py-2">Coef</th>
-                  <th className="text-left px-3 py-2">Inter.</th>
-                  <th className="text-left px-3 py-2">Dev.</th>
-                  <th className="text-left px-3 py-2">Compo.</th>
-                  <th className="text-left px-3 py-2">Moyenne</th>
-                  <th className="text-left px-3 py-2">M. Clas</th>
-                  <th className="text-left px-3 py-2">Appreciation</th>
+                  <th className="text-left px-2 py-2 whitespace-nowrap">Matières</th>
+                  <th className="text-center px-2 py-2">Inter.</th>
+                  <th className="text-center px-2 py-2">Dev.</th>
+                  <th className="text-center px-2 py-2"><span className="block">Moy.</span><span className="block">Clas</span></th>
+                  <th className="text-center px-2 py-2">Compo.</th>
+                  <th className="text-center px-2 py-2"><span className="block">Note</span><span className="block">/20</span></th>
+                  <th className="text-center px-2 py-2">Coef.</th>
+                  <th className="text-center px-2 py-2"><span className="block">Note</span><span className="block">coef.</span></th>
+                  <th className="text-center px-2 py-2">Rang</th>
+                  <th className="text-center px-2 py-2">Prof.</th>
+                  <th className="text-left px-2 py-2">Appréciation</th>
+                  <th className="text-center px-2 py-2">Signature</th>
                 </tr>
               </thead>
               <tbody>
@@ -165,16 +169,25 @@ export default function BulletinDetail({
                     average: line.average,
                     classAverage: null,
                   };
+                  const studentAverage = breakdown.average ?? line.average;
+                  const noteCoef = studentAverage != null && line.coefficient != null
+                    ? (parseFloat(String(studentAverage)) * line.coefficient).toFixed(2)
+                    : '-';
                   return (
                     <tr key={line.id} className="border-t border-slate-100 align-top">
-                      <td className="px-3 py-2">{line.subjectName}</td>
-                      <td className="px-3 py-2">{line.coefficient}</td>
-                      <td className="px-3 py-2">{formatValue(breakdown.interrogation)}</td>
-                      <td className="px-3 py-2">{formatValue(breakdown.devoir)}</td>
-                      <td className="px-3 py-2">{formatValue(breakdown.composition)}</td>
-                      <td className="px-3 py-2">{formatValue(breakdown.average ?? line.average)}</td>
-                      <td className="px-3 py-2">{formatValue(breakdown.classAverage)}</td>
-                      <td className="px-3 py-2">{line.teacherComment || '-'}</td>
+                      <td className="px-2 py-2">{line.subjectName}</td>
+                      <td className="px-2 py-2 text-center">{formatValue(breakdown.interrogation)}</td>
+                      <td className="px-2 py-2 text-center">{formatValue(breakdown.devoir)}</td>
+                      <td className="px-2 py-2 text-center">{formatValue(breakdown.devoir)}</td>
+                      <td className="px-2 py-2 text-center">{formatValue(breakdown.classAverage)}</td>
+                      <td className="px-2 py-2 text-center">{formatValue(breakdown.composition)}</td>
+                      <td className="px-2 py-2 text-center font-semibold">{formatValue(studentAverage)}</td>
+                      <td className="px-2 py-2 text-center">{line.coefficient}</td>
+                      <td className="px-2 py-2 text-center font-semibold">{noteCoef}</td>
+                      <td className="px-2 py-2 text-center">{line.rank ?? '-'}</td>
+                      <td className="px-2 py-2 text-center text-slate-500">—</td>
+                      <td className="px-2 py-2 max-w-xs truncate">{line.teacherComment || '-'}</td>
+                      <td className="px-2 py-2 text-center">—</td>
                     </tr>
                   );
                 })}
