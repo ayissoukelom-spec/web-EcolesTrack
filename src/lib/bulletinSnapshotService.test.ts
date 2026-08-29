@@ -394,4 +394,32 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.find((line) => line.subjectName === 'Math')?.classAverage).toBe(12);
     expect(state.bulletinLines.find((line) => line.subjectName === 'Français')?.classAverage).toBe(14);
   });
+
+  it('calcule 11,50 comme Moy. Général et utilise cette valeur pour le rang et l appréciation', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 70, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 71, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 72, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Compo', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 70, evaluationId: 70, studentId: 1, score: '11.07' },
+        { id: 71, evaluationId: 71, studentId: 1, score: '11.21' },
+        { id: 72, evaluationId: 72, studentId: 1, score: '11.86' },
+      ],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+    expect(mathLine?.interrogation).toBeCloseTo(11.07, 2);
+    expect(mathLine?.devoir).toBeCloseTo(11.21, 2);
+    expect(mathLine?.classAverage).toBeCloseTo(11.14, 2);
+    expect(mathLine?.composition).toBeCloseTo(11.86, 2);
+    expect(mathLine?.average).toBeCloseTo(11.5, 2);
+    expect(mathLine?.rank).toBe(1);
+    expect(mathLine?.teacherComment).toBe('Passable');
+  });
 });

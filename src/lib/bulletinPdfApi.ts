@@ -21,6 +21,7 @@ import {
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
 import { calculateFinalSubjectAverage } from './bulletinService';
+import { getGradeAppreciation } from './gradeColor';
 import studentAccess from './studentAccess';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
@@ -528,12 +529,17 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.termStartDate ?? null, header.termEndDate ?? null);
     resolvedLines = resolvedLines.map((line) => {
       const subjectBreakdown = breakdownBySubject.get(line.subjectName) ?? null;
+      const classAverage = subjectBreakdown?.classAverage ?? null;
+      const composition = subjectBreakdown?.composition ?? null;
+      const finalAverage = calculateFinalSubjectAverage(classAverage, composition) ?? line.average;
       return {
         ...line,
+        average: finalAverage,
+        teacherComment: finalAverage != null ? getGradeAppreciation(finalAverage) : line.teacherComment,
         interrogation: subjectBreakdown?.interrogation ?? null,
         devoir: subjectBreakdown?.devoir ?? null,
-        composition: subjectBreakdown?.composition ?? null,
-        classAverage: subjectBreakdown?.classAverage ?? null,
+        composition,
+        classAverage,
       };
     });
 

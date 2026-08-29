@@ -1,4 +1,5 @@
 import React from 'react';
+import { calculateFinalSubjectAverage } from '../../lib/bulletinService';
 import { Download, Eye } from 'lucide-react';
 import type { BulletinDetail as BulletinDetailType } from '../../types.ts';
 import { getGradeBadgeClass, getGradeBand } from '../../lib/gradeColor';
@@ -169,9 +170,7 @@ export default function BulletinDetail({
                     average: line.average,
                     classAverage: null,
                   };
-                  const studentAverage = breakdown.classAverage != null && breakdown.composition != null
-                    ? (breakdown.classAverage + breakdown.composition) / 2
-                    : breakdown.classAverage ?? breakdown.composition ?? line.average;
+                  const studentAverage = calculateFinalSubjectAverage(breakdown.classAverage, breakdown.composition) ?? line.average;
                   const noteCoef = studentAverage != null && line.coefficient != null
                     ? (parseFloat(String(studentAverage)) * line.coefficient).toFixed(2)
                     : '-';
