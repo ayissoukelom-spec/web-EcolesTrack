@@ -206,6 +206,15 @@ const buildFallbackLinesFromGrades = (
 
   let runningId = 1;
   return Array.from(bySubject.entries()).map(([subjectName, agg]) => ({
+    ...(() => {
+      const interrogation = computeWeightedAverage(agg.groups.interrogation);
+      const devoir = computeWeightedAverage(agg.groups.devoir);
+      return {
+        classAverage: interrogation != null && devoir != null
+          ? (interrogation + devoir) / 2
+          : interrogation ?? devoir,
+      };
+    })(),
     id: runningId++,
     bulletinId: 0,
     subjectId: null,
@@ -215,7 +224,6 @@ const buildFallbackLinesFromGrades = (
     interrogation: computeWeightedAverage(agg.groups.interrogation),
     devoir: computeWeightedAverage(agg.groups.devoir),
     composition: computeWeightedAverage(agg.groups.composition),
-    classAverage: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
     teacherComment: null,
     rank: null,
   }));
@@ -325,10 +333,11 @@ const computeSubjectBreakdown = async (
 
     const studentAverage = computeWeightedAverage(studentEntries);
     const studentsForSubject = Array.from(new Set(rows.filter((row) => row.subject === subjectName).map((row) => row.studentId)));
-    const classAverageValues = studentsForSubject
-      .map((currentStudentId) => {
+    const classTypeAverage = (type: 'interrogation' | 'devoir'): number | null => {
+      const values = studentsForSubject
+        .map((currentStudentId) => {
         const entries = rows
-          .filter((row) => row.subject === subjectName && row.studentId === currentStudentId)
+          .filter((row) => row.subject === subjectName && row.studentId === currentStudentId && (row.type ?? '').trim().toLowerCase() === type)
           .map((row) => {
             const rawScore = parseNumericScore(row.score);
             const maxScore = Number(row.maxScore || 0);
@@ -336,15 +345,22 @@ const computeSubjectBreakdown = async (
             return { coefficient: Number(row.coefficient || 0), score: (rawScore / maxScore) * 20 };
           })
           .filter((value): value is { coefficient: number; score: number } => value != null);
-        return computeWeightedAverage(entries);
-      })
-      .filter((value): value is number => value != null);
+          return computeWeightedAverage(entries);
+        })
+        .filter((value): value is number => value != null);
+      return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    };
+    const interrogationClassAverage = classTypeAverage('interrogation');
+    const devoirClassAverage = classTypeAverage('devoir');
+    const classAverage = interrogationClassAverage != null && devoirClassAverage != null
+      ? (interrogationClassAverage + devoirClassAverage) / 2
+      : interrogationClassAverage ?? devoirClassAverage;
 
     result.set(subjectName, {
       interrogation: computeWeightedAverage(bucket.byType.interrogation.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'interrogation')))),
       devoir: computeWeightedAverage(bucket.byType.devoir.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'devoir')))),
       composition: computeWeightedAverage(bucket.byType.composition.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'composition')))),
-      classAverage: classAverageValues.length > 0 ? classAverageValues.reduce((sum, value) => sum + value, 0) / classAverageValues.length : studentAverage,
+      classAverage,
     });
   }
 

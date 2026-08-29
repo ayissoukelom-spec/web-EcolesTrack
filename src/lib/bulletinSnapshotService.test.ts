@@ -280,4 +280,118 @@ describe('generateBulletinSnapshot', () => {
     expect(mathLine?.average).toBe(20);
     expect(mathLine?.rank).toBe(1);
   });
+
+  it('calcule Moy. Clas comme la moyenne des moyennes Interro et Devoir', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 10, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro 1', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 11, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro 2', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 12, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir 1', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 13, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir 2', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 10, evaluationId: 10, studentId: 1, score: '12' },
+        { id: 11, evaluationId: 11, studentId: 1, score: '16' },
+        { id: 12, evaluationId: 12, studentId: 1, score: '10' },
+        { id: 13, evaluationId: 13, studentId: 1, score: '14' },
+      ],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+    expect(mathLine?.interrogation).toBe(14);
+    expect(mathLine?.devoir).toBe(12);
+    expect(mathLine?.classAverage).toBe(13);
+  });
+
+  it('utilise uniquement la moyenne Interro si aucun Devoir n existe', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 20, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [{ id: 20, evaluationId: 20, studentId: 1, score: '15' }],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(state.bulletinLines[0]?.classAverage).toBe(15);
+  });
+
+  it('utilise uniquement la moyenne Devoir si aucune Interro n existe', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 30, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [{ id: 30, evaluationId: 30, studentId: 1, score: '13' }],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(state.bulletinLines[0]?.classAverage).toBe(13);
+  });
+
+  it('exclut les évaluations non retenues de Moy. Clas', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 40, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro retenue', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 41, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir non retenu', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: false },
+      ],
+      grades: [
+        { id: 40, evaluationId: 40, studentId: 1, score: '15' },
+        { id: 41, evaluationId: 41, studentId: 1, score: '1' },
+      ],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(state.bulletinLines[0]?.classAverage).toBe(15);
+  });
+
+  it('retourne null pour Moy. Clas sans Interro ni Devoir', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 50, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [{ id: 50, evaluationId: 50, studentId: 1, score: '18' }],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(state.bulletinLines[0]?.classAverage).toBeNull();
+  });
+
+  it('calcule Moy. Clas indépendamment pour chaque matière', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [baseState.students[0]],
+      evaluations: [
+        { id: 60, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 61, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 62, classId: 10, teacherId: 1, termId: 7, subject: 'Français', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 63, classId: 10, teacherId: 1, termId: 7, subject: 'Français', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 60, evaluationId: 60, studentId: 1, score: '10' },
+        { id: 61, evaluationId: 61, studentId: 1, score: '14' },
+        { id: 62, evaluationId: 62, studentId: 1, score: '16' },
+        { id: 63, evaluationId: 63, studentId: 1, score: '12' },
+      ],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(state.bulletinLines.find((line) => line.subjectName === 'Math')?.classAverage).toBe(12);
+    expect(state.bulletinLines.find((line) => line.subjectName === 'Français')?.classAverage).toBe(14);
+  });
 });

@@ -260,25 +260,41 @@ const computeSubjectLines = (
   const classAveragesBySubject = new Map<string, number | null>();
   for (const [subjectName, bucket] of bySubject.entries()) {
     const classEvaluationsForSubject = evaluations.filter((e) => e.subject === subjectName);
-    const subjectClassAverages: number[] = [];
+    const classTypeAverages: Record<'interrogation' | 'devoir', number[]> = {
+      interrogation: [],
+      devoir: [],
+    };
 
     for (const classStudent of classStudents) {
-      const studentEntries: Array<{ coefficient: number; score: number }> = [];
+      const studentEntriesByType: Record<'interrogation' | 'devoir', Array<{ coefficient: number; score: number }>> = {
+        interrogation: [],
+        devoir: [],
+      };
       for (const evaluation of classEvaluationsForSubject) {
+        const type = evaluation.type as 'interrogation' | 'devoir' | 'composition' | null;
+        if (type !== 'interrogation' && type !== 'devoir') continue;
         const grade = allGrades.find((g) => g.evaluationId === evaluation.id && g.studentId === classStudent.id);
         if (!grade) continue;
         const raw = parseNumericScore(grade.score);
         if (raw == null) continue;
         const normalized = (raw / (evaluation.maxScore || 20)) * 20;
-        studentEntries.push({ coefficient: Number(evaluation.coefficient || 0), score: normalized });
+        studentEntriesByType[type].push({ coefficient: Number(evaluation.coefficient || 0), score: normalized });
       }
-      const studentAverage = calculateTypeWeightedAverage(studentEntries);
-      if (studentAverage != null) subjectClassAverages.push(studentAverage);
+
+      for (const type of ['interrogation', 'devoir'] as const) {
+        const studentTypeAverage = calculateTypeWeightedAverage(studentEntriesByType[type]);
+        if (studentTypeAverage != null) classTypeAverages[type].push(studentTypeAverage);
+      }
     }
 
-    const classAverage = subjectClassAverages.length > 0
-      ? subjectClassAverages.reduce((sum, val) => sum + val, 0) / subjectClassAverages.length
+    const classTypeAverage = (values: number[]): number | null => values.length > 0
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
       : null;
+    const interrogationClassAverage = classTypeAverage(classTypeAverages.interrogation);
+    const devoirClassAverage = classTypeAverage(classTypeAverages.devoir);
+    const classAverage = interrogationClassAverage != null && devoirClassAverage != null
+      ? (interrogationClassAverage + devoirClassAverage) / 2
+      : interrogationClassAverage ?? devoirClassAverage;
     classAveragesBySubject.set(subjectName, classAverage);
   }
 
