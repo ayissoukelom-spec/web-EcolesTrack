@@ -287,6 +287,8 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
   }
 
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const bypassTeacherDataCache = normalizedEndpoint === '/api/teachers'
+    || normalizedEndpoint.startsWith('/api/classes');
   const rawUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
   const apiUrl = (() => {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
@@ -303,6 +305,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
   })();
   const mergedOptions = {
     ...options,
+    ...(bypassTeacherDataCache ? { cache: 'no-store' as RequestCache } : {}),
     headers: {
       ...headers,
       ...(options.headers || {}),

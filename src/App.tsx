@@ -113,7 +113,9 @@ export default function App() {
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
-  const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
+  const currentTeacherClassIds = (currentTeacherProfile?.classIds || [])
+    .map((classId) => Number(classId))
+    .filter((classId) => Number.isInteger(classId));
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
     ? Array.isArray(currentTeacherProfile.specialization)
       ? currentTeacherProfile.specialization
@@ -240,7 +242,13 @@ export default function App() {
       }
       if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
       if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
-      if (Array.isArray(map['/api/classes'])) setClassesList(map['/api/classes']);
+      if (Array.isArray(map['/api/classes'])) {
+        setClassesList((previousClasses) =>
+          currentRole === 'teacher' && map['/api/classes'].length === 0
+            ? previousClasses
+            : map['/api/classes']
+        );
+      }
 
       const rawStudentsPayload = map['/api/students'];
       const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
@@ -662,7 +670,7 @@ export default function App() {
     }
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => {
     try {
       console.debug('Creating evaluation', data);
       await apiFetch('/api/evaluations', {

@@ -208,12 +208,17 @@ export const evaluations = pgTable('evaluations', {
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }),
   subject: text('subject').notNull(), // e.g. "Mathématiques"
   title: text('title').notNull(), // e.g. "Devoir surveillé 1"
+  type: text('type'), // 'interrogation', 'devoir', or 'composition'
+  sequenceNumber: integer('sequence_number'), // Unique per (termId, classId)
+  generatedName: text('generated_name'), // Automatically generated: "Devoir S1.3"
   coefficient: integer('coefficient').default(1).notNull(),
   maxScore: integer('max_score').default(20).notNull(),
   countInBulletin: boolean('count_in_bulletin').default(true).notNull(),
   date: text('date').notNull(), // YYYY-MM-DD
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (table) => ({
+  evaluationTermClassSequenceIdx: sql`UNIQUE NULLS NOT DISTINCT (${table.termId}, ${table.classId}, ${table.sequenceNumber})`,
+}));
 
 // 9. Grades (Notes)
 export const grades = pgTable('grades', {

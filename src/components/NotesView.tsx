@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types';
 import { sortClasses } from '../lib/classOrdering';
@@ -41,7 +41,7 @@ interface NotesViewProps {
   teacherSpecializations?: string[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
-  onAddEvaluation: (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => void;
+  onAddEvaluation: (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
   onUpdateGrade?: (data: { gradeId: number; evaluationId: number; studentId: number; score: string; remarks: string }) => void | Promise<void>;
   onAddClass?: (data: { name: string; schoolId?: number | null }) => void;
@@ -73,21 +73,19 @@ export default function NotesView({
   const { role, activeSchoolId } = useAuth();
   const userRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
-  const sortedClasses = sortClasses(classesList || []);
+  const sortedClasses = useMemo(() => sortClasses(classesList || []), [classesList]);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
-  const availableClasses = userRole === 'teacher'
-    ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
+  const availableClasses = useMemo(() => userRole === 'teacher'
+    ? teacherClassIds.length > 0
+      ? sortedClasses.filter((c) => teacherClassIds.includes(Number(c.id)))
+      : sortedClasses
     : userRole === 'school_admin'
       ? sortedClasses.filter((c) => isApprovedForSchool(c, currentSchoolId))
-      : sortedClasses;
-  const filteredClasses = schoolFilterId
-    ? (
-      userRole === 'super_admin'
-        ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
-        : availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
-    )
-    : availableClasses;
+      : sortedClasses, [userRole, teacherClassIds, sortedClasses, currentSchoolId]);
+  const filteredClasses = useMemo(() => schoolFilterId
+    ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
+    : availableClasses, [availableClasses, schoolFilterId]);
 
   // Use the raw evaluations list here; class-level approval/sync issues
   // are handled at the NotesView UI filtering level.
@@ -111,10 +109,16 @@ export default function NotesView({
 
   const [newEvalClassId, setNewEvalClassId] = useState('');
   const [newEvalSubject, setNewEvalSubject] = useState('');
-  const [newEvalTitle, setNewEvalTitle] = useState('');
+  const [newEvalType, setNewEvalType] = useState(''); // 'interrogation', 'devoir', 'composition'
   const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
+
+  const evaluationTypes = [
+    { value: 'interrogation', label: 'Interrogation' },
+    { value: 'devoir', label: 'Devoir' },
+    { value: 'composition', label: 'Composition' },
+  ];
 
   const normalizeSubjectName = (value: string) =>
     String(value || '')
@@ -165,7 +169,7 @@ export default function NotesView({
 
   const handleCreateEvaluation = (e: React.FormEvent) => {
     e.preventDefault();
-    console.debug('NotesView: creating evaluation with subject', newEvalSubject);
+    console.debug('NotesView: creating evaluation with subject', newEvalSubject, 'and type', newEvalType);
     if (!newEvalClassId) {
       console.warn('NotesView: missing classId for evaluation');
       return;
@@ -174,15 +178,15 @@ export default function NotesView({
       console.warn('NotesView: missing subject for evaluation');
       return;
     }
-    if (!newEvalTitle.trim()) {
-      console.warn('NotesView: missing title for evaluation');
+    if (!newEvalType) {
+      console.warn('NotesView: missing type for evaluation');
       return;
     }
 
     onAddEvaluation({
       classId: parseInt(newEvalClassId),
       subject: newEvalSubject,
-      title: newEvalTitle,
+      type: newEvalType,
       coefficient: Number(newEvalCoefficient),
       maxScore: Number(newEvalMaxScore),
       date: newEvalDate,
@@ -190,7 +194,7 @@ export default function NotesView({
     setIsNewEvalFormOpen(false);
     setNewEvalClassId('');
     setNewEvalSubject('');
-    setNewEvalTitle('');
+    setNewEvalType('');
     setNewEvalCoefficient(1);
     setNewEvalMaxScore(20);
     setNewEvalDate(formatLocalDatetime());
@@ -420,7 +424,7 @@ export default function NotesView({
     return gradesForEval.every((grade) => isGradeModified(grade));
   };
 
-  const selectableEvaluations = approvedEvaluations.filter((ev) => {
+  const selectableEvaluations = useMemo(() => approvedEvaluations.filter((ev) => {
     // class filter (single source of truth)
     if (selectedClassIdNumber === null) return false;
     if (Number(ev.classId) !== selectedClassIdNumber) return false;
@@ -437,7 +441,7 @@ export default function NotesView({
     }
 
     return true;
-  });
+  }), [approvedEvaluations, selectedClassIdNumber, userRole, teacherId, studentsList, gradesList]);
 
   useEffect(() => {
     if (pendingScrollTarget) {
@@ -663,7 +667,7 @@ export default function NotesView({
                 setNewEvalClassId(String(initialClasses[0].id));
               }
               setNewEvalSubject('');
-              setNewEvalTitle('');
+              setNewEvalType('');
               setNewEvalCoefficient(1);
               setNewEvalMaxScore(20);
               setNewEvalDate(formatLocalDatetime());
@@ -796,15 +800,18 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Intitulé du devoir (ex: "DS n°3")</label>
-              <input
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Type de devoir</label>
+              <select
                 required
-                type="text"
-                value={newEvalTitle}
-                onChange={(e) => setNewEvalTitle(e.target.value)}
-                placeholder="ex. Devoir Surveillé Fractions"
+                value={newEvalType}
+                onChange={(e) => setNewEvalType(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
-              />
+              >
+                <option value="">-- Choisir un type --</option>
+                {evaluationTypes.map((et) => (
+                  <option key={et.value} value={et.value}>{et.label}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Coefficient</label>

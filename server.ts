@@ -189,10 +189,11 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
   if (dbUser) {
     const resolvedSchoolId = await getActiveUserSchoolId(dbUser.id);
-    if (role === 'school_admin' && resolvedSchoolId == null) {
+    const effectiveSchoolId = resolvedSchoolId ?? (role === 'teacher' ? dbUser.schoolId ?? null : null);
+    if (role === 'school_admin' && effectiveSchoolId == null) {
       return null;
     }
-    return { ...dbUser, role, schoolId: resolvedSchoolId } as ResolvedActor;
+    return { ...dbUser, role, schoolId: effectiveSchoolId } as ResolvedActor;
   }
 
   return null;
@@ -3208,6 +3209,7 @@ export async function createApp() {
           .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
           .where(inArray(classes.id, classIds));
 
+        res.set('Cache-Control', 'no-store');
         res.json(assignedClasses);
         return;
       }
@@ -3788,6 +3790,9 @@ export async function createApp() {
         teacherId: teacher.id,
         classIds: assignmentMap.get(teacher.id) || [],
       }));
+      if (actor.role === 'teacher') {
+        res.set('Cache-Control', 'no-store');
+      }
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to retrieve teachers list' });
@@ -5908,9 +5913,16 @@ export async function createApp() {
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, termId, subject, title, coefficient, maxScore, date } = req.body;
-      if (!classId || !subject || !title || !date) {
+      const { classId, teacherId, termId, subject, type, coefficient, maxScore, date } = req.body;
+      if (!classId || !subject || !type || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
+      }
+
+      // Validate evaluation type
+      const validTypes = ['interrogation', 'devoir', 'composition'];
+      const normalizedType = String(type).toLowerCase().trim();
+      if (!validTypes.includes(normalizedType)) {
+        return res.status(400).json({ error: `Invalid evaluation type. Must be one of: ${validTypes.join(', ')}` });
       }
 
       // Load the class to check its school
@@ -6094,12 +6106,49 @@ export async function createApp() {
         return res.status(400).json({ error: 'La matière n’est pas approuvée pour cette école' });
       }
 
+      // Generate sequence number for this (termId, classId) combination
+      // Using a transaction to avoid race conditions
+      const sequenceNumber = await db.transaction(async (tx) => {
+        // Get the maximum sequence number for this (termId, classId)
+        const existingSequences = await tx
+          .select({ maxSeq: sql<number>`MAX(${evaluations.sequenceNumber})` })
+          .from(evaluations)
+          .where(and(
+            eq(evaluations.termId, resolvedTermId),
+            eq(evaluations.classId, parseInt(classId))
+          ));
+
+        const maxSeq = existingSequences[0]?.maxSeq ?? 0;
+        const nextSequenceNumber = (maxSeq || 0) + 1;
+
+        console.log('DEBUG sequence generation', {
+          termId: resolvedTermId,
+          classId: parseInt(classId),
+          maxSeq,
+          nextSequenceNumber,
+        });
+
+        return nextSequenceNumber;
+      });
+
+      // Get the short term name for display
+      const [selectedTermInfo] = await db
+        .select({ name: schoolTerms.name, orderIndex: schoolTerms.orderIndex })
+        .from(schoolTerms)
+        .where(eq(schoolTerms.id, resolvedTermId));
+
+      const termShortName = selectedTermInfo?.name?.replace(/Trimestre\s+/i, 'T') || `S${selectedTermInfo?.orderIndex || 1}`;
+      const generatedName = `${normalizedType.charAt(0).toUpperCase()}${normalizedType.slice(1)} ${termShortName}.${sequenceNumber}`;
+
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
         termId: resolvedTermId,
         subject: normalizedSubject,
-        title,
+        title: generatedName,
+        type: normalizedType,
+        sequenceNumber,
+        generatedName,
         coefficient: coefficient ? parseInt(coefficient) : 1,
         maxScore: maxScore ? parseInt(maxScore) : 20,
         countInBulletin: false,
@@ -6156,7 +6205,7 @@ if (uniqueParentIds.length > 0) {
   const notificationsToInsert = uniqueParentIds.map((parentUserId) => ({
     userId: parentUserId,
     evaluationId: createdEvaluation.id,
-    title: `Nouveau devoir publié : ${title}`,
+    title: `Nouveau devoir publié : ${generatedName}`,
     body: evaluationMessage,
     type: 'grade',
   }));
@@ -6168,18 +6217,18 @@ if (uniqueParentIds.length > 0) {
     console.log("📤 ENVOI NOTIFICATION DEVOIR", {
   parentUserId,
   evaluationId: createdEvaluation.id,
-  title
+  title: generatedName
 });
     const evaluationNotificationPayload = {
       parentId: parentUserId,
-      title: `Nouveau devoir à venir : ${title}`,
+      title: `Nouveau devoir à venir : ${generatedName}`,
       message: evaluationMessage,
       category: "evaluation",
       metadata: {
         target: "homework",
         evaluationId: createdEvaluation.id,
         subject,
-        title,
+        title: generatedName,
         classId,
       },
       dedupeKey: `evaluation-${createdEvaluation.id}-${parentUserId}`,

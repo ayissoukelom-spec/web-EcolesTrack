@@ -146,6 +146,9 @@ export interface Evaluation {
   termName?: string;
   subject: string;
   title: string;
+  type?: string; // 'interrogation', 'devoir', 'composition'
+  sequenceNumber?: number | null; // Unique per (termId, classId)
+  generatedName?: string; // Auto-generated name like "Devoir S1.3"
   coefficient: number;
   maxScore: number;
   countInBulletin?: boolean;

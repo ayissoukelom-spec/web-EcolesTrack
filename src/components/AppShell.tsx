@@ -302,7 +302,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; title: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => {
     await apiFetch('/api/evaluations', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
   };
