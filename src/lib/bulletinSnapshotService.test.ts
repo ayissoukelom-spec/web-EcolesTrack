@@ -147,4 +147,128 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletins).toHaveLength(0);
     expect(state.bulletinLines).toHaveLength(0);
   });
+
+  it('calcule le rang par matière avec trois élèves et trois moyennes différentes', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      grades: [
+        // Math: Alice 18, Bob 15, Charlie 12
+        { id: 1, evaluationId: 1, studentId: 1, score: '18' },
+        { id: 2, evaluationId: 1, studentId: 2, score: '15' },
+        { id: 3, evaluationId: 1, studentId: 3, score: '12' },
+        // Français: Alice 14, Bob 16, Charlie 18
+        { id: 4, evaluationId: 2, studentId: 1, score: '8' },  // 8/10 = 16/20
+        { id: 5, evaluationId: 2, studentId: 2, score: '9.5' }, // 9.5/10 = 19/20
+        { id: 6, evaluationId: 2, studentId: 3, score: '10' }, // 10/10 = 20/20
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+    const frenchLine = state.bulletinLines.find((line) => line.subjectName === 'Français');
+
+    // Alice should rank 1st in Math (18 is highest)
+    expect(mathLine?.rank).toBe(1);
+    // Alice should rank 3rd in French (16/20 is lowest)
+    expect(frenchLine?.rank).toBe(3);
+  });
+
+  it('attribue le même rang à deux élèves ex æquo (tie-breaking rule)', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      grades: [
+        // Math: All three students have 15 (tie), except Charlie has 13
+        { id: 1, evaluationId: 1, studentId: 1, score: '15' },
+        { id: 2, evaluationId: 1, studentId: 2, score: '15' },
+        { id: 3, evaluationId: 1, studentId: 3, score: '13' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+
+    // Alice is tied at 15, so rank 1
+    expect(mathLine?.rank).toBe(1);
+  });
+
+  it('calcule les rangs indépendamment pour chaque matière', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+      ],
+      grades: [
+        // Math: Alice 16, Bob 12
+        { id: 1, evaluationId: 1, studentId: 1, score: '16' },
+        { id: 2, evaluationId: 1, studentId: 2, score: '12' },
+        // Français: Alice 10, Bob 16
+        { id: 3, evaluationId: 2, studentId: 1, score: '5' }, // 5/10 = 10/20
+        { id: 4, evaluationId: 2, studentId: 2, score: '8' }, // 8/10 = 16/20
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+    const frenchLine = state.bulletinLines.find((line) => line.subjectName === 'Français');
+
+    // Alice is 1st in Math, 2nd in French
+    expect(mathLine?.rank).toBe(1);
+    expect(frenchLine?.rank).toBe(2);
+  });
+
+  it('retourne null pour le rang si aucune moyenne valide n\'existe', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      grades: [
+        // Only Bob has a grade in Math; Alice has none
+        { id: 1, evaluationId: 1, studentId: 2, score: '15' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+
+    // Alice has no grade in Math, so rank should be null
+    expect(mathLine?.rank).toBeNull();
+  });
+
+  it('le rang par matière correspond à la moyenne affichée dans la colonne Note /20', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      grades: [
+        // Math: Alice 20, Bob 10, Charlie 15
+        { id: 1, evaluationId: 1, studentId: 1, score: '20' },
+        { id: 2, evaluationId: 1, studentId: 2, score: '10' },
+        { id: 3, evaluationId: 1, studentId: 3, score: '15' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+
+    // Alice: 20/20 (rank 1), average 20
+    expect(mathLine?.average).toBe(20);
+    expect(mathLine?.rank).toBe(1);
+  });
 });

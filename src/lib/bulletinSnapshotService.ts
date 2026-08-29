@@ -138,6 +138,7 @@ const computeSubjectLines = (
   classStudents: BulletinStudentLike[],
   allGrades: BulletinGradeLike[],
   targetStudentId: number,
+  termEvaluations: BulletinEvaluationLike[],
   teacherNameMap: Map<number, string> = new Map(),
 ): BulletinLineSnapshotInput[] => {
   const bySubject = new Map<string, {
@@ -221,6 +222,9 @@ const computeSubjectLines = (
       ? teacherNameMap.get(agg.teacherIds[agg.teacherIds.length - 1]) ?? null
       : null;
 
+    // Calculate subject rank
+    const rank = computeSubjectRank(subjectName, targetStudentId, classStudents, termEvaluations, allGrades);
+
     return {
       subjectId: null,
       subjectName,
@@ -233,7 +237,7 @@ const computeSubjectLines = (
       noteCoef,
       teacherName,
       teacherComment: null,
-      rank: null,
+      rank,
       signature: null,
     };
   });
@@ -261,6 +265,85 @@ const parseNumericScore = (score: string | number | null | undefined): number | 
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+/**
+ * Calculates the rank of a student within their subject and class for the term.
+ * Uses the same average calculation as the bulletin line.
+ *
+ * Rule: Students with identical averages share the same rank,
+ * and the next rank accounts for all students above (e.g., 1, 1, 3).
+ *
+ * @param subjectName - The subject for which to calculate rank
+ * @param targetStudentId - The student whose rank we want
+ * @param classStudents - All students in the class
+ * @param termEvaluations - Evaluations for the term
+ * @param allGrades - All grades for the class
+ * @returns The rank (1-based) or null if no valid average
+ */
+const computeSubjectRank = (
+  subjectName: string,
+  targetStudentId: number,
+  classStudents: BulletinStudentLike[],
+  termEvaluations: BulletinEvaluationLike[],
+  allGrades: BulletinGradeLike[],
+): number | null => {
+  // Filter evaluations for this subject only
+  const subjectEvaluations = termEvaluations.filter((e) => e.subject === subjectName);
+  if (subjectEvaluations.length === 0) return null;
+
+  // Calculate average for each student in the subject
+  const studentAverages: Array<{ studentId: number; average: number | null }> = [];
+
+  for (const classStudent of classStudents) {
+    // Collect grades for this student in this subject
+    const studentSubjectGrades = allGrades.filter(
+      (grade) => grade.studentId === classStudent.id &&
+                 subjectEvaluations.some((e) => e.id === grade.evaluationId)
+    );
+
+    // Calculate the subject average using the same logic as bulletin lines
+    let totalWeightedScore = 0;
+    let totalCoefficient = 0;
+
+    for (const evaluation of subjectEvaluations) {
+      const grade = studentSubjectGrades.find((g) => g.evaluationId === evaluation.id);
+      if (!grade) continue;
+
+      const rawScore = parseNumericScore(grade.score);
+      if (rawScore == null) continue;
+
+      // Normalize to /20 scale
+      const normalized = (rawScore / (evaluation.maxScore || 20)) * 20;
+      const coefficient = Number(evaluation.coefficient || 0);
+
+      if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
+
+      totalWeightedScore += normalized * coefficient;
+      totalCoefficient += coefficient;
+    }
+
+    const average = totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+    studentAverages.push({ studentId: classStudent.id, average });
+  }
+
+  // Filter students with valid averages
+  const validAverages = studentAverages.filter((entry) => entry.average != null);
+  if (validAverages.length === 0) return null;
+
+  // Sort by average descending
+  validAverages.sort((a, b) => (b.average as number) - (a.average as number));
+
+  // Find the target student and compute rank (accounting for ties)
+  let currentRank = 1;
+  for (let i = 0; i < validAverages.length; i++) {
+    if (validAverages[i].studentId === targetStudentId) {
+      return currentRank;
+    }
+    // Next rank increments by 1 for each new student
+    currentRank = i + 2;
+  }
+
+  return null;
+};
 
 const computeRank = (
   targetStudentId: number,
@@ -645,7 +728,7 @@ export const generateBulletinSnapshot = async (
     const teacherIds = Array.from(new Set(termEvaluations.map((e) => e.teacherId).filter((id) => id != null) as number[]));
     const teacherNameMap = await ctx.getTeacherNames(teacherIds);
 
-    const lines = computeSubjectLines(calculation.selectedEvaluations, calculation.snapshots, classStudents, allGrades, student.id, teacherNameMap);
+    const lines = computeSubjectLines(calculation.selectedEvaluations, calculation.snapshots, classStudents, allGrades, student.id, termEvaluations, teacherNameMap);
 
     const inserted = await ctx.insertBulletin({
       studentId: student.id,
