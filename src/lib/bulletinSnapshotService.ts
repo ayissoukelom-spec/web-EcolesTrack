@@ -20,6 +20,7 @@ import {
   type BulletinGradeLike,
   type BulletinStudentLike,
 } from './bulletinService';
+import { getGradeAppreciation } from './gradeColor';
 
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
@@ -305,7 +306,7 @@ const computeSubjectLines = (
       classAverage,
       noteCoef,
       teacherName,
-      teacherComment: null,
+      teacherComment: getGradeAppreciation(subjectAverage),
       rank,
       signature: null,
     };
