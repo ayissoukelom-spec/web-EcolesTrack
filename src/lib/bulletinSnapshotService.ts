@@ -16,6 +16,7 @@ import {
 } from '../db/schema.ts';
 import {
   calculateStudentTermAverage,
+  calculateFinalSubjectAverage,
   type BulletinEvaluationLike,
   type BulletinGradeLike,
   type BulletinStudentLike,
@@ -302,9 +303,9 @@ const computeSubjectLines = (
     const interrogationAvg = calculateTypeWeightedAverage(agg.byType.interrogation);
     const devoirAvg = calculateTypeWeightedAverage(agg.byType.devoir);
     const compositionAvg = calculateTypeWeightedAverage(agg.byType.composition);
-    const subjectAverage = agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null;
-    const noteCoef = subjectAverage != null ? subjectAverage * agg.coefficient : null;
     const classAverage = classAveragesBySubject.get(subjectName) ?? null;
+    const subjectAverage = calculateFinalSubjectAverage(classAverage, compositionAvg);
+    const noteCoef = subjectAverage != null ? subjectAverage * agg.coefficient : null;
 
     const teacherName = resolveSubjectTeacherName(agg.teacherIds, teacherNameMap);
 
@@ -386,9 +387,11 @@ const computeSubjectRank = (
                  subjectEvaluations.some((e) => e.id === grade.evaluationId)
     );
 
-    // Calculate the subject average using the same logic as bulletin lines
-    let totalWeightedScore = 0;
-    let totalCoefficient = 0;
+    const entriesByType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>> = {
+      interrogation: [],
+      devoir: [],
+      composition: [],
+    };
 
     for (const evaluation of subjectEvaluations) {
       const grade = studentSubjectGrades.find((g) => g.evaluationId === evaluation.id);
@@ -400,14 +403,18 @@ const computeSubjectRank = (
       // Normalize to /20 scale
       const normalized = (rawScore / (evaluation.maxScore || 20)) * 20;
       const coefficient = Number(evaluation.coefficient || 0);
-
+      const type = evaluation.type as 'interrogation' | 'devoir' | 'composition' | null;
       if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
-
-      totalWeightedScore += normalized * coefficient;
-      totalCoefficient += coefficient;
+      if (type === 'interrogation' || type === 'devoir' || type === 'composition') {
+        entriesByType[type].push({ coefficient, score: normalized });
+      }
     }
 
-    const average = totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+    const classAverage = calculateFinalSubjectAverage(
+      calculateTypeWeightedAverage(entriesByType.interrogation),
+      calculateTypeWeightedAverage(entriesByType.devoir),
+    );
+    const average = calculateFinalSubjectAverage(classAverage, calculateTypeWeightedAverage(entriesByType.composition));
     studentAverages.push({ studentId: classStudent.id, average });
   }
 

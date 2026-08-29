@@ -20,6 +20,7 @@ import {
   studentAcademicYearStatuses,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
+import { calculateFinalSubjectAverage } from './bulletinService';
 import studentAccess from './studentAccess';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
@@ -220,7 +221,10 @@ const buildFallbackLinesFromGrades = (
     subjectId: null,
     subjectName,
     coefficient: agg.coefficient,
-    average: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
+    average: calculateFinalSubjectAverage(
+      interrogation != null && devoir != null ? (interrogation + devoir) / 2 : interrogation ?? devoir,
+      computeWeightedAverage(agg.groups.composition),
+    ),
     interrogation: computeWeightedAverage(agg.groups.interrogation),
     devoir: computeWeightedAverage(agg.groups.devoir),
     composition: computeWeightedAverage(agg.groups.composition),
@@ -378,6 +382,8 @@ const sanitizePdfText = (value: string): string => {
     .replace(/\s+/g, ' ')
     .trim();
 };
+
+export const BULLETIN_FINAL_AVERAGE_LABEL = 'Moy. Général';
 
 const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
   const [header] = await db
@@ -661,7 +667,7 @@ export const createBulletinPdfDocument = async (
     { label: 'Devoir', width: 30 },
     { label: 'Moy. Clas', width: 35 },
     { label: 'Compo.', width: 30 },
-    { label: 'Note /20', width: 35 },
+    { label: BULLETIN_FINAL_AVERAGE_LABEL, width: 35 },
     { label: 'Coef.', width: 28 },
     { label: 'Note coef.', width: 40 },
     { label: 'Rang', width: 28 },
@@ -677,7 +683,7 @@ export const createBulletinPdfDocument = async (
     ['Devoir'],
     ['Moy.', 'Clas'],
     ['Compo.'],
-    ['Note', '/20'],
+    ['Moy.', 'Général'],
     ['Coef.'],
     ['Note', 'coef.'],
     ['Rang'],
@@ -904,7 +910,7 @@ export const createBulletinPdfDocument = async (
     drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[4].width;
 
-    // Column 6: Note /20
+    // Column 6: Moy. Général
     drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[5].width;
 

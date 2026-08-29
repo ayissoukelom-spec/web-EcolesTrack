@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateStudentTermAverage,
+  calculateFinalSubjectAverage,
   selectBulletinEvaluationsForTerm,
   summarizeTypeAveragesBySubject,
 } from './bulletinService';
@@ -25,6 +26,26 @@ const student: Student = {
 };
 
 describe('bulletinService', () => {
+  it.each([
+    [14, 16, 15],
+    [12, 10, 11],
+    [14, null, 14],
+    [null, 16, 16],
+    [null, null, null],
+  ])('calcule Moy. Général depuis Moy. Clas et Compo.', (classAverage, composition, expected) => {
+    expect(calculateFinalSubjectAverage(classAverage, composition)).toBe(expected);
+  });
+
+  it('calcule la moyenne finale indépendamment pour chaque matière', () => {
+    const lines = new Map([
+      ['Math', calculateFinalSubjectAverage(14, 16)],
+      ['Français', calculateFinalSubjectAverage(12, 10)],
+    ]);
+
+    expect(lines.get('Math')).toBe(15);
+    expect(lines.get('Français')).toBe(11);
+  });
+
   it('sélectionne uniquement les évaluations du trimestre comptabilisées dans le bulletin', () => {
     const evaluations: Evaluation[] = [
       { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'DS 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },

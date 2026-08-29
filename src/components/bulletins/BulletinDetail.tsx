@@ -151,7 +151,7 @@ export default function BulletinDetail({
                   <th className="text-center px-2 py-2">Devoir</th>
                   <th className="text-center px-2 py-2"><span className="block">Moy.</span><span className="block">Clas</span></th>
                   <th className="text-center px-2 py-2">Compo.</th>
-                  <th className="text-center px-2 py-2"><span className="block">Note</span><span className="block">/20</span></th>
+                  <th className="text-center px-2 py-2">Moy. Général</th>
                   <th className="text-center px-2 py-2">Coef.</th>
                   <th className="text-center px-2 py-2"><span className="block">Note</span><span className="block">coef.</span></th>
                   <th className="text-center px-2 py-2">Rang</th>
@@ -169,7 +169,9 @@ export default function BulletinDetail({
                     average: line.average,
                     classAverage: null,
                   };
-                  const studentAverage = breakdown.average ?? line.average;
+                  const studentAverage = breakdown.classAverage != null && breakdown.composition != null
+                    ? (breakdown.classAverage + breakdown.composition) / 2
+                    : breakdown.classAverage ?? breakdown.composition ?? line.average;
                   const noteCoef = studentAverage != null && line.coefficient != null
                     ? (parseFloat(String(studentAverage)) * line.coefficient).toFixed(2)
                     : '-';

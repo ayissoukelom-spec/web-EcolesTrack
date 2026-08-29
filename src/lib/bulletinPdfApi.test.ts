@@ -5,6 +5,7 @@ import { inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
   createBulletinPdfDocument,
+  BULLETIN_FINAL_AVERAGE_LABEL,
   formatStudentStatusForPdf,
   resolveStudentStatusForAcademicYear,
   type BulletinPdfActor,
@@ -148,12 +149,12 @@ describe('bulletin PDF API', () => {
         streams.push(match[1]);
       }
     }
-    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
     expect(text).toContain('STATUT :');
     expect(text).toMatch(/STATUT :[\s\S]*SEXE :/);
   });
 
-  it('affiche le libellé Moy. interro dans l en-tête du tableau PDF', async () => {
+  it('affiche le libellé Moy. Général dans l en-tête du tableau PDF', async () => {
     const pdfBytes = await createBulletinPdfDocument(snapshotData);
     const raw = Buffer.from(pdfBytes).toString('latin1');
     const streams: string[] = [];
@@ -164,8 +165,9 @@ describe('bulletin PDF API', () => {
         streams.push(match[1]);
       }
     }
-    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
-    expect(text).toContain('Moy. interro');
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    expect(BULLETIN_FINAL_AVERAGE_LABEL).toBe('Moy. Général');
+    expect(text).not.toContain('Note /20');
     expect(text).toContain('Devoir');
   });
 
@@ -180,7 +182,7 @@ describe('bulletin PDF API', () => {
         streams.push(match[1]);
       }
     }
-    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
     expect(text).not.toContain('STATUT :');
     expect(text).toContain('SEXE :');
   });

@@ -108,6 +108,14 @@ export const summarizeTypeAveragesBySubject = (subjectSnapshots: BulletinEvaluat
   };
 };
 
+export const calculateFinalSubjectAverage = (
+  classAverage: number | null | undefined,
+  composition: number | null | undefined,
+): number | null => {
+  if (classAverage != null && composition != null) return (classAverage + composition) / 2;
+  return classAverage ?? composition ?? null;
+};
+
 export interface BulletinTermAverageResult {
   termId: number;
   studentId: number;

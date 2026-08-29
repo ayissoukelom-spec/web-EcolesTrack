@@ -256,7 +256,7 @@ describe('generateBulletinSnapshot', () => {
     expect(mathLine?.rank).toBeNull();
   });
 
-  it('le rang par matière correspond à la moyenne affichée dans la colonne Note /20', async () => {
+  it('le rang par matière correspond à la moyenne affichée dans la colonne Moy. Général', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,
       students: [
@@ -276,8 +276,8 @@ describe('generateBulletinSnapshot', () => {
 
     const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
 
-    // Alice: 20/20 (rank 1), average 20
-    expect(mathLine?.average).toBe(20);
+    // Alice: Moy. Clas 15/20 (rank 1), Moy. Général 15 because no composition exists
+    expect(mathLine?.average).toBe(15);
     expect(mathLine?.rank).toBe(1);
   });
 

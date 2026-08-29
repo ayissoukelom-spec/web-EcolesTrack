@@ -432,7 +432,7 @@ export default function BulletinsView({
       .filter((student) => student.classId === detail.classId)
       .map((student) => student.id);
 
-    const subjectMap = new Map<string, { groups: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>; subjectAverages: number[] }>();
+    const subjectMap = new Map<string, { groups: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>; typeAverages: Record<'interrogation' | 'devoir', number[]> }>();
 
     for (const subjectName of Array.from(new Set(relevantEvaluations.map((ev) => ev.subject.trim() || 'Matiere non renseignee')))) {
       const byType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>> = {
@@ -440,7 +440,7 @@ export default function BulletinsView({
         devoir: [],
         composition: [],
       };
-      const subjectAverages: number[] = [];
+      const typeAverages: Record<'interrogation' | 'devoir', number[]> = { interrogation: [], devoir: [] };
 
       for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
         const type = normalizeEvaluationType(ev.type);
@@ -455,35 +455,48 @@ export default function BulletinsView({
       }
 
       for (const studentId of classStudentIds) {
-        const entries: Array<{ coefficient: number; score: number }> = [];
+        const entriesByType: Record<'interrogation' | 'devoir', Array<{ coefficient: number; score: number }>> = {
+          interrogation: [],
+          devoir: [],
+        };
         for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
+          const type = normalizeEvaluationType(ev.type);
+          if (type !== 'interrogation' && type !== 'devoir') continue;
           const grade = gradesList.find((g) => g.evaluationId === ev.id && g.studentId === studentId);
           const rawScore = grade ? parseNumericScore(grade.score) : null;
           if (rawScore == null) continue;
           const normalizedScore = (rawScore / (ev.maxScore || 20)) * 20;
-          entries.push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
+          entriesByType[type].push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
         }
-        const subjectAverage = computeWeightedAverage(entries);
-        if (subjectAverage != null) subjectAverages.push(subjectAverage);
+        for (const type of ['interrogation', 'devoir'] as const) {
+          const typeAverage = computeWeightedAverage(entriesByType[type]);
+          if (typeAverage != null) typeAverages[type].push(typeAverage);
+        }
       }
 
       subjectMap.set(subjectName, {
         groups: byType,
-        subjectAverages,
+        typeAverages,
       });
     }
 
     const result: Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }> = {};
-    for (const [subjectName, { groups, subjectAverages }] of subjectMap.entries()) {
+    for (const [subjectName, { groups, typeAverages }] of subjectMap.entries()) {
       const allEntries = Array.from(new Set([
         ...groups.interrogation,
         ...groups.devoir,
         ...groups.composition,
       ]));
       const currentAverage = computeWeightedAverage(allEntries);
-      const classAverage = subjectAverages.length > 0
-        ? subjectAverages.reduce((sum, value) => sum + value, 0) / subjectAverages.length
+      const classInterrogationAverage = typeAverages.interrogation.length > 0
+        ? typeAverages.interrogation.reduce((sum, value) => sum + value, 0) / typeAverages.interrogation.length
         : null;
+      const classDevoirAverage = typeAverages.devoir.length > 0
+        ? typeAverages.devoir.reduce((sum, value) => sum + value, 0) / typeAverages.devoir.length
+        : null;
+      const classAverage = classInterrogationAverage != null && classDevoirAverage != null
+        ? (classInterrogationAverage + classDevoirAverage) / 2
+        : classInterrogationAverage ?? classDevoirAverage;
       result[subjectName] = {
         interrogation: computeWeightedAverage(groups.interrogation),
         devoir: computeWeightedAverage(groups.devoir),
