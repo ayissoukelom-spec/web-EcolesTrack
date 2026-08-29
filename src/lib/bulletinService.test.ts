@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateStudentTermAverage,
   selectBulletinEvaluationsForTerm,
+  summarizeTypeAveragesBySubject,
 } from './bulletinService';
 import type { Evaluation, Grade, SchoolTerm, Student } from '../types';
 
@@ -157,5 +158,26 @@ describe('bulletinService', () => {
     expect(result.average).toBeCloseTo(12, 5);
     expect(result.totalCoefficient).toBe(3);
     expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1, 2]);
+  });
+
+  it('préserve le type des évaluations pour le regroupement Inter./Dev./Compo.', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Interro 1', type: 'interrogation', coefficient: 2, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Devoir 1', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+      { id: 3, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Compo 1', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-12' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '10' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '12' },
+      { id: 3, evaluationId: 3, studentId: 1, score: '16' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+    expect(result.snapshots.map((snapshot) => snapshot.type)).toEqual(['interrogation', 'devoir', 'composition']);
+    expect(summarizeTypeAveragesBySubject(result.snapshots)).toEqual({
+      interrogation: 10,
+      devoir: 12,
+      composition: 16,
+    });
   });
 });

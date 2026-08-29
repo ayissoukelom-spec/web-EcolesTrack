@@ -33,6 +33,36 @@ interface BulletinsViewProps {
 
 const parentCacheKey = (uid: string) => `ecoletrack_parent_bulletin_ids_${uid}`;
 
+const normalizeEvaluationType = (value?: string | null): 'interrogation' | 'devoir' | 'composition' | null => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'interrogation') return 'interrogation';
+  if (normalized === 'devoir') return 'devoir';
+  if (normalized === 'composition') return 'composition';
+  return null;
+};
+
+const parseNumericScore = (score: string | number | null | undefined): number | null => {
+  if (score == null) return null;
+  const normalized = String(score).trim().replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const computeWeightedAverage = (entries: Array<{ coefficient: number; score: number }>): number | null => {
+  let totalWeightedScore = 0;
+  let totalCoefficient = 0;
+
+  for (const entry of entries) {
+    const coefficient = Number(entry.coefficient ?? 0);
+    if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
+    totalWeightedScore += entry.score * coefficient;
+    totalCoefficient += coefficient;
+  }
+
+  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+};
+
 const toParentListItem = (detail: BulletinDetail): BulletinListItem => ({
   id: detail.id,
   studentId: detail.studentId,
@@ -377,6 +407,90 @@ export default function BulletinsView({
 
     return notes;
   }, [detailHook.detail, evaluationsList, gradesList, termsFromApi]);
+
+  const subjectBreakdownForDetail = useMemo(() => {
+    const detail = detailHook.detail;
+    if (!detail) return {} as Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }>;
+
+    const selectedTerm = termsFromApi.find((t) => t.id === detail.termId);
+    const startDate = selectedTerm?.startDate ?? null;
+    const endDate = selectedTerm?.endDate ?? null;
+    const relevantEvaluations = evaluationsList.filter((ev) => {
+      if (ev.classId !== detail.classId) return false;
+      if (ev.countInBulletin === false) return false;
+      if (ev.termId != null) return ev.termId === detail.termId;
+      if (!startDate || !endDate || !ev.date) return false;
+      const evalDate = String(ev.date).slice(0, 10);
+      return evalDate >= startDate && evalDate <= endDate;
+    });
+
+    const classStudentIds = studentsList
+      .filter((student) => student.classId === detail.classId)
+      .map((student) => student.id);
+
+    const subjectMap = new Map<string, { groups: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>; subjectAverages: number[] }>();
+
+    for (const subjectName of Array.from(new Set(relevantEvaluations.map((ev) => ev.subject.trim() || 'Matiere non renseignee')))) {
+      const byType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>> = {
+        interrogation: [],
+        devoir: [],
+        composition: [],
+      };
+      const subjectAverages: number[] = [];
+
+      for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
+        const type = normalizeEvaluationType(ev.type);
+        if (!type) continue;
+
+        const scoreForStudent = gradesList.find((grade) => grade.evaluationId === ev.id && grade.studentId === detail.studentId);
+        const rawScore = scoreForStudent ? parseNumericScore(scoreForStudent.score) : null;
+        if (rawScore == null) continue;
+
+        const normalizedScore = (rawScore / (ev.maxScore || 20)) * 20;
+        byType[type].push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
+      }
+
+      for (const studentId of classStudentIds) {
+        const entries: Array<{ coefficient: number; score: number }> = [];
+        for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
+          const grade = gradesList.find((g) => g.evaluationId === ev.id && g.studentId === studentId);
+          const rawScore = grade ? parseNumericScore(grade.score) : null;
+          if (rawScore == null) continue;
+          const normalizedScore = (rawScore / (ev.maxScore || 20)) * 20;
+          entries.push({ coefficient: Number(ev.coefficient || 0), score: normalizedScore });
+        }
+        const subjectAverage = computeWeightedAverage(entries);
+        if (subjectAverage != null) subjectAverages.push(subjectAverage);
+      }
+
+      subjectMap.set(subjectName, {
+        groups: byType,
+        subjectAverages,
+      });
+    }
+
+    const result: Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }> = {};
+    for (const [subjectName, { groups, subjectAverages }] of subjectMap.entries()) {
+      const allEntries = Array.from(new Set([
+        ...groups.interrogation,
+        ...groups.devoir,
+        ...groups.composition,
+      ]));
+      const currentAverage = computeWeightedAverage(allEntries);
+      const classAverage = subjectAverages.length > 0
+        ? subjectAverages.reduce((sum, value) => sum + value, 0) / subjectAverages.length
+        : null;
+      result[subjectName] = {
+        interrogation: computeWeightedAverage(groups.interrogation),
+        devoir: computeWeightedAverage(groups.devoir),
+        composition: computeWeightedAverage(groups.composition),
+        average: currentAverage,
+        classAverage,
+      };
+    }
+
+    return result;
+  }, [detailHook.detail, evaluationsList, gradesList, studentsList, termsFromApi]);
 
   useEffect(() => {
     if (listHook.error && isParent) {
@@ -816,6 +930,7 @@ export default function BulletinsView({
           error={detailHook.error || pdfHook.error}
           selectedId={selectedId}
           liveNotes={liveNotesForDetail}
+          subjectBreakdown={subjectBreakdownForDetail}
           pdfLoading={pdfHook.loading}
           onDownloadPdf={handleDownloadPdf}
         />

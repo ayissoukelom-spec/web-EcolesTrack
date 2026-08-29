@@ -9,9 +9,12 @@ interface BulletinDetailProps {
   error: string | null;
   selectedId: number | null;
   liveNotes: Array<{ id: string; subject: string; title: string; score: string; maxScore: number | null; date: string | null }>;
+  subjectBreakdown?: Record<string, { interrogation: number | null; devoir: number | null; composition: number | null; average: number | null; classAverage: number | null }>;
   pdfLoading: boolean;
   onDownloadPdf: () => void;
 }
+
+const formatValue = (value: number | null): string => value == null ? '—' : value.toFixed(2);
 
 export default function BulletinDetail({
   detail,
@@ -19,6 +22,7 @@ export default function BulletinDetail({
   error,
   selectedId,
   liveNotes,
+  subjectBreakdown = {},
   pdfLoading,
   onDownloadPdf,
 }: BulletinDetailProps) {
@@ -139,24 +143,41 @@ export default function BulletinDetail({
           )}
 
           <div className="overflow-x-auto border border-slate-100 rounded-xl">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs min-w-[760px]">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="text-left px-3 py-2">Matiere</th>
                   <th className="text-left px-3 py-2">Coef</th>
+                  <th className="text-left px-3 py-2">Inter.</th>
+                  <th className="text-left px-3 py-2">Dev.</th>
+                  <th className="text-left px-3 py-2">Compo.</th>
                   <th className="text-left px-3 py-2">Moyenne</th>
+                  <th className="text-left px-3 py-2">M. Clas</th>
                   <th className="text-left px-3 py-2">Appreciation</th>
                 </tr>
               </thead>
               <tbody>
-                {detail.lines.map((line) => (
-                  <tr key={line.id} className="border-t border-slate-100">
-                    <td className="px-3 py-2">{line.subjectName}</td>
-                    <td className="px-3 py-2">{line.coefficient}</td>
-                    <td className="px-3 py-2">{line.average == null ? '-' : line.average.toFixed(2)}</td>
-                    <td className="px-3 py-2">{line.teacherComment || '-'}</td>
-                  </tr>
-                ))}
+                {detail.lines.map((line) => {
+                  const breakdown = subjectBreakdown[line.subjectName] ?? {
+                    interrogation: null,
+                    devoir: null,
+                    composition: null,
+                    average: line.average,
+                    classAverage: null,
+                  };
+                  return (
+                    <tr key={line.id} className="border-t border-slate-100 align-top">
+                      <td className="px-3 py-2">{line.subjectName}</td>
+                      <td className="px-3 py-2">{line.coefficient}</td>
+                      <td className="px-3 py-2">{formatValue(breakdown.interrogation)}</td>
+                      <td className="px-3 py-2">{formatValue(breakdown.devoir)}</td>
+                      <td className="px-3 py-2">{formatValue(breakdown.composition)}</td>
+                      <td className="px-3 py-2">{formatValue(breakdown.average ?? line.average)}</td>
+                      <td className="px-3 py-2">{formatValue(breakdown.classAverage)}</td>
+                      <td className="px-3 py-2">{line.teacherComment || '-'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

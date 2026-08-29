@@ -20,12 +20,15 @@ export interface BulletinStudentLike {
   lastName?: string;
 }
 
+export type BulletinEvaluationType = 'interrogation' | 'devoir' | 'composition';
+
 export interface BulletinEvaluationLike {
   id: number;
   classId: number;
   termId?: number | null;
   subject: string;
   title: string;
+  type?: string | null;
   coefficient: number;
   maxScore: number;
   countInBulletin?: boolean;
@@ -42,6 +45,7 @@ export interface BulletinEvaluationSnapshot {
   evaluationId: number;
   title: string;
   subject: string;
+  type?: BulletinEvaluationType | null;
   coefficient: number;
   maxScore: number;
   rawScore: number | null;
@@ -50,6 +54,58 @@ export interface BulletinEvaluationSnapshot {
   countedInAverage: boolean;
   excludedReason?: 'excluded-from-bulletin' | 'missing-grade' | 'invalid-score' | 'invalid-max-score';
 }
+
+export interface BulletinTypeAverageSummary {
+  interrogation: number | null;
+  devoir: number | null;
+  composition: number | null;
+}
+
+export const normalizeEvaluationType = (value?: string | null): BulletinEvaluationType | null => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'interrogation') return 'interrogation';
+  if (normalized === 'devoir') return 'devoir';
+  if (normalized === 'composition') return 'composition';
+  return null;
+};
+
+export const calculateTypeWeightedAverage = (entries: Array<{ coefficient: number; normalizedScore: number | null }>): number | null => {
+  let totalWeightedScore = 0;
+  let totalCoefficient = 0;
+
+  for (const entry of entries) {
+    const coefficient = Number(entry.coefficient ?? 0);
+    const normalizedScore = entry.normalizedScore;
+    if (!Number.isFinite(coefficient) || coefficient <= 0 || normalizedScore == null) continue;
+    totalWeightedScore += normalizedScore * coefficient;
+    totalCoefficient += coefficient;
+  }
+
+  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+};
+
+export const summarizeTypeAveragesBySubject = (subjectSnapshots: BulletinEvaluationSnapshot[]): BulletinTypeAverageSummary => {
+  const grouped: Record<BulletinEvaluationType, Array<{ coefficient: number; normalizedScore: number | null }>> = {
+    interrogation: [],
+    devoir: [],
+    composition: [],
+  };
+
+  for (const snapshot of subjectSnapshots) {
+    const type = snapshot.type ?? normalizeEvaluationType((snapshot as any).evaluationType ?? null);
+    if (!type) continue;
+    grouped[type].push({
+      coefficient: Number(snapshot.coefficient ?? 0),
+      normalizedScore: snapshot.normalizedScore,
+    });
+  }
+
+  return {
+    interrogation: calculateTypeWeightedAverage(grouped.interrogation),
+    devoir: calculateTypeWeightedAverage(grouped.devoir),
+    composition: calculateTypeWeightedAverage(grouped.composition),
+  };
+};
 
 export interface BulletinTermAverageResult {
   termId: number;
@@ -117,6 +173,7 @@ export const calculateStudentTermAverage = ({ term, student, evaluations, grades
 
   for (const evaluation of selectedEvaluations) {
     const coefficient = resolveCoefficient(evaluation);
+    const type = normalizeEvaluationType(evaluation.type);
     const latestGrade = findLatestGradeForStudent(evaluation.id, student.id, grades);
 
     if (!latestGrade) {
@@ -124,6 +181,7 @@ export const calculateStudentTermAverage = ({ term, student, evaluations, grades
         evaluationId: evaluation.id,
         title: evaluation.title,
         subject: evaluation.subject,
+        type,
         coefficient,
         maxScore: evaluation.maxScore,
         rawScore: null,
@@ -141,6 +199,7 @@ export const calculateStudentTermAverage = ({ term, student, evaluations, grades
         evaluationId: evaluation.id,
         title: evaluation.title,
         subject: evaluation.subject,
+        type,
         coefficient,
         maxScore: evaluation.maxScore,
         rawScore: null,
@@ -158,6 +217,7 @@ export const calculateStudentTermAverage = ({ term, student, evaluations, grades
         evaluationId: evaluation.id,
         title: evaluation.title,
         subject: evaluation.subject,
+        type,
         coefficient,
         maxScore: evaluation.maxScore,
         rawScore,
@@ -177,6 +237,7 @@ export const calculateStudentTermAverage = ({ term, student, evaluations, grades
       evaluationId: evaluation.id,
       title: evaluation.title,
       subject: evaluation.subject,
+      type,
       coefficient,
       maxScore: evaluation.maxScore,
       rawScore,

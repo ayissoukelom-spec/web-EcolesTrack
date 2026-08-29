@@ -52,6 +52,10 @@ export interface BulletinPdfLine {
   subjectName: string;
   coefficient: number;
   average: number | null;
+  interrogation?: number | null;
+  devoir?: number | null;
+  composition?: number | null;
+  classAverage?: number | null;
   teacherComment: string | null;
   rank: number | null;
 }
@@ -161,22 +165,40 @@ const parseNumericScore = (score: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const computeWeightedAverage = (entries: Array<{ coefficient: number; score: number }>): number | null => {
+  let totalWeightedScore = 0;
+  let totalCoefficient = 0;
+
+  for (const entry of entries) {
+    const coefficient = Number(entry.coefficient ?? 0);
+    if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
+    totalWeightedScore += entry.score * coefficient;
+    totalCoefficient += coefficient;
+  }
+
+  return totalCoefficient > 0 ? totalWeightedScore / totalCoefficient : null;
+};
+
 const buildFallbackLinesFromGrades = (
-  rows: Array<{ subject: string; coefficient: number; maxScore: number; score: string }>,
+  rows: Array<{ subject: string; coefficient: number; maxScore: number; score: string; type?: string | null }>,
 ): BulletinPdfLine[] => {
-  const bySubject = new Map<string, { coefficient: number; weighted: number; weightedCoefficient: number }>();
+  const bySubject = new Map<string, { coefficient: number; weighted: number; weightedCoefficient: number; groups: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>> }>();
 
   for (const row of rows) {
     const coefficient = Number(row.coefficient || 0);
     const maxScore = Number(row.maxScore || 0);
     const rawScore = parseNumericScore(row.score);
     if (!(coefficient > 0) || !(maxScore > 0) || rawScore == null) continue;
-
     const normalizedScore = (rawScore / maxScore) * 20;
-    const current = bySubject.get(row.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0 };
+    const type = row.type?.trim().toLowerCase();
+    const key = type === 'interrogation' || type === 'devoir' || type === 'composition' ? type : null;
+    const current = bySubject.get(row.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0, groups: { interrogation: [], devoir: [], composition: [] } };
     current.coefficient += coefficient;
     current.weighted += normalizedScore * coefficient;
     current.weightedCoefficient += coefficient;
+    if (key) {
+      current.groups[key].push({ coefficient, score: normalizedScore });
+    }
     bySubject.set(row.subject, current);
   }
 
@@ -188,6 +210,10 @@ const buildFallbackLinesFromGrades = (
     subjectName,
     coefficient: agg.coefficient,
     average: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
+    interrogation: computeWeightedAverage(agg.groups.interrogation),
+    devoir: computeWeightedAverage(agg.groups.devoir),
+    composition: computeWeightedAverage(agg.groups.composition),
+    classAverage: agg.weightedCoefficient > 0 ? agg.weighted / agg.weightedCoefficient : null,
     teacherComment: null,
     rank: null,
   }));
@@ -211,6 +237,116 @@ const toDateLabel = (iso: string | null): string => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return new Date().toLocaleDateString('fr-FR');
   return date.toLocaleDateString('fr-FR');
+};
+
+const computeSubjectBreakdown = async (
+  studentId: number,
+  classId: number,
+  termId: number,
+  termStartDate: Date | string | null,
+  termEndDate: Date | string | null,
+): Promise<Map<string, { interrogation: number | null; devoir: number | null; composition: number | null; classAverage: number | null }>> => {
+  const termScopeCondition: SQL = (termStartDate && termEndDate)
+    ? sql`(
+        ${evaluations.termId} = ${termId}
+        or (
+          ${evaluations.termId} is null
+          and ${evaluations.date} >= ${termStartDate}
+          and ${evaluations.date} <= ${termEndDate}
+        )
+      )`
+    : sql`${evaluations.termId} = ${termId}`;
+
+  const rows = await db
+    .select({
+      subject: evaluations.subject,
+      studentId: grades.studentId,
+      type: evaluations.type,
+      coefficient: evaluations.coefficient,
+      maxScore: evaluations.maxScore,
+      score: grades.score,
+    })
+    .from(grades)
+    .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
+    .where(and(
+      eq(evaluations.classId, classId),
+      eq(evaluations.countInBulletin, true),
+      termScopeCondition,
+    ));
+
+  const bySubject = new Map<string, { studentEntries: Array<{ coefficient: number; score: number }>; byType: Record<'interrogation' | 'devoir' | 'composition', Array<{ coefficient: number; score: number }>>; allStudentAverages: number[] }>();
+
+  for (const row of rows) {
+    const subjectName = String(row.subject ?? '').trim();
+    if (!subjectName) continue;
+    const rawScore = parseNumericScore(row.score);
+    const maxScore = Number(row.maxScore || 0);
+    if (rawScore == null || maxScore <= 0) continue;
+    const normalizedScore = (rawScore / maxScore) * 20;
+    const type = (row.type ?? '').trim().toLowerCase();
+    const asType = type === 'interrogation' || type === 'devoir' || type === 'composition' ? type : null;
+
+    const current = bySubject.get(subjectName) ?? { studentEntries: [], byType: { interrogation: [], devoir: [], composition: [] }, allStudentAverages: [] };
+    current.studentEntries.push({ coefficient: Number(row.coefficient || 0), score: normalizedScore });
+    if (asType) current.byType[asType].push({ coefficient: Number(row.coefficient || 0), score: normalizedScore });
+    bySubject.set(subjectName, current);
+  }
+
+  const studentAverageMap = new Map<string, number>();
+  for (const [subjectName, bucket] of bySubject.entries()) {
+    const studentSpecific = bucket.studentEntries.filter((entry) => {
+      const matchingRows = rows.filter((row) => row.subject === subjectName && row.studentId === studentId);
+      const studentValues = matchingRows
+        .map((row) => {
+          const raw = parseNumericScore(row.score);
+          const max = Number(row.maxScore || 0);
+          return raw == null || max <= 0 ? null : (raw / max) * 20;
+        })
+        .filter((value): value is number => value != null);
+      return studentValues.length > 0;
+    });
+    const studentAverage = computeWeightedAverage(studentSpecific.length > 0 ? studentSpecific : bucket.studentEntries.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && parseNumericScore(row.score) != null)));
+    if (studentAverage != null) studentAverageMap.set(subjectName, studentAverage);
+  }
+
+  const result = new Map<string, { interrogation: number | null; devoir: number | null; composition: number | null; classAverage: number | null }>();
+  for (const [subjectName, bucket] of bySubject.entries()) {
+    const studentRows = rows.filter((row) => row.subject === subjectName && row.studentId === studentId);
+    const studentEntries = studentRows
+      .map((row) => {
+        const rawScore = parseNumericScore(row.score);
+        const maxScore = Number(row.maxScore || 0);
+        if (rawScore == null || maxScore <= 0) return null;
+        return { coefficient: Number(row.coefficient || 0), score: (rawScore / maxScore) * 20 };
+      })
+      .filter((value): value is { coefficient: number; score: number } => value != null);
+
+    const studentAverage = computeWeightedAverage(studentEntries);
+    const studentsForSubject = Array.from(new Set(rows.filter((row) => row.subject === subjectName).map((row) => row.studentId)));
+    const classAverageValues = studentsForSubject
+      .map((currentStudentId) => {
+        const entries = rows
+          .filter((row) => row.subject === subjectName && row.studentId === currentStudentId)
+          .map((row) => {
+            const rawScore = parseNumericScore(row.score);
+            const maxScore = Number(row.maxScore || 0);
+            if (rawScore == null || maxScore <= 0) return null;
+            return { coefficient: Number(row.coefficient || 0), score: (rawScore / maxScore) * 20 };
+          })
+          .filter((value): value is { coefficient: number; score: number } => value != null);
+        return computeWeightedAverage(entries);
+      })
+      .filter((value): value is number => value != null);
+
+    result.set(subjectName, {
+      interrogation: computeWeightedAverage(bucket.byType.interrogation.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'interrogation')))),
+      devoir: computeWeightedAverage(bucket.byType.devoir.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'devoir')))),
+      composition: computeWeightedAverage(bucket.byType.composition.filter((entry) => rows.some((row) => row.subject === subjectName && row.studentId === studentId && ((row.type ?? '').trim().toLowerCase() === 'composition')))),
+      classAverage: classAverageValues.length > 0 ? classAverageValues.reduce((sum, value) => sum + value, 0) / classAverageValues.length : studentAverage,
+    });
+  }
+
+  return result;
 };
 
 const sanitizePdfText = (value: string): string => {
@@ -362,6 +498,18 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       rank: line.rank,
     }));
 
+    const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.termStartDate ?? null, header.termEndDate ?? null);
+    resolvedLines = resolvedLines.map((line) => {
+      const subjectBreakdown = breakdownBySubject.get(line.subjectName) ?? null;
+      return {
+        ...line,
+        interrogation: subjectBreakdown?.interrogation ?? null,
+        devoir: subjectBreakdown?.devoir ?? null,
+        composition: subjectBreakdown?.composition ?? null,
+        classAverage: subjectBreakdown?.classAverage ?? null,
+      };
+    });
+
     if (resolvedLines.length === 0) {
       const termScopeCondition: SQL = (header.termStartDate && header.termEndDate)
         ? sql`(
@@ -487,11 +635,15 @@ export const createBulletinPdfDocument = async (
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
   const columns = [
-    { label: template.labels.subject, width: 205 },
-    { label: template.labels.coefficient, width: 52 },
-    { label: template.labels.subjectAverage, width: 78 },
-    { label: template.labels.rank, width: 48 },
-    { label: template.labels.teacherComment, width: tableWidth - 205 - 52 - 78 - 48 },
+    { label: template.labels.subject, width: 155 },
+    { label: template.labels.coefficient, width: 42 },
+    { label: 'Inter.', width: 52 },
+    { label: 'Dev.', width: 52 },
+    { label: 'Compo.', width: 52 },
+    { label: template.labels.subjectAverage, width: 62 },
+    { label: 'M. Clas', width: 62 },
+    { label: template.labels.rank, width: 38 },
+    { label: template.labels.teacherComment, width: tableWidth - 155 - 42 - 52 - 52 - 52 - 62 - 62 - 38 },
   ];
 
   const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => {
@@ -667,15 +819,29 @@ export const createBulletinPdfDocument = async (
     }
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: data.lines.indexOf(line) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
     let x = tableX;
+    const subjectBreakdown = {
+      interrogation: line.interrogation ?? null,
+      devoir: line.devoir ?? null,
+      composition: line.composition ?? null,
+      classAverage: line.classAverage ?? null,
+    };
     drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 8.5, text, fontRegular, 2);
     x += columns[0].width;
     drawText(page, String(line.coefficient), x + 7, cursorY - 13, 8.5, text, fontRegular);
     x += columns[1].width;
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
     x += columns[2].width;
-    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
     x += columns[3].width;
-    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[4].width - 14, 8.5, text, fontRegular, 2);
+    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[4].width;
+    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[5].width;
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[6].width;
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8.5, text, fontRegular);
+    x += columns[7].width;
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[8].width - 14, 8.5, text, fontRegular, 2);
     cursorY -= rowHeight;
   }
 
