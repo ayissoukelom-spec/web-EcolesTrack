@@ -117,8 +117,7 @@ const buildTeacherNameMap = async (
   const rows = await tx
     .select({
       teacherId: teachers.id,
-      firstName: users.firstName,
-      lastName: users.lastName,
+      name: users.name,
     })
     .from(teachers)
     .innerJoin(users, eq(teachers.userId, users.id))
@@ -126,10 +125,83 @@ const buildTeacherNameMap = async (
 
   const map = new Map<number, string>();
   for (const row of rows) {
-    const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ');
-    map.set(row.teacherId, fullName || `Teacher ${row.teacherId}`);
+    map.set(row.teacherId, row.name || `Teacher ${row.teacherId}`);
   }
   return map;
+};
+
+export const resolveSubjectTeacherName = (
+  teacherIds: number[],
+  teacherNameMap: Map<number, string>,
+): string | null => {
+  if (!teacherIds || teacherIds.length === 0) return null;
+
+  const counts = new Map<number, number>();
+  for (const teacherId of teacherIds) {
+    if (teacherId == null) continue;
+    counts.set(teacherId, (counts.get(teacherId) ?? 0) + 1);
+  }
+
+  const bestTeacher = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+  if (!bestTeacher) return null;
+
+  return teacherNameMap.get(bestTeacher[0]) ?? null;
+};
+
+export const buildSubjectTeacherNameMap = async (
+  classId: number,
+  termId: number,
+): Promise<Map<string, string>> => {
+  const rows = await db
+    .select({
+      subject: evaluations.subject,
+      teacherId: evaluations.teacherId,
+    })
+    .from(evaluations)
+    .where(and(
+      eq(evaluations.classId, classId),
+      eq(evaluations.termId, termId),
+      eq(evaluations.countInBulletin, true),
+    ));
+
+  if (rows.length === 0) {
+    return new Map();
+  }
+
+  const teacherIds = Array.from(new Set(rows.map((row) => row.teacherId).filter((id): id is number => Number.isInteger(id) && id > 0)));
+  if (teacherIds.length === 0) {
+    return new Map();
+  }
+
+  const teacherRows = await db
+    .select({
+      teacherId: teachers.id,
+      name: users.name,
+    })
+    .from(teachers)
+    .innerJoin(users, eq(teachers.userId, users.id))
+    .where(inArray(teachers.id, teacherIds));
+
+  const teacherNameMap = new Map<number, string>();
+  for (const row of teacherRows) {
+    teacherNameMap.set(row.teacherId, row.name || `Teacher ${row.teacherId}`);
+  }
+
+  const bySubject = new Map<string, number[]>();
+  for (const row of rows) {
+    if (row.teacherId == null) continue;
+    const current = bySubject.get(row.subject) ?? [];
+    current.push(row.teacherId);
+    bySubject.set(row.subject, current);
+  }
+
+  const result = new Map<string, string>();
+  for (const [subject, teacherIdsForSubject] of bySubject.entries()) {
+    const teacherName = resolveSubjectTeacherName(teacherIdsForSubject, teacherNameMap);
+    if (teacherName) result.set(subject, teacherName);
+  }
+
+  return result;
 };
 
 const computeSubjectLines = (
@@ -217,10 +289,7 @@ const computeSubjectLines = (
     const noteCoef = subjectAverage != null ? subjectAverage * agg.coefficient : null;
     const classAverage = classAveragesBySubject.get(subjectName) ?? null;
 
-    // Get most frequent teacher for this subject
-    const teacherName = agg.teacherIds.length > 0
-      ? teacherNameMap.get(agg.teacherIds[agg.teacherIds.length - 1]) ?? null
-      : null;
+    const teacherName = resolveSubjectTeacherName(agg.teacherIds, teacherNameMap);
 
     // Calculate subject rank
     const rank = computeSubjectRank(subjectName, targetStudentId, classStudents, termEvaluations, allGrades);

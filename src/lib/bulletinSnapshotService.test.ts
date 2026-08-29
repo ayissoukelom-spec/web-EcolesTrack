@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   generateBulletinSnapshot,
+  resolveSubjectTeacherName,
   type BulletinLineSnapshotInput,
   type BulletinSnapshotContext,
   type BulletinSnapshotPersistence,
@@ -228,6 +229,14 @@ describe('generateBulletinSnapshot', () => {
     // Alice is 1st in Math, 2nd in French
     expect(mathLine?.rank).toBe(1);
     expect(frenchLine?.rank).toBe(2);
+  });
+
+  it('choisit l enseignant principal d une matière par fréquence d affectation et non par la dernière occurrence', () => {
+    expect(resolveSubjectTeacherName([7, 8, 7, 9], new Map([
+      [7, 'Mme Aline'],
+      [8, 'M. Benoit'],
+      [9, 'Mme Celine'],
+    ]))).toBe('Mme Aline');
   });
 
   it('retourne null pour le rang si aucune moyenne valide n\'existe', async () => {

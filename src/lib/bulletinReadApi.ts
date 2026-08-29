@@ -16,6 +16,7 @@ import {
   students,
   teachers,
 } from '../db/schema.ts';
+import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
 
 export interface BulletinReadActor {
   id?: number | null;
@@ -65,6 +66,7 @@ export interface BulletinLineResponse {
   subjectName: string;
   coefficient: number;
   average: number | null;
+  teacherName?: string | null;
   teacherComment: string | null;
   rank: number | null;
   createdAt: string | null;
@@ -306,6 +308,8 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       .where(eq(bulletinLines.bulletinId, id))
       .orderBy(bulletinLines.id);
 
+    const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
+
     return {
       id: header.id,
       studentId: header.studentId,
@@ -332,6 +336,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         subjectName: line.subjectName,
         coefficient: line.coefficient,
         average: parseNumber(line.average),
+        teacherName: subjectTeacherMap.get(line.subjectName) ?? null,
         teacherComment: line.teacherComment,
         rank: line.rank,
         createdAt: toIso(line.createdAt),

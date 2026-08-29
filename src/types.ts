@@ -253,6 +253,7 @@ export interface BulletinLine {
   subjectName: string;
   coefficient: number;
   average: number | null;
+  teacherName?: string | null;
   teacherComment: string | null;
   rank: number | null;
   createdAt: string | null;

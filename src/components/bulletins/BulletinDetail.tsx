@@ -185,7 +185,7 @@ export default function BulletinDetail({
                       <td className="px-2 py-2 text-center">{line.coefficient}</td>
                       <td className="px-2 py-2 text-center font-semibold">{noteCoef}</td>
                       <td className="px-2 py-2 text-center">{line.rank ?? '-'}</td>
-                      <td className="px-2 py-2 text-center text-slate-500">—</td>
+                      <td className="px-2 py-2 text-center text-slate-500">{line.teacherName || '—'}</td>
                       <td className="px-2 py-2 max-w-xs truncate">{line.teacherComment || '-'}</td>
                       <td className="px-2 py-2 text-center">—</td>
                     </tr>

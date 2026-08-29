@@ -19,6 +19,7 @@ import {
   students,
   studentAcademicYearStatuses,
 } from '../db/schema.ts';
+import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
 import studentAccess from './studentAccess';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
@@ -52,6 +53,7 @@ export interface BulletinPdfLine {
   subjectName: string;
   coefficient: number;
   average: number | null;
+  teacherName?: string | null;
   interrogation?: number | null;
   devoir?: number | null;
   composition?: number | null;
@@ -487,6 +489,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .where(eq(bulletinLines.bulletinId, bulletinId))
       .orderBy(bulletinLines.id);
 
+    const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
+
     let resolvedLines = lines.map((line) => ({
       id: line.id,
       bulletinId: line.bulletinId,
@@ -494,6 +498,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       subjectName: line.subjectName,
       coefficient: line.coefficient,
       average: parseNumber(line.average),
+      teacherName: subjectTeacherMap.get(line.subjectName) ?? null,
       teacherComment: line.teacherComment,
       rank: line.rank,
     }));
