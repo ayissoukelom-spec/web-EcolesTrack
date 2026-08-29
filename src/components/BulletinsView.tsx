@@ -137,13 +137,17 @@ export default function BulletinsView({
   const visibleStudentIds = useMemo(() => new Set(visibleStudents.map((student) => student.id)), [visibleStudents]);
 
   const generateSchools = useMemo(() => {
+    if (currentRole === 'super_admin' || currentRole === 'school_admin') {
+      return schoolsList;
+    }
+
     const classSchoolIds = new Set(
       classesList
         .map((klass) => klass.schoolId)
         .filter((schoolId): schoolId is number => schoolId != null),
     );
     return schoolsList.filter((school) => classSchoolIds.has(school.id));
-  }, [classesList, schoolsList]);
+  }, [classesList, currentRole, schoolsList]);
 
   const generateClasses = useMemo(() => {
     if (!generateSchoolId) return classesList;

@@ -153,6 +153,22 @@ describe('bulletin PDF API', () => {
     expect(text).toMatch(/STATUT :[\s\S]*SEXE :/);
   });
 
+  it('affiche le libellé Moy. interro dans l en-tête du tableau PDF', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const raw = Buffer.from(pdfBytes).toString('latin1');
+    const streams: string[] = [];
+    for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      try {
+        streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+      } catch {
+        streams.push(match[1]);
+      }
+    }
+    const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)> Tj/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    expect(text).toContain('Moy. interro');
+    expect(text).toContain('Devoir');
+  });
+
   it('n affiche pas le bloc statut dans le PDF si le statut est absent', async () => {
     const pdfBytes = await createBulletinPdfDocument({ ...snapshotData, studentStatus: null });
     const raw = Buffer.from(pdfBytes).toString('latin1');

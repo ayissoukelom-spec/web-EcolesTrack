@@ -641,8 +641,8 @@ export const createBulletinPdfDocument = async (
   const tableWidth = pageSize[0] - margin * 2;
   const columns = [
     { label: 'Matières', width: 70 },
-    { label: 'Inter.', width: 30 },
-    { label: 'Dev.', width: 30 },
+    { label: 'Moy. interro', width: 30 },
+    { label: 'Devoir', width: 30 },
     { label: 'Moy. Clas', width: 35 },
     { label: 'Compo.', width: 30 },
     { label: 'Note /20', width: 35 },
@@ -657,8 +657,8 @@ export const createBulletinPdfDocument = async (
   // Define multi-line headers for better space usage
   const headerLines = [
     ['Matières'],
-    ['Inter.'],
-    ['Dev.'],
+    ['Moy.', 'interro'],
+    ['Devoir'],
     ['Moy.', 'Clas'],
     ['Compo.'],
     ['Note', '/20'],

@@ -180,4 +180,33 @@ describe('bulletinService', () => {
       composition: 16,
     });
   });
+
+  it('calcule la moyenne d interrogations et de devoirs uniquement à partir des évaluations retenues pour le bulletin', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Interro 1', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+      { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Interro 2', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+      { id: 3, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Interro 3', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: false, date: '2026-06-12' },
+      { id: 4, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Devoir 1', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-13' },
+      { id: 5, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Devoir 2', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-14' },
+      { id: 6, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Devoir 3', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: false, date: '2026-06-15' },
+      { id: 7, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Compo 1', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-16' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '12' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '15' },
+      { id: 3, evaluationId: 3, studentId: 1, score: '16' },
+      { id: 4, evaluationId: 4, studentId: 1, score: '10' },
+      { id: 5, evaluationId: 5, studentId: 1, score: '14' },
+      { id: 6, evaluationId: 6, studentId: 1, score: '18' },
+      { id: 7, evaluationId: 7, studentId: 1, score: '15' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+    const summary = summarizeTypeAveragesBySubject(result.snapshots);
+
+    expect(summary.interrogation).toBeCloseTo(13.5, 5);
+    expect(summary.devoir).toBeCloseTo(12, 5);
+    expect(summary.composition).toBe(15);
+    expect(result.selectedEvaluations.map((evaluation) => evaluation.id)).toEqual([1, 2, 4, 5, 7]);
+  });
 });

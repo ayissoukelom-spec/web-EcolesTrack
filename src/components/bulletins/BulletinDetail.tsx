@@ -147,8 +147,8 @@ export default function BulletinDetail({
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="text-left px-2 py-2 whitespace-nowrap">Matières</th>
-                  <th className="text-center px-2 py-2">Inter.</th>
-                  <th className="text-center px-2 py-2">Dev.</th>
+                  <th className="text-center px-2 py-2"><span className="block">Moy.</span><span className="block">interro</span></th>
+                  <th className="text-center px-2 py-2">Devoir</th>
                   <th className="text-center px-2 py-2"><span className="block">Moy.</span><span className="block">Clas</span></th>
                   <th className="text-center px-2 py-2">Compo.</th>
                   <th className="text-center px-2 py-2"><span className="block">Note</span><span className="block">/20</span></th>
@@ -177,7 +177,6 @@ export default function BulletinDetail({
                     <tr key={line.id} className="border-t border-slate-100 align-top">
                       <td className="px-2 py-2">{line.subjectName}</td>
                       <td className="px-2 py-2 text-center">{formatValue(breakdown.interrogation)}</td>
-                      <td className="px-2 py-2 text-center">{formatValue(breakdown.devoir)}</td>
                       <td className="px-2 py-2 text-center">{formatValue(breakdown.devoir)}</td>
                       <td className="px-2 py-2 text-center">{formatValue(breakdown.classAverage)}</td>
                       <td className="px-2 py-2 text-center">{formatValue(breakdown.composition)}</td>
