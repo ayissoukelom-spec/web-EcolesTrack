@@ -212,12 +212,13 @@ export default function App() {
       }
 
       // 3. Load other lists for CRUD and management tabs
+      const classesEndpoint = currentRole !== 'super_admin' && currentSchoolId != null
+        ? `/api/classes?schoolId=${currentSchoolId}`
+        : '/api/classes';
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
-        currentRole !== 'super_admin' && currentSchoolId != null
-          ? `/api/classes?schoolId=${currentSchoolId}`
-          : '/api/classes',
+        classesEndpoint,
         '/api/teachers',
         '/api/students',
         '/api/parents',
@@ -242,11 +243,11 @@ export default function App() {
       }
       if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
       if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
-      if (Array.isArray(map['/api/classes'])) {
+      if (Array.isArray(map[classesEndpoint])) {
         setClassesList((previousClasses) =>
-          currentRole === 'teacher' && map['/api/classes'].length === 0
+          currentRole === 'teacher' && map[classesEndpoint].length === 0
             ? previousClasses
-            : map['/api/classes']
+            : map[classesEndpoint]
         );
       }
 
