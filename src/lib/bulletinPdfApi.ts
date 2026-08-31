@@ -20,7 +20,12 @@ import {
   studentAcademicYearStatuses,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
-import { calculateClassAverage, calculateFinalSubjectAverage, calculateTypeWeightedAverage } from './bulletinService';
+import {
+  calculateClassAverage,
+  calculateFinalSubjectAverage,
+  calculateTypeWeightedAverage,
+  resolveSubjectCoefficientFromPublishedComposition,
+} from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
 import studentAccess from './studentAccess';
 
@@ -53,7 +58,7 @@ export interface BulletinPdfLine {
   bulletinId: number;
   subjectId: number | null;
   subjectName: string;
-  coefficient: number;
+  coefficient: number | null;
   average: number | null;
   teacherName?: string | null;
   interrogation?: number | null;
@@ -221,7 +226,6 @@ const buildFallbackLinesFromGrades = (
     const type = row.type?.trim().toLowerCase();
     const key = type === 'interrogation' || type === 'devoir' || type === 'composition' ? type : null;
     const current = bySubject.get(row.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0, groups: { interrogation: [], devoir: [], composition: [] } };
-    current.coefficient += coefficient;
     current.weighted += normalizedScore * coefficient;
     current.weightedCoefficient += coefficient;
     if (key) {
@@ -243,7 +247,19 @@ const buildFallbackLinesFromGrades = (
     bulletinId: 0,
     subjectId: null,
     subjectName,
-    coefficient: agg.coefficient,
+    coefficient: resolveSubjectCoefficientFromPublishedComposition(
+      rows.map((row) => ({
+        subject: row.subject,
+        classId: undefined,
+        termId: undefined,
+        type: row.type,
+        coefficient: row.coefficient,
+        countInBulletin: true,
+      })),
+      subjectName,
+      undefined,
+      undefined,
+    ),
     average: calculateFinalSubjectAverage(
       calculateClassAverage(interrogation, devoir),
       calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
@@ -550,6 +566,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
           coefficient: evaluations.coefficient,
           maxScore: evaluations.maxScore,
           score: grades.score,
+            type: evaluations.type,
         })
         .from(grades)
         .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
@@ -910,7 +927,7 @@ export const createBulletinPdfDocument = async (
     x += columns[5].width;
 
     // Column 7: Coef.
-    drawText(page, String(line.coefficient), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 8, text, fontRegular);
     x += columns[6].width;
 
     // Column 8: Note coef.

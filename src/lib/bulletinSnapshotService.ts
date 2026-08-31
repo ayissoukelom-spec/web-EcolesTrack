@@ -19,6 +19,8 @@ import {
   calculateClassAverage,
   calculateFinalSubjectAverage,
   calculateTypeWeightedAverage,
+  calculateWeightedSubjectAverage,
+  resolveSubjectCoefficientFromPublishedComposition,
   type BulletinEvaluationLike,
   type BulletinGradeLike,
   type BulletinStudentLike,
@@ -28,7 +30,7 @@ import { getGradeAppreciation } from './gradeColor';
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
   subjectName: string;
-  coefficient: number;
+  coefficient: number | null;
   average: number | null;
   interrogation?: number | null;
   devoir?: number | null;
@@ -214,6 +216,8 @@ const computeSubjectLines = (
   classStudents: BulletinStudentLike[],
   allGrades: BulletinGradeLike[],
   targetStudentId: number,
+  classId: number,
+  termId: number,
   termEvaluations: BulletinEvaluationLike[],
   teacherNameMap: Map<number, string> = new Map(),
 ): BulletinLineSnapshotInput[] => {
@@ -234,7 +238,6 @@ const computeSubjectLines = (
       byType: { interrogation: [], devoir: [], composition: [] },
       teacherIds: [],
     };
-    current.coefficient += Math.max(0, Number(evaluation.coefficient || 0));
     if (evaluation.teacherId) current.teacherIds.push(evaluation.teacherId);
     bySubject.set(evaluation.subject, current);
   }
@@ -271,7 +274,15 @@ const computeSubjectLines = (
     );
     const classAverage = calculateClassAverage(interrogationAvg, devoirAvg);
     const subjectAverage = calculateFinalSubjectAverage(classAverage, compositionAvg);
-    const noteCoef = subjectAverage != null ? subjectAverage * agg.coefficient : null;
+    const subjectCoefficient = resolveSubjectCoefficientFromPublishedComposition(
+      termEvaluations,
+      subjectName,
+      classId,
+      termId,
+    );
+    const noteCoef = subjectAverage != null && subjectCoefficient != null
+      ? subjectAverage * subjectCoefficient
+      : null;
 
     const teacherName = resolveSubjectTeacherName(agg.teacherIds, teacherNameMap);
 
@@ -281,7 +292,7 @@ const computeSubjectLines = (
     return {
       subjectId: null,
       subjectName,
-      coefficient: agg.coefficient,
+      coefficient: subjectCoefficient,
       average: subjectAverage,
       interrogation: interrogationAvg,
       devoir: devoirAvg,
@@ -769,26 +780,36 @@ export const generateBulletinSnapshot = async (
     });
 
     const rank = computeRank(student.id, classStudents, termEvaluations, allGrades, term.id);
-    const mention = resolveMention(calculation.average);
-    const appreciation = resolveAppreciation(calculation.average);
 
     // Load teacher names for all evaluations
     const teacherIds = Array.from(new Set(termEvaluations.map((e) => e.teacherId).filter((id) => id != null) as number[]));
     const teacherNameMap = await ctx.getTeacherNames(teacherIds);
 
-    const lines = computeSubjectLines(calculation.selectedEvaluations, calculation.snapshots, classStudents, allGrades, student.id, termEvaluations, teacherNameMap);
+    const lines = computeSubjectLines(
+      calculation.selectedEvaluations,
+      calculation.snapshots,
+      classStudents,
+      allGrades,
+      student.id,
+      student.classId,
+      term.id,
+      termEvaluations,
+      teacherNameMap,
+    );
+    const subjectAverage = calculateWeightedSubjectAverage(lines);
+    const finalAverage = subjectAverage.average;
 
     const inserted = await ctx.insertBulletin({
       studentId: student.id,
       classId: student.classId,
       schoolYearId: klass.academicYearId,
       termId: term.id,
-      average: calculation.average,
-      totalPoints: calculation.totalWeightedScore,
-      totalCoefficients: calculation.totalCoefficient,
+      average: finalAverage,
+      totalPoints: subjectAverage.totalPoints,
+      totalCoefficients: subjectAverage.totalCoefficients,
       rank,
-      mention,
-      appreciation,
+      mention: resolveMention(finalAverage),
+      appreciation: resolveAppreciation(finalAverage),
       generatedAt: new Date(),
     });
 
@@ -798,12 +819,12 @@ export const generateBulletinSnapshot = async (
       bulletinId: inserted.id,
       studentId: student.id,
       termId: term.id,
-      average: calculation.average,
-      totalPoints: calculation.totalWeightedScore,
-      totalCoefficients: calculation.totalCoefficient,
+      average: finalAverage,
+      totalPoints: subjectAverage.totalPoints,
+      totalCoefficients: subjectAverage.totalCoefficients,
       rank,
-      mention,
-      appreciation,
+      mention: resolveMention(finalAverage),
+      appreciation: resolveAppreciation(finalAverage),
       linesCount: lines.length,
     };
   });

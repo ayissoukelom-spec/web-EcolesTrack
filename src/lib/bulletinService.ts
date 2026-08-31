@@ -93,6 +93,58 @@ export const calculateClassAverage = (
   return interrogation ?? devoir ?? null;
 };
 
+export const resolveSubjectCoefficientFromPublishedComposition = (
+  evaluations: Array<{
+    subject: string;
+    classId?: number | null;
+    termId?: number | null;
+    type?: string | null;
+    coefficient: number;
+    countInBulletin?: boolean;
+  }>,
+  subjectName: string,
+  classId?: number | null,
+  termId?: number | null,
+): number | null => {
+  const coefficients = Array.from(new Set(
+    evaluations
+      .filter((evaluation) => (
+        evaluation.subject === subjectName
+        && normalizeEvaluationType(evaluation.type) === 'composition'
+        && evaluation.countInBulletin === true
+        && (classId == null || evaluation.classId == null || evaluation.classId === classId)
+        && (termId == null || evaluation.termId == null || evaluation.termId === termId)
+      ))
+      .map((evaluation) => Number(evaluation.coefficient))
+      .filter((coefficient) => Number.isFinite(coefficient) && coefficient >= 0),
+  ));
+
+  if (coefficients.length === 0) return null;
+  if (coefficients.length === 1) return coefficients[0];
+
+  const [first, ...rest] = coefficients;
+  return rest.every((value) => value === first) ? first : null;
+};
+
+export const calculateWeightedSubjectAverage = (
+  lines: Array<{ average: number | null; coefficient: number | null }>,
+): { average: number | null; totalPoints: number; totalCoefficients: number } => {
+  let totalPoints = 0;
+  let totalCoefficients = 0;
+
+  for (const line of lines) {
+    if (line.average == null || line.coefficient == null || !Number.isFinite(line.coefficient) || line.coefficient <= 0) continue;
+    totalPoints += line.average * line.coefficient;
+    totalCoefficients += line.coefficient;
+  }
+
+  return {
+    average: totalCoefficients > 0 ? totalPoints / totalCoefficients : null,
+    totalPoints,
+    totalCoefficients,
+  };
+};
+
 export const calculateSubjectBreakdown = (
   snapshots: BulletinEvaluationSnapshot[],
   classAveragesBySubject: Record<string, number | null> = {},

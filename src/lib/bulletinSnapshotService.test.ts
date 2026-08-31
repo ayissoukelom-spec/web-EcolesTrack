@@ -134,11 +134,37 @@ describe('generateBulletinSnapshot', () => {
 
     const result = await generateBulletinSnapshot(1, 7, persistence);
 
-    expect(result.average).toBe(14);
-    expect(result.totalCoefficients).toBe(2);
+    expect(result.average).toBeNull();
+    expect(result.totalCoefficients).toBe(0);
     expect(state.bulletinLines.map((line) => line.subjectName)).toEqual(['Math']);
+    expect(state.bulletinLines[0]?.coefficient).toBeNull();
     expect(state.bulletinLines.some((line) => line.subjectName === 'Français')).toBe(false);
     expect(state.bulletinLines.some((line) => line.subjectName === 'Histoire')).toBe(false);
+  });
+
+  it('utilise le coefficient de la composition publiée pour la ligne matière', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      evaluations: [
+        { id: 10, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro 1', type: 'interrogation', coefficient: 2, maxScore: 20, countInBulletin: true },
+        { id: 11, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Interro 2', type: 'interrogation', coefficient: 4, maxScore: 20, countInBulletin: true },
+        { id: 12, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 13, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 3, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 10, evaluationId: 10, studentId: 1, score: '10' },
+        { id: 11, evaluationId: 11, studentId: 1, score: '14' },
+        { id: 12, evaluationId: 12, studentId: 1, score: '12' },
+        { id: 13, evaluationId: 13, studentId: 1, score: '16' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+    const mathLine = state.bulletinLines.find((line) => line.subjectName === 'Math');
+
+    expect(mathLine?.coefficient).toBe(3);
+    expect(mathLine?.coefficient).not.toBe(10);
+    expect(result.totalCoefficients).toBe(3);
   });
 
   it('n enregistre rien si une erreur survient pendant les lignes (transaction atomique)', async () => {

@@ -3,6 +3,8 @@ import {
   calculateStudentTermAverage,
   calculateClassAverage,
   calculateFinalSubjectAverage,
+  calculateWeightedSubjectAverage,
+  resolveSubjectCoefficientFromPublishedComposition,
   selectBulletinEvaluationsForTerm,
   summarizeTypeAveragesBySubject,
 } from './bulletinService';
@@ -266,5 +268,71 @@ describe('bulletinService', () => {
 
     expect(expectedClassAverage).toBe(11.14);
     expect(expectedAverage).toBe(11.5);
+  });
+
+  it('utilise exclusivement le coefficient de la composition publiée comme coefficient matière', () => {
+    const evaluations = [
+      { subject: 'Math', classId: 10, termId: 7, type: 'interrogation', coefficient: 3, countInBulletin: true },
+      { subject: 'Math', classId: 10, termId: 7, type: 'interrogation', coefficient: 2, countInBulletin: true },
+      { subject: 'Math', classId: 10, termId: 7, type: 'devoir', coefficient: 4, countInBulletin: true },
+      { subject: 'Math', classId: 10, termId: 7, type: 'devoir', coefficient: 2, countInBulletin: true },
+      { subject: 'Math', classId: 10, termId: 7, type: 'composition', coefficient: 3, countInBulletin: true },
+    ];
+
+    expect(resolveSubjectCoefficientFromPublishedComposition(evaluations, 'Math', 10, 7)).toBe(3);
+    expect(resolveSubjectCoefficientFromPublishedComposition(
+      evaluations.map((evaluation) => ({ ...evaluation, countInBulletin: evaluation.type !== 'composition' })),
+      'Math',
+      10,
+      7,
+    )).toBeNull();
+    expect(resolveSubjectCoefficientFromPublishedComposition(
+      [
+        { subject: 'Math', classId: 10, termId: 7, type: 'composition', coefficient: 3, countInBulletin: true },
+        { subject: 'Math', classId: 11, termId: 7, type: 'composition', coefficient: 3, countInBulletin: true },
+      ],
+      'Math',
+      10,
+      7,
+    )).toBe(3);
+    expect(resolveSubjectCoefficientFromPublishedComposition(
+      [
+        { subject: 'Math', classId: 10, termId: 7, type: 'composition', coefficient: 3, countInBulletin: true },
+        { subject: 'Math', classId: 10, termId: 8, type: 'composition', coefficient: 4, countInBulletin: true },
+      ],
+      'Math',
+      10,
+      7,
+    )).toBe(3);
+  });
+
+  it('refuse un coefficient matière ambigu et pondère la moyenne générale par matière', () => {
+    expect(resolveSubjectCoefficientFromPublishedComposition([
+      { subject: 'Math', type: 'composition', coefficient: 3, countInBulletin: true },
+      { subject: 'Math', type: 'composition', coefficient: 4, countInBulletin: true },
+    ], 'Math')).toBeNull();
+
+    const result = calculateWeightedSubjectAverage([
+      { average: 13.375, coefficient: 3 },
+      { average: 12, coefficient: 2 },
+    ]);
+
+    expect(result.totalPoints).toBe(64.125);
+    expect(result.totalCoefficients).toBe(5);
+    expect(result.average).toBe(12.825);
+  });
+
+  it('utilise la somme des coefficients matière pour la moyenne générale du bulletin', () => {
+    const result = calculateWeightedSubjectAverage([
+      { average: 13.375, coefficient: 3 },
+      { average: 12, coefficient: 2 },
+      { average: 11.5, coefficient: 2 },
+      { average: 10.25, coefficient: 2 },
+    ]);
+
+    expect(result.totalCoefficients).toBe(9);
+    expect(result.totalPoints).toBeCloseTo(108.125, 5);
+    expect(result.average).toBeCloseTo(12.0138888889, 5);
+    expect((13.375 * 3)).toBeCloseTo(40.125, 5);
   });
 });

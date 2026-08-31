@@ -13,6 +13,7 @@ import {
   type BulletinPdfData,
   type BulletinPdfDataProvider,
 } from './bulletinPdfApi';
+import { resolveSubjectCoefficientFromPublishedComposition } from './bulletinService';
 
 const actor: BulletinPdfActor = {
   role: 'school_admin',
@@ -142,6 +143,24 @@ describe('bulletin PDF API', () => {
     const breakdown = calculateStudentSubjectTypeAverages(rows, 26, 'Phylosophie');
 
     expect(breakdown.interrogation).toBe(11);
+  });
+
+  it('prend le coefficient de la composition publiée, jamais la somme des évaluations', () => {
+    const rows = [
+      { subject: 'Mathématique', type: 'interrogation', coefficient: 3, maxScore: 20, score: '12' },
+      { subject: 'Mathématique', type: 'interrogation', coefficient: 2, maxScore: 20, score: '19' },
+      { subject: 'Mathématique', type: 'devoir', coefficient: 4, maxScore: 20, score: '13' },
+      { subject: 'Mathématique', type: 'devoir', coefficient: 2, maxScore: 20, score: '19' },
+      { subject: 'Mathématique', type: 'composition', coefficient: 3, maxScore: 20, score: '11' },
+    ];
+
+    const subjectCoefficient = resolveSubjectCoefficientFromPublishedComposition(
+      rows.map((row) => ({ ...row, countInBulletin: true })),
+      'Mathématique',
+    );
+
+    expect(subjectCoefficient).toBe(3);
+    expect(subjectCoefficient).not.toBe(14);
   });
 
   it.each([

@@ -317,7 +317,7 @@ export const bulletinLines = pgTable('bulletin_lines', {
   bulletinId: integer('bulletin_id').references(() => bulletins.id, { onDelete: 'cascade' }).notNull(),
   subjectId: integer('subject_id'),
   subjectName: text('subject_name').notNull(),
-  coefficient: integer('coefficient').notNull(),
+  coefficient: integer('coefficient'),
   average: text('average'),
   teacherComment: text('teacher_comment'),
   rank: integer('rank'),

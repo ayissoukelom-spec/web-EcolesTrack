@@ -251,7 +251,7 @@ export interface BulletinLine {
   bulletinId: number;
   subjectId: number | null;
   subjectName: string;
-  coefficient: number;
+  coefficient: number | null;
   average: number | null;
   teacherName?: string | null;
   teacherComment: string | null;

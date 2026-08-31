@@ -1,0 +1,1 @@
+ALTER TABLE "bulletin_lines" ALTER COLUMN "coefficient" DROP NOT NULL;
