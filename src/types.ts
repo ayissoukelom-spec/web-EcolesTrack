@@ -37,9 +37,20 @@ export interface SchoolTerm {
   createdAt?: string;
 }
 
+export interface SubjectType {
+  id: number;
+  schoolId?: number | null;
+  name: string;
+  description?: string | null;
+  sortOrder: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Subject {
   id: number;
   schoolId?: number | null;
+  subjectTypeId?: number | null;
   name: string;
   code?: string;
   status?: 'pending' | 'approved' | 'rejected' | string;

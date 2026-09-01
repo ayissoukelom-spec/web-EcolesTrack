@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BookOpen, Plus, Edit2, Trash2, X, CheckCircle2, XCircle } from 'lucide-react';
-import { Subject } from '../types.ts';
+import { Subject, SubjectType } from '../types.ts';
 import ModalSurface from './ModalSurface';
 
 interface SchoolOption {
@@ -13,9 +13,13 @@ interface SubjectsViewProps {
   userRole?: string;
   schoolId?: number;
   schoolsList?: SchoolOption[];
-  onAddSubject: (data: { name: string; code?: string; schoolId?: number }) => void;
-  onUpdateSubject: (id: number, data: { name: string; code?: string }) => void;
+  subjectTypesList?: SubjectType[];
+  onAddSubject: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => void;
+  onUpdateSubject: (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => void;
   onDeleteSubject: (id: number) => void;
+  onAddSubjectType?: (data: { schoolId: number; name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onUpdateSubjectType?: (id: number, data: { schoolId?: number; name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onDeleteSubjectType?: (id: number) => Promise<void>;
   onApproveSubject?: (id: number) => void;
   onRejectSubject?: (id: number) => void;
   subjectGroups?: any[];
@@ -33,9 +37,13 @@ export default function SubjectsView({
   userRole,
   schoolId,
   schoolsList = [],
+  subjectTypesList = [],
   onAddSubject,
   onUpdateSubject,
   onDeleteSubject,
+  onAddSubjectType = async () => {},
+  onUpdateSubjectType = async () => {},
+  onDeleteSubjectType = async () => {},
   onApproveSubject,
   onRejectSubject,
   subjectGroups = [],
@@ -51,19 +59,27 @@ export default function SubjectsView({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formName, setFormName] = useState('');
   const [formCode, setFormCode] = useState('');
+  const [formSubjectTypeId, setFormSubjectTypeId] = useState<number | ''>('');
   const [selectedSchoolId, setSelectedSchoolId] = useState<number | ''>(schoolId ?? '');
   const [filterSchoolId, setFilterSchoolId] = useState<number | ''>('');
   const [subjectSearch, setSubjectSearch] = useState('');
   const [subjectGroupSearch, setSubjectGroupSearch] = useState('');
+  const [subjectTypeName, setSubjectTypeName] = useState('');
+  const [subjectTypeDescription, setSubjectTypeDescription] = useState('');
+  const [subjectTypeSortOrder, setSubjectTypeSortOrder] = useState(0);
+  const [editingSubjectTypeId, setEditingSubjectTypeId] = useState<number | null>(null);
+  const [subjectTypeSchoolId, setSubjectTypeSchoolId] = useState<number | ''>('');
 
   const handleOpenForm = (subject?: Subject) => {
     if (subject) {
       setFormName(subject.name);
       setFormCode(subject.code || '');
+      setFormSubjectTypeId(subject.subjectTypeId ?? '');
       setEditingId(subject.id);
     } else {
       setFormName('');
       setFormCode('');
+      setFormSubjectTypeId('');
       setEditingId(null);
     }
     setIsFormOpen(true);
@@ -73,6 +89,7 @@ export default function SubjectsView({
     setIsFormOpen(false);
     setFormName('');
     setFormCode('');
+    setFormSubjectTypeId('');
     setSelectedSchoolId(schoolId ?? '');
     setEditingId(null);
   };
@@ -85,16 +102,54 @@ export default function SubjectsView({
       onUpdateSubject(editingId, {
         name: formName.trim(),
         code: formCode.trim() || undefined,
+        subjectTypeId: formSubjectTypeId === '' ? null : Number(formSubjectTypeId),
       });
     } else {
       const targetSchoolId = userRole === 'super_admin' ? (selectedSchoolId ? Number(selectedSchoolId) : undefined) : schoolId;
-      onAddSubject({
+      const newSubjectData: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null } = {
         name: formName.trim(),
         code: formCode.trim() || undefined,
         schoolId: targetSchoolId,
-      });
+      };
+      if (formSubjectTypeId !== '') newSubjectData.subjectTypeId = Number(formSubjectTypeId);
+      onAddSubject(newSubjectData);
     }
     handleCloseForm();
+  };
+
+  const resetSubjectTypeForm = () => {
+    setSubjectTypeName('');
+    setSubjectTypeDescription('');
+    setSubjectTypeSortOrder(0);
+    setEditingSubjectTypeId(null);
+  };
+
+  const handleSaveSubjectType = async () => {
+    const name = subjectTypeName.trim();
+    if (!name || !subjectTypeSchoolId) return;
+    const data = {
+      schoolId: Number(subjectTypeSchoolId),
+      name,
+      description: subjectTypeDescription.trim() || null,
+      sortOrder: subjectTypeSortOrder,
+    };
+    if (editingSubjectTypeId) await onUpdateSubjectType(editingSubjectTypeId, data);
+    else await onAddSubjectType(data);
+    resetSubjectTypeForm();
+  };
+
+  const handleEditSubjectType = (subjectType: SubjectType) => {
+    setEditingSubjectTypeId(subjectType.id);
+    setSubjectTypeSchoolId(subjectType.schoolId ?? '');
+    setSubjectTypeName(subjectType.name);
+    setSubjectTypeDescription(subjectType.description ?? '');
+    setSubjectTypeSortOrder(subjectType.sortOrder);
+  };
+
+  const handleDeleteSubjectType = async (id: number) => {
+    if (confirm('Êtes-vous sûr de vouloir supprimer ce type de matière ?')) {
+      await onDeleteSubjectType(id);
+    }
   };
 
   const handleDelete = (id: number) => {
@@ -181,6 +236,36 @@ export default function SubjectsView({
             </select>
           </div>
           <p className="text-xs text-slate-500">Affiche uniquement les matières liées à l’établissement sélectionné.</p>
+        </div>
+      )}
+
+      {userRole === 'super_admin' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700">Types de matières</h3>
+            <p className="text-xs text-slate-500">Les types sont propres à un établissement.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <select aria-label="École du type de matière" value={subjectTypeSchoolId} onChange={(e) => setSubjectTypeSchoolId(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+              <option value="">Choisir une école</option>
+              {schoolsList.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
+            </select>
+            <input aria-label="Nom du type de matière" value={subjectTypeName} onChange={(e) => setSubjectTypeName(e.target.value)} placeholder="Nom du type" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+            <input aria-label="Description du type de matière" value={subjectTypeDescription} onChange={(e) => setSubjectTypeDescription(e.target.value)} placeholder="Description (optionnelle)" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+            <input aria-label="Ordre du type de matière" type="number" min="0" value={subjectTypeSortOrder} onChange={(e) => setSubjectTypeSortOrder(Number(e.target.value))} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={handleSaveSubjectType} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">{editingSubjectTypeId ? 'Mettre à jour le type' : 'Enregistrer le type'}</button>
+            {editingSubjectTypeId && <button type="button" onClick={resetSubjectTypeForm} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">Annuler</button>}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {subjectTypesList.map((subjectType) => (
+              <div key={subjectType.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <div><div className="font-semibold text-slate-800">{subjectType.name}</div><div className="text-xs text-slate-500">{schoolsList.find((school) => school.id === subjectType.schoolId)?.name || 'École inconnue'}</div></div>
+                <div className="flex gap-2"><button type="button" onClick={() => handleEditSubjectType(subjectType)} className="text-indigo-600">Modifier</button><button type="button" onClick={() => handleDeleteSubjectType(subjectType.id)} className="text-rose-600">Supprimer</button></div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -293,6 +378,7 @@ export default function SubjectsView({
             <tr>
               <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Nom de la matière</th>
               <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Code</th>
+              <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Type</th>
               {userRole === 'school_admin' && <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Statut</th>}
               <th className="text-center px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Actions</th>
             </tr>
@@ -305,6 +391,7 @@ export default function SubjectsView({
                   <td className="px-6 py-4 text-sm text-slate-600">
                     {subject.code ? <span className="bg-slate-100 px-2 py-1 rounded text-xs font-mono">{subject.code}</span> : <span className="text-slate-400 text-xs italic">—</span>}
                   </td>
+                  <td className="px-6 py-4 text-sm text-slate-600">{subjectTypesList.find((subjectType) => subjectType.id === subject.subjectTypeId)?.name || <span className="text-slate-400 text-xs italic">Aucun type</span>}</td>
                   {userRole === 'school_admin' && (
                     <td className="px-6 py-4 text-sm">
                       <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${getStatusClasses(subject.status)}`}>
@@ -315,6 +402,15 @@ export default function SubjectsView({
                   <td className="px-6 py-4 text-center space-x-2">
                     {userRole === 'school_admin' ? (
                       <>
+                        {(subject.schoolId === schoolId || subject.schoolId === null) && (
+                          <button
+                            onClick={() => handleOpenForm(subject)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            Modifier
+                          </button>
+                        )}
                         <button
                           onClick={() => onApproveSubject?.(subject.id)}
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
@@ -353,7 +449,7 @@ export default function SubjectsView({
               ))
             ) : (
               <tr>
-                <td colSpan={userRole === 'school_admin' ? 4 : 3} className="px-6 py-12 text-center">
+                <td colSpan={userRole === 'school_admin' ? 5 : 4} className="px-6 py-12 text-center">
                   <BookOpen className="h-12 w-12 text-slate-200 mx-auto mb-3" />
                   <p className="text-slate-500 font-medium">Aucune matière créée</p>
                   <p className="text-xs text-slate-400 mt-1">Cliquez sur "Ajouter une matière" pour commencer</p>
@@ -414,6 +510,16 @@ export default function SubjectsView({
                   className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   maxLength={10}
                 />
+              </div>
+
+              <div>
+                <label htmlFor="subject-type-select" className="block text-sm font-semibold text-slate-700 mb-2">
+                  Type de matière (optionnel)
+                </label>
+                <select id="subject-type-select" value={formSubjectTypeId} onChange={(e) => setFormSubjectTypeId(e.target.value ? Number(e.target.value) : '')} className="w-full px-4 py-2 rounded-lg border border-slate-200">
+                  <option value="">Aucun type</option>
+                  {subjectTypesList.filter((subjectType) => subjectType.schoolId === (userRole === 'school_admin' ? schoolId : (editingId ? subjectsList.find((subject) => subject.id === editingId)?.schoolId : selectedSchoolId))).map((subjectType) => <option key={subjectType.id} value={subjectType.id}>{subjectType.name}</option>)}
+                </select>
               </div>
 
               {userRole === 'super_admin' && (

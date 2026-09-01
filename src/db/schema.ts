@@ -168,10 +168,24 @@ export const studentAcademicYearStatuses = pgTable('student_academic_year_status
   studentStatusAllowedCheck: check('student_academic_year_statuses_status_check', sql`${table.status} IS NULL OR ${table.status} IN ('Nouveau', 'Doublant', 'Triplant', 'Quadruplant', 'Quintuplant', 'Sextuplant')`),
 }));
 
-// 7b. Subjects (Matières)
+// 7b. Subject types (catalogue existant, rattache a une ecole)
+export const subjectTypes = pgTable('subject_types', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  sortOrder: integer('sort_order').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  subjectTypeSchoolNameUniqueIdx: uniqueIndex('subject_types_school_id_name_idx').on(table.schoolId, table.name),
+}));
+
+// 7c. Subjects (Matières)
 export const subjects = pgTable('subjects', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
+  subjectTypeId: integer('subject_type_id').references(() => subjectTypes.id, { onDelete: 'set null' }),
   name: text('name').notNull(), // e.g. "Mathématiques"
   code: text('code'), // optional abbreviation e.g. "MATH"
   createdAt: timestamp('created_at').defaultNow(),
@@ -182,6 +196,7 @@ export const schoolSubjects = pgTable('school_subjects', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'cascade' }).notNull(),
+  subjectTypeId: integer('subject_type_id').references(() => subjectTypes.id, { onDelete: 'set null' }),
   status: text('status').default('pending').notNull(), // pending | approved | rejected
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -369,10 +384,19 @@ export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
   evaluations: many(evaluations),
 }));
 
+export const subjectTypesRelations = relations(subjectTypes, ({ many }) => ({
+  subjects: many(subjects),
+  schoolSubjects: many(schoolSubjects),
+}));
+
 export const subjectsRelations = relations(subjects, ({ one, many }) => ({
   school: one(schools, {
     fields: [subjects.schoolId],
     references: [schools.id],
+  }),
+  subjectType: one(subjectTypes, {
+    fields: [subjects.subjectTypeId],
+    references: [subjectTypes.id],
   }),
   schoolSubjects: many(schoolSubjects),
 }));
@@ -385,6 +409,10 @@ export const schoolSubjectsRelations = relations(schoolSubjects, ({ one }) => ({
   subject: one(subjects, {
     fields: [schoolSubjects.subjectId],
     references: [subjects.id],
+  }),
+  subjectType: one(subjectTypes, {
+    fields: [schoolSubjects.subjectTypeId],
+    references: [subjectTypes.id],
   }),
 }));
 

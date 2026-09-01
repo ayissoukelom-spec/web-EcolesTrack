@@ -80,6 +80,69 @@ describe('SubjectsView', () => {
     expect(screen.queryByText('Latin')).toBeNull();
   });
 
+  it('gère une matière globale approuvée sans type sans la faire disparaître', () => {
+    const onUpdateSubject = vi.fn();
+
+    render(
+      <SubjectsView
+        subjectsList={[
+          { id: 1, schoolId: null, name: 'Mathématique', status: 'approved', subjectTypeId: null },
+        ]}
+        subjectTypesList={[{ id: 7, schoolId: 54, name: 'Scientifique', sortOrder: 0 }]}
+        userRole="school_admin"
+        schoolId={54}
+        onAddSubject={vi.fn()}
+        onUpdateSubject={onUpdateSubject}
+        onDeleteSubject={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Mathématique')).toBeDefined();
+    expect(screen.getByText('Aucun type')).toBeDefined();
+    expect(screen.getByRole('button', { name: /modifier/i })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: /modifier/i }));
+
+    const typeSelect = screen.getByLabelText(/type de matière/i) as HTMLSelectElement;
+    expect(typeSelect.value).toBe('');
+    fireEvent.change(typeSelect, { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: /mettre à jour/i }));
+
+    expect(onUpdateSubject).toHaveBeenCalledWith(1, {
+      name: 'Mathématique',
+      code: undefined,
+      subjectTypeId: 7,
+    });
+    expect(screen.getByText('Mathématique')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: /modifier/i }));
+    fireEvent.change(screen.getByLabelText(/type de matière/i), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /mettre à jour/i }));
+
+    expect(onUpdateSubject).toHaveBeenLastCalledWith(1, {
+      name: 'Mathématique',
+      code: undefined,
+      subjectTypeId: null,
+    });
+    expect(screen.getByText('Mathématique')).toBeDefined();
+    expect(screen.getByText('Aucun type')).toBeDefined();
+  });
+
+  it('ne considère pas une matière globale non attribuée comme approuvée', () => {
+    render(
+      <SubjectsView
+        subjectsList={[]}
+        userRole="school_admin"
+        schoolId={54}
+        onAddSubject={vi.fn()}
+        onUpdateSubject={vi.fn()}
+        onDeleteSubject={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText('Mathématique')).toBeNull();
+  });
+
   it('permet au super admin de créer une matière globale sans choisir d’établissement', async () => {
     const onAddSubject = vi.fn();
 
