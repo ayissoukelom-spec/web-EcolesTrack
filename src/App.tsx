@@ -9,7 +9,8 @@ import {
   SystemNotification,
   User,
   UserRole,
-  AuditEvent
+  AuditEvent,
+  SubjectType,
 } from './types.ts';
 import {
   apiFetch,
@@ -109,6 +110,7 @@ export default function App() {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
+  const [subjectTypesList, setSubjectTypesList] = useState<SubjectType[]>([]);
   const processedNotificationIdsRef = useRef<Set<number>>(new Set());
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
@@ -228,6 +230,7 @@ export default function App() {
         '/api/notifications',
         '/api/subjects',
         '/api/subjects?approvedOnly=true',
+        '/api/subject-types',
         '/api/simulation/users',
       ];
 
@@ -262,6 +265,7 @@ export default function App() {
       if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
       if (Array.isArray(map['/api/subjects'])) setSubjectsList(map['/api/subjects']);
       if (Array.isArray(map['/api/subjects?approvedOnly=true'])) setApprovedSubjectsList(map['/api/subjects?approvedOnly=true']);
+      if (Array.isArray(map['/api/subject-types'])) setSubjectTypesList(map['/api/subject-types']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
 
       if (currentRole === 'super_admin') {
@@ -727,7 +731,7 @@ export default function App() {
     }
   };
 
-  const handleAddSubject = async (data: { name: string; code?: string; schoolId?: number }) => {
+  const handleAddSubject = async (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => {
     try {
       const createdSubject = await apiFetch('/api/subjects', {
         method: 'POST',
@@ -740,7 +744,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateSubject = async (id: number, data: { name: string; code?: string }) => {
+  const handleUpdateSubject = async (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => {
     try {
       const updatedSubject = await apiFetch(`/api/subjects/${id}`, {
         method: 'PUT',
@@ -754,6 +758,23 @@ export default function App() {
       setErrorMsg(err.message);
       throw err;
     }
+  };
+
+  const handleAddSubjectType = async (data: { schoolId: number; name: string; description?: string | null; sortOrder?: number }) => {
+    const created = await apiFetch('/api/subject-types', { method: 'POST', body: JSON.stringify(data) });
+    setSubjectTypesList((prev) => [...prev, created]);
+    return created;
+  };
+
+  const handleUpdateSubjectType = async (id: number, data: { schoolId?: number; name?: string; description?: string | null; sortOrder?: number }) => {
+    const updated = await apiFetch(`/api/subject-types/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    setSubjectTypesList((prev) => prev.map((item) => item.id === id ? updated : item));
+    return updated;
+  };
+
+  const handleDeleteSubjectType = async (id: number) => {
+    await apiFetch(`/api/subject-types/${id}`, { method: 'DELETE' });
+    setSubjectTypesList((prev) => prev.filter((item) => item.id !== id));
   };
 
   const handleDeleteSubject = async (id: number) => {
@@ -1128,6 +1149,7 @@ export default function App() {
                   parentsList={parentsList}
                   usersList={usersList}
                   subjectsList={subjectsList}
+                  subjectTypesList={subjectTypesList}
                   approvedSubjectsList={approvedSubjectsList}
                   onAddSchool={handleAddSchool}
                   onUpdateSchool={handleUpdateSchool}
@@ -1153,6 +1175,9 @@ export default function App() {
                   onDeleteSubject={handleDeleteSubject}
                   onApproveSubject={handleApproveSubject}
                   onRejectSubject={handleRejectSubject}
+                  onAddSubjectType={handleAddSubjectType}
+                  onUpdateSubjectType={handleUpdateSubjectType}
+                  onDeleteSubjectType={handleDeleteSubjectType}
                   onApproveClass={handleApproveClass}
                   onRejectClass={handleRejectClass}
                   currentSchoolId={currentSchoolId}

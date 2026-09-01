@@ -3,7 +3,7 @@ import { apiFetch, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } f
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -362,6 +362,7 @@ interface AdminViewProps {
   parentsList: Parent[];
   usersList: User[];
   subjectsList?: any[];
+  subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
@@ -384,8 +385,11 @@ interface AdminViewProps {
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number) => void;
-  onAddSubject?: (data: { name: string; code?: string; schoolId?: number }) => Promise<any>;
-  onUpdateSubject?: (id: number, data: { name: string; code?: string }) => Promise<any>;
+  onAddSubject?: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => Promise<any>;
+  onUpdateSubject?: (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => Promise<any>;
+  onAddSubjectType?: (data: { schoolId: number; name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onUpdateSubjectType?: (id: number, data: { schoolId?: number; name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onDeleteSubjectType?: (id: number) => Promise<void>;
   onDeleteSubject?: (id: number) => Promise<void>;
   onApproveSubject?: (id: number) => Promise<any>;
   onRejectSubject?: (id: number) => Promise<any>;
@@ -401,6 +405,7 @@ export default function AdminView({
   studentsList,
   parentsList,
   subjectsList = [],
+  subjectTypesList = [],
   approvedSubjectsList = [],
   onAddSchool,
   onUpdateSchool,
@@ -427,6 +432,9 @@ export default function AdminView({
   onDeleteSubject,
   onApproveSubject,
   onRejectSubject,
+  onAddSubjectType,
+  onUpdateSubjectType,
+  onDeleteSubjectType,
   onApproveClass,
   onRejectClass,
   currentSchoolId,
@@ -4932,6 +4940,7 @@ export default function AdminView({
       {activeTab === 'matieres' && (
         <SubjectsView
           subjectsList={subjectsList}
+          subjectTypesList={subjectTypesList}
           userRole={userRole}
           schoolId={currentSchoolId != null ? currentSchoolId : undefined}
           schoolsList={schoolsList}
@@ -4940,6 +4949,9 @@ export default function AdminView({
           onDeleteSubject={onDeleteSubject || (() => {})}
           onApproveSubject={onApproveSubject || (() => {})}
           onRejectSubject={onRejectSubject || (() => {})}
+          onAddSubjectType={onAddSubjectType || (async () => {})}
+          onUpdateSubjectType={onUpdateSubjectType || (async () => {})}
+          onDeleteSubjectType={onDeleteSubjectType || (async () => {})}
           subjectGroups={subjectGroups}
           subjectGroupForm={subjectGroupForm}
           editingSubjectGroupId={editingSubjectGroupId}
