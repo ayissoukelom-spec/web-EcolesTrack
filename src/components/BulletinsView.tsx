@@ -737,8 +737,8 @@ export default function BulletinsView({
                     </span>
                   </div>
                   {isOpen && (
-                    <div className="space-y-2 p-2">
-                      <div className="flex flex-wrap gap-2 px-1">
+                    <div className="p-2">
+                      <div className="mb-2 flex flex-wrap gap-2 px-1">
                         <button
                           type="button"
                           disabled={allSelected || validationBusyId != null}
@@ -756,30 +756,32 @@ export default function BulletinsView({
                           Tout deselectionner
                         </button>
                       </div>
-                      {evaluations.map((evaluation) => {
-                        const validated = isEvaluationValidated(evaluation);
-                        const missing = missingGradeCount(evaluation);
-                        const gradeCount = gradesList.filter((grade) => grade.evaluationId === evaluation.id).length;
-                        const classStudentCount = generateStudents.filter((student) => student.classId === evaluation.classId).length;
-                        return (
-                          <label key={evaluation.id} className="flex items-start gap-3 rounded-lg border border-slate-100 p-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={validated}
-                              disabled={validationBusyId != null}
-                              onChange={() => handleToggleEvaluation(evaluation)}
-                              className="mt-1"
-                            />
-                            <span className="min-w-0 text-sm text-slate-700">
-                              <span className="block font-semibold">{evaluation.title || 'Evaluation sans titre'}</span>
-                              <span className="block text-xs text-slate-500">{evaluation.date} · Coef. {evaluation.coefficient}</span>
-                              <span className={`block text-xs ${missing > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                                {gradeCount}/{classStudentCount} notes{missing > 0 ? ` · ${missing} manquante(s)` : ''}
+                      <div className="flex flex-wrap gap-2 px-1">
+                        {evaluations.map((evaluation) => {
+                          const validated = isEvaluationValidated(evaluation);
+                          const missing = missingGradeCount(evaluation);
+                          const gradeCount = gradesList.filter((grade) => grade.evaluationId === evaluation.id).length;
+                          const classStudentCount = generateStudents.filter((student) => student.classId === evaluation.classId).length;
+                          return (
+                            <label key={evaluation.id} className="flex min-w-[14rem] flex-1 cursor-pointer items-start gap-3 rounded-lg border border-slate-100 p-2">
+                              <input
+                                type="checkbox"
+                                checked={validated}
+                                disabled={validationBusyId != null}
+                                onChange={() => handleToggleEvaluation(evaluation)}
+                                className="mt-1"
+                              />
+                              <span className="min-w-0 text-sm text-slate-700">
+                                <span className="block font-semibold">{evaluation.title || 'Evaluation sans titre'}</span>
+                                <span className="block text-xs text-slate-500">{evaluation.date} · Coef. {evaluation.coefficient}</span>
+                                <span className={`block text-xs ${missing > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                  {gradeCount}/{classStudentCount} notes{missing > 0 ? ` · ${missing} manquante(s)` : ''}
+                                </span>
                               </span>
-                            </span>
-                          </label>
-                        );
-                      })}
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
