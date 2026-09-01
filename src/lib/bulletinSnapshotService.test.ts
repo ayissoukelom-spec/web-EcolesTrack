@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   generateBulletinSnapshot,
+  groupBulletinLinesBySubjectType,
   resolveSubjectTeacherName,
   type BulletinLineSnapshotInput,
   type BulletinSnapshotContext,
@@ -17,6 +18,7 @@ interface FakeState {
   grades: BulletinGradeLike[];
   bulletins: Array<CreateBulletinInput & { id: number }>;
   bulletinLines: Array<BulletinLineSnapshotInput & { id: number; bulletinId: number }>;
+  subjectTypeNames: Map<string, string>;
 }
 
 const cloneState = (state: FakeState): FakeState => ({
@@ -27,6 +29,7 @@ const cloneState = (state: FakeState): FakeState => ({
   grades: state.grades.map((row) => ({ ...row })),
   bulletins: state.bulletins.map((row) => ({ ...row })),
   bulletinLines: state.bulletinLines.map((row) => ({ ...row })),
+  subjectTypeNames: new Map(state.subjectTypeNames),
 });
 
 const createFakePersistence = (initial: FakeState, failOnInsertLines = false): { persistence: BulletinSnapshotPersistence; state: FakeState } => {
@@ -58,6 +61,9 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
         async getTeacherNames(teacherIds) {
           // Fake implementation: return empty map for testing
           return new Map();
+        },
+        async getSubjectTypes() {
+          return new Map(draft.subjectTypeNames);
         },
         async insertBulletin(payload) {
           const id = draft.bulletins.length + 1;
@@ -109,7 +115,49 @@ describe('generateBulletinSnapshot', () => {
     ],
     bulletins: [],
     bulletinLines: [],
+    subjectTypeNames: new Map(),
   };
+
+  it('regroupe les lignes selon le type de matière sans dupliquer les matières', () => {
+    const lines = [
+      { subjectName: 'Français', subjectTypeName: 'Littéraire', average: 14 },
+      { subjectName: 'Histoire', subjectTypeName: 'Littéraires', average: 12 },
+      { subjectName: 'Math', subjectTypeName: 'Scientifique', average: 16 },
+      { subjectName: 'Sport', subjectTypeName: null, average: 18 },
+    ];
+
+    const groups = groupBulletinLinesBySubjectType(lines);
+
+    expect(groups.matieres_litteraires.map((line) => line.subjectName)).toEqual(['Français', 'Histoire']);
+    expect(groups.matieres_scientifiques.map((line) => line.subjectName)).toEqual(['Math']);
+    expect([...groups.matieres_litteraires, ...groups.matieres_scientifiques]).toHaveLength(3);
+    expect(groups.matieres_litteraires[0]?.average).toBe(14);
+  });
+
+  it('applique la classification fournie pour l école sans inventer de type', async () => {
+    const { persistence } = createFakePersistence({
+      ...baseState,
+      evaluations: baseState.evaluations.map((evaluation) => evaluation.id === 2
+        ? { ...evaluation, subject: 'Science' }
+        : evaluation.id === 3
+          ? { ...evaluation, countInBulletin: true }
+        : evaluation),
+      subjectTypeNames: new Map([
+        ['Math', 'Litteraire'],
+        ['Science', 'Scientifique'],
+      ]),
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+
+    expect(result.matieres_litteraires.map((line) => line.subjectName)).toContain('Math');
+    expect(result.matieres_scientifiques.map((line) => line.subjectName)).toContain('Science');
+    expect(result.matieres_litteraires).not.toContainEqual(expect.objectContaining({ subjectName: 'Science' }));
+    expect(result.matieres_scientifiques).not.toContainEqual(expect.objectContaining({ subjectName: 'Math' }));
+    expect(result.matieres_litteraires).toHaveLength(1);
+    expect(result.matieres_scientifiques).toHaveLength(1);
+    expect(result.linesCount).toBe(3);
+  });
 
   it('enregistre un bulletin et toutes ses lignes de matière', async () => {
     const { persistence, state } = createFakePersistence(baseState);

@@ -69,6 +69,19 @@ const snapshotData: BulletinPdfData = {
   ],
 };
 
+const extractPdfText = (pdfBytes: Uint8Array): string => {
+  const raw = Buffer.from(pdfBytes).toString('latin1');
+  const streams: string[] = [];
+  for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    try {
+      streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
+    } catch {
+      streams.push(match[1]);
+    }
+  }
+  return streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+};
+
 const createApp = (
   provider: BulletinPdfDataProvider,
   pdfGenerator?: (data: BulletinPdfData) => Promise<Uint8Array>,
@@ -219,6 +232,32 @@ describe('bulletin PDF API', () => {
     expect(BULLETIN_FINAL_AVERAGE_LABEL).toBe('Moy. Général');
     expect(text).not.toContain('Note /20');
     expect(text).toContain('Devoir');
+  });
+
+  it('affiche les groupes de matières dans l ordre littéraire puis scientifique', async () => {
+    const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeName: 'Littéraire', average: 14 };
+    const historyLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Histoire', subjectTypeName: 'Littéraire', average: 12 };
+    const mathLine = { ...snapshotData.lines[0], id: 3, subjectName: 'Mathématiques', subjectTypeName: 'Scientifique', average: 16 };
+    const scienceLine = { ...snapshotData.lines[0], id: 4, subjectName: 'Sciences', subjectTypeName: 'Scientifique', average: 15 };
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      lines: [literaryLine, historyLine, mathLine, scienceLine],
+      matieres_litteraires: [literaryLine, historyLine],
+      matieres_scientifiques: [mathLine, scienceLine],
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+
+    const normalizedText = text.replace(/\s+/g, '');
+    expect(normalizedText).toContain('MATIERESLITTERAIRES');
+    expect(normalizedText).toContain('MATIERESSCIENTIFIQUES');
+    expect(normalizedText.indexOf('MATIERESLITTERAIRES')).toBeLessThan(normalizedText.indexOf('MATIERESSCIENTIFIQUES'));
+    expect(text.indexOf('Fran')).toBeLessThan(text.indexOf('Math'));
+    expect(text.match(/Français/g)?.length ?? 0).toBe(0);
+    expect(text.match(/Fran/g)?.length).toBe(1);
+    expect(text.match(/Math/g)?.length).toBe(1);
+    expect(text).toContain('14.00');
+    expect(text).toContain('16.00');
   });
 
   it('n affiche pas le bloc statut dans le PDF si le statut est absent', async () => {

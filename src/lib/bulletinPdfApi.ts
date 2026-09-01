@@ -19,7 +19,12 @@ import {
   students,
   studentAcademicYearStatuses,
 } from '../db/schema.ts';
-import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
+import {
+  buildSubjectTeacherNameMap,
+  groupBulletinLinesBySubjectType,
+  loadSubjectTypeNames,
+  resolveBulletinSubjectType,
+} from './bulletinSnapshotService';
 import {
   calculateClassAverage,
   calculateFinalSubjectAverage,
@@ -58,6 +63,7 @@ export interface BulletinPdfLine {
   bulletinId: number;
   subjectId: number | null;
   subjectName: string;
+  subjectTypeName?: string | null;
   coefficient: number | null;
   average: number | null;
   teacherName?: string | null;
@@ -106,6 +112,8 @@ export interface BulletinPdfData {
   appreciation: string | null;
   generatedAt: string | null;
   lines: BulletinPdfLine[];
+  matieres_litteraires?: BulletinPdfLine[];
+  matieres_scientifiques?: BulletinPdfLine[];
 }
 
 export interface BulletinPdfDataProvider {
@@ -519,11 +527,16 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
 
     const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
 
+    const subjectTypeNames = header.studentSchoolId == null
+      ? new Map<string, string>()
+      : await loadSubjectTypeNames(db, header.studentSchoolId);
+
     let resolvedLines = lines.map((line) => ({
       id: line.id,
       bulletinId: line.bulletinId,
       subjectId: line.subjectId,
       subjectName: line.subjectName,
+      subjectTypeName: subjectTypeNames.get(line.subjectName) ?? null,
       coefficient: line.coefficient,
       average: parseNumber(line.average),
       teacherName: subjectTeacherMap.get(line.subjectName) ?? null,
@@ -580,8 +593,11 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       resolvedLines = buildFallbackLinesFromGrades(gradeRows).map((line) => ({
         ...line,
         bulletinId: bulletinId,
+        subjectTypeName: subjectTypeNames.get(line.subjectName) ?? null,
       }));
     }
+
+    const subjectGroups = groupBulletinLinesBySubjectType(resolvedLines);
 
     return {
       id: header.id,
@@ -607,6 +623,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       appreciation: header.appreciation,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
+      ...subjectGroups,
     };
   },
 });
@@ -882,7 +899,37 @@ export const createBulletinPdfDocument = async (
   drawWrappedText(page, data.mention || '-', tableX + 410, summaryY - 43, 88, 10, text, fontBold, 2);
 
   cursorY = drawTableHeader(page, summaryY - 94);
-  for (const line of data.lines) {
+  const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
+  const renderEntries: Array<{ groupTitle?: string; line?: BulletinPdfLine }> = groupedDataAvailable
+    ? [
+      ...(data.matieres_litteraires && data.matieres_litteraires.length > 0
+        ? [{ groupTitle: 'MATIERES LITTERAIRES' }]
+        : []),
+      ...(data.matieres_litteraires ?? []).map((line) => ({ line })),
+      ...(data.matieres_scientifiques && data.matieres_scientifiques.length > 0
+        ? [{ groupTitle: 'MATIERES SCIENTIFIQUES' }]
+        : []),
+      ...(data.matieres_scientifiques ?? []).map((line) => ({ line })),
+      ...data.lines
+        .filter((line) => !resolveBulletinSubjectType(line.subjectTypeName))
+        .map((line) => ({ line })),
+    ]
+    : data.lines.map((line) => ({ line }));
+
+  for (const entry of renderEntries) {
+    if (entry.groupTitle) {
+      if (cursorY - 24 < 82) {
+        ({ page, cursorY } = createPage(false));
+        cursorY = drawTableHeader(page, cursorY);
+      }
+      drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
+      page.drawLine({ start: { x: tableX + 7, y: cursorY - 19 }, end: { x: tableX + tableWidth - 7, y: cursorY - 19 }, color: lightBorder, thickness: 0.7 });
+      cursorY -= 24;
+      continue;
+    }
+
+    const line = entry.line;
+    if (!line) continue;
     const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 8.5).slice(0, 2);
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 8.5).slice(0, 2);
     const rowHeight = Math.max(26, Math.max(subjectLines.length, commentLines.length) * 11 + 8);
@@ -890,7 +937,7 @@ export const createBulletinPdfDocument = async (
       ({ page, cursorY } = createPage(false));
       cursorY = drawTableHeader(page, cursorY);
     }
-    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: data.lines.indexOf(line) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
+    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: renderEntries.indexOf(entry) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
     let x = tableX;
     const subjectBreakdown = {
       interrogation: line.interrogation ?? null,

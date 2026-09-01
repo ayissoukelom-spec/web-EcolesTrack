@@ -11,6 +11,7 @@ import {
   grades,
   schoolTerms,
   students,
+  subjects,
   teachers,
   users,
 } from '../db/schema.ts';
@@ -30,6 +31,7 @@ import { getGradeAppreciation } from './gradeColor';
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
   subjectName: string;
+  subjectTypeName?: string | null;
   coefficient: number | null;
   average: number | null;
   interrogation?: number | null;
@@ -42,6 +44,51 @@ export interface BulletinLineSnapshotInput {
   rank?: number | null;
   signature?: string | null;
 }
+
+export type BulletinSubjectGroup = 'matieres_litteraires' | 'matieres_scientifiques';
+
+export interface BulletinSubjectGroups<T> {
+  matieres_litteraires: T[];
+  matieres_scientifiques: T[];
+}
+
+export const SUBJECT_TYPE_GROUPS: Record<string, BulletinSubjectGroup> = {
+  litteraire: 'matieres_litteraires',
+  litteraires: 'matieres_litteraires',
+  'matiere litteraire': 'matieres_litteraires',
+  'matieres litteraires': 'matieres_litteraires',
+  scientifique: 'matieres_scientifiques',
+  scientifiques: 'matieres_scientifiques',
+  'matiere scientifique': 'matieres_scientifiques',
+  'matieres scientifiques': 'matieres_scientifiques',
+};
+
+const normalizeSubjectTypeName = (value: string | null | undefined): string => String(value ?? '')
+  .normalize('NFKD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, ' ');
+
+export const groupBulletinLinesBySubjectType = <T extends { subjectTypeName?: string | null }>(
+  lines: T[],
+): BulletinSubjectGroups<T> => {
+  const groups: BulletinSubjectGroups<T> = {
+    matieres_litteraires: [],
+    matieres_scientifiques: [],
+  };
+
+  for (const line of lines) {
+    const group = SUBJECT_TYPE_GROUPS[normalizeSubjectTypeName(line.subjectTypeName)];
+    if (group) groups[group].push(line);
+  }
+
+  return groups;
+};
+
+export const resolveBulletinSubjectType = (
+  subjectTypeName: string | null | undefined,
+): BulletinSubjectGroup | null => SUBJECT_TYPE_GROUPS[normalizeSubjectTypeName(subjectTypeName)] ?? null;
 
 export interface CreateBulletinInput {
   studentId: number;
@@ -68,6 +115,8 @@ export interface BulletinSnapshotResult {
   mention: string | null;
   appreciation: string | null;
   linesCount: number;
+  matieres_litteraires: BulletinLineSnapshotInput[];
+  matieres_scientifiques: BulletinLineSnapshotInput[];
 }
 
 export interface BulletinSnapshotContext {
@@ -78,9 +127,31 @@ export interface BulletinSnapshotContext {
   getClassTermEvaluations(classId: number, termId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
   getTeacherNames(teacherIds: number[]): Promise<Map<number, string>>;
+  getSubjectTypes(schoolId: number): Promise<Map<string, string>>;
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
+
+export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<Map<string, string>> => {
+  const result = await tx.execute(sql`
+    SELECT
+      s.name AS "subjectName",
+      COALESCE(st_school.name, st_local.name) AS "subjectTypeName"
+    FROM subjects s
+    LEFT JOIN school_subjects ss
+      ON ss.subject_id = s.id
+      AND ss.school_id = ${schoolId}
+    LEFT JOIN subject_types st_school ON st_school.id = ss.subject_type_id
+    LEFT JOIN subject_types st_local ON st_local.id = s.subject_type_id
+    WHERE s.school_id = ${schoolId} OR s.school_id IS NULL
+    ORDER BY s.id
+  `);
+  const rows = (result?.rows ?? result) as Array<{ subjectName: string; subjectTypeName?: string | null }>;
+
+  return new Map(rows
+    .filter((row: { subjectTypeName?: string | null }) => row.subjectTypeName != null)
+    .map((row: { subjectName: string; subjectTypeName: string }) => [row.subjectName, row.subjectTypeName]));
+};
 
 export interface BulletinSnapshotPersistence {
   transaction<T>(run: (ctx: BulletinSnapshotContext) => Promise<T>): Promise<T>;
@@ -220,6 +291,7 @@ const computeSubjectLines = (
   termId: number,
   termEvaluations: BulletinEvaluationLike[],
   teacherNameMap: Map<number, string> = new Map(),
+  subjectTypeNames: Map<string, string> = new Map(),
 ): BulletinLineSnapshotInput[] => {
   const bySubject = new Map<string, {
     coefficient: number;
@@ -303,6 +375,7 @@ const computeSubjectLines = (
       teacherComment: getGradeAppreciation(subjectAverage),
       rank,
       signature: null,
+      subjectTypeName: subjectTypeNames.get(subjectName) ?? null,
     };
   });
 };
@@ -522,6 +595,9 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           }
           return map;
         },
+        async getSubjectTypes(schoolId) {
+          return loadSubjectTypeNames(tx, schoolId);
+        },
         async insertBulletin(payload) {
           const [inserted] = await tx.insert(bulletins).values({
             studentId: payload.studentId,
@@ -696,6 +772,9 @@ export const registerBulletinGenerateRoute = (
                 }
                 return map;
               },
+              async getSubjectTypes(schoolId) {
+                return loadSubjectTypeNames(tx, schoolId);
+              },
               async insertBulletin(payload) {
                 const [inserted] = await tx.insert(bulletins).values({
                   studentId: payload.studentId,
@@ -766,6 +845,7 @@ export const generateBulletinSnapshot = async (
 
     const classStudents = await ctx.getClassStudents(student.classId);
     const termEvaluations = await ctx.getClassTermEvaluations(student.classId, termId);
+    const subjectTypeNames = await ctx.getSubjectTypes(student.schoolId);
 
     const evaluationIds = termEvaluations.map((evaluation) => evaluation.id);
     const classStudentIds = classStudents.map((row) => row.id);
@@ -795,7 +875,9 @@ export const generateBulletinSnapshot = async (
       term.id,
       termEvaluations,
       teacherNameMap,
+      subjectTypeNames,
     );
+    const subjectGroups = groupBulletinLinesBySubjectType(lines);
     const subjectAverage = calculateWeightedSubjectAverage(lines);
     const finalAverage = subjectAverage.average;
 
@@ -826,6 +908,7 @@ export const generateBulletinSnapshot = async (
       mention: resolveMention(finalAverage),
       appreciation: resolveAppreciation(finalAverage),
       linesCount: lines.length,
+      ...subjectGroups,
     };
   });
 };
