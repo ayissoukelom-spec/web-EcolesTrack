@@ -260,6 +260,26 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('16.00');
   });
 
+  it('affiche le total après toutes les matières et additionne coefficients et notes coefficientées', async () => {
+    const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeName: 'Littéraire', coefficient: 3, average: 13 };
+    const historyLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Histoire', subjectTypeName: 'Littéraire', coefficient: 2, average: 12 };
+    const mathLine = { ...snapshotData.lines[0], id: 3, subjectName: 'Mathématiques', subjectTypeName: 'Scientifique', coefficient: 4, average: 13 };
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      lines: [literaryLine, historyLine, mathLine],
+      matieres_litteraires: [literaryLine, historyLine],
+      matieres_scientifiques: [mathLine],
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+    const normalizedText = text.replace(/\s+/g, '');
+
+    expect(normalizedText).toContain('TOTAL');
+    expect(normalizedText.indexOf('Math')).toBeLessThan(normalizedText.indexOf('TOTAL'));
+    expect(normalizedText).toContain('9.00');
+    expect(normalizedText).toContain('115.00');
+  });
+
   it('n affiche pas le bloc statut dans le PDF si le statut est absent', async () => {
     const pdfBytes = await createBulletinPdfDocument({ ...snapshotData, studentStatus: null });
     const raw = Buffer.from(pdfBytes).toString('latin1');

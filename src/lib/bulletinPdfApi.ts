@@ -1000,6 +1000,33 @@ export const createBulletinPdfDocument = async (
     cursorY -= rowHeight;
   }
 
+  const renderedLines = renderEntries.flatMap((entry) => entry.line ? [entry.line] : []);
+  const totalCoefficients = renderedLines.reduce((total, line) => total + (line.coefficient ?? 0), 0);
+  const totalWeightedPoints = renderedLines.reduce(
+    (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
+    0,
+  );
+  const totalRowHeight = 28;
+  if (cursorY - totalRowHeight < 82) {
+    ({ page, cursorY } = createPage(false));
+    cursorY = drawTableHeader(page, cursorY);
+  }
+  page.drawRectangle({
+    x: tableX,
+    y: cursorY - totalRowHeight,
+    width: tableWidth,
+    height: totalRowHeight,
+    color: secondary,
+    borderColor: lightBorder,
+    borderWidth: 0.8,
+  });
+  drawText(page, 'TOTAL', tableX + 7, cursorY - 18, 8.5, primary, fontBold);
+  const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
+  const totalWeightedPointsX = totalCoefficientX + columns[6].width;
+  drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 18, 8.5, primary, fontBold);
+  drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 18, 8.5, primary, fontBold);
+  cursorY -= totalRowHeight;
+
   const appreciationText = data.appreciation || '-';
   const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 9);
   const appreciationHeight = 34 + Math.min(appreciationLines.length, 5) * 12;
