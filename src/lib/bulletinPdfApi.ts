@@ -900,21 +900,28 @@ export const createBulletinPdfDocument = async (
 
   cursorY = drawTableHeader(page, summaryY - 94);
   const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
-  const renderEntries: Array<{ groupTitle?: string; line?: BulletinPdfLine }> = groupedDataAvailable
+  const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
     ? [
       ...(data.matieres_litteraires && data.matieres_litteraires.length > 0
         ? [{ groupTitle: 'MATIERES LITTERAIRES' }]
         : []),
       ...(data.matieres_litteraires ?? []).map((line) => ({ line })),
+      ...(data.matieres_litteraires && data.matieres_litteraires.length > 0
+        ? [{ subtotal: { label: 'TOTAL MATIERES LITTERAIRES', lines: data.matieres_litteraires } }]
+        : []),
       ...(data.matieres_scientifiques && data.matieres_scientifiques.length > 0
         ? [{ groupTitle: 'MATIERES SCIENTIFIQUES' }]
         : []),
       ...(data.matieres_scientifiques ?? []).map((line) => ({ line })),
+      ...(data.matieres_scientifiques && data.matieres_scientifiques.length > 0
+        ? [{ subtotal: { label: 'TOTAL MATIERES SCIENTIFIQUES', lines: data.matieres_scientifiques } }]
+        : []),
       ...data.lines
         .filter((line) => !resolveBulletinSubjectType(line.subjectTypeName))
         .map((line) => ({ line })),
     ]
     : data.lines.map((line) => ({ line }));
+  const totalRowHeight = 28;
 
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
@@ -925,6 +932,34 @@ export const createBulletinPdfDocument = async (
       drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
       page.drawLine({ start: { x: tableX + 7, y: cursorY - 19 }, end: { x: tableX + tableWidth - 7, y: cursorY - 19 }, color: lightBorder, thickness: 0.7 });
       cursorY -= 24;
+      continue;
+    }
+
+    if (entry.subtotal) {
+      const subtotalCoefficients = entry.subtotal.lines.reduce((total, line) => total + (line.coefficient ?? 0), 0);
+      const subtotalWeightedPoints = entry.subtotal.lines.reduce(
+        (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
+        0,
+      );
+      if (cursorY - totalRowHeight < 82) {
+        ({ page, cursorY } = createPage(false));
+        cursorY = drawTableHeader(page, cursorY);
+      }
+      page.drawRectangle({
+        x: tableX,
+        y: cursorY - totalRowHeight,
+        width: tableWidth,
+        height: totalRowHeight,
+        color: softBackground,
+        borderColor: lightBorder,
+        borderWidth: 0.8,
+      });
+      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 18, 8.5, primary, fontBold);
+      const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
+      const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
+      drawText(page, subtotalCoefficients.toFixed(2), subtotalCoefficientX, cursorY - 18, 8.5, primary, fontBold);
+      drawText(page, subtotalWeightedPoints.toFixed(2), subtotalWeightedPointsX, cursorY - 18, 8.5, primary, fontBold);
+      cursorY -= totalRowHeight;
       continue;
     }
 
@@ -1006,7 +1041,6 @@ export const createBulletinPdfDocument = async (
     (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
     0,
   );
-  const totalRowHeight = 28;
   if (cursorY - totalRowHeight < 82) {
     ({ page, cursorY } = createPage(false));
     cursorY = drawTableHeader(page, cursorY);
@@ -1020,7 +1054,7 @@ export const createBulletinPdfDocument = async (
     borderColor: lightBorder,
     borderWidth: 0.8,
   });
-  drawText(page, 'TOTAL', tableX + 7, cursorY - 18, 8.5, primary, fontBold);
+  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 18, 8.5, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
   const totalWeightedPointsX = totalCoefficientX + columns[6].width;
   drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 18, 8.5, primary, fontBold);

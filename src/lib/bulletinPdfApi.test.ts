@@ -261,23 +261,40 @@ describe('bulletin PDF API', () => {
   });
 
   it('affiche le total après toutes les matières et additionne coefficients et notes coefficientées', async () => {
-    const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeName: 'Littéraire', coefficient: 3, average: 13 };
-    const historyLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Histoire', subjectTypeName: 'Littéraire', coefficient: 2, average: 12 };
+    // Expected: Literary total = 70 (3*12 + 2*17 = 36 + 34 = 70)
+    // Expected: Scientific total = 86 (4*13 + 2*17 = 52 + 34 = 86)
+    // Expected: General total = 156 (70 + 86 = 156)
+    const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeName: 'Littéraire', coefficient: 3, average: 12 };
+    const historyLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Histoire', subjectTypeName: 'Littéraire', coefficient: 2, average: 17 };
     const mathLine = { ...snapshotData.lines[0], id: 3, subjectName: 'Mathématiques', subjectTypeName: 'Scientifique', coefficient: 4, average: 13 };
+    const scienceLine = { ...snapshotData.lines[0], id: 4, subjectName: 'Sciences', subjectTypeName: 'Scientifique', coefficient: 2, average: 17 };
     const data: BulletinPdfData = {
       ...snapshotData,
-      lines: [literaryLine, historyLine, mathLine],
+      lines: [literaryLine, historyLine, mathLine, scienceLine],
       matieres_litteraires: [literaryLine, historyLine],
-      matieres_scientifiques: [mathLine],
+      matieres_scientifiques: [mathLine, scienceLine],
     };
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
     const normalizedText = text.replace(/\s+/g, '');
 
-    expect(normalizedText).toContain('TOTAL');
-    expect(normalizedText.indexOf('Math')).toBeLessThan(normalizedText.indexOf('TOTAL'));
-    expect(normalizedText).toContain('9.00');
-    expect(normalizedText).toContain('115.00');
+    const literarySubtotal = normalizedText.indexOf('TOTALMATIERESLITTERAIRES');
+    const scientificGroup = normalizedText.indexOf('MATIERESSCIENTIFIQUES');
+    const scientificSubtotal = normalizedText.indexOf('TOTALMATIERESSCIENTIFIQUES');
+    const generalTotal = normalizedText.indexOf('TOTALGENERAL');
+    expect(literarySubtotal).toBeGreaterThan(normalizedText.indexOf('Histoire'));
+    expect(scientificGroup).toBeGreaterThan(literarySubtotal);
+    expect(scientificSubtotal).toBeGreaterThan(normalizedText.indexOf('Sciences'));
+    expect(generalTotal).toBeGreaterThan(scientificSubtotal);
+    expect(normalizedText.match(/TOTALMATIERESLITTERAIRES/g)?.length).toBe(1);
+    expect(normalizedText.match(/TOTALMATIERESSCIENTIFIQUES/g)?.length).toBe(1);
+    expect(normalizedText.match(/TOTALGENERAL/g)?.length).toBe(1);
+    expect(normalizedText).toContain('5.00');
+    expect(normalizedText).toContain('70.00');
+    expect(normalizedText).toContain('6.00');
+    expect(normalizedText).toContain('86.00');
+    expect(normalizedText).toContain('11.00');
+    expect(normalizedText).toContain('156.00');
   });
 
   it('n affiche pas le bloc statut dans le PDF si le statut est absent', async () => {
