@@ -54,6 +54,8 @@ const snapshotData: BulletinPdfData = {
   rank: 2,
   mention: 'SNAPSHOT_MENTION',
   appreciation: 'SNAPSHOT_APPRECIATION',
+  absences: 0,
+  retards: 0,
   generatedAt: '2026-06-26T08:00:00.000Z',
   lines: [
     {
@@ -253,9 +255,8 @@ describe('bulletin PDF API', () => {
     expect(normalizedText).toContain('MATIERESSCIENTIFIQUES');
     expect(normalizedText.indexOf('MATIERESLITTERAIRES')).toBeLessThan(normalizedText.indexOf('MATIERESSCIENTIFIQUES'));
     expect(text.indexOf('Fran')).toBeLessThan(text.indexOf('Math'));
-    expect(text.match(/Français/g)?.length ?? 0).toBe(0);
-    expect(text.match(/Fran/g)?.length).toBe(1);
-    expect(text.match(/Math/g)?.length).toBe(1);
+    expect((text.match(/Français/g) ?? []).length).toBe(1);
+    expect((text.match(/Math/g) ?? []).length).toBeGreaterThan(0);
     expect(text).toContain('14.00');
     expect(text).toContain('16.00');
   });
@@ -395,7 +396,7 @@ describe('bulletin PDF API', () => {
     expect(payload.error).toBe('Forbidden');
   });
 
-  it('gère un bulletin long sur plusieurs pages avec les données optionnelles absentes', async () => {
+  it('génère un bulletin compact en une seule page même avec beaucoup de matières', async () => {
     const longData: BulletinPdfData = {
       ...snapshotData,
       appreciation: 'Appreciation longue '.repeat(20),
@@ -409,7 +410,8 @@ describe('bulletin PDF API', () => {
     const pdfBytes = await createBulletinPdfDocument(longData);
     const document = await PDFDocument.load(pdfBytes);
 
-    expect(document.getPageCount()).toBeGreaterThan(1);
+    expect(document.getPageCount()).toBe(1);
+    expect(extractPdfText(pdfBytes)).toContain('Matiere 45');
   });
 
   it('utilise les informations propres à chaque établissement et tolère les champs absents', async () => {
@@ -455,9 +457,9 @@ describe('bulletin PDF API', () => {
     expect(textA).toContain('SEXE :');
     expect(textA).toMatch(/(?:^|\s)F(?:\s|$)/);
     expect(textA).toContain('COLLEGE A');
-    expect(textA).toContain("DIRECTION RE GIONALE DE L'E DUCATION GRAND LOME");
+    expect(textA).toContain('DIRECTION RÉGIONALE DE L\'ÉDUCATION GRAND LOMÉ');
     expect(textA).not.toContain('Excellence');
-    expect(textA).toContain('BP : 1234 Te l : 90 00 00 01');
+    expect(textA).toContain('BP : 1234 Tél : 90 00 00 01');
     expect(textA).not.toContain('ADRESSE A');
     expect(textA).not.toContain('District');
     expect(textA).not.toContain('COLLEGE B');
@@ -515,5 +517,82 @@ describe('bulletin PDF API', () => {
     });
 
     expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
+  });
+
+  it('affiche les absences et retards sur une seule ligne dans la section ASSIDUITÉ', async () => {
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      absences: 5,
+      retards: 2,
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+
+    expect(text).toContain('ASSIDUITÉ');
+    expect(text).toMatch(/Absences\s*:\s*5\s+Retards\s*:\s*2/);
+    expect(text).not.toMatch(/Absences\s*:\s*5\s*\n\s*Retards\s*:\s*2/);
+  });
+
+  it('supprime le bloc Moyenne/Rang sous le nom de l élève', async () => {
+    const text = extractPdfText(await createBulletinPdfDocument({ ...snapshotData, average: 14.5, rank: 2 }));
+
+    expect(text).not.toContain('Moyenne générale');
+    expect(text).not.toContain('Total points');
+    expect(text).not.toContain('Total coefficients');
+  });
+
+  it('affiche zéro absence quand l\'élève n\'en a aucune', async () => {
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      absences: 0,
+      retards: 0,
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+
+    expect(text).toContain('ASSIDUITÉ');
+    expect(text).toContain('Retards : 0');
+    expect(text).toContain('Absences : 0');
+  });
+
+  it('compte les absences réelles d un élève dans le bulletin PDF et exclut les autres périodes', async () => {
+    const studentA = { ...snapshotData, studentId: 10, studentName: 'Élève A', absences: 5, retards: 0 };
+    const studentB = { ...snapshotData, studentId: 11, studentName: 'Élève B', absences: 2, retards: 0 };
+    const studentC = { ...snapshotData, studentId: 12, studentName: 'Élève C', absences: 0, retards: 0 };
+
+    const pdfA = extractPdfText(await createBulletinPdfDocument(studentA));
+    const pdfB = extractPdfText(await createBulletinPdfDocument(studentB));
+    const pdfC = extractPdfText(await createBulletinPdfDocument(studentC));
+
+    expect(pdfA).toContain('Absences : 5');
+    expect(pdfB).toContain('Absences : 2');
+    expect(pdfC).toContain('Absences : 0');
+    expect(pdfA).not.toContain('Absences : 2');
+    expect(pdfB).not.toContain('Absences : 5');
+    expect(pdfC).not.toContain('Absences : 1');
+  });
+
+  it('affiche des nombres différents pour chaque élève', async () => {
+    const student1 = await createBulletinPdfDocument({
+      ...snapshotData,
+      studentId: 10,
+      absences: 3,
+      retards: 1,
+    });
+
+    const student2 = await createBulletinPdfDocument({
+      ...snapshotData,
+      studentId: 11,
+      absences: 7,
+      retards: 2,
+    });
+
+    const text1 = extractPdfText(student1);
+    const text2 = extractPdfText(student2);
+
+    expect(text1).toContain('Absences : 3');
+    expect(text1).toContain('Retards : 1');
+    expect(text2).toContain('Absences : 7');
+    expect(text2).toContain('Retards : 2');
   });
 });

@@ -6,6 +6,7 @@ import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import {
+  absences,
   academicYears,
   bulletinLines,
   bulletins,
@@ -110,6 +111,8 @@ export interface BulletinPdfData {
   rank: number | null;
   mention: string | null;
   appreciation: string | null;
+  absences: number;
+  retards: number;
   generatedAt: string | null;
   lines: BulletinPdfLine[];
   matieres_litteraires?: BulletinPdfLine[];
@@ -387,14 +390,38 @@ const computeSubjectBreakdown = async (
 
 const sanitizePdfText = (value: string): string => {
   const raw = String(value ?? '');
-  // Keep PDF generation stable with StandardFonts by removing unsupported glyphs.
   return raw
-    .normalize('NFKD')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[^\x20-\x7E\u00B0]/g, ' ')
+    .replace(/[^\p{L}\p{N}\p{P}\p{S}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+};
+
+const sanitizePdfTextPreservingAccents = sanitizePdfText;
+
+const loadPdfFonts = async (pdf: PDFDocument) => {
+  const candidates = [
+    { regular: 'C:/Windows/Fonts/calibri.ttf', bold: 'C:/Windows/Fonts/calibrib.ttf' },
+    { regular: 'C:/Windows/Fonts/segoeui.ttf', bold: 'C:/Windows/Fonts/segoeuib.ttf' },
+    { regular: 'C:/Windows/Fonts/arial.ttf', bold: 'C:/Windows/Fonts/arialbd.ttf' },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      return {
+        regular: await pdf.embedFont(await readFile(candidate.regular)),
+        bold: await pdf.embedFont(await readFile(candidate.bold)),
+      };
+    } catch {
+      // Fall back to built-in fonts if a local TTF is unavailable.
+    }
+  }
+
+  return {
+    regular: await pdf.embedFont(StandardFonts.TimesRoman),
+    bold: await pdf.embedFont(StandardFonts.TimesRomanBold),
+  };
 };
 
 export const BULLETIN_FINAL_AVERAGE_LABEL = 'Moy. Général';
@@ -599,6 +626,24 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
 
     const subjectGroups = groupBulletinLinesBySubjectType(resolvedLines);
 
+    // Count only real absences for the student within the bulletin's class and term date range.
+    // The existing schema keeps absences in the `absences` table and does not have a dedicated delays table.
+    let absencesCount = 0;
+    if (header.termStartDate && header.termEndDate) {
+      const absenceRows = await db
+        .select({ count: sql<number>`count(distinct ${absences.id})::int` })
+        .from(absences)
+        .where(
+          and(
+            eq(absences.studentId, header.studentId),
+            eq(absences.classId, header.classId),
+            sql`${absences.date} >= ${header.termStartDate}`,
+            sql`${absences.date} <= ${header.termEndDate}`,
+          ),
+        );
+      absencesCount = Number(absenceRows[0]?.count ?? 0);
+    }
+
     return {
       id: header.id,
       studentId: header.studentId,
@@ -621,6 +666,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       rank: header.rank,
       mention: header.mention,
       appreciation: header.appreciation,
+      absences: absencesCount,
+      retards: 0,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
       ...subjectGroups,
@@ -668,8 +715,7 @@ export const createBulletinPdfDocument = async (
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 40;
 
-  const fontRegular = await pdf.embedFont(StandardFonts.TimesRoman);
-  const fontBold = await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const { regular: fontRegular, bold: fontBold } = await loadPdfFonts(pdf);
   let logo: any = null;
   if (template.logoFilePath) {
     try {
@@ -682,7 +728,6 @@ export const createBulletinPdfDocument = async (
     }
   }
 
-  const pages: any[] = [];
   const school = data.school ?? { name: data.schoolName };
   const white = rgb(1, 1, 1);
   const muted = hexToRgb('#475569');
@@ -832,73 +877,56 @@ export const createBulletinPdfDocument = async (
     return y - (headerHeight + 4);
   };
 
-  const createPage = (includeStudentBlock: boolean) => {
-    const page = pdf.addPage(pageSize);
-    pages.push(page);
-    let cursorY = drawHeader(page, includeStudentBlock);
-    if (includeStudentBlock) {
-      const title = `${template.labels.title} DU ${data.termName}`;
-      const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
-      drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
-      const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
-      const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
-      drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 22, 10, text, fontBold);
-      page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-      const studentLabel = 'NOM ET PRENOMS DE L ELEVE :';
-      const studentName = sanitizePdfText(data.studentName);
-      const studentLabelSize = 8;
-      const studentNameSize = 10.5;
-      const studentGap = 4;
-      const studentLabelWidth = fontRegular.widthOfTextAtSize(studentLabel, studentLabelSize);
-      const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
-      const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
-      const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
-      drawText(page, studentLabel, tableX + 12, cursorY - 51, studentLabelSize, muted, fontRegular);
-      drawText(page, studentName, studentNameX, cursorY - 51, studentNameSize, text, fontBold);
-      if (data.studentMatricule?.trim()) {
-        const matriculeText = `N° Mle : ${sanitizePdfText(data.studentMatricule)}`;
-        const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
-        drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67, studentLabelSize, text, fontRegular);
-      }
-      const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
-      const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
-      const genderValue = data.studentGender?.trim() ? sanitizePdfText(data.studentGender) : null;
-      const rightEdge = tableX + tableWidth - 12;
-      const rightBlocks = [
-        statusValue ? { label: 'STATUT :', value: statusValue } : null,
-        genderValue ? { label: 'SEXE :', value: genderValue } : null,
-      ].filter((block): block is { label: string; value: string } => block !== null);
-      rightBlocks.forEach((block, index) => {
-        const labelWidth = fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
-        const valueWidth = fontBold.widthOfTextAtSize(block.value, studentNameSize);
-        const blockWidth = labelWidth + studentGap + valueWidth;
-        const blockY = cursorY - 51 - index * 16;
-        const rightAlignedX = rightEdge - blockWidth;
-        const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
-        const blockX = Math.max(rightAlignedX, minimumX);
-        drawText(page, block.label, blockX, blockY, studentLabelSize, muted, fontRegular);
-        drawText(page, block.value, blockX + labelWidth + studentGap, blockY, studentNameSize, text, fontBold);
-      });
-      cursorY -= 96;
-    }
-    return { page, cursorY };
-  };
+  const page = pdf.addPage(pageSize);
+  let cursorY = drawHeader(page, true);
 
-  let { page, cursorY } = createPage(true);
+  const title = `${template.labels.title} DU ${data.termName}`;
+  const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
+  drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
+  const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
+  const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
+  drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 22, 10, text, fontBold);
+  page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
+  const studentLabel = 'NOM ET PRENOMS DE L ELEVE :';
+  const studentName = sanitizePdfText(data.studentName);
+  const studentLabelSize = 8;
+  const studentNameSize = 10.5;
+  const studentGap = 4;
+  const studentLabelWidth = fontRegular.widthOfTextAtSize(studentLabel, studentLabelSize);
+  const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
+  const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
+  const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
+  drawText(page, studentLabel, tableX + 12, cursorY - 51, studentLabelSize, muted, fontRegular);
+  drawText(page, studentName, studentNameX, cursorY - 51, studentNameSize, text, fontBold);
+  if (data.studentMatricule?.trim()) {
+    const matriculeText = `N° Mle : ${sanitizePdfTextPreservingAccents(data.studentMatricule)}`;
+    const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
+    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67, studentLabelSize, text, fontRegular);
+  }
+  const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
+  const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
+  const genderValue = data.studentGender?.trim() ? sanitizePdfText(data.studentGender) : null;
+  const rightEdge = tableX + tableWidth - 12;
+  const rightBlocks = [
+    statusValue ? { label: 'STATUT :', value: statusValue } : null,
+    genderValue ? { label: 'SEXE :', value: genderValue } : null,
+  ].filter((block): block is { label: string; value: string } => block !== null);
+  rightBlocks.forEach((block, index) => {
+    const labelWidth = fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
+    const valueWidth = fontBold.widthOfTextAtSize(block.value, studentNameSize);
+    const blockWidth = labelWidth + studentGap + valueWidth;
+    const blockY = cursorY - 51 - index * 16;
+    const rightAlignedX = rightEdge - blockWidth;
+    const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
+    const blockX = Math.max(rightAlignedX, minimumX);
+    drawText(page, block.label, blockX, blockY, studentLabelSize, muted, fontRegular);
+    drawText(page, block.value, blockX + labelWidth + studentGap, blockY, studentNameSize, text, fontBold);
+  });
+  cursorY -= 96;
+
   const summaryY = cursorY;
-  page.drawRectangle({ x: tableX, y: summaryY - 78, width: tableWidth, height: 70, color: secondary, borderColor: lightBorder, borderWidth: 0.7 });
-  drawText(page, template.labels.average, tableX + 14, summaryY - 22, 9, muted, fontBold);
-  drawText(page, data.average == null ? '-' : data.average.toFixed(2), tableX + 14, summaryY - 53, 24, primary, fontBold);
-  drawText(page, 'Total points', tableX + 180, summaryY - 22, 8, muted, fontBold);
-  drawText(page, data.totalPoints.toFixed(2), tableX + 180, summaryY - 43, 12, text, fontBold);
-  drawText(page, 'Total coefficients', tableX + 180, summaryY - 59, 8, muted, fontBold);
-  drawText(page, data.totalCoefficients.toFixed(2), tableX + 180, summaryY - 75, 10, text, fontBold);
-  drawText(page, template.labels.rank, tableX + 330, summaryY - 22, 8, muted, fontBold);
-  drawText(page, data.rank == null ? '-' : String(data.rank), tableX + 330, summaryY - 43, 12, text, fontBold);
-  drawText(page, template.labels.mention, tableX + 410, summaryY - 22, 8, muted, fontBold);
-  drawWrappedText(page, data.mention || '-', tableX + 410, summaryY - 43, 88, 10, text, fontBold, 2);
 
-  cursorY = drawTableHeader(page, summaryY - 94);
+  cursorY = drawTableHeader(page, summaryY - 12);
   const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
   const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
     ? [
@@ -921,17 +949,13 @@ export const createBulletinPdfDocument = async (
         .map((line) => ({ line })),
     ]
     : data.lines.map((line) => ({ line }));
-  const totalRowHeight = 28;
+  const totalRowHeight = 20;
 
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
-      if (cursorY - 24 < 82) {
-        ({ page, cursorY } = createPage(false));
-        cursorY = drawTableHeader(page, cursorY);
-      }
       drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
       page.drawLine({ start: { x: tableX + 7, y: cursorY - 19 }, end: { x: tableX + tableWidth - 7, y: cursorY - 19 }, color: lightBorder, thickness: 0.7 });
-      cursorY -= 24;
+      cursorY -= 20;
       continue;
     }
 
@@ -941,10 +965,6 @@ export const createBulletinPdfDocument = async (
         (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
         0,
       );
-      if (cursorY - totalRowHeight < 82) {
-        ({ page, cursorY } = createPage(false));
-        cursorY = drawTableHeader(page, cursorY);
-      }
       page.drawRectangle({
         x: tableX,
         y: cursorY - totalRowHeight,
@@ -954,24 +974,20 @@ export const createBulletinPdfDocument = async (
         borderColor: lightBorder,
         borderWidth: 0.8,
       });
-      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 18, 8.5, primary, fontBold);
+      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
       const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
       const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
-      drawText(page, subtotalCoefficients.toFixed(2), subtotalCoefficientX, cursorY - 18, 8.5, primary, fontBold);
-      drawText(page, subtotalWeightedPoints.toFixed(2), subtotalWeightedPointsX, cursorY - 18, 8.5, primary, fontBold);
+      drawText(page, subtotalCoefficients.toFixed(2), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, subtotalWeightedPoints.toFixed(2), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
       cursorY -= totalRowHeight;
       continue;
     }
 
     const line = entry.line;
     if (!line) continue;
-    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 8.5).slice(0, 2);
-    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 8.5).slice(0, 2);
-    const rowHeight = Math.max(26, Math.max(subjectLines.length, commentLines.length) * 11 + 8);
-    if (cursorY - rowHeight < 82) {
-      ({ page, cursorY } = createPage(false));
-      cursorY = drawTableHeader(page, cursorY);
-    }
+    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
+    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
+    const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: renderEntries.indexOf(entry) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
     let x = tableX;
     const subjectBreakdown = {
@@ -985,52 +1001,52 @@ export const createBulletinPdfDocument = async (
       : '-';
 
     // Column 1: Matières
-    drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 8.5, text, fontRegular, 2);
+    drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 7.5, text, fontRegular, 2);
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[5].width;
 
     // Column 7: Coef.
-    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[6].width;
 
     // Column 8: Note coef.
-    drawText(page, String(noteCoef), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, String(noteCoef), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[7].width;
 
     // Column 9: Rang
-    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 8, text, fontRegular);
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 7.5, text, fontRegular);
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
     const teacherName = line.teacherName || '-';
-    drawWrappedText(page, teacherName, x + 7, cursorY - 13, columns[9].width - 14, 7.5, text, fontRegular, 2);
+    drawWrappedText(page, teacherName, x + 7, cursorY - 13, columns[9].width - 14, 7.2, text, fontRegular, 2);
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.5, text, fontRegular, 2);
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontRegular, 2);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
-    drawText(page, '', x + 7, cursorY - 13, 8.5, text, fontRegular);
+    drawText(page, '', x + 7, cursorY - 13, 7.5, text, fontRegular);
 
     cursorY -= rowHeight;
   }
@@ -1041,10 +1057,6 @@ export const createBulletinPdfDocument = async (
     (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
     0,
   );
-  if (cursorY - totalRowHeight < 82) {
-    ({ page, cursorY } = createPage(false));
-    cursorY = drawTableHeader(page, cursorY);
-  }
   page.drawRectangle({
     x: tableX,
     y: cursorY - totalRowHeight,
@@ -1054,37 +1066,35 @@ export const createBulletinPdfDocument = async (
     borderColor: lightBorder,
     borderWidth: 0.8,
   });
-  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 18, 8.5, primary, fontBold);
+  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
   const totalWeightedPointsX = totalCoefficientX + columns[6].width;
-  drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 18, 8.5, primary, fontBold);
-  drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 18, 8.5, primary, fontBold);
+  drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
   const appreciationText = data.appreciation || '-';
-  const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 9);
-  const appreciationHeight = 34 + Math.min(appreciationLines.length, 5) * 12;
-  if (cursorY - appreciationHeight < 82) {
-    ({ page, cursorY } = createPage(false));
-  }
+  const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 8.5);
+  const appreciationHeight = 26 + Math.min(appreciationLines.length, 4) * 10;
   page.drawRectangle({ x: tableX, y: cursorY - appreciationHeight, width: tableWidth, height: appreciationHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-  drawText(page, template.labels.appreciation, tableX + 12, cursorY - 17, 9, primary, fontBold);
-  drawWrappedText(page, appreciationText, tableX + 12, cursorY - 34, tableWidth - 24, 9, text, fontRegular, 5);
-  cursorY -= appreciationHeight + 58;
-  if (cursorY < 82) {
-    ({ page, cursorY } = createPage(false));
-  }
+  drawText(page, template.labels.appreciation, tableX + 12, cursorY - 15, 8.5, primary, fontBold);
+  drawWrappedText(page, appreciationText, tableX + 12, cursorY - 28, tableWidth - 24, 8.5, text, fontRegular, 4);
+  cursorY -= appreciationHeight + 30;
+
+  const attendanceHeight = 28;
+  page.drawRectangle({ x: tableX, y: cursorY - attendanceHeight, width: tableWidth, height: attendanceHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
+  drawText(page, sanitizePdfTextPreservingAccents('ASSIDUITÉ'), tableX + 12, cursorY - 15, 8.5, primary, fontBold);
+  drawText(page, `Absences : ${data.absences}    Retards : ${data.retards}`, tableX + 12, cursorY - 25, 7.7, text, fontRegular);
+  cursorY -= attendanceHeight + 24;
+
   page.drawLine({ start: { x: margin, y: cursorY }, end: { x: margin + 190, y: cursorY }, color: lightBorder, thickness: 0.8 });
   page.drawLine({ start: { x: page.getWidth() - margin - 190, y: cursorY }, end: { x: page.getWidth() - margin, y: cursorY }, color: lightBorder, thickness: 0.8 });
   drawText(page, template.labels.signatureSchool, margin, cursorY - 16, 8.5, muted, fontRegular);
   drawText(page, template.labels.signatureParent, page.getWidth() - margin - 190, cursorY - 16, 8.5, muted, fontRegular);
 
-  for (const currentPage of pages) {
-    const width = currentPage.getWidth();
-    currentPage.drawLine({ start: { x: margin, y: 54 }, end: { x: width - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
-    drawText(currentPage, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
-    drawText(currentPage, `Page ${pages.indexOf(currentPage) + 1}/${pages.length}`, width - margin - 55, 38, 7.5, muted, fontRegular);
-  }
+  page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
+  drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
+  drawText(page, 'Page 1/1', page.getWidth() - margin - 55, 38, 7.5, muted, fontRegular);
 
   return pdf.save({ useObjectStreams: false });
 };
