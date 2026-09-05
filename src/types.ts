@@ -181,6 +181,8 @@ export interface Grade {
   editCount?: number;
   createdAt?: string;
   updatedAt?: string;
+  evaluationMinimumScore?: number | null;
+  evaluationMaximumScore?: number | null;
   isModified?: boolean;
 }
 

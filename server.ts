@@ -31,7 +31,7 @@ import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSc
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
-import { validateGradeScore } from './src/lib/gradeValidation.ts';
+import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
@@ -6107,6 +6107,7 @@ export async function createApp() {
           teacherName: users.name,
           termId: evaluations.termId,
           subject: evaluations.subject,
+          type: evaluations.type,
           title: evaluations.title,
           coefficient: evaluations.coefficient,
           maxScore: evaluations.maxScore,
@@ -6671,7 +6672,30 @@ if (uniqueParentIds.length > 0) {
       }
 
       const list = await query;
-      res.json(list);
+      if (actor.role !== 'parent' || list.length === 0) {
+        return res.json(list);
+      }
+
+      const evaluationIds = Array.from(new Set(list.map((grade) => grade.evaluationId)));
+      const evaluationScoreRows = await db
+        .select({
+          evaluationId: grades.evaluationId,
+          score: grades.score,
+          maxScore: evaluations.maxScore,
+        })
+        .from(grades)
+        .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
+        .where(and(
+          inArray(grades.evaluationId, evaluationIds),
+          eq(evaluations.countInBulletin, true),
+        ));
+      const scoreBounds = calculateEvaluationScoreBounds(evaluationScoreRows);
+
+      return res.json(list.map((grade) => ({
+        ...grade,
+        evaluationMinimumScore: scoreBounds.get(grade.evaluationId)?.minimum ?? null,
+        evaluationMaximumScore: scoreBounds.get(grade.evaluationId)?.maximum ?? null,
+      })));
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch grades list' });
     }

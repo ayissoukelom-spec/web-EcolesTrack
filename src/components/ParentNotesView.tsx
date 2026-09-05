@@ -372,6 +372,8 @@ export default function ParentNotesView({
                       <th className="px-4 py-3 font-semibold">Matiere</th>
                       <th className="px-4 py-3 font-semibold">Evaluation</th>
                       <th className="px-4 py-3 font-semibold">Note</th>
+                      <th className="px-4 py-3 font-semibold">Meilleure note</th>
+                      <th className="px-4 py-3 font-semibold">Plus faible note</th>
                       <th className="px-4 py-3 font-semibold">Date de publication</th>
                       <th className="px-4 py-3 font-semibold">Mention</th>
                     </tr>
@@ -394,6 +396,12 @@ export default function ParentNotesView({
                             <span className={`font-semibold px-2 py-1 rounded-lg ${gradeBadgeClass}`}>
                               {grade.score} / {maxScore}
                             </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {grade.evaluationMaximumScore == null ? '-' : `${grade.evaluationMaximumScore.toFixed(2)} / 20`}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {grade.evaluationMinimumScore == null ? '-' : `${grade.evaluationMinimumScore.toFixed(2)} / 20`}
                           </td>
                           <td className="px-4 py-3 text-slate-600">{publishedDate}</td>
                           <td className="px-4 py-3 text-slate-700">{mention}</td>

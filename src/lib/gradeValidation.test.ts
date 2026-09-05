@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateGradeScore } from './gradeValidation';
+import { calculateEvaluationScoreBounds, validateGradeScore } from './gradeValidation';
 
 describe('validateGradeScore', () => {
   it('accepts numeric score within maxScore', () => {
@@ -32,5 +32,25 @@ describe('validateGradeScore', () => {
       isValid: false,
       error: 'La note ne peut pas être négative',
     });
+  });
+
+  it('calculates separate normalized bounds and ignores Abs', () => {
+    const bounds = calculateEvaluationScoreBounds([
+      { evaluationId: 1, score: '14', maxScore: 20 },
+      { evaluationId: 1, score: '19', maxScore: 20 },
+      { evaluationId: 1, score: '19', maxScore: 20 },
+      { evaluationId: 1, score: '7', maxScore: 20 },
+      { evaluationId: 1, score: '7', maxScore: 20 },
+      { evaluationId: 1, score: 'Abs', maxScore: 20 },
+      { evaluationId: 2, score: '8', maxScore: 10 },
+      { evaluationId: 2, score: '15', maxScore: 20 },
+      { evaluationId: 3, score: '12', maxScore: 20 },
+      { evaluationId: 4, score: '20', maxScore: 20, countInBulletin: false },
+    ]);
+
+    expect(bounds.get(1)).toEqual({ minimum: 7, maximum: 19 });
+    expect(bounds.get(2)).toEqual({ minimum: 15, maximum: 16 });
+    expect(bounds.get(3)).toEqual({ minimum: 12, maximum: 12 });
+    expect(bounds.has(4)).toBe(false);
   });
 });
