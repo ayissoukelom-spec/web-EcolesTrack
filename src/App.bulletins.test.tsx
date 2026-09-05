@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.tsx';
 import { AuthProvider } from './contexts/AuthContext.tsx';
@@ -71,7 +71,15 @@ vi.mock('./components/DashboardView.tsx', () => ({ default: () => <div>Dashboard
 vi.mock('./components/AdminView.tsx', () => ({ default: () => <div>AdminView</div> }));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./components/AbsenceView.tsx', () => ({ default: () => <div>AbsenceView</div> }));
-vi.mock('./components/NotesView.tsx', () => ({ default: () => <div>NotesView</div> }));
+vi.mock('./components/NotesView.tsx', () => ({
+  default: ({ onAddGrade, gradesList }: { onAddGrade?: (data: any) => Promise<void>; gradesList?: any[] }) => (
+    <>
+      <div>NotesView</div>
+      {onAddGrade && <button onClick={() => onAddGrade({ evaluationId: 42, studentId: 7, score: '14', remarks: '' })}>Mock save grade</button>}
+      <div data-testid="mock-grades">{JSON.stringify(gradesList || [])}</div>
+    </>
+  ),
+}));
 vi.mock('./components/NotificationView.tsx', () => ({ default: () => <div>NotificationView</div> }));
 vi.mock('./components/AuditView.tsx', () => ({ default: () => <div>AuditView</div> }));
 vi.mock('./components/MobileParentView.tsx', () => ({ default: () => <div>MobileParentView</div> }));
@@ -125,6 +133,55 @@ describe('App bulletin navigation', () => {
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('refreshes grades from the backend after saving a grade', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    const initialGrades = [{ id: 1, evaluationId: 1, studentId: 7, score: '10' }];
+    const refreshedGrades = [{
+      id: 2,
+      evaluationId: 42,
+      studentId: 7,
+      score: '14',
+      evaluationMinimumScore: 7,
+      evaluationMaximumScore: 19,
+    }];
+    let gradesRequestCount = 0;
+    mockApiFetch.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/grades' && options?.method === 'POST') return Promise.resolve({ id: 2 });
+      if (url === '/api/grades') {
+        gradesRequestCount += 1;
+        return Promise.resolve(gradesRequestCount === 1 ? initialGrades : refreshedGrades);
+      }
+      if (url === '/api/schools') return Promise.resolve([]);
+      if (url === '/api/academic-years') return Promise.resolve([]);
+      if (url === '/api/teachers') return Promise.resolve([]);
+      if (url === '/api/parents') return Promise.resolve([]);
+      if (url === '/api/evaluations') return Promise.resolve([]);
+      if (url === '/api/notifications') return Promise.resolve([]);
+      if (url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Notes & Bulletins/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock save grade' }));
+
+    await waitFor(() => expect(screen.getByTestId('mock-grades')).toHaveTextContent('evaluationMinimumScore'));
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/grades', {
+      method: 'POST',
+      body: JSON.stringify({ evaluationId: 42, studentId: 7, score: '14', remarks: '' }),
+    });
+    expect(gradesRequestCount).toBeGreaterThan(1);
+    expect(screen.getByTestId('mock-grades')).toHaveTextContent('"evaluationMinimumScore":7');
+    expect(screen.getByTestId('mock-grades')).toHaveTextContent('"evaluationMaximumScore":19');
   });
 
   it('keeps the Bulletin menu visible but disabled for non-super_admin roles and does not navigate on click', async () => {

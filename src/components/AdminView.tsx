@@ -576,6 +576,9 @@ export default function AdminView({
   const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
   const [termStartDate, setTermStartDate] = useState<string>('');
   const [termEndDate, setTermEndDate] = useState<string>('');
+  const [editingTermId, setEditingTermId] = useState<number | null>(null);
+  const [editingTermStartDate, setEditingTermStartDate] = useState('');
+  const [editingTermEndDate, setEditingTermEndDate] = useState('');
   const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
@@ -3985,9 +3988,71 @@ export default function AdminView({
                 <ul className="space-y-2 text-sm">
                   {termsList.map((t) => (
                     <li key={t.id} className="flex items-center justify-between">
-                      <div>{t.name} {t.start_date ? `(${t.start_date} → ${t.end_date || '…'})` : ''}</div>
+                      {editingTermId === t.id ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{t.name}</span>
+                          <input
+                            type="date"
+                            value={editingTermStartDate}
+                            onChange={(event) => setEditingTermStartDate(event.target.value)}
+                            className="px-2 py-1 border border-slate-200 rounded"
+                          />
+                          <input
+                            type="date"
+                            value={editingTermEndDate}
+                            onChange={(event) => setEditingTermEndDate(event.target.value)}
+                            className="px-2 py-1 border border-slate-200 rounded"
+                          />
+                        </div>
+                      ) : (
+                        <div>{t.name} {t.startDate ? `(${t.startDate} → ${t.endDate || '…'})` : ''}</div>
+                      )}
                       <div className="inline-flex items-center gap-2">
-                        <div className="text-slate-400 text-xs">{t.is_active ? 'Actif' : 'Inactif'}</div>
+                        <div className="text-slate-400 text-xs">{t.isActive ? 'Actif' : 'Inactif'}</div>
+                        {['super_admin', 'school_admin'].includes(userRole) && (
+                          editingTermId === t.id ? (
+                            <>
+                              <button
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold"
+                                onClick={async () => {
+                                  try {
+                                    if (!editingTermStartDate || !editingTermEndDate) {
+                                      setTermNotice({ type: 'error', text: 'Veuillez choisir la date de début et la date de fin.' });
+                                      return;
+                                    }
+                                    if (new Date(editingTermEndDate) < new Date(editingTermStartDate)) {
+                                      setTermNotice({ type: 'error', text: 'La date de fin doit être supérieure ou égale à la date de début.' });
+                                      return;
+                                    }
+                                    const updatedTerm = await apiFetch(`/api/school-terms/${t.id}`, {
+                                      method: 'PUT',
+                                      body: JSON.stringify({ startDate: editingTermStartDate, endDate: editingTermEndDate }),
+                                    });
+                                    setTermsList((prev) => prev.map((row) => row.id === t.id ? updatedTerm : row));
+                                    setEditingTermId(null);
+                                    setTermNotice({ type: 'success', text: 'Période modifiée avec succès.' });
+                                  } catch (err: any) {
+                                    setTermNotice({ type: 'error', text: err?.message || 'Impossible de modifier la période.' });
+                                  }
+                                }}
+                              >Enregistrer</button>
+                              <button
+                                className="px-2 py-1 border border-slate-200 text-slate-600 rounded text-xs font-semibold"
+                                onClick={() => setEditingTermId(null)}
+                              >Annuler</button>
+                            </>
+                          ) : (
+                            <button
+                              className="px-2 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded text-xs font-semibold"
+                              onClick={() => {
+                                setEditingTermId(t.id);
+                                setEditingTermStartDate(t.startDate || '');
+                                setEditingTermEndDate(t.endDate || '');
+                                setTermNotice(null);
+                              }}
+                            >Modifier</button>
+                          )
+                        )}
                         <button
                           className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
                           onClick={async () => {

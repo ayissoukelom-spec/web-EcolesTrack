@@ -3090,6 +3090,10 @@ export async function createApp() {
       const id = Number(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
+      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
       const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
       if (!existing) return res.status(404).json({ error: 'Term not found' });
 
@@ -3100,6 +3104,22 @@ export async function createApp() {
       const { name, startDate, endDate, orderIndex, isActive } = req.body as any;
       const updates: any = {};
       if (name != null) updates.name = String(name);
+      const nextStartDate = startDate != null ? String(startDate) : existing.startDate;
+      const nextEndDate = endDate != null ? String(endDate) : existing.endDate;
+      const isValidDate = (value: string) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+        const parsed = new Date(`${value}T00:00:00Z`);
+        return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+      };
+      if (nextStartDate && !isValidDate(nextStartDate)) {
+        return res.status(400).json({ error: 'Invalid start date' });
+      }
+      if (nextEndDate && !isValidDate(nextEndDate)) {
+        return res.status(400).json({ error: 'Invalid end date' });
+      }
+      if (nextStartDate && nextEndDate && nextStartDate > nextEndDate) {
+        return res.status(400).json({ error: 'End date must be greater than or equal to start date' });
+      }
       if (startDate != null) updates.startDate = startDate;
       if (endDate != null) updates.endDate = endDate;
       if (orderIndex != null) updates.orderIndex = Number(orderIndex);
@@ -6685,10 +6705,7 @@ if (uniqueParentIds.length > 0) {
         })
         .from(grades)
         .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
-        .where(and(
-          inArray(grades.evaluationId, evaluationIds),
-          eq(evaluations.countInBulletin, true),
-        ));
+        .where(inArray(grades.evaluationId, evaluationIds));
       const scoreBounds = calculateEvaluationScoreBounds(evaluationScoreRows);
 
       return res.json(list.map((grade) => ({

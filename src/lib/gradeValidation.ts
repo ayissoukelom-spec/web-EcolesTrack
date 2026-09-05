@@ -25,7 +25,6 @@ export const calculateEvaluationScoreBounds = (rows: EvaluationScoreRow[]): Map<
   const bounds = new Map<number, EvaluationScoreBounds>();
 
   for (const row of rows) {
-    if (row.countInBulletin === false) continue;
     const score = parseNumericScore(row.score);
     const maxScore = Number(row.maxScore);
     if (score == null || !Number.isFinite(maxScore) || maxScore <= 0) continue;

@@ -51,6 +51,6 @@ describe('validateGradeScore', () => {
     expect(bounds.get(1)).toEqual({ minimum: 7, maximum: 19 });
     expect(bounds.get(2)).toEqual({ minimum: 15, maximum: 16 });
     expect(bounds.get(3)).toEqual({ minimum: 12, maximum: 12 });
-    expect(bounds.has(4)).toBe(false);
+    expect(bounds.get(4)).toEqual({ minimum: 20, maximum: 20 });
   });
 });

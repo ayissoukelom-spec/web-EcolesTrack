@@ -285,6 +285,11 @@ export default function App() {
     }
   };
 
+  const refreshGrades = async () => {
+    const grades = await apiFetch('/api/grades');
+    if (Array.isArray(grades)) setGradesList(grades);
+  };
+
   // When Super Admin selects a school filter, fetch classes annotated for that school
   // so that global classes approved for the school have their `status` populated.
   useEffect(() => {
@@ -700,31 +705,11 @@ export default function App() {
 
   const handleAddGrade = async (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => {
     try {
-      const createdOrUpdatedGrade = await apiFetch('/api/grades', {
+      await apiFetch('/api/grades', {
         method: 'POST',
         body: JSON.stringify(data),
       });
-      setGradesList((prev) => {
-        const existingIndex = prev.findIndex(
-          (g: any) => g.evaluationId === data.evaluationId && g.studentId === data.studentId
-        );
-        const gradeEntry = {
-          id: createdOrUpdatedGrade.id ?? (existingIndex !== -1 ? prev[existingIndex].id : Date.now()),
-          evaluationId: data.evaluationId,
-          studentId: data.studentId,
-          score: data.score,
-          remarks: data.remarks,
-          editCount: createdOrUpdatedGrade.editCount ?? prev[existingIndex]?.editCount ?? 0,
-          evaluationTitle: createdOrUpdatedGrade.evaluationTitle ?? prev[existingIndex]?.evaluationTitle ?? '',
-          subject: createdOrUpdatedGrade.subject ?? prev[existingIndex]?.subject ?? '',
-        };
-        if (existingIndex !== -1) {
-          const next = [...prev];
-          next[existingIndex] = gradeEntry;
-          return next;
-        }
-        return [...prev, gradeEntry];
-      });
+      await refreshGrades();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
