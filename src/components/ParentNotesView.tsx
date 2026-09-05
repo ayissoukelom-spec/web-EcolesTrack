@@ -397,11 +397,25 @@ export default function ParentNotesView({
                               {grade.score} / {maxScore}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            {grade.evaluationMaximumScore == null ? '-' : `${grade.evaluationMaximumScore.toFixed(2)} / 20`}
+                          <td className="px-4 py-3">
+                            {grade.evaluationMaximumScore == null ? (
+                              <span className="text-slate-700">-</span>
+                            ) : (
+                              <span className="inline-flex min-w-[76px] items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-700">
+                                <span>Fort</span>
+                                <strong>{`${grade.evaluationMaximumScore.toFixed(2)} / 20`}</strong>
+                              </span>
+                            )}
                           </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            {grade.evaluationMinimumScore == null ? '-' : `${grade.evaluationMinimumScore.toFixed(2)} / 20`}
+                          <td className="px-4 py-3">
+                            {grade.evaluationMinimumScore == null ? (
+                              <span className="text-slate-700">-</span>
+                            ) : (
+                              <span className="inline-flex min-w-[76px] items-center justify-between gap-2 rounded-lg border border-black bg-black px-2.5 py-1.5 text-xs text-[#FFFF00]">
+                                <span>Faible</span>
+                                <strong>{`${grade.evaluationMinimumScore.toFixed(2)} / 20`}</strong>
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-slate-600">{publishedDate}</td>
                           <td className="px-4 py-3 text-slate-700">{mention}</td>
