@@ -28,11 +28,55 @@ export const academicYears = pgTable('academic_years', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 2b. School Terms / Trimesters
+// 2b. Global education cycles and levels
+export const cycles = pgTable('cycles', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const levels = pgTable('levels', {
+  id: serial('id').primaryKey(),
+  cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'restrict' }).notNull(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  orderIndex: integer('order_index').default(1).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const schoolCycles = pgTable('school_cycles', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'cascade' }).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  schoolCycleUniqueIdx: uniqueIndex('school_cycles_school_id_cycle_id_idx').on(table.schoolId, table.cycleId),
+}));
+
+export const cyclePeriodTemplates = pgTable('cycle_period_templates', {
+  id: serial('id').primaryKey(),
+  cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'cascade' }).notNull(),
+  periodType: text('period_type').notNull(), // trimester | semester
+  name: text('name').notNull(),
+  orderIndex: integer('order_index').default(1).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  cyclePeriodTemplateUniqueIdx: uniqueIndex('cycle_period_templates_cycle_order_idx').on(table.cycleId, table.orderIndex),
+}));
+
+// 2c. School Terms / operational periods
 export const schoolTerms = pgTable('school_terms', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
+  templateId: integer('template_id').references(() => cyclePeriodTemplates.id, { onDelete: 'set null' }),
+  periodType: text('period_type'), // trimester | semester; nullable for legacy terms
   name: text('name').notNull(), // e.g. "Trimestre 1"
   startDate: text('start_date'), // YYYY-MM-DD
   endDate: text('end_date'), // YYYY-MM-DD
@@ -125,6 +169,7 @@ export const classes = pgTable('classes', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  levelId: integer('level_id').references(() => levels.id, { onDelete: 'set null' }),
   name: text('name').notNull(), // e.g. "6ème A"
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'set null' }), // Principal teacher
 }, (table) => ({
@@ -372,6 +417,28 @@ export const academicYearsRelations = relations(academicYears, ({ one, many }) =
   classes: many(classes),
 }));
 
+export const cyclesRelations = relations(cycles, ({ many }) => ({
+  levels: many(levels),
+  schoolCycles: many(schoolCycles),
+  periodTemplates: many(cyclePeriodTemplates),
+  schoolTerms: many(schoolTerms),
+}));
+
+export const levelsRelations = relations(levels, ({ one, many }) => ({
+  cycle: one(cycles, { fields: [levels.cycleId], references: [cycles.id] }),
+  classes: many(classes),
+}));
+
+export const schoolCyclesRelations = relations(schoolCycles, ({ one }) => ({
+  school: one(schools, { fields: [schoolCycles.schoolId], references: [schools.id] }),
+  cycle: one(cycles, { fields: [schoolCycles.cycleId], references: [cycles.id] }),
+}));
+
+export const cyclePeriodTemplatesRelations = relations(cyclePeriodTemplates, ({ one, many }) => ({
+  cycle: one(cycles, { fields: [cyclePeriodTemplates.cycleId], references: [cycles.id] }),
+  schoolTerms: many(schoolTerms),
+}));
+
 export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
   school: one(schools, {
     fields: [schoolTerms.schoolId],
@@ -381,6 +448,8 @@ export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
     fields: [schoolTerms.academicYearId],
     references: [academicYears.id],
   }),
+  cycle: one(cycles, { fields: [schoolTerms.cycleId], references: [cycles.id] }),
+  template: one(cyclePeriodTemplates, { fields: [schoolTerms.templateId], references: [cyclePeriodTemplates.id] }),
   evaluations: many(evaluations),
 }));
 
@@ -478,6 +547,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
     fields: [classes.academicYearId],
     references: [academicYears.id],
   }),
+  level: one(levels, { fields: [classes.levelId], references: [levels.id] }),
   mainTeacher: one(teachers, {
     fields: [classes.teacherId],
     references: [teachers.id],

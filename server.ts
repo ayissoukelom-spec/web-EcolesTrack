@@ -27,7 +27,7 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
@@ -61,6 +61,10 @@ import {
   notifications,
   auditEvents,
   schoolTerms,
+  levels,
+  cycles,
+  schoolCycles,
+  cyclePeriodTemplates,
   evaluationParticipations,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
@@ -69,6 +73,7 @@ import studentAccess from './src/lib/studentAccess.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
+import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -2992,7 +2997,75 @@ export async function createApp() {
     }
   });
 
-  // School Terms (Trimestres) - CRUD
+  // Global education structure and school cycle assignments
+  app.get('/api/education/cycles', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const rows = await db.select().from(cycles).where(eq(cycles.isActive, true));
+      return res.json(rows);
+    } catch (err) {
+      console.error('Failed to fetch education cycles:', err);
+      return res.status(500).json({ error: 'Failed to fetch education cycles' });
+    }
+  });
+
+  app.get('/api/education/levels', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const rows = await db.select().from(levels).where(eq(levels.isActive, true)).orderBy(levels.orderIndex);
+      return res.json(rows);
+    } catch (err) {
+      console.error('Failed to fetch education levels:', err);
+      return res.status(500).json({ error: 'Failed to fetch education levels' });
+    }
+  });
+
+  app.get('/api/education/cycle-period-templates', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const rows = await db.select().from(cyclePeriodTemplates).where(eq(cyclePeriodTemplates.isActive, true)).orderBy(cyclePeriodTemplates.orderIndex);
+      return res.json(rows);
+    } catch (err) {
+      console.error('Failed to fetch cycle period templates:', err);
+      return res.status(500).json({ error: 'Failed to fetch cycle period templates' });
+    }
+  });
+
+  app.get('/api/schools/:schoolId/cycles', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const schoolId = Number(req.params.schoolId);
+      const rows = await db.select().from(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
+      return res.json(rows);
+    } catch (err) {
+      console.error('Failed to fetch school cycles:', err);
+      return res.status(500).json({ error: 'Failed to fetch school cycles' });
+    }
+  });
+
+  app.put('/api/schools/:schoolId/cycles', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const schoolId = Number(req.params.schoolId);
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      const requestedCodes = Array.isArray(req.body?.cycleCodes) ? req.body.cycleCodes.map((value: unknown) => String(value)) : [];
+      const availableCycles = await db.select().from(cycles).where(eq(cycles.isActive, true));
+      const selectedCycles = availableCycles.filter((cycle) => requestedCodes.includes(cycle.code));
+      if (selectedCycles.length !== requestedCodes.length) return res.status(400).json({ error: 'Unknown education cycle' });
+      await db.delete(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
+      if (selectedCycles.length > 0) {
+        await db.insert(schoolCycles).values(selectedCycles.map((cycle) => ({ schoolId, cycleId: cycle.id, isActive: true })));
+      }
+      return res.json(await db.select().from(schoolCycles).where(eq(schoolCycles.schoolId, schoolId)));
+    } catch (err) {
+      console.error('Failed to update school cycles:', err);
+      return res.status(500).json({ error: 'Failed to update school cycles' });
+    }
+  });
+
+  // School Terms (operational periods) - CRUD
   app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
@@ -3049,7 +3122,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      const { academicYearId, name, startDate, endDate, orderIndex, isActive, schoolId: incomingSchoolId } = req.body as any;
+      const { academicYearId, cycleId, periodType, templateId, name, startDate, endDate, orderIndex, isActive, schoolId: incomingSchoolId } = req.body as any;
       if (!academicYearId || !name) return res.status(400).json({ error: 'academicYearId and name are required' });
 
       let targetSchoolId: number | null = null;
@@ -3063,6 +3136,9 @@ export async function createApp() {
 
       const vals: any = {
         academicYearId: Number(academicYearId),
+        cycleId: cycleId != null && cycleId !== '' ? Number(cycleId) : null,
+        templateId: templateId != null && templateId !== '' ? Number(templateId) : null,
+        periodType: periodType ?? null,
         name: String(name),
         startDate: startDate ?? null,
         endDate: endDate ?? null,
@@ -3070,6 +3146,22 @@ export async function createApp() {
         isActive: isActive != null ? !!isActive : true,
         schoolId: targetSchoolId,
       };
+
+      if (targetSchoolId != null && vals.cycleId != null) {
+        const configuredCycles = await db.select({ id: schoolCycles.id }).from(schoolCycles).where(eq(schoolCycles.schoolId, targetSchoolId));
+        if (configuredCycles.length > 0 && !(await validateSchoolCycle(targetSchoolId, vals.cycleId))) {
+          return res.status(403).json({ error: 'The selected period cycle is not enabled for this school' });
+        }
+      }
+
+      const duplicateConditions = [
+        eq(schoolTerms.academicYearId, vals.academicYearId),
+        eq(schoolTerms.orderIndex, vals.orderIndex),
+        vals.cycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, vals.cycleId),
+        targetSchoolId == null ? sql`${schoolTerms.schoolId} IS NULL` : eq(schoolTerms.schoolId, targetSchoolId),
+      ];
+      const [duplicateTerm] = await db.select({ id: schoolTerms.id }).from(schoolTerms).where(and(...duplicateConditions)).limit(1);
+      if (duplicateTerm) return res.status(409).json({ error: 'A period already exists for this cycle and academic year' });
 
       const inserted = await db.insert(schoolTerms).values(vals).returning();
       res.status(201).json(inserted[0]);
@@ -3101,9 +3193,12 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const { name, startDate, endDate, orderIndex, isActive } = req.body as any;
+      const { name, startDate, endDate, orderIndex, isActive, cycleId, periodType, templateId } = req.body as any;
       const updates: any = {};
       if (name != null) updates.name = String(name);
+      if (cycleId != null) updates.cycleId = Number(cycleId);
+      if (periodType != null) updates.periodType = String(periodType);
+      if (templateId != null) updates.templateId = Number(templateId);
       const nextStartDate = startDate != null ? String(startDate) : existing.startDate;
       const nextEndDate = endDate != null ? String(endDate) : existing.endDate;
       const isValidDate = (value: string) => {
@@ -3396,7 +3491,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      const { name, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, teacherId } = req.body;
+      const { name, levelId: rawLevelId, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, teacherId } = req.body;
       const trimmedName = typeof name === 'string' ? name.trim() : '';
       const academicYearId = rawAcademicYearId != null && rawAcademicYearId !== '' ? Number(rawAcademicYearId) : null;
       console.log('academicYearId parsed =', academicYearId, typeof academicYearId);
@@ -3435,6 +3530,28 @@ export async function createApp() {
         return res.status(400).json({ error: `Missing required parameters. Received: name=${trimmedName}, academicYearId=${academicYearId}` });
       }
 
+      const requestedLevelId = rawLevelId != null && rawLevelId !== '' ? Number(rawLevelId) : null;
+      let resolvedLevelId = requestedLevelId;
+      if (requestedLevelId != null && (!Number.isInteger(requestedLevelId) || requestedLevelId <= 0)) {
+        return res.status(400).json({ error: 'Invalid levelId' });
+      }
+      if (resolvedLevelId == null) {
+        const inferredCode = inferLevelCodeFromClassName(trimmedName);
+        if (inferredCode) {
+          const [inferredLevel] = await db.select({ id: levels.id }).from(levels).where(eq(levels.code, inferredCode));
+          resolvedLevelId = inferredLevel?.id ?? null;
+        }
+      }
+
+      if (resolvedSchoolId != null && resolvedLevelId != null) {
+        const [level] = await db.select({ cycleId: levels.cycleId }).from(levels).where(eq(levels.id, resolvedLevelId));
+        if (!level) return res.status(400).json({ error: 'Unknown levelId' });
+        const configuredCycles = await db.select({ id: schoolCycles.id }).from(schoolCycles).where(eq(schoolCycles.schoolId, Number(resolvedSchoolId)));
+        if (configuredCycles.length > 0 && !(await validateSchoolCycle(Number(resolvedSchoolId), level.cycleId))) {
+          return res.status(403).json({ error: 'The selected level cycle is not enabled for this school' });
+        }
+      }
+
       console.log('Attempting to create class', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
 
       try {
@@ -3453,9 +3570,15 @@ export async function createApp() {
             name: trimmedName,
             schoolId: null,
             academicYearId: Number(academicYearId),
+            levelId: resolvedLevelId,
             teacherId: teacherId ? Number(teacherId) : null,
           }).returning();
           classRow = createdClass;
+        } else if (classRow.levelId == null && resolvedLevelId != null) {
+          const [updatedClass] = await db.update(classes).set({ levelId: resolvedLevelId }).where(eq(classes.id, classRow.id)).returning();
+          classRow = updatedClass;
+        } else if (resolvedLevelId != null && classRow.levelId != null && classRow.levelId !== resolvedLevelId) {
+          return res.status(409).json({ error: 'Class level conflicts with the existing global class' });
         }
 
         if (classRow && resolvedSchoolId != null) {
@@ -6318,60 +6441,36 @@ export async function createApp() {
       }
 
       let resolvedTermId: number | null = null;
-      if (termId != null && termId !== '') {
-        const parsedTermId = Number(termId);
-        if (!Number.isInteger(parsedTermId) || parsedTermId <= 0) {
-          return res.status(400).json({ error: 'Invalid termId' });
+      const evaluationSchoolId = classRecord.schoolId ?? actor.schoolId ?? null;
+      if (evaluationSchoolId != null) {
+        const resolvedTerm = await resolveSchoolTermForClass({
+          classId: parseInt(classId),
+          academicYearId: classRecord.academicYearId,
+          schoolId: evaluationSchoolId,
+          date: evaluationDate,
+          requestedTermId: termId != null && termId !== '' ? Number(termId) : null,
+        });
+        if ('error' in resolvedTerm) {
+          return res.status(400).json({ error: resolvedTerm.error });
         }
-
-        const [selectedTerm] = await db
-          .select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId })
-          .from(schoolTerms)
-          .where(eq(schoolTerms.id, parsedTermId));
-
-        if (!selectedTerm) {
-          return res.status(400).json({ error: 'Selected term not found' });
-        }
-
-        if (selectedTerm.academicYearId !== classRecord.academicYearId) {
-          return res.status(400).json({ error: 'Selected term does not belong to class academic year' });
-        }
-
-        resolvedTermId = selectedTerm.id;
+        resolvedTermId = resolvedTerm.term.id;
       } else {
         const termsForYear = await db
-          .select({
-            id: schoolTerms.id,
-            startDate: schoolTerms.startDate,
-            endDate: schoolTerms.endDate,
-            orderIndex: schoolTerms.orderIndex,
-            isActive: schoolTerms.isActive,
-          })
+          .select({ id: schoolTerms.id, startDate: schoolTerms.startDate, endDate: schoolTerms.endDate, orderIndex: schoolTerms.orderIndex, isActive: schoolTerms.isActive })
           .from(schoolTerms)
           .where(eq(schoolTerms.academicYearId, classRecord.academicYearId))
           .orderBy(schoolTerms.orderIndex);
-
-        const matchedByRange = termsForYear.find((term) =>
-          !!term.startDate
-          && !!term.endDate
-          && evaluationDate >= term.startDate
-          && evaluationDate <= term.endDate,
-        );
-
-        if (matchedByRange) {
-          resolvedTermId = matchedByRange.id;
-        } else {
-          const activeTerm = termsForYear.find((term) => term.isActive);
-          if (activeTerm) {
-            resolvedTermId = activeTerm.id;
-          } else if (termsForYear.length === 1) {
-            resolvedTermId = termsForYear[0].id;
-          }
-        }
+        const requestedTermId = termId != null && termId !== '' ? Number(termId) : null;
+        const selected = requestedTermId != null
+          ? termsForYear.find((term) => term.id === requestedTermId)
+          : termsForYear.find((term) => !!term.startDate && !!term.endDate && evaluationDate >= term.startDate && evaluationDate <= term.endDate)
+            ?? termsForYear.find((term) => term.isActive)
+            ?? (termsForYear.length === 1 ? termsForYear[0] : undefined);
+        resolvedTermId = selected?.id ?? null;
       }
 
       if (!resolvedTermId) {
-        return res.status(400).json({ error: 'Unable to resolve term for this evaluation. Please select a term explicitly.' });
+        return res.status(400).json({ error: 'Unable to resolve a compatible term for this evaluation. Please select a term explicitly.' });
       }
 
       const normalizedSubject = String(subject).trim();
@@ -6472,11 +6571,11 @@ export async function createApp() {
 
       // Get the short term name for display
       const [selectedTermInfo] = await db
-        .select({ name: schoolTerms.name, orderIndex: schoolTerms.orderIndex })
+        .select({ name: schoolTerms.name, orderIndex: schoolTerms.orderIndex, periodType: schoolTerms.periodType })
         .from(schoolTerms)
         .where(eq(schoolTerms.id, resolvedTermId));
 
-      const termShortName = selectedTermInfo?.name?.replace(/Trimestre\s+/i, 'T') || `S${selectedTermInfo?.orderIndex || 1}`;
+      const termShortName = getPeriodTypeShortName(selectedTermInfo?.periodType, selectedTermInfo?.orderIndex || 1, selectedTermInfo?.name);
       const generatedName = `${normalizedType.charAt(0).toUpperCase()}${normalizedType.slice(1)} ${termShortName}.${sequenceNumber}`;
 
       const result = await db.insert(evaluations).values({
@@ -7510,6 +7609,7 @@ export async function startServer() {
 
   console.log('Verifying if database needs seeding...');
   try {
+    await ensureEducationStructureSchema();
     await seedDatabaseIfEmpty();
     await ensureSchoolsTableSchema();
     await ensureStudentMatriculesSchema();

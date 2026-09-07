@@ -119,7 +119,7 @@ export default function BulletinActions({
 
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                <RequiredLabel label="Trimestre" required />
+                <RequiredLabel label="Période" required />
               </label>
               <select
                 value={generateTermId}
@@ -127,7 +127,7 @@ export default function BulletinActions({
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
                 required
               >
-                <option value="">Trimestre</option>
+                <option value="">Période</option>
                 {termOptions.map((term) => (
                   <option key={term.id} value={term.id}>{term.name}</option>
                 ))}

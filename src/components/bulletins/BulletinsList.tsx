@@ -92,7 +92,7 @@ export default function BulletinsList({
               onChange={(e) => onFilterTermChange(e.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="">Tous les trimestres</option>
+              <option value="">Toutes les périodes</option>
               {termOptions.map((term) => (
                 <option key={term.id} value={term.id}>{term.name}</option>
               ))}

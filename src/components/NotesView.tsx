@@ -1031,7 +1031,7 @@ export default function NotesView({
                 <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                   <tr>
                     <th className="px-6 py-4">Nom de l'Élève</th>
-                    <th className="px-6 py-4">Moyenne Générale du Trimestre</th>
+                    <th className="px-6 py-4">Moyenne Générale de la Période</th>
                     {selectedEvalId && (
                       <>
                         <th className="px-6 py-4">Note au devoir ({scoreScaleSuffix})</th>

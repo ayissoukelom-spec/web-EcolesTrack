@@ -211,7 +211,7 @@ export default function BulletinsView({
       const termId = Number(ev?.termId);
       if (!Number.isInteger(termId) || termId <= 0 || seen.has(termId)) continue;
       seen.add(termId);
-      options.push({ id: termId, name: String(ev?.termName || `Trimestre ${termId}`) });
+      options.push({ id: termId, name: String(ev?.termName || `Période ${termId}`) });
     }
     return options.sort((a, b) => a.id - b.id);
   }, [evaluationsList, termsFromApi]);
@@ -530,7 +530,7 @@ export default function BulletinsView({
     const termId = Number(generateTermId);
 
     if (!Number.isInteger(studentId) || studentId <= 0 || !Number.isInteger(termId) || termId <= 0) {
-      generateHook.setError('Selectionnez un eleve et un trimestre valides.');
+      generateHook.setError('Selectionnez un eleve et une période valides.');
       return;
     }
 
@@ -553,7 +553,7 @@ export default function BulletinsView({
     }
 
     if (!Number.isInteger(termId) || termId <= 0) {
-      generateHook.setError('Selectionnez un trimestre valide pour la generation en lot.');
+      generateHook.setError('Selectionnez une période valide pour la generation en lot.');
       return;
     }
 
@@ -582,7 +582,7 @@ export default function BulletinsView({
       .filter((id): id is number => Number.isInteger(id) && Number(id) > 0);
 
     const className = classesList.find((klass) => klass.id === classId)?.name || `Classe ${classId}`;
-    const termName = termOptions.find((term) => term.id === termId)?.name || `Trimestre ${termId}`;
+    const termName = termOptions.find((term) => term.id === termId)?.name || `Période ${termId}`;
     const summary = createdList
       .map((entry) => {
         const id = Number(entry.id);

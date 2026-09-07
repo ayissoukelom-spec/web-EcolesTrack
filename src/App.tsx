@@ -11,6 +11,7 @@ import {
   UserRole,
   AuditEvent,
   SubjectType,
+  EducationLevel,
 } from './types.ts';
 import {
   apiFetch,
@@ -111,6 +112,7 @@ export default function App() {
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
   const [subjectTypesList, setSubjectTypesList] = useState<SubjectType[]>([]);
+  const [educationLevels, setEducationLevels] = useState<EducationLevel[]>([]);
   const processedNotificationIdsRef = useRef<Set<number>>(new Set());
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
@@ -231,6 +233,7 @@ export default function App() {
         '/api/subjects',
         '/api/subjects?approvedOnly=true',
         '/api/subject-types',
+        '/api/education/levels',
         '/api/simulation/users',
       ];
 
@@ -266,6 +269,7 @@ export default function App() {
       if (Array.isArray(map['/api/subjects'])) setSubjectsList(map['/api/subjects']);
       if (Array.isArray(map['/api/subjects?approvedOnly=true'])) setApprovedSubjectsList(map['/api/subjects?approvedOnly=true']);
       if (Array.isArray(map['/api/subject-types'])) setSubjectTypesList(map['/api/subject-types']);
+      if (Array.isArray(map['/api/education/levels'])) setEducationLevels(map['/api/education/levels']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
 
       if (currentRole === 'super_admin') {
@@ -441,7 +445,7 @@ export default function App() {
     }
   };
 
-  const handleAddClass = async (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => {
+  const handleAddClass = async (data: { name: string; levelId?: number | null; schoolId?: number | null; academicYearId: number; teacherId?: number }) => {
     try {
       const payload = {
         ...data,
@@ -1135,6 +1139,7 @@ export default function App() {
                   usersList={usersList}
                   subjectsList={subjectsList}
                   subjectTypesList={subjectTypesList}
+                  educationLevels={educationLevels}
                   approvedSubjectsList={approvedSubjectsList}
                   onAddSchool={handleAddSchool}
                   onUpdateSchool={handleUpdateSchool}

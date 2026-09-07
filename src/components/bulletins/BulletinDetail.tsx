@@ -69,7 +69,7 @@ export default function BulletinDetail({
               <p className="font-semibold text-slate-800">{detail.className}</p>
             </div>
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-              <p className="text-slate-500">Trimestre</p>
+              <p className="text-slate-500">Période</p>
               <p className="font-semibold text-slate-800">{detail.termName}</p>
             </div>
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">

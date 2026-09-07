@@ -378,13 +378,13 @@ export default function MobileParentView({
                               onClick={() => setActiveScreen('grades')}
                               className="bg-slate-900 p-3 rounded-lg border border-slate-800/50 flex flex-col justify-between h-20 hover:border-slate-700 cursor-pointer"
                             >
-                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Trimestre</span>
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Période</span>
                               <p className="text-lg font-black text-indigo-400 mt-1">{calculateGPA()} <span className="text-[10px] text-slate-500 font-normal">/{(childGrades[0]?.maxScore ?? 20)}</span></p>
                               <p className="text-[8px] text-slate-500">Moyenne Générale</p>
                             </div>
                           ) : (
                             <div className="bg-slate-900 p-3 rounded-lg border border-slate-800/20 flex flex-col justify-between h-20 opacity-60">
-                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Trimestre</span>
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Période</span>
                               <p className="text-lg font-black text-indigo-400 mt-1">— <span className="text-[10px] text-slate-500 font-normal">/{(childGrades[0]?.maxScore ?? 20)}</span></p>
                               <p className="text-[8px] text-slate-500">Moyenne indisponible</p>
                             </div>

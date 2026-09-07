@@ -3,7 +3,7 @@ import { apiFetch, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } f
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType, EducationLevel } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -370,7 +370,8 @@ interface AdminViewProps {
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onSetActiveYear?: (id: number) => Promise<any>;
   onDeleteYear?: (id: number) => Promise<any>;
-  onAddClass: (data: { name: string; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
+  onAddClass: (data: { name: string; levelId?: number | null; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
+  educationLevels?: EducationLevel[];
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
   onRejectClass?: (id: number) => Promise<any>;
@@ -414,6 +415,7 @@ export default function AdminView({
   onSetActiveYear,
   onDeleteYear,
   onAddClass,
+  educationLevels = [],
   onAddTeacher,
   onAddParent,
   onAddStudent,
@@ -573,13 +575,18 @@ export default function AdminView({
   const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
-  const [termForm, setTermForm] = useState({ name: '', academicYearId: '' });
+  const [educationCycles, setEducationCycles] = useState<any[]>([]);
+  const [periodTemplates, setPeriodTemplates] = useState<any[]>([]);
+  const [activeSchoolCycleCodes, setActiveSchoolCycleCodes] = useState<string[]>([]);
+  const [activeSchoolCycleIds, setActiveSchoolCycleIds] = useState<number[]>([]);
+  const [schoolCyclesLoaded, setSchoolCyclesLoaded] = useState(false);
+  const [termForm, setTermForm] = useState({ name: '', academicYearId: '', cycleId: '', templateId: '', periodType: '' });
   const [termStartDate, setTermStartDate] = useState<string>('');
   const [termEndDate, setTermEndDate] = useState<string>('');
   const [editingTermId, setEditingTermId] = useState<number | null>(null);
   const [editingTermStartDate, setEditingTermStartDate] = useState('');
   const [editingTermEndDate, setEditingTermEndDate] = useState('');
-  const [classForm, setClassForm] = useState({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
+  const [classForm, setClassForm] = useState({ cycle: '', levelId: '', stream: '', section: '', group: '', schoolId: '' });
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
@@ -850,6 +857,34 @@ export default function AdminView({
       }
     })();
   }, [visibleYearsList]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [cycles, templates] = await Promise.all([
+          apiFetch('/api/education/cycles'),
+          apiFetch('/api/education/cycle-period-templates'),
+        ]);
+        if (cancelled) return;
+        setEducationCycles(Array.isArray(cycles) ? cycles : []);
+        setPeriodTemplates(Array.isArray(templates) ? templates : []);
+        if (currentSchoolId != null) {
+          const assignments = await apiFetch(`/api/schools/${currentSchoolId}/cycles`);
+          if (!cancelled) {
+            const activeAssignments = Array.isArray(assignments) ? assignments.filter((assignment: any) => assignment.isActive !== false) : [];
+            setActiveSchoolCycleIds(activeAssignments.map((assignment: any) => Number(assignment.cycleId)).filter(Number.isInteger));
+            setActiveSchoolCycleCodes(activeAssignments.map((assignment: any) => String(assignment.cycleCode || assignment.code || cycles.find((cycle: any) => cycle.id === assignment.cycleId)?.code || '')).filter(Boolean));
+            setSchoolCyclesLoaded(true);
+          }
+        } else {
+          setSchoolCyclesLoaded(false);
+        }
+      } catch (error) {
+        console.warn('Failed to load education structure catalog', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentSchoolId, userRole]);
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
@@ -1175,7 +1210,12 @@ export default function AdminView({
       });
       setYearForm({ name: '', isActive: false, schoolId: '' });
     } else if (activeTab === 'classes') {
-      const className = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
+      const selectedLevel = educationLevels.find((level) => String(level.id) === classForm.levelId);
+      const className = [selectedLevel?.name || classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
+      if (!selectedLevel) {
+        setStudentError('Veuillez sélectionner un niveau scolaire du catalogue.');
+        return;
+      }
       if (!className.trim()) {
         setStudentError('Veuillez sélectionner au moins un champ pour créer une classe.');
         return;
@@ -1193,12 +1233,13 @@ export default function AdminView({
       try {
         const payload: any = {
           name: className,
+          levelId: selectedLevel.id,
           academicYearId: Number(defaultAcademicYearId),
           teacherId: undefined,
           schoolId,
         };
         await onAddClass(payload);
-        setClassForm({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
+        setClassForm({ cycle: '', levelId: '', stream: '', section: '', group: '', schoolId: '' });
         setStudentError(null);
         setActiveTab('classes');
         setIsModalOpen(false);
@@ -3891,10 +3932,63 @@ export default function AdminView({
             </table>
           </div>
           <div className="mt-6">
-            <h3 className="text-sm font-semibold text-slate-700 mb-2">Trimestres / Périodes</h3>
-            <div className="flex items-center gap-2 mb-3">
+            {userRole === 'super_admin' && educationCycles.length > 0 && (
+              <div className="mb-6 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">Catalogue global des cycles et périodes</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {educationCycles.map((cycle: any) => {
+                    const cycleLevels = educationLevels.filter((level: any) => Number(level.cycleId) === Number(cycle.id)).sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+                    const cycleTemplates = periodTemplates.filter((template: any) => Number(template.cycleId) === Number(cycle.id)).sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+                    return (
+                      <div key={cycle.id} className="rounded-lg border border-indigo-100 bg-white p-3">
+                        <div className="font-semibold text-slate-800">{cycle.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">Niveaux: {cycleLevels.map((level: any) => level.name).join(' · ') || 'Aucun'}</div>
+                        <div className="mt-1 text-xs font-medium text-indigo-700">Périodes: {cycleTemplates.map((template: any) => template.name).join(' · ') || 'Aucun'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">Périodes scolaires</h3>
+            {educationCycles.length > 0 && (
+              <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Cycles activés pour l’école</div>
+                <div className="flex flex-wrap gap-3">
+                  {educationCycles.map((cycle: any) => {
+                    const checked = activeSchoolCycleCodes.includes(String(cycle.code));
+                    return (
+                      <label key={cycle.id} className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={userRole === 'teacher' || userRole === 'parent' || currentSchoolId == null}
+                          onChange={async (event) => {
+                            if (currentSchoolId == null) return;
+                            const nextCodes = event.target.checked
+                              ? [...activeSchoolCycleCodes, String(cycle.code)]
+                              : activeSchoolCycleCodes.filter((code) => code !== String(cycle.code));
+                            try {
+                              await apiFetch(`/api/schools/${currentSchoolId}/cycles`, { method: 'PUT', body: JSON.stringify({ cycleCodes: nextCodes }) });
+                              setActiveSchoolCycleCodes(nextCodes);
+                              setActiveSchoolCycleIds(educationCycles.filter((item: any) => nextCodes.includes(String(item.code))).map((item: any) => Number(item.id)));
+                              setTermNotice({ type: 'success', text: 'Cycles de l’école mis à jour.' });
+                            } catch (error: any) {
+                              setTermNotice({ type: 'error', text: error?.message || 'Impossible de mettre à jour les cycles.' });
+                            }
+                          }}
+                          className="h-4 w-4"
+                        />
+                        {cycle.name}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-12 lg:items-center">
               <select
-                className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm"
+                className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm lg:col-span-2"
                 value={termForm.academicYearId}
                 onChange={(e) => {
                   setTermForm((p) => ({ ...p, academicYearId: e.target.value }));
@@ -3908,7 +4002,7 @@ export default function AdminView({
               </select>
               <input
                 type="date"
-                className="px-3 py-2 border border-slate-200 rounded-lg"
+                className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg"
                 value={termStartDate}
                 onChange={(e) => {
                   setTermStartDate(e.target.value);
@@ -3918,7 +4012,7 @@ export default function AdminView({
               />
               <input
                 type="date"
-                className="px-3 py-2 border border-slate-200 rounded-lg"
+                className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg"
                 value={termEndDate}
                 onChange={(e) => {
                   setTermEndDate(e.target.value);
@@ -3926,14 +4020,30 @@ export default function AdminView({
                 }}
                 placeholder="Fin (YYYY-MM-DD)"
               />
-              <input type="text" className="px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom du trimestre" value={termForm.name} onChange={(e) => { setTermForm((p) => ({ ...p, name: e.target.value })); setTermNotice(null); }} />
+              <select className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm lg:col-span-2" value={termForm.cycleId} onChange={(e) => {
+                const cycleId = e.target.value;
+                const firstTemplate = periodTemplates.find((template: any) => String(template.cycleId) === cycleId);
+                setTermForm((p) => ({ ...p, cycleId, templateId: firstTemplate ? String(firstTemplate.id) : '', periodType: firstTemplate?.periodType || '' }));
+                setTermNotice(null);
+              }}>
+                <option value="">Cycle (optionnel pour l’historique)</option>
+                {educationCycles.filter((cycle: any) => userRole === 'super_admin' || activeSchoolCycleCodes.includes(String(cycle.code))).map((cycle: any) => <option key={cycle.id} value={String(cycle.id)}>{cycle.name}</option>)}
+              </select>
+              {termForm.cycleId && <select className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm lg:col-span-2" value={termForm.templateId} onChange={(e) => {
+                const template = periodTemplates.find((item: any) => String(item.id) === e.target.value);
+                setTermForm((p) => ({ ...p, templateId: e.target.value, periodType: template?.periodType || p.periodType }));
+              }}>
+                <option value="">Template de période</option>
+                {periodTemplates.filter((template: any) => String(template.cycleId) === termForm.cycleId).map((template: any) => <option key={template.id} value={String(template.id)}>{template.name}</option>)}
+              </select>}
+              <input type="text" className="min-w-0 w-full lg:col-span-2 px-3 py-2 border border-slate-200 rounded-lg" placeholder="Nom de la période" value={termForm.name} onChange={(e) => { setTermForm((p) => ({ ...p, name: e.target.value })); setTermNotice(null); }} />
               <button
-                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
+                className="w-full whitespace-nowrap px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm lg:col-span-1"
                 onClick={async () => {
                   try {
                     if (!termForm.name || !termForm.academicYearId) {
-                      setStudentError('Veuillez renseigner le nom du trimestre et l\'année académique.');
-                      setTermNotice({ type: 'error', text: 'Veuillez renseigner le nom du trimestre et l\'année académique.' });
+                      setStudentError('Veuillez renseigner le nom de la période et l\'année académique.');
+                      setTermNotice({ type: 'error', text: 'Veuillez renseigner le nom de la période et l\'année académique.' });
                       return;
                     }
                     const selectedYearId = Number(termForm.academicYearId);
@@ -3944,8 +4054,8 @@ export default function AdminView({
                       return;
                     }
                     if (!termStartDate || !termEndDate) {
-                      setStudentError('Veuillez choisir la date de début et la date de fin du trimestre.');
-                      setTermNotice({ type: 'error', text: 'Veuillez choisir la date de début et la date de fin du trimestre.' });
+                      setStudentError('Veuillez choisir la date de début et la date de fin de la période.');
+                      setTermNotice({ type: 'error', text: 'Veuillez choisir la date de début et la date de fin de la période.' });
                       return;
                     }
                     if (new Date(termEndDate) < new Date(termStartDate)) {
@@ -3953,16 +4063,20 @@ export default function AdminView({
                       setTermNotice({ type: 'error', text: 'La date de fin doit être supérieure ou égale à la date de début.' });
                       return;
                     }
+                    const selectedTemplate = periodTemplates.find((template: any) => String(template.id) === termForm.templateId);
                     const payload: any = {
                       name: termForm.name,
                       academicYearId: selectedYearId,
+                      cycleId: termForm.cycleId ? Number(termForm.cycleId) : null,
+                      templateId: termForm.templateId ? Number(termForm.templateId) : null,
+                      periodType: termForm.periodType || selectedTemplate?.periodType || null,
                       startDate: termStartDate || null,
                       endDate: termEndDate || null,
                     };
                     await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify(payload) });
                     setStudentError(null);
-                    setTermNotice({ type: 'success', text: 'Trimestre créé avec succès.' });
-                    setTermForm({ name: '', academicYearId: '' });
+                    setTermNotice({ type: 'success', text: 'Période créée avec succès.' });
+                    setTermForm({ name: '', academicYearId: '', cycleId: '', templateId: '', periodType: '' });
                     setTermStartDate('');
                     setTermEndDate('');
                     // refresh list
@@ -3970,12 +4084,36 @@ export default function AdminView({
                     setTermsList(list || []);
                   } catch (err) {
                     console.error('Failed to create term', err);
-                    const message = (err as any)?.message || 'Impossible de créer le trimestre. Vérifiez l\'année académique et les dates.';
+                    const message = (err as any)?.message || 'Impossible de créer la période. Vérifiez l\'année académique et les dates.';
                     setStudentError(message);
                     setTermNotice({ type: 'error', text: message });
                   }
                 }}
               >Créer</button>
+              {termForm.cycleId && termForm.academicYearId && (
+                <button className="w-full whitespace-nowrap px-3 py-2 border border-indigo-200 text-indigo-700 rounded-lg text-sm lg:col-span-1" onClick={async () => {
+                  const templateRows = periodTemplates
+                    .filter((template: any) => String(template.cycleId) === termForm.cycleId)
+                    .filter((template: any) => !termsList.some((term: any) => {
+                      const sameSchoolScope = currentSchoolId == null
+                        ? term.schoolId == null
+                        : Number(term.schoolId) === Number(currentSchoolId);
+                      return sameSchoolScope && Number(term.cycleId) === Number(template.cycleId) && Number(term.orderIndex) === Number(template.orderIndex);
+                    }))
+                    .sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+                  if (templateRows.length === 0) return;
+                  try {
+                    for (const template of templateRows) {
+                      await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify({ academicYearId: Number(termForm.academicYearId), cycleId: Number(termForm.cycleId), templateId: template.id, periodType: template.periodType, name: template.name, orderIndex: template.orderIndex, isActive: true }) });
+                    }
+                    const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}`);
+                    setTermsList(list || []);
+                    setTermNotice({ type: 'success', text: `${templateRows.length} périodes générées depuis le template.` });
+                  } catch (error: any) {
+                    setTermNotice({ type: 'error', text: error?.message || 'Impossible de générer les périodes.' });
+                  }
+                }}>Générer depuis le template</button>
+              )}
             </div>
             {termNotice && (
               <p className={`text-sm mb-3 ${termNotice.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>{termNotice.text}</p>
@@ -3983,7 +4121,7 @@ export default function AdminView({
 
             <div className="rounded-lg border border-slate-100 bg-white p-3">
               {termsList.length === 0 ? (
-                <p className="text-sm text-slate-500">Aucun trimestre trouvé pour l'année sélectionnée.</p>
+                <p className="text-sm text-slate-500">Aucune période trouvée pour l'année sélectionnée.</p>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {termsList.map((t) => (
@@ -4057,12 +4195,12 @@ export default function AdminView({
                           className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
                           onClick={async () => {
                             try {
-                              if (!window.confirm(`Supprimer le trimestre ${t.name} ?`)) return;
+                              if (!window.confirm(`Supprimer la période ${t.name} ?`)) return;
                               await apiFetch(`/api/school-terms/${t.id}`, { method: 'DELETE' });
                               setTermsList((prev) => prev.filter((row) => row.id !== t.id));
-                              setTermNotice({ type: 'success', text: 'Trimestre supprimé avec succès.' });
+                              setTermNotice({ type: 'success', text: 'Période supprimée avec succès.' });
                             } catch (err: any) {
-                              setTermNotice({ type: 'error', text: err?.message || 'Impossible de supprimer le trimestre.' });
+                              setTermNotice({ type: 'error', text: err?.message || 'Impossible de supprimer la période.' });
                             }
                           }}
                         >
@@ -4103,7 +4241,7 @@ export default function AdminView({
                 {userRole === 'super_admin' && (
                   <button
                     onClick={() => {
-                      setClassForm({ cycle: '', stream: '', section: '', group: '', schoolId: '' });
+                      setClassForm({ cycle: '', levelId: '', stream: '', section: '', group: '', schoolId: '' });
                       setActiveTab('classes');
                       setStudentError(null);
                       setIsModalOpen(true);
@@ -5038,6 +5176,9 @@ export default function AdminView({
         schoolForm={schoolForm}
         setSchoolForm={setSchoolForm}
         subjectsList={subjectsList}
+        educationLevels={educationLevels}
+        enabledEducationCycleIds={activeSchoolCycleIds}
+        schoolCyclesLoaded={schoolCyclesLoaded}
         yearForm={yearForm}
         setYearForm={setYearForm}
         classForm={classForm}

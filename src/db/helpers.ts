@@ -15,8 +15,122 @@ import {
   notifications,
   subjects,
   schoolSubjects,
+  cycles,
+  levels,
+  schoolCycles,
+  cyclePeriodTemplates,
 } from './schema.ts';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+
+export async function ensureEducationStructureSchema() {
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS cycles (
+    id SERIAL PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS levels (
+    id SERIAL PRIMARY KEY,
+    cycle_id INTEGER NOT NULL REFERENCES cycles(id) ON DELETE RESTRICT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS school_cycles (
+    id SERIAL PRIMARY KEY,
+    school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    cycle_id INTEGER NOT NULL REFERENCES cycles(id) ON DELETE CASCADE,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE (school_id, cycle_id)
+  )`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS cycle_period_templates (
+    id SERIAL PRIMARY KEY,
+    cycle_id INTEGER NOT NULL REFERENCES cycles(id) ON DELETE CASCADE,
+    period_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE (cycle_id, order_index)
+  )`);
+  await db.execute(sql`ALTER TABLE classes ADD COLUMN IF NOT EXISTS level_id INTEGER REFERENCES levels(id) ON DELETE SET NULL`);
+  await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS cycle_id INTEGER REFERENCES cycles(id) ON DELETE SET NULL`);
+  await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES cycle_period_templates(id) ON DELETE SET NULL`);
+  await db.execute(sql`ALTER TABLE school_terms ADD COLUMN IF NOT EXISTS period_type TEXT`);
+
+  await db.insert(cycles).values([
+    { code: 'college', name: 'Collège' },
+    { code: 'lycee', name: 'Lycée' },
+  ]).onConflictDoNothing({ target: cycles.code });
+
+  const cycleRows = await db.select().from(cycles);
+  const cycleByCode = new Map(cycleRows.map((cycle) => [cycle.code, cycle.id]));
+  const levelDefaults = [
+    ['college', '6e', '6ème', 1], ['college', '5e', '5ème', 2],
+    ['college', '4e', '4ème', 3], ['college', '3e', '3ème', 4],
+    ['lycee', '2nde', '2nde', 5], ['lycee', '1ere', '1ère', 6], ['lycee', 'tle', 'Tle', 7],
+  ] as const;
+  for (const [cycleCode, code, name, orderIndex] of levelDefaults) {
+    const cycleId = cycleByCode.get(cycleCode);
+    if (cycleId == null) continue;
+    await db.insert(levels).values({ cycleId, code, name, orderIndex }).onConflictDoNothing({ target: levels.code });
+  }
+
+  const templateDefaults = [
+    ['college', 'trimester', 'Trimestre 1', 1], ['college', 'trimester', 'Trimestre 2', 2], ['college', 'trimester', 'Trimestre 3', 3],
+    ['lycee', 'semester', 'Semestre 1', 1], ['lycee', 'semester', 'Semestre 2', 2],
+  ] as const;
+  for (const [cycleCode, periodType, name, orderIndex] of templateDefaults) {
+    const cycleId = cycleByCode.get(cycleCode);
+    if (cycleId == null) continue;
+    await db.insert(cyclePeriodTemplates).values({ cycleId, periodType, name, orderIndex }).onConflictDoNothing();
+  }
+
+  await db.execute(sql`UPDATE school_terms SET period_type = CASE
+    WHEN name ILIKE 'Semestre%' THEN 'semester'
+    WHEN name ILIKE 'Trimestre%' THEN 'trimester'
+    ELSE period_type END WHERE period_type IS NULL`);
+  await db.execute(sql`UPDATE classes AS cls SET level_id = lvl.id FROM levels AS lvl
+    WHERE cls.level_id IS NULL AND (
+      (lvl.code = '6e' AND lower(cls.name) ~ '^(6e|6eme|6ème)([[:space:]]|$)') OR
+      (lvl.code = '5e' AND lower(cls.name) ~ '^(5e|5eme|5ème)([[:space:]]|$)') OR
+      (lvl.code = '4e' AND lower(cls.name) ~ '^(4e|4eme|4ème)([[:space:]]|$)') OR
+      (lvl.code = '3e' AND lower(cls.name) ~ '^(3e|3eme|3ème)([[:space:]]|$)') OR
+      (lvl.code = '2nde' AND lower(cls.name) ~ '^(2de|2nde)([[:space:]]|$)') OR
+      (lvl.code = '1ere' AND lower(cls.name) ~ '^(1ere|1ère)([[:space:]]|$)') OR
+      (lvl.code = 'tle' AND lower(cls.name) ~ '^(tle|terminale)([[:space:]]|$)')
+    )`);
+}
+
+async function insertTemplateTerms(academicYearId: number, schoolId: number | null | undefined) {
+  const templates = await db.select().from(cyclePeriodTemplates).where(eq(cyclePeriodTemplates.isActive, true)).orderBy(cyclePeriodTemplates.cycleId, cyclePeriodTemplates.orderIndex);
+  if (templates.length === 0) return false;
+
+  for (const template of templates) {
+    const [existing] = await db.select({ id: schoolTerms.id }).from(schoolTerms).where(and(
+      eq(schoolTerms.academicYearId, academicYearId),
+      eq(schoolTerms.cycleId, template.cycleId),
+      eq(schoolTerms.orderIndex, template.orderIndex),
+    )).limit(1);
+    if (existing) continue;
+
+    await db.insert(schoolTerms).values({
+      schoolId: schoolId ?? undefined,
+      academicYearId,
+      cycleId: template.cycleId,
+      templateId: template.id,
+      periodType: template.periodType,
+      name: template.name,
+      orderIndex: template.orderIndex,
+      isActive: true,
+    });
+  }
+  return true;
+}
 
 /**
  * Ensure the audit_events table exists and contains expected columns.
@@ -402,20 +516,15 @@ export async function ensureDefaultSchoolTermsExist() {
 
     const years = await db.select().from(academicYears);
     for (const year of years) {
-      const defaultTerms = [
-        { name: 'Trimestre 1', orderIndex: 1 },
-        { name: 'Trimestre 2', orderIndex: 2 },
-        { name: 'Trimestre 3', orderIndex: 3 },
-      ];
-
-      for (const term of defaultTerms) {
-        await db.insert(schoolTerms).values({
-          schoolId: year.schoolId ?? undefined,
-          academicYearId: year.id,
-          name: term.name,
-          orderIndex: term.orderIndex,
-          isActive: true,
-        });
+      const insertedFromTemplates = await insertTemplateTerms(year.id, year.schoolId);
+      if (!insertedFromTemplates) {
+        for (const term of [
+          { name: 'Trimestre 1', orderIndex: 1 },
+          { name: 'Trimestre 2', orderIndex: 2 },
+          { name: 'Trimestre 3', orderIndex: 3 },
+        ]) {
+          await db.insert(schoolTerms).values({ schoolId: year.schoolId ?? undefined, academicYearId: year.id, name: term.name, orderIndex: term.orderIndex, isActive: true });
+        }
       }
     }
   } catch (err: any) {
@@ -457,20 +566,15 @@ export async function seedDatabaseIfEmpty() {
     const activeYear = yearInsert[0];
 
     // 2b. Insert default terms for the active academic year
-    const defaultTerms = [
-      { name: 'Trimestre 1', orderIndex: 1 },
-      { name: 'Trimestre 2', orderIndex: 2 },
-      { name: 'Trimestre 3', orderIndex: 3 },
-    ];
-
-    for (const term of defaultTerms) {
-      await db.insert(schoolTerms).values({
-        schoolId: mainSchool.id,
-        academicYearId: activeYear.id,
-        name: term.name,
-        orderIndex: term.orderIndex,
-        isActive: true,
-      });
+    const insertedFromTemplates = await insertTemplateTerms(activeYear.id, mainSchool.id);
+    if (!insertedFromTemplates) {
+      for (const term of [
+        { name: 'Trimestre 1', orderIndex: 1 },
+        { name: 'Trimestre 2', orderIndex: 2 },
+        { name: 'Trimestre 3', orderIndex: 3 },
+      ]) {
+        await db.insert(schoolTerms).values({ schoolId: mainSchool.id, academicYearId: activeYear.id, name: term.name, orderIndex: term.orderIndex, isActive: true });
+      }
     }
 
     // 3. Insert Simulated Users

@@ -122,7 +122,7 @@ export interface BulletinSnapshotResult {
 export interface BulletinSnapshotContext {
   getStudentById(studentId: number): Promise<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string } | null>;
   getClassById(classId: number): Promise<{ id: number; academicYearId: number } | null>;
-  getTermById(termId: number): Promise<{ id: number; academicYearId: number } | null>;
+  getTermById(termId: number): Promise<{ id: number; academicYearId: number; periodType?: string | null } | null>;
   getClassStudents(classId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
   getClassTermEvaluations(classId: number, termId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
@@ -176,12 +176,13 @@ const resolveMention = (average: number | null): string | null => {
   return 'Insuffisant';
 };
 
-const resolveAppreciation = (average: number | null): string | null => {
-  if (average == null) return 'Aucune note disponible pour ce trimestre.';
-  if (average >= 16) return 'Excellent trimestre, continuez ainsi.';
-  if (average >= 14) return 'Très bon trimestre avec des résultats solides.';
-  if (average >= 12) return 'Bon trimestre, efforts réguliers.';
-  if (average >= 10) return 'Trimestre satisfaisant, peut progresser.';
+const resolveAppreciation = (average: number | null, periodType: string | null | undefined = 'trimester'): string | null => {
+  const periodLabel = periodType === 'semester' ? 'semestre' : 'trimestre';
+  if (average == null) return `Aucune note disponible pour ce ${periodLabel}.`;
+  if (average >= 16) return `Excellent ${periodLabel}, continuez ainsi.`;
+  if (average >= 14) return `Très bon ${periodLabel}, avec des résultats solides.`;
+  if (average >= 12) return `Bon ${periodLabel}, efforts réguliers.`;
+  if (average >= 10) return `${periodLabel.charAt(0).toUpperCase()}${periodLabel.slice(1)} satisfaisant, peut progresser.`;
   return 'Des efforts supplémentaires sont attendus.';
 };
 
@@ -527,6 +528,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           const [row] = await tx.select({
             id: schoolTerms.id,
             academicYearId: schoolTerms.academicYearId,
+            periodType: schoolTerms.periodType,
           }).from(schoolTerms).where(eq(schoolTerms.id, termId));
           return row ?? null;
         },
@@ -696,7 +698,7 @@ export const registerBulletinGenerateRoute = (
                 return row ?? null;
               },
               async getTermById(termId) {
-                const [row] = await tx.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+                const [row] = await tx.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId, periodType: schoolTerms.periodType }).from(schoolTerms).where(eq(schoolTerms.id, termId));
                 return row ?? null;
               },
               async getClassStudents(classId) {
@@ -891,7 +893,7 @@ export const generateBulletinSnapshot = async (
       totalCoefficients: subjectAverage.totalCoefficients,
       rank,
       mention: resolveMention(finalAverage),
-      appreciation: resolveAppreciation(finalAverage),
+      appreciation: resolveAppreciation(finalAverage, term.periodType),
       generatedAt: new Date(),
     });
 
@@ -906,7 +908,7 @@ export const generateBulletinSnapshot = async (
       totalCoefficients: subjectAverage.totalCoefficients,
       rank,
       mention: resolveMention(finalAverage),
-      appreciation: resolveAppreciation(finalAverage),
+      appreciation: resolveAppreciation(finalAverage, term.periodType),
       linesCount: lines.length,
       ...subjectGroups,
     };

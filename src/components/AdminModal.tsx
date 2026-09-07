@@ -51,6 +51,9 @@ export default function AdminModal(props: any) {
     userRole,
     currentSchoolId,
     subjectsList = [],
+    educationLevels = [],
+    enabledEducationCycleIds = [],
+    schoolCyclesLoaded = false,
     classGroups = [],
     subjectGroups = [],
   } = props;
@@ -702,11 +705,21 @@ export default function AdminModal(props: any) {
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Cycle</label>
-                  <input list="cycle-options" type="text" value={classForm.cycle} onChange={e => setClassForm({...classForm, cycle: e.target.value})} placeholder="Cycle (ex: 1ère)" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
-                  <datalist id="cycle-options">
-                    {cycleOptions.map((c) => <option key={c} value={c} />)}
-                  </datalist>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Niveau</label>
+                  <select
+                    required
+                    value={classForm.levelId || ''}
+                    onChange={e => {
+                      const level = educationLevels.find((item: any) => String(item.id) === e.target.value);
+                      setClassForm({ ...classForm, levelId: e.target.value, cycle: level?.name || '' });
+                    }}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                  >
+                    <option value="">Choisir un niveau</option>
+                    {educationLevels
+                      .filter((level: any) => userRole !== 'school_admin' || !schoolCyclesLoaded || enabledEducationCycleIds.includes(Number(level.cycleId)))
+                      .map((level: any) => <option key={level.id} value={String(level.id)}>{level.name}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Section</label>

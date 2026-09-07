@@ -25,10 +25,29 @@ export interface AcademicYear {
   createdAt?: string;
 }
 
+export interface EducationCycle {
+  id: number;
+  code: 'college' | 'lycee' | string;
+  name: string;
+  isActive: boolean;
+}
+
+export interface EducationLevel {
+  id: number;
+  cycleId: number;
+  code: string;
+  name: string;
+  orderIndex: number;
+  isActive: boolean;
+}
+
 export interface SchoolTerm {
   id: number;
   schoolId?: number;
   academicYearId: number;
+  cycleId?: number | null;
+  templateId?: number | null;
+  periodType?: 'trimester' | 'semester' | null;
   name: string;
   startDate?: string;
   endDate?: string;
@@ -119,6 +138,7 @@ export interface Class {
   id: number;
   schoolId?: number | null;
   academicYearId: number;
+  levelId?: number | null;
   name: string;
   teacherId?: number;
   teacherName?: string;
