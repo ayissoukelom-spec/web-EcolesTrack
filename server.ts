@@ -132,6 +132,22 @@ async function findExistingUsersByEmailAndSchool(email: string | null | undefine
   );
 }
 
+const DUPLICATE_EMAIL_ERROR = {
+  code: 'EMAIL_ALREADY_IN_USE',
+  message: 'Cette adresse e-mail est déjà utilisée. Veuillez utiliser une autre adresse e-mail.',
+};
+
+function isUsersEmailUniqueViolation(error: any) {
+  if (error?.code !== '23505' && error?.cause?.code !== '23505') return false;
+  const constraint = String(error?.constraint || error?.cause?.constraint || '').toLowerCase();
+  const detail = String(error?.detail || error?.cause?.detail || '').toLowerCase();
+  return constraint.includes('email') || (detail.includes('users') && detail.includes('email'));
+}
+
+function sendDuplicateEmailResponse(res: any) {
+  return res.status(409).json({ error: DUPLICATE_EMAIL_ERROR.message, code: DUPLICATE_EMAIL_ERROR.code });
+}
+
 // Resolved actor shape used by business routes.
 type ResolvedActorRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | string;
 
@@ -955,7 +971,7 @@ export async function createApp() {
       }
       
       if (existingByEmail.length > 0) {
-        return res.status(409).json({ error: 'User with same email already exists' + (resolvedSchoolId && role !== 'super_admin' ? ' in this school' : '') });
+        return sendDuplicateEmailResponse(res);
       }
 
       const newUserRows = await db.insert(users).values({ uid: finalUid, email: normalizedEmail, name, role, schoolId: resolvedSchoolId, academicYearId, gender: gender ?? null, phone: phone || null }).returning();
@@ -1114,6 +1130,7 @@ export async function createApp() {
       res.status(201).json(responseBody);
     } catch (err: any) {
       console.error('Error creating admin user:', err);
+      if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -4260,7 +4277,7 @@ export async function createApp() {
           // Email uniqueness check: per-school (same email allowed in different schools)
           const existingParentEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, effectiveSchoolId);
           if (existingParentEmail.length > 0) {
-            return res.status(409).json({ error: 'User with same email already exists in this school' });
+            return sendDuplicateEmailResponse(res);
           }
 
           const fakeUid = `sim_parent_${Date.now()}`;
@@ -4307,6 +4324,7 @@ export async function createApp() {
           });
         } catch (err: any) {
           console.error('Error recording parent info:', err);
+          if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
           res.status(500).json({ error: 'Internal server error' });
         }
       });
