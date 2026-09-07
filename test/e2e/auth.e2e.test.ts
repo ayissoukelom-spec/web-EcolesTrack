@@ -1117,12 +1117,43 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
-      .send([{ name: 'Local Parent', email: 'localparent@x.test' }]);
+      .send([{ name: 'Local Parent', email: 'localparent@x.test', phonePrefix: '+228', phone: '90000000', parentType: 'mere', studentId: 11 }]);
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(1);
     expect(res.body.inserted[0].user.email).toBe('localparent@x.test');
     expect(res.body.inserted[0].user.schoolId).toBe(10);
+  });
+
+  it('3o0. school_admin can batch import multiple parents without students', async () => {
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([
+        { name: 'Parent Sans Enfant 1', email: 'parent-no-child-1@x.test', phonePrefix: '+228', phone: '90000002', parentType: 'mere', address: '' },
+        { name: 'Parent Sans Enfant 2', email: 'parent-no-child-2@x.test', phonePrefix: '+228', phone: '90000003', parentType: 'pere', address: '' },
+      ]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(2);
+    expect(res.body.errors).toEqual([]);
+  });
+
+  it('3o1. duplicate Parent email is rejected clearly during batch import', async () => {
+    const payload = [{ name: 'Duplicate Parent', email: 'duplicate@x.test', phonePrefix: '+228', phone: '90000001', parentType: 'pere', studentId: 11 }];
+    await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send(payload);
+
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0]).toMatchObject({ row: 2, error: 'duplicate email in this school' });
   });
 
   it('3p. school_admin cannot send notification to another-school user via POST /api/notifications/send', async () => {

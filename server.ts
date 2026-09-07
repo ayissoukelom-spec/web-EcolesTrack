@@ -74,6 +74,7 @@ import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
+import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -4333,7 +4334,7 @@ export async function createApp() {
   app.get('/api/parents/template', async (req, res) => {
     try {
       const XLSX = await import('xlsx');
-      const headers = ['name', 'email', 'phone', 'address', 'schoolId', 'studentIds', 'studentNames'];
+      const headers = [...PARENT_IMPORT_HEADERS];
       const worksheet = XLSX.utils.aoa_to_sheet([headers]);
       worksheet['!cols'] = headers.map((_, index) => ({ wch: index === 0 ? 24 : 18 }));
       worksheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
@@ -4442,20 +4443,23 @@ export async function createApp() {
 
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i] || {};
-        const name = (r.name || r.fullName || '').trim();
-        const normalizedEmail = normalizeEmail(r.email || '');
-        const phone = (r.phone || '').trim();
-        const address = (r.address || '').trim();
+        const validation = validateParentImportRow({ ...r, name: r.name || r.fullName }, { requireSchoolId: actor.role === 'super_admin' });
+        const normalizedRow = validation.normalized;
+        const name = (normalizedRow.name || r.fullName || '').trim();
+        const normalizedEmail = normalizeEmail(normalizedRow.email || '');
+        const phone = `${normalizedRow.phonePrefix || '+228'} ${normalizedRow.phone}`.trim();
+        const address = normalizedRow.address || '';
+        const gender = normalizedRow.gender || null;
         const requestedSchoolId = r.schoolId != null && r.schoolId !== '' ? parseInt(String(r.schoolId), 10) : null;
         let schoolId = null;
 
         if (actor.role === 'school_admin') {
           if (actor.schoolId == null) {
-            errors.push({ row: i, email: normalizedEmail || undefined, error: 'Forbidden: missing school context' });
+            errors.push({ row: i + 2, email: normalizedEmail || undefined, error: 'Forbidden: missing school context' });
             continue;
           }
           if (requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
-            errors.push({ row: i, email: normalizedEmail || undefined, error: 'Cannot import parent for another school' });
+            errors.push({ row: i + 2, email: normalizedEmail || undefined, error: 'Cannot import parent for another school' });
             continue;
           }
 
@@ -4464,33 +4468,34 @@ export async function createApp() {
           schoolId = requestedSchoolId;
         }
 
-        if (!name || !normalizedEmail) {
-          errors.push({ row: i, email: normalizedEmail || undefined, error: 'name and email are required' });
+        if (validation.errors.length > 0) {
+          errors.push({ row: i + 2, email: normalizedEmail || undefined, error: validation.errors.join('; ') });
           continue;
         }
 
         // Check email uniqueness per-school (same email allowed in different schools)
         const existing = await findExistingUsersByEmailAndSchool(normalizedEmail, schoolId);
         if (existing && existing.length > 0) {
-          errors.push({ row: i, email: normalizedEmail, error: 'duplicate email in this school' });
+          errors.push({ row: i + 2, email: normalizedEmail, error: 'duplicate email in this school' });
           continue;
         }
 
-        // create user and parent profile
-        const fakeUid = `sim_parent_${Date.now()}_${i}`;
-        const userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId }).returning();
-        const createdUser = userRes[0];
-
         // option: link to student by studentIds or studentNames
         let linkedStudentId: number | null = null;
-        if (r.studentIds) {
+        const errorsBeforeStudentLookup = errors.length;
+        if (normalizedRow.studentId) {
+          const requestedStudentId = parseInt(normalizedRow.studentId, 10);
+          const [srow] = await db.select().from(students).where(eq(students.id, requestedStudentId));
+          if (srow) linkedStudentId = srow.id;
+          else errors.push({ row: i + 2, email: normalizedEmail, error: `studentId introuvable: ${normalizedRow.studentId}` });
+        } else if (r.studentIds) {
           const ids = String(r.studentIds).split(/[,;]+/).map((s: string) => parseInt(s.trim())).filter((n) => !isNaN(n));
           for (const sid of ids) {
             const [srow] = await db.select().from(students).where(eq(students.id, sid));
             if (srow) { linkedStudentId = srow.id; break; }
           }
           if (ids.length > 0 && !linkedStudentId) {
-            errors.push({ row: i, email: normalizedEmail, error: `studentIds provided but no matching student found (${String(r.studentIds)})` });
+            errors.push({ row: i + 2, email: normalizedEmail, error: `studentIds provided but no matching student found (${String(r.studentIds)})` });
           }
         } else if (r.studentNames) {
           const names = String(r.studentNames).split(/[,;]+/).map((s: string) => s.trim()).filter(Boolean);
@@ -4504,10 +4509,15 @@ export async function createApp() {
             }
           }
           if (names.length > 0 && !linkedStudentId) {
-            errors.push({ row: i, email: normalizedEmail, error: `studentNames provided but no matching student found (${String(r.studentNames)})` });
+            errors.push({ row: i + 2, email: normalizedEmail, error: `studentNames provided but no matching student found (${String(r.studentNames)})` });
           }
         }
 
+        if (errors.length > errorsBeforeStudentLookup) continue;
+
+        const fakeUid = `sim_parent_${Date.now()}_${i}`;
+        const userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId, gender }).returning();
+        const createdUser = userRes[0];
         const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: phone || null, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
         try {
           if (schoolId != null) {

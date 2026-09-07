@@ -29,6 +29,7 @@ import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+import { PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -1498,8 +1499,11 @@ export default function AdminView({
 
       // Validate parent-specific columns
       const headerKeys = Object.keys(records[0] || {});
+      const requiredHeaders = userRole === 'school_admin'
+        ? PARENT_IMPORT_HEADERS.filter((header) => !['phonePrefix', 'gender', 'schoolId', 'studentId', 'studentIds', 'studentNames'].includes(header))
+        : PARENT_IMPORT_HEADERS.filter((header) => !['phonePrefix', 'gender', 'studentId', 'studentIds', 'studentNames'].includes(header));
       const missing: string[] = [];
-      ['name','email'].forEach((h) => { if (!headerKeys.includes(h)) missing.push(h); });
+      requiredHeaders.forEach((h) => { if (!headerKeys.includes(h)) missing.push(h); });
       if (missing.length > 0) {
         setImportErrorsList([`Colonnes manquantes pour parents: ${missing.join(', ')}`]);
         setImportPreviewRecords([]);
@@ -1509,27 +1513,15 @@ export default function AdminView({
         return;
       }
 
-      // normalize: trim, lowercase email
-      const normalized = records.map((r) => {
-        const out: any = {};
-        Object.keys(r || {}).forEach((k) => { out[k] = String(r[k] ?? '').trim(); });
-        if (out.email) out.email = out.email.toLowerCase();
-        if (out.phone) out.phone = out.phone.replace(/\D/g, '');
-        return out;
-      });
-
-      // validate rows (email format)
+      // Normalize and validate with the same field rules as the batch API.
+      const normalized = records.map((r) => Object.fromEntries(
+        Object.entries(r || {}).map(([key, value]) => [key, String(value ?? '').trim()]),
+      ));
       const rowErrors: {row:number; errors:string[]}[] = [];
       const valid: any[] = [];
-      const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       for (let i = 0; i < normalized.length; i++) {
-        const r = normalized[i];
-        const errs: string[] = [];
-        if (!r.name) errs.push('name manquant');
-        if (!r.email) errs.push('email manquant');
-        else if (!emailRe.test(r.email)) errs.push('email invalide');
-        if (r.phone && r.phone.length !== 8) errs.push('phone doit contenir 8 chiffres');
-        if (errs.length > 0) rowErrors.push({ row: i, errors: errs }); else valid.push(r);
+        const result = validateParentImportRow(normalized[i], { requireSchoolId: userRole !== 'school_admin' });
+        if (result.errors.length > 0) rowErrors.push({ row: i + 2, errors: result.errors }); else valid.push(result.normalized);
       }
 
       if (rowErrors.length > 0) {
