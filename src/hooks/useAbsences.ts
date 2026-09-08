@@ -28,10 +28,14 @@ export function useAbsences() {
     await refresh();
   }, [refresh]);
 
-  const justifyAbsence = useCallback(async (id: number, reason: string, file?: File) => {
-    if (file) {
+  const justifyAbsence = useCallback(async (id: number, reason: string, files?: File[] | File | null) => {
+    const normalizedFiles = Array.isArray(files) ? files : files ? [files] : [];
+
+    if (normalizedFiles.length > 0) {
       const formData = new FormData();
-      formData.append('file', file);
+      normalizedFiles.forEach((file) => {
+        formData.append('files', file);
+      });
       formData.append('justificationReason', reason);
       await apiFetch(`/api/absences/${id}/justifications`, {
         method: 'POST',

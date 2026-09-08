@@ -18,7 +18,7 @@ interface AbsenceViewProps {
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
-  onJustifyAbsence: (id: number, reason: string, file?: File | null) => void;
+  onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
 }
 
 export default function AbsenceView({
@@ -55,7 +55,74 @@ export default function AbsenceView({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
   const [justificationText, setJustificationText] = useState('');
-  const [uploadMockFile, setUploadMockFile] = useState<File | null>(null);
+  const [selectedJustificationFiles, setSelectedJustificationFiles] = useState<File[]>([]);
+  const [justificationUploadError, setJustificationUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const MAX_JUSTIFICATION_FILES = 5;
+  const MAX_JUSTIFICATION_FILE_SIZE = 5 * 1024 * 1024;
+  const allowedJustificationTypes = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+
+  const resetJustificationForm = () => {
+    setJustificationText('');
+    setSelectedJustificationFiles([]);
+    setJustificationUploadError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} o`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  };
+
+  const appendJustificationFiles = (incomingFiles: File[]) => {
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    incomingFiles.forEach((file) => {
+      if (!allowedJustificationTypes.has(file.type)) {
+        errors.push(`${file.name}: format interdit. Seuls PDF, JPG et PNG sont acceptés.`);
+        return;
+      }
+
+      if (file.size > MAX_JUSTIFICATION_FILE_SIZE) {
+        errors.push(`${file.name}: dépasse 5 Mo.`);
+        return;
+      }
+
+      validFiles.push(file);
+    });
+
+    if (selectedJustificationFiles.length + validFiles.length > MAX_JUSTIFICATION_FILES) {
+      const remainingSlots = MAX_JUSTIFICATION_FILES - selectedJustificationFiles.length;
+      if (remainingSlots <= 0) {
+        errors.push(`Vous avez déjà atteint la limite de ${MAX_JUSTIFICATION_FILES} fichiers.`);
+      } else {
+        errors.push(`Vous pouvez ajouter jusqu'à ${remainingSlots} fichier(s) supplémentaire(s).`);
+      }
+    }
+
+    if (errors.length > 0) {
+      setJustificationUploadError(errors.join(' '));
+    } else {
+      setJustificationUploadError(null);
+    }
+
+    const mergedFiles = [...selectedJustificationFiles, ...validFiles].slice(0, MAX_JUSTIFICATION_FILES);
+    setSelectedJustificationFiles(mergedFiles);
+  };
+
+  const handleJustificationInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+
+    appendJustificationFiles(files);
+    event.target.value = '';
+  };
 
   // Form State
   const [newAbsenceForm, setNewAbsenceForm] = useState({
@@ -201,10 +268,9 @@ export default function AbsenceView({
   const handleJustifySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!showJustifyModal) return;
-    onJustifyAbsence(showJustifyModal.id, justificationText, uploadMockFile);
+    onJustifyAbsence(showJustifyModal.id, justificationText, selectedJustificationFiles);
     setShowJustifyModal(null);
-    setJustificationText('');
-    setUploadMockFile(null);
+    resetJustificationForm();
   };
 
   // Filter absences
@@ -712,20 +778,45 @@ export default function AbsenceView({
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Charger un document justificatif (certificat médical / optionnel)</label>
                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center hover:bg-slate-50/50 transition-colors cursor-pointer relative">
                   <input
+                    ref={fileInputRef}
                     type="file"
-                    onChange={(e) => setUploadMockFile(e.target.files?.[0] || null)}
+                    accept=".pdf,image/jpeg,image/png"
+                    multiple
+                    onChange={handleJustificationInputChange}
                     className="absolute inset-0 opacity-0 cursor-pointer"
                   />
                   <div className="space-y-1">
                     <p className="text-xs font-semibold text-slate-600">Glissez-déposez ou cliquez pour téléverser</p>
-                    <p className="text-[10px] text-slate-400">PDF, PNG, JPG jusqu'à 5 Mo</p>
+                    <p className="text-[10px] text-slate-400">PDF, PNG, JPG — jusqu'à {MAX_JUSTIFICATION_FILES} fichiers — 5 Mo maximum par fichier</p>
                   </div>
                 </div>
-                {uploadMockFile && (
-                  <p className="mt-2 text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                    <CheckSquare className="h-4 w-4" />
-                    Fichier : {uploadMockFile.name}
-                  </p>
+
+                {selectedJustificationFiles.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {selectedJustificationFiles.map((file, index) => (
+                      <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-semibold">{file.name}</div>
+                          <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] opacity-80">
+                            <span>{file.type || 'inconnu'}</span>
+                            <span>•</span>
+                            <span>{formatFileSize(file.size)}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJustificationFiles((previousFiles) => previousFiles.filter((_, fileIndex) => fileIndex !== index))}
+                          className="shrink-0 font-semibold underline underline-offset-2"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {justificationUploadError && (
+                  <p className="mt-2 text-xs font-semibold text-rose-600">{justificationUploadError}</p>
                 )}
               </div>
             </div>

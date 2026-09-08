@@ -577,12 +577,46 @@ export async function createApp() {
     },
   });
 
-  const handleSingleFileUpload = (req: any, res: any, next: any) => {
-    upload.single('file')(req, res, (err: any) => {
-      if (err) {
-        return res.status(400).json({ error: err.message || 'Invalid file upload' });
+  const handleJustificationUpload = (req: any, res: any, next: any) => {
+    upload.array('files', 5)(req, res, (err: any) => {
+      if (!err) {
+        const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+        console.log('📎 Absence justification upload request', {
+          contentType: req.headers['content-type'] || null,
+          bodyKeys: Object.keys(req.body || {}),
+          uploadedFilesCount: uploadedFiles.length,
+          fileNames: uploadedFiles.map((f: any) => f?.originalname || '(unknown)'),
+          totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
+        });
+
+        req.justificationFiles = uploadedFiles;
+        return next();
       }
-      return next();
+
+      if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
+        console.warn('⚠️ Expected files[] field not found; trying legacy single file field', { message: err.message });
+        return upload.single('file')(req, res, (legacyErr: any) => {
+          if (legacyErr) {
+            console.error('❌ Multer error for absence justification upload:', legacyErr);
+            return res.status(400).json({ error: legacyErr.message || 'Invalid file upload' });
+          }
+
+          const uploadedFiles = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
+          console.log('📎 Legacy file upload request', {
+            contentType: req.headers['content-type'] || null,
+            bodyKeys: Object.keys(req.body || {}),
+            uploadedFilesCount: uploadedFiles.length,
+            fileNames: uploadedFiles.map((f: any) => f?.originalname || '(unknown)'),
+            totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
+          });
+
+          req.justificationFiles = uploadedFiles;
+          return next();
+        });
+      }
+
+      console.error('❌ Multer error for absence justification upload:', err);
+      return res.status(400).json({ error: err.message || 'Invalid file upload' });
     });
   };
 
@@ -5357,7 +5391,7 @@ export async function createApp() {
     }
   });
 
-  app.post('/api/absences/:id/justifications', requireAuth, handleSingleFileUpload, async (req: AuthRequest, res) => {
+  app.post('/api/absences/:id/justifications', requireAuth, handleJustificationUpload, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id, 10);
@@ -5371,8 +5405,13 @@ export async function createApp() {
       if (!justificationReason) {
         return res.status(400).json({ error: 'Please specify a reason for justification' });
       }
-      if (!req.file) {
-        return res.status(400).json({ error: 'Please upload a justification file' });
+
+      const uploadedFiles = Array.isArray((req as any).justificationFiles)
+        ? (req as any).justificationFiles as any[]
+        : [];
+      const fileList = uploadedFiles.length > 0 ? uploadedFiles : [];
+      if (fileList.length === 0) {
+        return res.status(400).json({ error: 'Please upload at least one justification file' });
       }
 
       const actor = await resolveActor(req);
@@ -5434,28 +5473,32 @@ export async function createApp() {
         .where(eq(absences.id, id))
         .returning();
 
-      const inserted = await db.insert(absenceJustifications).values({
-        absenceId: id,
-        fileName: req.file.originalname,
-        filePath: req.file.filename,
-        mimeType: req.file.mimetype,
-        fileSize: Number(req.file.size),
-        uploadedBy: req.user.id,
-      }).returning();
+      const inserted = await db.insert(absenceJustifications).values(
+        fileList.map((file: any) => ({
+          absenceId: id,
+          fileName: file.originalname,
+          filePath: file.filename,
+          mimeType: file.mimetype,
+          fileSize: Number(file.size),
+          uploadedBy: req.user!.id!,
+        }))
+      ).returning();
 
+      const auditText = fileList.map((file: any) => file.originalname).join(', ');
       await logAuditEvent(
         actor,
         'create',
         'absence_justification',
         id,
         actor.schoolId ?? null,
-        `Uploaded justification file ${req.file.originalname} for absence ${id}`,
+        `Uploaded justification files ${auditText} for absence ${id}`,
       );
 
       res.status(201).json({
         ...updated[0],
-        justificationFileId: inserted[0]?.id,
-        justificationFileName: inserted[0]?.fileName,
+        justificationFileId: inserted[0]?.id ?? null,
+        justificationFileName: inserted[0]?.fileName ?? null,
+        justificationFilesCount: inserted.length,
       });
     } catch (err: any) {
       console.error('Failed to upload absence justification:', err);

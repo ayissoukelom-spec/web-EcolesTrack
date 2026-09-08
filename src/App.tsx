@@ -674,9 +674,9 @@ export default function App() {
     }
   };
 
-  const handleJustifyAbsence = async (id: number, reason: string, file?: File | null) => {
+  const handleJustifyAbsence = async (id: number, reason: string, files?: File[] | File | null) => {
     try {
-      await justifyAbsence(id, reason, file ?? undefined);
+      await justifyAbsence(id, reason, files ?? undefined);
       fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message);
