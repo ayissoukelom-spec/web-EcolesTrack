@@ -23,6 +23,7 @@ import {
   findTeacherProfileFromSimulatedUser,
 } from './lib/api.ts';
 import { useAuth } from './contexts/AuthContext.tsx';
+import { useAbsences } from './hooks/useAbsences.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
@@ -56,6 +57,7 @@ import {
 
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
+  const { justifyAbsence } = useAbsences();
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
@@ -672,12 +674,9 @@ export default function App() {
     }
   };
 
-  const handleJustifyAbsence = async (id: number, reason: string) => {
+  const handleJustifyAbsence = async (id: number, reason: string, file?: File | null) => {
     try {
-      await apiFetch(`/api/absences/${id}/justify`, {
-        method: 'PUT',
-        body: JSON.stringify({ justificationReason: reason }),
-      });
+      await justifyAbsence(id, reason, file ?? undefined);
       fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message);

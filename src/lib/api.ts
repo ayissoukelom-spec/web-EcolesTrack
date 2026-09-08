@@ -303,13 +303,20 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
       return rawUrl;
     }
   })();
+  const mergedHeaders = {
+    ...headers,
+    ...(options.headers || {}),
+  } as Record<string, string>;
+  const isFormDataBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (isFormDataBody) {
+    delete mergedHeaders['Content-Type'];
+    delete mergedHeaders['content-type'];
+  }
+
   const mergedOptions = {
     ...options,
     ...(bypassTeacherDataCache ? { cache: 'no-store' as RequestCache } : {}),
-    headers: {
-      ...headers,
-      ...(options.headers || {}),
-    },
+    headers: mergedHeaders,
   };
 
   // Client-side validation: if sending JSON body for create/update, validate name fields.
