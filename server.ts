@@ -7906,7 +7906,11 @@ export async function startServer() {
   console.log('Verifying if database needs seeding...');
   try {
     await ensureEducationStructureSchema();
-    await seedDatabaseIfEmpty();
+    if (process.env.DISABLE_DEMO_SEED !== 'true') {
+      await seedDatabaseIfEmpty();
+    } else {
+      console.log('Demo seed disabled.');
+    }
     await ensureSchoolsTableSchema();
     await ensureStudentMatriculesSchema();
     await ensureStudentAcademicYearStatusesTableExists();
