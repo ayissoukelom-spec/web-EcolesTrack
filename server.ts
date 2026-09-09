@@ -7708,7 +7708,7 @@ if (uniqueParentIds.length > 0) {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const rawBody = req.body ?? {};
-      const { title, body, type, userId } = rawBody;
+      const { title, body, type, userId, classId } = rawBody;
       if (!title || !body || !type) return res.status(400).json({ error: 'Missing keys' });
 
       const uploadedFiles = Array.isArray((req as any).notificationFiles) ? (req as any).notificationFiles as any[] : [];
@@ -7736,6 +7736,8 @@ if (uniqueParentIds.length > 0) {
 
       let targetUserIds: number[] = [];
 
+      if (userId && classId) return rejectAfterUpload(400, 'Choose either a parent or a class, not both');
+
       if (userId) {
         // Sending to specific user - validate school permission if school_admin
         const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
@@ -7751,6 +7753,22 @@ if (uniqueParentIds.length > 0) {
         }
 
         targetUserIds.push(targetUser.id);
+      } else if (classId) {
+        const parsedClassId = parseInt(String(classId), 10);
+        if (!Number.isInteger(parsedClassId)) return rejectAfterUpload(400, 'Invalid class');
+
+        const classConditions = [eq(students.classId, parsedClassId)];
+        if (actor.role === 'school_admin') {
+          classConditions.push(eq(students.schoolId, actor.schoolId!));
+        }
+
+        const classParents = await db
+          .selectDistinct({ userId: parents.userId })
+          .from(students)
+          .innerJoin(parents, eq(students.parentId, parents.id))
+          .innerJoin(users, eq(parents.userId, users.id))
+          .where(and(...classConditions, eq(users.role, 'parent')));
+        targetUserIds = classParents.map((parent) => parent.userId);
       } else {
         // Send to all parents (or all parents in school if school_admin)
         let query = db

@@ -324,7 +324,7 @@ export default function AppShell() {
     }));
   };
 
-  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number }) => {
+  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number }) => {
     await apiFetch('/api/notifications/send', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
   };
@@ -466,7 +466,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'notifications') {
-      return <NotificationView userRole={currentRole} notificationsList={notificationsList} usersList={usersList} onSendNotification={handleSendNotification} onMarkAllAsRead={handleMarkAllAsRead} />;
+      return <NotificationView userRole={currentRole} notificationsList={notificationsList} usersList={usersList} classesList={classesList} studentsList={studentsList} onSendNotification={handleSendNotification} onMarkAllAsRead={handleMarkAllAsRead} />;
     }
 
     if (activeTab === 'mobile-parent') {

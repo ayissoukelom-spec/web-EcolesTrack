@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { SystemNotification, User, UserRole } from '../types.ts';
+import { Class, Student, SystemNotification, User, UserRole } from '../types.ts';
 import { apiFetch, apiFetchBlob } from '../lib/api.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
@@ -9,7 +9,9 @@ interface NotificationViewProps {
   userRole: UserRole;
   notificationsList: SystemNotification[];
   usersList: User[];
-  onSendNotification: (data: { title: string; body: string; type: string; userId?: number; files?: File[] }) => void;
+  classesList: Class[];
+  studentsList: Student[];
+  onSendNotification: (data: { title: string; body: string; type: string; userId?: number; classId?: number; files?: File[] }) => void;
   onMarkAllAsRead: () => void;
   onNotificationRead?: () => void;
 }
@@ -18,6 +20,8 @@ export default function NotificationView({
   userRole,
   notificationsList,
   usersList,
+  classesList,
+  studentsList,
   onSendNotification,
   onMarkAllAsRead,
   onNotificationRead,
@@ -28,7 +32,9 @@ export default function NotificationView({
     title: '',
     body: '',
     type: 'info',
+    recipientMode: 'all' as 'all' | 'class' | 'individual',
     userId: '',
+    classId: '',
   });
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
@@ -42,7 +48,8 @@ export default function NotificationView({
       title: notifForm.title,
       body: notifForm.body,
       type: notifForm.type,
-      userId: notifForm.userId ? parseInt(notifForm.userId) : undefined,
+      userId: notifForm.recipientMode === 'individual' && notifForm.userId ? parseInt(notifForm.userId) : undefined,
+      classId: notifForm.recipientMode === 'class' && notifForm.classId ? parseInt(notifForm.classId) : undefined,
       files: attachedFiles.length > 0 ? attachedFiles : undefined,
     });
 
@@ -50,12 +57,23 @@ export default function NotificationView({
       title: '',
       body: '',
       type: 'info',
+      recipientMode: 'all',
       userId: '',
+      classId: '',
     });
     setAttachedFiles([]);
     
     setTimeout(() => setIsSending(false), 800);
   };
+
+  const parentUsers = usersList.filter((user) => user.role === 'parent');
+  const selectedClassParentCount = notifForm.classId
+    ? new Set(
+      studentsList
+        .filter((student) => String(student.classId) === notifForm.classId && student.parentId != null)
+        .map((student) => student.parentId),
+    ).size
+    : 0;
 
   const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
     const nextFiles = Array.from(event.target.files ?? []);
@@ -398,19 +416,59 @@ export default function NotificationView({
             {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
               <form onSubmit={handleBroadcast} className="space-y-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Destinataires ciblé</label>
-                  <select
-                    value={notifForm.userId}
-                    onChange={(e) => setNotifForm({ ...notifForm, userId: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
-                  >
-                    <option value="">Tous les parents d'élèves (Diffusion)</option>
-                    {usersList.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.role})
-                      </option>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Destinataires</label>
+                  <div className="space-y-2">
+                    {([
+                      ['all', 'Tous les parents'],
+                      ['class', 'Par classe'],
+                      ['individual', 'Individuellement'],
+                    ] as const).map(([mode, label]) => (
+                      <label key={mode} className="flex items-center gap-2 text-xs sm:text-sm text-slate-700 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="notification-recipient-mode"
+                          value={mode}
+                          checked={notifForm.recipientMode === mode}
+                          onChange={() => setNotifForm({ ...notifForm, recipientMode: mode, userId: '', classId: '' })}
+                          className="accent-indigo-600"
+                        />
+                        {label}
+                      </label>
                     ))}
-                  </select>
+                  </div>
+
+                  {notifForm.recipientMode === 'class' && (
+                    <>
+                      <select
+                        aria-label="Classe destinataire"
+                        value={notifForm.classId}
+                        onChange={(e) => setNotifForm({ ...notifForm, classId: e.target.value })}
+                        className="mt-3 w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
+                        required
+                      >
+                        <option value="">Sélectionner une classe</option>
+                        {classesList.map((klass) => (
+                          <option key={klass.id} value={klass.id}>{klass.name}</option>
+                        ))}
+                      </select>
+                      {notifForm.classId && <p className="mt-2 text-xs font-semibold text-indigo-700">Parents concernés : {selectedClassParentCount}</p>}
+                    </>
+                  )}
+
+                  {notifForm.recipientMode === 'individual' && (
+                    <select
+                      aria-label="Parent destinataire"
+                      value={notifForm.userId}
+                      onChange={(e) => setNotifForm({ ...notifForm, userId: e.target.value })}
+                      className="mt-3 w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
+                      required
+                    >
+                      <option value="">Sélectionner un parent</option>
+                      {parentUsers.map((user) => (
+                        <option key={user.id} value={user.id}>{user.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>

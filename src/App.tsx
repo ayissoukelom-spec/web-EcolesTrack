@@ -804,7 +804,7 @@ export default function App() {
     }
   };
 
-  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number }) => {
+  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number }) => {
     try {
       await apiFetch('/api/notifications/send', {
         method: 'POST',
@@ -1258,6 +1258,8 @@ export default function App() {
                 <NotificationView
                   userRole={currentRole}
                   notificationsList={notificationsList}
+                  classesList={classesList}
+                  studentsList={studentsList}
                   usersList={usersList}
                   onSendNotification={handleSendNotification}
                   onMarkAllAsRead={handleMarkAllAsRead}
