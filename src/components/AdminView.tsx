@@ -476,6 +476,7 @@ export default function AdminView({
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
   const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
+  const [teacherStudentClassFilterId, setTeacherStudentClassFilterId] = useState<number | null>(null);
   const [studentFilterClasses, setStudentFilterClasses] = useState<Class[] | null>(null);
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
 
@@ -746,6 +747,24 @@ export default function AdminView({
   const currentTeacher = findTeacherProfileFromSimulatedUser(userRole, simulatedUser, teachersList, usersList);
   const currentTeacherClassIds = currentTeacher ? (currentTeacher.classIds || []) : [];
 
+  const teacherStudentFilterClasses = classesList
+    .filter((cls) => currentTeacherClassIds.includes(cls.id))
+    .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+  useEffect(() => {
+    if (userRole !== 'teacher' || teacherStudentFilterClasses.length === 0) {
+      setTeacherStudentClassFilterId(null);
+      return;
+    }
+
+    if (
+      teacherStudentClassFilterId !== null
+      && !teacherStudentFilterClasses.some((cls) => cls.id === teacherStudentClassFilterId)
+    ) {
+      setTeacherStudentClassFilterId(null);
+    }
+  }, [userRole, teacherStudentClassFilterId, teacherStudentFilterClasses]);
+
   const teacherBelongsToSchool = (teacher: Teacher, schoolId: number | null | undefined) => {
     if (!schoolId) return true;
     if (teacher.schoolId === schoolId) return true;
@@ -776,7 +795,8 @@ export default function AdminView({
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || st.schoolId === superAdminSchoolFilterId) &&
     (userRole !== 'teacher' || currentTeacherClassIds.includes(st.classId)) &&
     (userRole !== 'parent' || (currentParent ? st.parentId === currentParent.id : false)) &&
-    (!studentClassFilterId || st.classId === studentClassFilterId) &&
+    (userRole !== 'teacher' || teacherStudentClassFilterId === null || st.classId === teacherStudentClassFilterId) &&
+    (userRole === 'teacher' || !studentClassFilterId || st.classId === studentClassFilterId) &&
     filterBySearch(`${st.firstName} ${st.lastName} ${st.className || ''} ${st.parentName || ''} ${st.yearName || ''}`)
   );
 
@@ -4665,6 +4685,24 @@ export default function AdminView({
         {/* TAB 5: STUDENTS */}
         {activeTab === 'students' && (
           <div>
+            {userRole === 'teacher' && (
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-3">
+                <label className="text-slate-600 text-xs sm:text-sm font-semibold" htmlFor="teacher-student-class-filter">
+                  Classe
+                </label>
+                <select
+                  id="teacher-student-class-filter"
+                  className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+                  value={teacherStudentClassFilterId ?? ''}
+                  onChange={(e) => setTeacherStudentClassFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                >
+                  <option value="">Toutes mes classes</option>
+                  {teacherStudentFilterClasses.map((cls) => (
+                    <option key={cls.id} value={String(cls.id)}>{cls.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             {['super_admin', 'school_admin'].includes(userRole) && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">

@@ -890,4 +890,75 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByText('Alice Martin')).toBeTruthy();
     expect(screen.queryByText('Bob Durand')).toBeNull();
   });
+
+  it('filters teacher students by assigned class and keeps text search combined', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [
+      { id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 },
+      { id: 20, name: 'CM2', schoolId: 1, academicYearId: 1 },
+      { id: 30, name: '6ème', schoolId: 1, academicYearId: 1 },
+    ];
+    const teachers: Teacher[] = [{ id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10, 20] }];
+    const students: Student[] = [
+      { id: 101, firstName: 'Alice', lastName: 'CM1', schoolId: 1, classId: 10, className: 'CM1', parentId: 1 } as Student,
+      { id: 102, firstName: 'Bob', lastName: 'CM2', schoolId: 1, classId: 20, className: 'CM2', parentId: 2 } as Student,
+      { id: 103, firstName: 'Claire', lastName: 'Sixième', schoolId: 1, classId: 30, className: '6ème', parentId: 3 } as Student,
+    ];
+    const parents: Parent[] = [];
+    const users: User[] = [{ id: 2, uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', role: 'teacher', schoolId: 1 }];
+
+    const storage = window.localStorage as any;
+    storage.getItem.mockImplementation((key: string) => {
+      if (key === 'ecoletrack_simulated_role') return 'teacher';
+      if (key === 'ecoletrack_simulated_user') return JSON.stringify({ uid: 'u2', email: 'alice@example.com', name: 'Alice Martin', schoolId: 1 });
+      return null;
+    });
+
+    renderWithAuth(
+      <AdminView
+        userRole="teacher"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={teachers}
+        studentsList={students}
+        parentsList={parents}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={async () => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+
+    const classFilter = screen.getByLabelText('Classe');
+    expect(within(classFilter).queryByText('6ème')).toBeNull();
+    expect(screen.getByRole('option', { name: 'CM1' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'CM2' })).toBeTruthy();
+    const studentRows = () => screen.getAllByRole('row').map((row) => row.textContent || '');
+    expect(studentRows().some((text) => text.includes('Alice') && text.includes('CM1'))).toBe(true);
+    expect(studentRows().some((text) => text.includes('Bob') && text.includes('CM2'))).toBe(true);
+    expect(studentRows().some((text) => text.includes('Claire'))).toBe(false);
+
+    fireEvent.change(classFilter, { target: { value: '10' } });
+    expect(studentRows().some((text) => text.includes('Alice') && text.includes('CM1'))).toBe(true);
+    expect(studentRows().some((text) => text.includes('Bob'))).toBe(false);
+
+    const search = screen.getByPlaceholderText(/Rechercher parmi/i);
+    fireEvent.change(search, { target: { value: 'Alice' } });
+    expect(studentRows().some((text) => text.includes('Alice') && text.includes('CM1'))).toBe(true);
+    expect(studentRows().some((text) => text.includes('Bob'))).toBe(false);
+  });
 });
