@@ -68,7 +68,7 @@ import {
   cyclePeriodTemplates,
   evaluationParticipations,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
 import studentAccess from './src/lib/studentAccess.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
@@ -4231,6 +4231,7 @@ export async function createApp() {
       // accept optional filters from query params
       const filterSchoolId = req.query.schoolId ? parseInt(String(req.query.schoolId)) : null;
       const filterClassId = req.query.classId ? parseInt(String(req.query.classId)) : null;
+      const searchQuery = String(req.query.q || '').trim();
 
       // if non-super_admin requests a specific school, ensure they belong to it
       if (actor.role !== 'super_admin' && filterSchoolId && actor.schoolId && filterSchoolId !== actor.schoolId) {
@@ -4300,6 +4301,17 @@ export async function createApp() {
         oldModelQuery = oldModelQuery.where(eq(students.classId, filterClassId)) as any;
         newModelQuery = newModelQuery.where(eq(students.classId, filterClassId)) as any;
       }
+      if (searchQuery) {
+        const searchPattern = `%${searchQuery}%`;
+        const searchCondition = or(
+          ilike(users.name, searchPattern),
+          ilike(students.firstName, searchPattern),
+          ilike(students.lastName, searchPattern),
+          sql`concat_ws(' ', ${users.name}, ${students.firstName}, ${students.lastName}) ILIKE ${searchPattern}`,
+        );
+        oldModelQuery = oldModelQuery.where(searchCondition) as any;
+        newModelQuery = newModelQuery.where(searchCondition) as any;
+      }
 
       if (actor.role !== 'super_admin') {
         if (!actor.schoolId) {
@@ -4341,8 +4353,8 @@ export async function createApp() {
         }
       }
 
-      const list = Array.from(parentById.values());
-      console.debug('[api/parents] returning parents count:', list.length, 'requestedClassId=', filterClassId, 'requestedSchoolId=', filterSchoolId);
+      const list = Array.from(parentById.values()).slice(0, searchQuery ? 25 : undefined);
+      console.debug('[api/parents] returning parents count:', list.length, 'requestedClassId=', filterClassId, 'requestedSchoolId=', filterSchoolId, 'hasSearch=', Boolean(searchQuery));
       res.json(list);
     } catch (err: any) {
       console.error('Error fetching parents:', err);

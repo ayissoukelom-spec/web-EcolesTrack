@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Class, Student, SystemNotification, User, UserRole } from '../types.ts';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Class, Parent, Student, SystemNotification, User, UserRole } from '../types.ts';
 import { apiFetch, apiFetchBlob } from '../lib/api.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
@@ -36,6 +36,11 @@ export default function NotificationView({
     userId: '',
     classId: '',
   });
+  const [parentSearchQuery, setParentSearchQuery] = useState('');
+  const [parentSearchResults, setParentSearchResults] = useState<Parent[]>([]);
+  const [selectedParent, setSelectedParent] = useState<Parent | null>(null);
+  const [isParentSearchLoading, setIsParentSearchLoading] = useState(false);
+  const parentSearchRequestRef = useRef(0);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -48,7 +53,7 @@ export default function NotificationView({
       title: notifForm.title,
       body: notifForm.body,
       type: notifForm.type,
-      userId: notifForm.recipientMode === 'individual' && notifForm.userId ? parseInt(notifForm.userId) : undefined,
+      userId: notifForm.recipientMode === 'individual' && selectedParent ? selectedParent.userId : undefined,
       classId: notifForm.recipientMode === 'class' && notifForm.classId ? parseInt(notifForm.classId) : undefined,
       files: attachedFiles.length > 0 ? attachedFiles : undefined,
     });
@@ -61,12 +66,50 @@ export default function NotificationView({
       userId: '',
       classId: '',
     });
+    setParentSearchQuery('');
+    setParentSearchResults([]);
+    setSelectedParent(null);
     setAttachedFiles([]);
     
     setTimeout(() => setIsSending(false), 800);
   };
 
-  const parentUsers = usersList.filter((user) => user.role === 'parent');
+  useEffect(() => {
+    if (notifForm.recipientMode !== 'individual') {
+      setParentSearchResults([]);
+      setIsParentSearchLoading(false);
+      return;
+    }
+
+    const query = parentSearchQuery.trim();
+    const requestId = ++parentSearchRequestRef.current;
+    if (query.length < 2) {
+      setParentSearchResults([]);
+      setIsParentSearchLoading(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsParentSearchLoading(true);
+      apiFetch(`/api/parents?q=${encodeURIComponent(query)}`)
+        .then((results) => {
+          if (requestId === parentSearchRequestRef.current) {
+            setParentSearchResults(Array.isArray(results) ? results : []);
+          }
+        })
+        .catch(() => {
+          if (requestId === parentSearchRequestRef.current) setParentSearchResults([]);
+        })
+        .finally(() => {
+          if (requestId === parentSearchRequestRef.current) setIsParentSearchLoading(false);
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [notifForm.recipientMode, parentSearchQuery]);
+
+  const parentLabel = (parent: Parent) => String(parent.name || `${parent.firstName || ''} ${parent.lastName || ''}`).trim() || `Parent #${parent.id}`;
+  const parentStudentLabel = (parent: Parent) => [parent.studentFirstName, parent.studentLastName].filter(Boolean).join(' ').trim();
   const selectedClassParentCount = notifForm.classId
     ? new Set(
       studentsList
@@ -429,7 +472,12 @@ export default function NotificationView({
                           name="notification-recipient-mode"
                           value={mode}
                           checked={notifForm.recipientMode === mode}
-                          onChange={() => setNotifForm({ ...notifForm, recipientMode: mode, userId: '', classId: '' })}
+                          onChange={() => {
+                            setNotifForm({ ...notifForm, recipientMode: mode, userId: '', classId: '' });
+                            setParentSearchQuery('');
+                            setParentSearchResults([]);
+                            setSelectedParent(null);
+                          }}
                           className="accent-indigo-600"
                         />
                         {label}
@@ -456,18 +504,60 @@ export default function NotificationView({
                   )}
 
                   {notifForm.recipientMode === 'individual' && (
-                    <select
-                      aria-label="Parent destinataire"
-                      value={notifForm.userId}
-                      onChange={(e) => setNotifForm({ ...notifForm, userId: e.target.value })}
-                      className="mt-3 w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
-                      required
-                    >
-                      <option value="">Sélectionner un parent</option>
-                      {parentUsers.map((user) => (
-                        <option key={user.id} value={user.id}>{user.name}</option>
-                      ))}
-                    </select>
+                    <div className="mt-3 space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="search"
+                          aria-label="Rechercher un parent"
+                          placeholder="Rechercher un parent..."
+                          value={parentSearchQuery}
+                          onChange={(event) => setParentSearchQuery(event.target.value)}
+                          className="min-w-0 flex-1 px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
+                        />
+                        {parentSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setParentSearchQuery('')}
+                            className="px-3 py-2 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl"
+                          >
+                            Effacer
+                          </button>
+                        )}
+                      </div>
+
+                      {isParentSearchLoading && <p className="text-xs text-slate-400">Recherche en cours...</p>}
+                      {!isParentSearchLoading && parentSearchQuery.trim().length >= 2 && parentSearchResults.length === 0 && (
+                        <p className="text-xs text-slate-500">Aucun parent trouvé</p>
+                      )}
+                      {parentSearchResults.length > 0 && (
+                        <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+                          {parentSearchResults.map((parent) => {
+                            const studentLabel = parentStudentLabel(parent);
+                            return (
+                              <button
+                                type="button"
+                                key={`${parent.id}-${parent.userId}`}
+                                onClick={() => {
+                                  setSelectedParent(parent);
+                                  setNotifForm((previous) => ({ ...previous, userId: String(parent.userId) }));
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-indigo-50"
+                              >
+                                <span className="block font-bold">{parentLabel(parent)}</span>
+                                {studentLabel && <span className="block text-[10px] text-slate-400">Élève : {studentLabel}</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {selectedParent && (
+                        <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+                          <span><strong>Parent choisi :</strong> {parentLabel(selectedParent)}{parentStudentLabel(selectedParent) ? `, élève : ${parentStudentLabel(selectedParent)}` : ''}</span>
+                          <button type="button" onClick={() => { setSelectedParent(null); setNotifForm((previous) => ({ ...previous, userId: '' })); }} className="shrink-0 font-bold text-indigo-700">Changer</button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -550,7 +640,7 @@ export default function NotificationView({
 
                 <button
                   type="submit"
-                  disabled={isSending}
+                  disabled={isSending || (notifForm.recipientMode === 'individual' && !selectedParent)}
                   className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md flex justify-center items-center gap-2 transition-all cursor-pointer"
                   id="btn-broadcast-submit"
                 >
