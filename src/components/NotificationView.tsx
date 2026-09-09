@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { SystemNotification, User, UserRole } from '../types.ts';
-import { apiFetch } from '../lib/api.ts';
+import { apiFetch, apiFetchBlob } from '../lib/api.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
 import { getPublicationLabel } from '../lib/dateFormatting';
@@ -9,7 +9,7 @@ interface NotificationViewProps {
   userRole: UserRole;
   notificationsList: SystemNotification[];
   usersList: User[];
-  onSendNotification: (data: { title: string; body: string; type: string; userId?: number }) => void;
+  onSendNotification: (data: { title: string; body: string; type: string; userId?: number; files?: File[] }) => void;
   onMarkAllAsRead: () => void;
   onNotificationRead?: () => void;
 }
@@ -30,6 +30,9 @@ export default function NotificationView({
     type: 'info',
     userId: '',
   });
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
   const handleBroadcast = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +43,7 @@ export default function NotificationView({
       body: notifForm.body,
       type: notifForm.type,
       userId: notifForm.userId ? parseInt(notifForm.userId) : undefined,
+      files: attachedFiles.length > 0 ? attachedFiles : undefined,
     });
 
     setNotifForm({
@@ -48,8 +52,50 @@ export default function NotificationView({
       type: 'info',
       userId: '',
     });
+    setAttachedFiles([]);
     
     setTimeout(() => setIsSending(false), 800);
+  };
+
+  const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextFiles = Array.from(event.target.files ?? []);
+    setAttachedFiles((previousFiles) => [...previousFiles, ...nextFiles]);
+    event.target.value = '';
+  };
+
+  const removeAttachedFile = (indexToRemove: number) => {
+    setAttachedFiles((previousFiles) => previousFiles.filter((_, index) => index !== indexToRemove));
+  };
+
+  const handleAttachmentDownload = async (notificationId: number, attachmentId: number, fileName: string) => {
+    setAttachmentError(null);
+    setDownloadingAttachmentId(attachmentId);
+
+    try {
+      const blob = await apiFetchBlob(`/api/notifications/${notificationId}/attachments/${attachmentId}`);
+      const objectUrl = URL.createObjectURL(blob);
+      const downloadLink = document.createElement('a');
+      downloadLink.href = objectUrl;
+      downloadLink.download = fileName;
+      downloadLink.target = '_blank';
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (error: any) {
+      const status = error?.status;
+      setAttachmentError(
+        status === 401
+          ? 'Votre session a expiré. Veuillez vous reconnecter.'
+          : status === 403
+            ? 'Vous n’êtes pas autorisé à télécharger cette pièce jointe.'
+            : status === 404
+              ? 'Cette pièce jointe est indisponible.'
+              : 'Le téléchargement de la pièce jointe a échoué.'
+      );
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
   };
 
   const normalizeNotifText = (value?: string) => (value || '').toLowerCase();
@@ -155,6 +201,28 @@ export default function NotificationView({
             <span className="text-[10px] text-slate-400 whitespace-nowrap">Instant</span>
           </div>
           <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{notif.body}</p>
+          {notif.attachments && notif.attachments.length > 0 && (
+            <div className="pt-1 space-y-1">
+              {notif.attachments.map((attachment) => (
+                <button
+                  type="button"
+                  key={attachment.id}
+                  className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 underline underline-offset-2 disabled:cursor-wait disabled:opacity-60"
+                  disabled={downloadingAttachmentId === attachment.id}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleAttachmentDownload(notif.id, attachment.id, attachment.fileName);
+                  }}
+                >
+                  <Mail className="h-3 w-3" />
+                  {downloadingAttachmentId === attachment.id ? 'Téléchargement...' : attachment.fileName}
+                </button>
+              ))}
+            </div>
+          )}
+          {attachmentError && (
+            <p role="alert" className="pt-1 text-[10px] font-semibold text-rose-600">{attachmentError}</p>
+          )}
           <div className="pt-1 flex flex-col gap-1 text-[10px] text-slate-400">
             {publishedAtLabel && (
               <span className="text-slate-500">{publishedAtLabel}</span>
@@ -391,6 +459,35 @@ export default function NotificationView({
                     placeholder="Saisissez votre message d’information majeur à envoyer..."
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none placeholder-slate-400 text-slate-800"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Pièces jointes (PDF, JPG, PNG)
+                  </label>
+                  <input
+                    type="file"
+                    multiple
+                    accept="application/pdf,image/png,image/jpeg"
+                    onChange={handleFileSelection}
+                    className="w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-indigo-700 file:font-bold"
+                  />
+                  {attachedFiles.length > 0 && (
+                    <div className="mt-2 space-y-1.5 text-[10px] text-slate-500">
+                      {attachedFiles.map((file, index) => (
+                        <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <span className="truncate">{file.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeAttachedFile(index)}
+                            className="text-[10px] font-bold text-rose-600 hover:text-rose-700"
+                          >
+                            Retirer
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <button

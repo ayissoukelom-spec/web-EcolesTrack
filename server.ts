@@ -58,6 +58,7 @@ import {
   grades,
   absences,
   absenceJustifications,
+  notificationAttachments,
   notifications,
   auditEvents,
   schoolTerms,
@@ -545,6 +546,9 @@ export async function createApp() {
   app.use(express.json());
 
   const uploadStorageDir = path.join(process.cwd(), 'uploads', 'absence-justifications');
+  const notificationUploadStorageDir = path.join(process.cwd(), 'uploads', 'notification-attachments');
+
+  await fsPromises.mkdir(notificationUploadStorageDir, { recursive: true });
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
 
   if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
@@ -618,6 +622,89 @@ export async function createApp() {
       console.error('❌ Multer error for absence justification upload:', err);
       return res.status(400).json({ error: err.message || 'Invalid file upload' });
     });
+  };
+
+  const notificationUpload = multer({
+    storage: multer.diskStorage({
+      destination: notificationUploadStorageDir,
+      filename: (_req, file, cb) => {
+        const randomSuffix = crypto.randomBytes(16).toString('hex');
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${randomSuffix}-${safeName}`);
+      },
+    }),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowedExtensionsByMime: Record<string, string[]> = {
+        'application/pdf': ['.pdf'],
+        'image/png': ['.png'],
+        'image/jpeg': ['.jpg', '.jpeg'],
+      };
+      const allowedExtensions = allowedExtensionsByMime[file.mimetype];
+      const extension = path.extname(file.originalname).toLowerCase();
+      if (!allowedExtensions || !allowedExtensions.includes(extension)) {
+        return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+
+  const handleNotificationUpload = (req: any, res: any, next: any) => {
+    notificationUpload.array('files', 5)(req, res, (err: any) => {
+      if (!err) {
+        const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+        console.log('📎 Notification attachment upload request', {
+          contentType: req.headers['content-type'] || null,
+          bodyKeys: Object.keys(req.body || {}),
+          uploadedFilesCount: uploadedFiles.length,
+          fileNames: uploadedFiles.map((f: any) => f?.originalname || '(unknown)'),
+          totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
+        });
+        req.notificationFiles = uploadedFiles;
+        return next();
+      }
+
+      if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
+        console.warn('⚠️ Expected files[] field not found for notification upload; trying legacy single file field', { message: err.message });
+        return notificationUpload.single('file')(req, res, (legacyErr: any) => {
+          if (legacyErr) {
+            void cleanupUploadedNotificationFiles(Array.isArray(req.files) ? req.files : req.file ? [req.file] : [])
+              .finally(() => {
+                console.error('❌ Multer error for notification attachment upload:', legacyErr);
+                res.status(400).json({ error: legacyErr.message || 'Invalid file upload' });
+              });
+            return;
+          }
+          const uploadedFiles = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
+          req.notificationFiles = uploadedFiles;
+          return next();
+        });
+      }
+
+      void cleanupUploadedNotificationFiles(Array.isArray(req.files) ? req.files : req.file ? [req.file] : [])
+        .finally(() => {
+          console.error('❌ Multer error for notification attachment upload:', err);
+          res.status(400).json({ error: err.message || 'Invalid file upload' });
+        });
+    });
+  };
+
+  const cleanupUploadedNotificationFiles = async (uploadedFiles: any[] = []) => {
+    if (!Array.isArray(uploadedFiles) || uploadedFiles.length === 0) return;
+
+    await Promise.allSettled(
+      uploadedFiles.map(async (file: any) => {
+        if (!file || !file.path) return;
+        try {
+          await fsPromises.rm(file.path, { force: true });
+        } catch (cleanupErr) {
+          console.warn('Failed to clean uploaded notification file after DB failure:', {
+            path: file.path,
+            error: cleanupErr instanceof Error ? cleanupErr.message : cleanupErr,
+          });
+        }
+      })
+    );
   };
 
   // Global debug middleware for request/response tracing
@@ -7497,9 +7584,83 @@ if (uniqueParentIds.length > 0) {
         .where(eq(notifications.userId, actor.id))
         .orderBy(desc(notifications.id));
 
-      res.json(userNotifications);
+      if (userNotifications.length === 0) {
+        return res.json([]);
+      }
+
+      const notificationIds = userNotifications.map((notification) => notification.id);
+      const attachmentRows = notificationIds.length > 0
+        ? await db.select().from(notificationAttachments).where(inArray(notificationAttachments.notificationId, notificationIds))
+        : [];
+
+      const attachmentsByNotificationId = attachmentRows.reduce((acc: Record<number, any[]>, attachment) => {
+        const key = Number(attachment.notificationId);
+        if (!acc[key]) acc[key] = [];
+        acc[key].push({
+          id: attachment.id,
+          notificationId: attachment.notificationId,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          fileSize: attachment.fileSize,
+          uploadedBy: attachment.uploadedBy,
+          uploadedAt: attachment.uploadedAt,
+        });
+        return acc;
+      }, {} as Record<number, any[]>);
+
+      res.json(userNotifications.map((notification) => ({
+        ...notification,
+        attachments: attachmentsByNotificationId[notification.id] ?? [],
+      })));
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to load notifications feed' });
+    }
+  });
+
+  app.get('/api/notifications/:notificationId/attachments/:attachmentId', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const notificationId = parseInt(req.params.notificationId, 10);
+      const attachmentId = parseInt(req.params.attachmentId, 10);
+      if (!Number.isFinite(notificationId) || !Number.isFinite(attachmentId)) {
+        return res.status(400).json({ error: 'Invalid notification or attachment id' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const [notification] = await db.select().from(notifications).where(eq(notifications.id, notificationId));
+      if (!notification) return res.status(404).json({ error: 'Notification not found' });
+
+      const [attachment] = await db.select().from(notificationAttachments)
+        .where(and(eq(notificationAttachments.id, attachmentId), eq(notificationAttachments.notificationId, notificationId)));
+      if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+
+      const [recipient] = await db.select({ id: users.id, schoolId: users.schoolId }).from(users).where(eq(users.id, notification.userId));
+      const isOwner = notification.userId === actor.id;
+      const isSchoolAdminAllowed = actor.role === 'school_admin' && actor.schoolId != null && recipient?.schoolId === actor.schoolId;
+      const isSuperAdminAllowed = actor.role === 'super_admin';
+      if (!isOwner && !isSchoolAdminAllowed && !isSuperAdminAllowed) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const safeFileName = path.basename(String(attachment.filePath));
+      const absoluteFilePath = path.join(notificationUploadStorageDir, safeFileName);
+      try {
+        await fsPromises.access(absoluteFilePath);
+      } catch {
+        return res.status(404).json({ error: 'Attachment file not found on disk' });
+      }
+
+      res.download(absoluteFilePath, attachment.fileName, (downloadErr) => {
+        if (downloadErr && !res.headersSent) {
+          console.error('Failed to send notification attachment download:', downloadErr);
+          res.status(500).json({ error: 'Failed to send attachment file' });
+        }
+      });
+    } catch (err: any) {
+      console.error('Failed to download notification attachment:', err);
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -7543,17 +7704,34 @@ if (uniqueParentIds.length > 0) {
   });
 
   // Send system-wide / simulated push notice
-  app.post('/api/notifications/send', requireAuth, async (req: AuthRequest, res) => {
+  app.post('/api/notifications/send', requireAuth, handleNotificationUpload, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { title, body, type, userId } = req.body;
+      const rawBody = req.body ?? {};
+      const { title, body, type, userId } = rawBody;
       if (!title || !body || !type) return res.status(400).json({ error: 'Missing keys' });
 
+      const uploadedFiles = Array.isArray((req as any).notificationFiles) ? (req as any).notificationFiles as any[] : [];
+
+      const cleanupAndRethrow = async (err: any) => {
+        try {
+          await cleanupUploadedNotificationFiles(uploadedFiles);
+        } catch (cleanupErr) {
+          console.warn('Notification attachment cleanup failed after DB error:', cleanupErr);
+        }
+        throw err;
+      };
+
+      const rejectAfterUpload = async (status: number, error: string) => {
+        await cleanupUploadedNotificationFiles(uploadedFiles);
+        return res.status(status).json({ error });
+      };
+
       const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor) return rejectAfterUpload(404, 'User not found');
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return rejectAfterUpload(403, 'Forbidden');
       if (actor.role === 'school_admin' && actor.schoolId == null) {
-        return res.status(403).json({ error: 'Forbidden: missing school context' });
+        return rejectAfterUpload(403, 'Forbidden: missing school context');
       }
 
       let targetUserIds: number[] = [];
@@ -7561,13 +7739,13 @@ if (uniqueParentIds.length > 0) {
       if (userId) {
         // Sending to specific user - validate school permission if school_admin
         const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
-        if (!targetUser) return res.status(404).json({ error: 'Target user not found' });
+        if (!targetUser) return rejectAfterUpload(404, 'Target user not found');
         
         if (actor.role === 'school_admin') {
           if (targetUser.schoolId !== actor.schoolId) {
             const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
             if (!membership) {
-              return res.status(403).json({ error: 'Cannot send notification to user in another school' });
+              return rejectAfterUpload(403, 'Cannot send notification to user in another school');
             }
           }
         }
@@ -7590,36 +7768,53 @@ if (uniqueParentIds.length > 0) {
         targetUserIds = parentsList.map(p => p.userId);
       }
 
-      for (const id of targetUserIds) {
-  await db.insert(notifications).values({
-    userId: id,
-    title,
-    body,
-    type,
-  });
+      try {
+        for (const id of targetUserIds) {
+          const [insertedNotification] = await db.insert(notifications).values({
+            userId: id,
+            title,
+            body,
+            type,
+          }).returning();
 
-  const infoNotificationPayload = {
-    parentId: String(id),
-    title,
-    message: body,
-    category: "info",
-    metadata: {
-      target: "info",
-      deepLink: "ecoletrack://dashboard",
-    },
-    dedupeKey: `info-${Date.now()}-${id}`,
-  };
-  const { signature, timestamp } = signInternalPayload(infoNotificationPayload);
-  await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "X-Internal-Signature": signature,
-    "X-Internal-Timestamp": timestamp,
-  },
-  body: JSON.stringify(infoNotificationPayload),
-});
-}
+          if (uploadedFiles.length > 0) {
+            await db.insert(notificationAttachments).values(
+              uploadedFiles.map((file: any) => ({
+                notificationId: insertedNotification.id,
+                fileName: file.originalname,
+                filePath: file.filename,
+                mimeType: file.mimetype,
+                fileSize: Number(file.size),
+                uploadedBy: req.user!.id!,
+              }))
+            );
+          }
+
+          const infoNotificationPayload = {
+            parentId: String(id),
+            title,
+            message: body,
+            category: "info",
+            metadata: {
+              target: "info",
+              deepLink: "ecoletrack://dashboard",
+            },
+            dedupeKey: `info-${Date.now()}-${id}`,
+          };
+          const { signature, timestamp } = signInternalPayload(infoNotificationPayload);
+          await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Internal-Signature": signature,
+              "X-Internal-Timestamp": timestamp,
+            },
+            body: JSON.stringify(infoNotificationPayload),
+          });
+        }
+      } catch (err: any) {
+        await cleanupAndRethrow(err);
+      }
 
       res.json({ success: true, message: `Notification successfully routed to ${targetUserIds.length} users.` });
   } catch (err: any) {

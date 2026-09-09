@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, getSimulationHeaders, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
+import { apiFetch, apiFetchBlob, getSimulationHeaders, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -138,5 +138,36 @@ describe('apiFetch', () => {
     expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
     expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiFetchBlob', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: new MemoryStorage(),
+    });
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(new Blob(['pdf content'], { type: 'application/pdf' })),
+      } as any)),
+    });
+  });
+
+  it('sends the stored Bearer token and returns the response as a Blob', async () => {
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+
+    const blob = await apiFetchBlob('/api/notifications/12/attachments/34');
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe('application/pdf');
+    const fetchMock = globalThis.fetch as any;
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/notifications/12/attachments/34');
+    expect(url).not.toContain('jwt-token');
+    expect((options.headers as Record<string, string>).Authorization).toBe('Bearer jwt-token');
   });
 });

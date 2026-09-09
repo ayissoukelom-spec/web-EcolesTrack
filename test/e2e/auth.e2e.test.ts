@@ -1,5 +1,7 @@
 import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Mock DB and Auth middleware before importing the server so the real server
 // uses our test doubles when startServer() runs on import.
@@ -17,6 +19,7 @@ const FIXTURES = {
     { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
     { id: 10, uid: 'teacher-sim', email: 'teacher@x.test', name: 'TeacherSim', role: 'teacher', schoolId: 10, isDeleted: false },
+    { id: 11, uid: 'other-school-admin-uid', email: 'other-admin@x.test', name: 'OtherSchoolAdmin', role: 'school_admin', schoolId: 20, isDeleted: false },
   ],
   schools: [
     { id: 10, name: 'Test School' },
@@ -53,6 +56,7 @@ const FIXTURES = {
     { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
   ],
   absenceJustifications: [],
+  notificationAttachments: [],
   notifications: [],
   localAuths: [],
   userSchools: [
@@ -71,6 +75,10 @@ function resetFixtures() {
 }
 
 function createMockDb() {
+  const db: any = {
+    __failNextNotificationAttachmentInsert: false,
+  };
+
   // Minimal mock that supports the select/insert/update/delete chains used
   // by server.ts. It inspects query conditions to match rows for uid, email,
   // id and schoolId, and keeps fixture state in memory.
@@ -322,6 +330,7 @@ function createMockDb() {
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
       if (lower.includes('absencejustifications')) return 'absenceJustifications';
+      if (lower.includes('notificationattachments')) return 'notificationAttachments';
       if (lower.includes('notifications')) return 'notifications';
       if (lower.includes('auditevents')) return 'auditEvents';
     }
@@ -342,6 +351,7 @@ function createMockDb() {
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('status')) return 'schoolClasses';
       if (keys.includes('studentid') && keys.includes('date') && keys.includes('period') && keys.includes('isjustified')) return 'absences';
       if (keys.includes('absenceid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'absenceJustifications';
+      if (keys.includes('notificationid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'notificationAttachments';
       if (keys.includes('type') && keys.includes('userid') && keys.includes('title')) return 'notifications';
     }
 
@@ -359,6 +369,7 @@ function createMockDb() {
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
       if (lower.includes('absencejustifications')) return 'absenceJustifications';
+      if (lower.includes('notificationattachments')) return 'notificationAttachments';
       if (lower.includes('notifications')) return 'notifications';
     }
 
@@ -381,6 +392,7 @@ function createMockDb() {
       : tableName === 'absences' ? FIXTURES.absences
       : tableName === 'absenceJustifications' ? FIXTURES.absenceJustifications
       : tableName === 'notifications' ? FIXTURES.notifications
+      : tableName === 'notificationAttachments' ? FIXTURES.notificationAttachments
       : []) as any[];
 
     if (!cond) return rows;
@@ -416,9 +428,11 @@ function createMockDb() {
       if (conditions.ids !== undefined) {
         const idMatchTarget = tableName === 'parents' ? Number(row.studentId)
           : tableName === 'absences' ? Number(row.studentId)
+          : tableName === 'notificationAttachments' ? Number(row.notificationId)
           : Number(row.id);
         if (!Array.isArray(conditions.ids) || !conditions.ids.includes(idMatchTarget)) return false;
       }
+      if (conditions.notificationId !== undefined && row.notificationId !== conditions.notificationId) return false;
       if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
       if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
       if (conditions.studentId !== undefined && row.studentId !== conditions.studentId) return false;
@@ -441,7 +455,7 @@ function createMockDb() {
     });
   };
 
-  const db = {
+  Object.assign(db, {
     select(selectSpec?: any) {
       const builder: any = {
         _selected: selectSpec,
@@ -530,6 +544,31 @@ function createMockDb() {
         const conditions = combinedConditions;
         const fromName = resolveTableName(builder._table);
 
+          if (fromName === 'notificationAttachments' && builder._cond) {
+            const queryChunks: any[] = [];
+            const collectQueryChunks = (value: any) => {
+              if (!value || typeof value !== 'object') return;
+              if (Array.isArray(value.queryChunks)) {
+                value.queryChunks.forEach((chunk: any) => {
+                  if (chunk && typeof chunk === 'object' && Array.isArray(chunk.queryChunks)) {
+                    collectQueryChunks(chunk);
+                  } else {
+                    queryChunks.push(chunk);
+                  }
+                });
+              }
+            };
+            collectQueryChunks(builder._cond);
+            for (let index = 0; index < queryChunks.length; index += 1) {
+              const column = queryChunks[index];
+              if (column?.name === 'notification_id') {
+                const value = queryChunks.slice(index + 1).find((chunk: any) => chunk?.constructor?.name === 'Param');
+                if (value) conditions.notificationId = Number(value.value);
+              }
+            }
+            rows = filterTableRows(builder._table, conditions);
+          }
+
         if (fromName === 'classes' && conditions.userId !== undefined) {
           rows = rows.filter((row) => {
             return FIXTURES.classTeachers.some((assignment) => {
@@ -582,9 +621,42 @@ function createMockDb() {
     },
     insert() {
       return {
-        values: (obj: any) => ({
-          returning: async () => {
-            // crud: infers insert target by inspecting keys
+        values: (obj: any) => {
+          const executeInsert = async () => {
+            if (Array.isArray(obj)) {
+              const inserted: any[] = [];
+              if (db.__failNextNotificationAttachmentInsert) {
+                const hasAttachmentRows = obj.some((item) => item && item.notificationId != null);
+                if (hasAttachmentRows) {
+                  throw new Error('Simulated DB failure for notification attachments');
+                }
+              }
+              for (const item of obj) {
+                if (item == null) continue;
+                if (item.notificationId != null) {
+                  const nextId = FIXTURES.notificationAttachments.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+                  const row = { id: nextId, ...item };
+                  FIXTURES.notificationAttachments.push(row as any);
+                  inserted.push(row);
+                  continue;
+                }
+                if (item.userId != null && item.type != null) {
+                  const nextId = FIXTURES.notifications.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+                  const row = { id: nextId, ...item };
+                  FIXTURES.notifications.push(row as any);
+                  inserted.push(row);
+                  continue;
+                }
+                if (item.absenceId != null || item.filePath != null || item.fileName != null) {
+                  FIXTURES.absenceJustifications.push(item as any);
+                  inserted.push(item);
+                  continue;
+                }
+                inserted.push(item);
+              }
+              return inserted;
+            }
+
             if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
               FIXTURES.userSchools.push(obj as any);
               return [obj];
@@ -603,17 +675,49 @@ function createMockDb() {
               FIXTURES.users.push(row as any);
               return [row];
             }
+            if (obj.notificationId != null) {
+              if (db.__failNextNotificationAttachmentInsert) {
+                throw new Error('Simulated DB failure for notification attachments');
+              }
+              const nextId = FIXTURES.notificationAttachments.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, ...obj };
+              FIXTURES.notificationAttachments.push(row as any);
+              return [row];
+            }
             if (obj.absenceId !== undefined || obj.filePath !== undefined || obj.fileName !== undefined) {
               FIXTURES.absenceJustifications.push(obj as any);
               return [obj];
             }
             if (obj.userId !== undefined && obj.type !== undefined) {
-              FIXTURES.notifications.push(obj as any);
-              return [obj];
+              const nextId = FIXTURES.notifications.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, ...obj };
+              FIXTURES.notifications.push(row as any);
+              return [row];
             }
             return [obj];
-          },
-        }),
+          };
+
+          return {
+            returning: async () => executeInsert(),
+            then: async (onfulfilled?: any, onrejected?: any) => {
+              try {
+                const result = await executeInsert();
+                return onfulfilled ? onfulfilled(result) : result;
+              } catch (error) {
+                if (onrejected) return onrejected(error);
+                throw error;
+              }
+            },
+            catch: async (onrejected?: any) => {
+              try {
+                return await executeInsert();
+              } catch (error) {
+                if (onrejected) return onrejected(error);
+                throw error;
+              }
+            },
+          };
+        },
       };
     },
     update(table?: any) {
@@ -643,6 +747,7 @@ function createMockDb() {
               if (tableName === 'schoolClasses') return updateRow(FIXTURES.schoolClasses);
               if (tableName === 'absences') return updateRow(FIXTURES.absences);
               if (tableName === 'notifications') return updateRow(FIXTURES.notifications);
+              if (tableName === 'notificationAttachments') return updateRow(FIXTURES.notificationAttachments);
               if (tableName === 'auditEvents') return updateRow(FIXTURES.auditEvents);
             }
             return [];
@@ -704,7 +809,7 @@ function createMockDb() {
         },
       };
     },
-  } as any;
+  });
   // Ensure basic execute helper used by db helpers is present
   (db as any).execute = async (_sql: any) => [];
   return db;
@@ -821,6 +926,7 @@ let app: any = null;
 describe('E2E security: auth & privilege checks', () => {
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
+    process.env.INTERNAL_SECRET = 'test-internal-secret';
     // Ensure TextEncoder/TextDecoder exist for esbuild used by Vite
     try {
       const util = await import('util');
@@ -1175,6 +1281,293 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ title: 'Oops', body: 'This should fail', type: 'alert' });
 
     expect(res.status).toBe(403);
+  });
+
+  it('3q1. school_admin can send a notification with PDF and PNG attachments', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF');
+    const pngBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAF', 'base64');
+
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Important document')
+      .field('body', 'Veuillez consulter le document joint')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'notice.pdf', contentType: 'application/pdf' })
+      .attach('files', pngBuffer, { filename: 'image.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(FIXTURES.notifications.length).toBeGreaterThan(0);
+    expect(FIXTURES.notificationAttachments.length).toBe(2);
+  });
+
+  it('3q2. parent GET /api/notifications includes attachment metadata', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF');
+
+    await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Document de réunion')
+      .field('body', 'Pièce jointe disponible')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'reunion.pdf', contentType: 'application/pdf' });
+
+    const res = await request(app)
+      .get('/api/notifications')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0].attachments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fileName: 'reunion.pdf' }),
+    ]));
+  });
+
+  it('3q3. attachment download rejects attachments crossed between two notifications', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF');
+
+    await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Notification A')
+      .field('body', 'Attachment A')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'attachment-a.pdf', contentType: 'application/pdf' });
+
+    await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Notification B')
+      .field('body', 'Attachment B')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'attachment-b.pdf', contentType: 'application/pdf' });
+
+    const notificationA = FIXTURES.notifications.find((notification: any) => notification.title === 'Notification A');
+    const notificationB = FIXTURES.notifications.find((notification: any) => notification.title === 'Notification B');
+    const attachmentA = FIXTURES.notificationAttachments.find((attachment: any) => attachment.fileName === 'attachment-a.pdf');
+    const attachmentB = FIXTURES.notificationAttachments.find((attachment: any) => attachment.fileName === 'attachment-b.pdf');
+
+    expect(notificationA).toBeDefined();
+    expect(notificationB).toBeDefined();
+    expect(attachmentA).toMatchObject({ notificationId: notificationA.id });
+    expect(attachmentB).toMatchObject({ notificationId: notificationB.id });
+
+    const resAWithAttachmentB = await request(app)
+      .get(`/api/notifications/${notificationA.id}/attachments/${attachmentB.id}`)
+      .set('Authorization', 'Bearer token-school');
+    const resBWithAttachmentA = await request(app)
+      .get(`/api/notifications/${notificationB.id}/attachments/${attachmentA.id}`)
+      .set('Authorization', 'Bearer token-school');
+
+    expect(resAWithAttachmentB.status).toBe(404);
+    expect(resBWithAttachmentA.status).toBe(404);
+  });
+
+  it('3q4. notification upload cleans uploaded files when DB insert fails', async () => {
+    const dir = path.join(process.cwd(), 'uploads', 'notification-attachments');
+    fs.mkdirSync(dir, { recursive: true });
+    const existingFilePath = path.join(dir, 'preexisting-notification-file.pdf');
+    fs.writeFileSync(existingFilePath, 'preexisting file');
+    const beforeFileNames = new Set(fs.readdirSync(dir));
+    (mockDb.db as any).__failNextNotificationAttachmentInsert = true;
+
+    const pdfBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF');
+    try {
+      const res = await request(app)
+        .post('/api/notifications/send')
+        .set('Authorization', 'Bearer token-school')
+        .field('title', 'Cleanup test')
+        .field('body', 'Should clean uploaded files')
+        .field('type', 'info')
+        .field('userId', '6')
+        .attach('files', pdfBuffer, { filename: `cleanup-test-${Date.now()}.pdf`, contentType: 'application/pdf' });
+
+      expect(res.status).toBe(500);
+      expect(fs.existsSync(existingFilePath)).toBe(true);
+      expect(fs.readdirSync(dir).filter((fileName) => !beforeFileNames.has(fileName))).toEqual([]);
+    } finally {
+      (mockDb.db as any).__failNextNotificationAttachmentInsert = false;
+      fs.rmSync(existingFilePath, { force: true });
+    }
+  });
+
+  it('3q5. text-only JSON notifications remain compatible without attachments', async () => {
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Text only', body: 'No attachment', type: 'info', userId: 6 });
+
+    expect(res.status).toBe(200);
+    const createdNotification = FIXTURES.notifications.find((notification: any) => notification.title === 'Text only');
+    expect(createdNotification).toBeDefined();
+    expect(FIXTURES.notificationAttachments.filter((attachment: any) => attachment.notificationId === createdNotification.id)).toHaveLength(0);
+
+    const feed = await request(app)
+      .get('/api/notifications')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    const textNotification = feed.body.find((notification: any) => notification.id === createdNotification.id);
+    expect(textNotification.attachments).toEqual([]);
+  });
+
+  it('3q6. JPG and JPEG attachments are accepted', async () => {
+    const imageBuffer = Buffer.from('image bytes');
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'JPEG formats')
+      .field('body', 'Images')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', imageBuffer, { filename: 'photo.jpg', contentType: 'image/jpeg' })
+      .attach('files', imageBuffer, { filename: 'photo.jpeg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(200);
+    expect(FIXTURES.notificationAttachments.filter((attachment: any) => ['photo.jpg', 'photo.jpeg'].includes(attachment.fileName))).toHaveLength(2);
+  });
+
+  it('3q7. five attachments are accepted', async () => {
+    const imageBuffer = Buffer.from('image bytes');
+    let uploadRequest = request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Five files')
+      .field('body', 'Maximum accepted count')
+      .field('type', 'info')
+      .field('userId', '6');
+    for (let index = 1; index <= 5; index += 1) {
+      uploadRequest = uploadRequest.attach('files', imageBuffer, { filename: `file-${index}.png`, contentType: 'image/png' }) as any;
+    }
+
+    const res = await uploadRequest;
+    expect(res.status).toBe(200);
+    expect(FIXTURES.notificationAttachments.filter((attachment: any) => attachment.fileName.startsWith('file-'))).toHaveLength(5);
+  });
+
+  it('3q8. six attachments are rejected with HTTP 400', async () => {
+    const imageBuffer = Buffer.from('image bytes');
+    let uploadRequest = request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Six files')
+      .field('body', 'Too many files')
+      .field('type', 'info')
+      .field('userId', '6');
+    for (let index = 1; index <= 6; index += 1) {
+      uploadRequest = uploadRequest.attach('files', imageBuffer, { filename: `too-many-${index}.png`, contentType: 'image/png' }) as any;
+    }
+
+    const res = await uploadRequest;
+    expect(res.status).toBe(400);
+  });
+
+  it('3q9. oversized and unsupported notification files are rejected with HTTP 400', async () => {
+    const oversizedBuffer = Buffer.alloc(5 * 1024 * 1024 + 1, 'a');
+    const oversizedRes = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Oversized file')
+      .field('body', 'Too large')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', oversizedBuffer, { filename: 'large.pdf', contentType: 'application/pdf' });
+
+    const unsupportedRes = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Unsupported file')
+      .field('body', 'Wrong MIME')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', Buffer.from('text'), { filename: 'notes.txt', contentType: 'text/plain' });
+
+    expect(oversizedRes.status).toBe(400);
+    expect(unsupportedRes.status).toBe(400);
+  });
+
+  it('3q10. attachment extension and MIME must match', async () => {
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Mismatched type')
+      .field('body', 'Wrong extension')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', Buffer.from('not a png'), { filename: 'not-a-png.txt', contentType: 'image/png' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('3q11. authorized parent can download an attachment', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.4\nparent download');
+    await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Parent download')
+      .field('body', 'Download')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'parent-download.pdf', contentType: 'application/pdf' });
+    const notification = FIXTURES.notifications.find((row: any) => row.title === 'Parent download');
+    const attachment = FIXTURES.notificationAttachments.find((row: any) => row.fileName === 'parent-download.pdf');
+
+    const res = await request(app)
+      .get(`/api/notifications/${notification.id}/attachments/${attachment.id}`)
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/^application\/pdf/);
+    expect(res.body).toEqual(pdfBuffer);
+  });
+
+  it('3q12. attachment download enforces exact actor authorization statuses', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.4\nauthorized roles');
+    await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .field('title', 'Role authorization')
+      .field('body', 'Download')
+      .field('type', 'info')
+      .field('userId', '6')
+      .attach('files', pdfBuffer, { filename: 'role-authorization.pdf', contentType: 'application/pdf' });
+    const notification = FIXTURES.notifications.find((row: any) => row.title === 'Role authorization');
+    const attachment = FIXTURES.notificationAttachments.find((row: any) => row.fileName === 'role-authorization.pdf');
+    const url = `/api/notifications/${notification.id}/attachments/${attachment.id}`;
+
+    const unauthenticated = await request(app).get(url);
+    const unauthorizedParent = await request(app)
+      .get(url)
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent-no-school')
+      .set('x-simulated-email', 'parent-noschool@x.test');
+    const sameSchoolAdmin = await request(app).get(url).set('Authorization', 'Bearer token-school');
+    const otherSchoolAdmin = await request(app)
+      .get(url)
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'other-school-admin-uid')
+      .set('x-simulated-email', 'other-admin@x.test')
+      .set('x-simulated-school-id', '20');
+    const superAdmin = await request(app).get(url).set('Authorization', 'Bearer token-super');
+
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthorizedParent.status).toBe(403);
+    expect(sameSchoolAdmin.status).toBe(200);
+    expect(otherSchoolAdmin.status).toBe(403);
+    expect(superAdmin.status).toBe(200);
   });
 
   it('3r. school_admin cannot change a student to another school via PUT /api/students/:id', async () => {
