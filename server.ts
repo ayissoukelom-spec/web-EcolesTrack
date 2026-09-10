@@ -587,6 +587,35 @@ function verifyInternalJustificationAuth(req: any, res: any, next: any) {
   return next();
 }
 
+function verifyInternalNotificationAttachmentRequest(req: any, res: any): boolean {
+  const signature = req.headers['x-internal-signature'];
+  const timestamp = req.headers['x-internal-timestamp'];
+  const internalSecret = process.env.INTERNAL_SECRET;
+  const attachmentId = String(req.params.attachmentId ?? '');
+
+  if (!internalSecret || !internalSecret.trim() || typeof signature !== 'string' || typeof timestamp !== 'string') {
+    res.status(401).json({ error: 'Invalid internal authentication' });
+    return false;
+  }
+
+  const requestTime = Number(timestamp);
+  if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
+    res.status(401).json({ error: 'Expired internal authentication' });
+    return false;
+  }
+
+  const payload = JSON.stringify({ attachmentId });
+  const hmac = crypto.createHmac('sha256', internalSecret);
+  hmac.update(`${payload}${timestamp}`);
+  const expectedSignature = hmac.digest('hex');
+  if (signature.length !== expectedSignature.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    res.status(401).json({ error: 'Invalid internal authentication' });
+    return false;
+  }
+
+  return true;
+}
+
 export async function createApp() {
   const app = express();
 
@@ -692,6 +721,48 @@ export async function createApp() {
       return next();
     });
   };
+
+  app.get('/api/internal/notification-attachment/:attachmentId', async (req: any, res: any) => {
+    if (!verifyInternalNotificationAttachmentRequest(req, res)) return;
+
+    const attachmentId = parseInt(req.params.attachmentId, 10);
+    if (!Number.isInteger(attachmentId)) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    try {
+      const [attachment] = await db
+        .select()
+        .from(notificationAttachments)
+        .where(eq(notificationAttachments.id, attachmentId));
+      if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+
+      const safeFileName = path.basename(String(attachment.filePath));
+      const absoluteFilePath = path.resolve(notificationUploadStorageDir, safeFileName);
+      const storageRoot = path.resolve(notificationUploadStorageDir) + path.sep;
+      if (!absoluteFilePath.startsWith(storageRoot)) {
+        return res.status(404).json({ error: 'Attachment file not found on disk' });
+      }
+
+      try {
+        await fsPromises.access(absoluteFilePath);
+      } catch {
+        return res.status(404).json({ error: 'Attachment file not found on disk' });
+      }
+
+      return res.sendFile(absoluteFilePath, {
+        headers: { 'Content-Type': attachment.mimeType },
+      }, (sendError: any) => {
+        if (sendError && !res.headersSent) {
+          console.error('Failed to send internal notification attachment:', sendError);
+          res.status(500).json({ error: 'Failed to send attachment file' });
+        }
+      });
+    } catch (err: any) {
+      console.error('Failed to serve internal notification attachment:', err?.message || err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   const notificationUpload = multer({
     storage: multer.diskStorage({
