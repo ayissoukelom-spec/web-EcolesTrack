@@ -84,7 +84,7 @@ describe('AdminModal class groups synchronization', () => {
     userRole: 'super_admin',
     currentSchoolId: null,
     subjectsList: [],
-    classGroups: [
+    groupPresets: [
       { id: 'ceg', name: 'CEG (Collège)', classNames: ['6ème', '5ème', '4ème'] },
       { id: 'lycee', name: 'Lycée', classNames: ['Lycée'] },
     ],
@@ -159,14 +159,14 @@ describe('AdminModal class groups synchronization', () => {
     const mockSetSchoolForm = vi.fn();
     
     // Create a class group where '6ème' appears in both 'ceg' and 'all-classes' groups
-    const classGroups = [
+    const groupPresets = [
       { id: 'ceg', name: 'CEG', classNames: ['6ème', '5ème'] },
       { id: 'all', name: 'All Classes', classNames: ['6ème', '4ème', 'Lycée'] },
     ];
 
     const props = {
       ...createBaseProps(),
-      classGroups,
+      groupPresets,
       schoolForm: {
         ...createBaseProps().schoolForm,
         selectedClassGroups: ['ceg', 'all'],

@@ -54,7 +54,7 @@ export default function AdminModal(props: any) {
     educationLevels = [],
     enabledEducationCycleIds = [],
     schoolCyclesLoaded = false,
-    classGroups = [],
+    groupPresets = [],
     subjectGroups = [],
   } = props;
   const { fieldErrors, setFieldErrors } = props;
@@ -134,7 +134,7 @@ export default function AdminModal(props: any) {
     if (!groupIds || groupIds.length === 0) return [] as string[];
     const normalizedAvailable = new Set(availableClassNames.map((name: string) => name.toLowerCase()));
     const result = Array.from(new Set(groupIds.flatMap((groupId) => {
-      const selectedGroup = classGroups.find((group: any) => String(group.id || '') === String(groupId));
+      const selectedGroup = groupPresets.find((group: any) => String(group.id || '') === String(groupId));
       if (!selectedGroup || !Array.isArray(selectedGroup.classNames)) return [] as string[];
       return selectedGroup.classNames
         .map((name: any) => String(name || '').trim())
@@ -449,7 +449,7 @@ export default function AdminModal(props: any) {
               <fieldset className="space-y-3">
                 <legend className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Groupes de classes</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3">
-                  {classGroups.map((group: any) => {
+                  {groupPresets.map((group: any) => {
                     const isSelected = (schoolForm.selectedClassGroups || []).includes(String(group.id));
                     return (
                       <label key={group.id} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">

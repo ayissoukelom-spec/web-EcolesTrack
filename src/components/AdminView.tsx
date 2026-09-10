@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 
 import { sortClasses } from '../lib/classOrdering';
-import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
+import { getClassGroupsVisibleToSchool, isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
@@ -526,7 +526,7 @@ export default function AdminView({
   ];
   const defaultSubjectGroups: any[] = [];
   const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
-  const [classGroups, setClassGroups] = useState<any[]>(() => {
+  const [groupPresets, setGroupPresets] = useState<any[]>(() => {
     if (typeof window === 'undefined') return defaultClassGroups;
     try {
       const stored = window.localStorage.getItem('ecoletrack-class-groups');
@@ -627,8 +627,8 @@ export default function AdminView({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('ecoletrack-class-groups', JSON.stringify(classGroups));
-  }, [classGroups]);
+    window.localStorage.setItem('ecoletrack-class-groups', JSON.stringify(groupPresets));
+  }, [groupPresets]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -909,6 +909,9 @@ export default function AdminView({
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
+  const activeClassGroups = superAdminSchoolFilterId == null
+    ? []
+    : getClassGroupsVisibleToSchool(groupPresets, studentFilterClasses || [], superAdminSchoolFilterId);
 
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
 
@@ -939,9 +942,9 @@ export default function AdminView({
     }
 
     if (editingClassGroupId) {
-      setClassGroups((prev) => prev.map((group) => group.id === editingClassGroupId ? { ...group, name: trimmedName, classNames } : group));
+      setGroupPresets((prev) => prev.map((group) => group.id === editingClassGroupId ? { ...group, name: trimmedName, classNames } : group));
     } else {
-      setClassGroups((prev) => [
+      setGroupPresets((prev) => [
         ...prev,
         { id: `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`, name: trimmedName, classNames },
       ]);
@@ -959,7 +962,7 @@ export default function AdminView({
   };
 
   const handleDeleteClassGroup = (groupId: string) => {
-    setClassGroups((prev) => prev.filter((group) => group.id !== groupId));
+    setGroupPresets((prev) => prev.filter((group) => group.id !== groupId));
     if (editingClassGroupId === groupId) {
       setEditingClassGroupId(null);
       setClassGroupForm({ name: '', selectedClassNames: [] });
@@ -4322,8 +4325,9 @@ export default function AdminView({
                     </button>
                   )}
                 </div>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  {classGroups.map((group) => (
+                <h4 className="mt-4 text-sm font-semibold text-slate-800">Presets de création</h4>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {groupPresets.map((group) => (
                     <div key={group.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-semibold text-slate-800">{group.name}</div>
@@ -4339,6 +4343,29 @@ export default function AdminView({
                       </div>
                     </div>
                   ))}
+                </div>
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+                  <h4 className="text-sm font-semibold text-slate-800">Groupes disponibles pour l’école sélectionnée</h4>
+                  {superAdminSchoolFilterId == null ? (
+                    <p className="mt-2 text-xs text-slate-500">Sélectionnez une école pour afficher ses groupes disponibles.</p>
+                  ) : activeClassGroups.length === 0 ? (
+                    <p className="mt-2 text-xs text-slate-500">Aucun groupe de classes disponible</p>
+                  ) : (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {activeClassGroups.map((group) => (
+                        <div key={group.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                          <div className="font-semibold text-slate-800">{group.name}</div>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {group.classNames
+                              .filter((className: string) => (studentFilterClasses || []).some((klass) => klass.name === className))
+                              .map((className: string) => (
+                                <span key={`${group.id}-${className}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{className}</span>
+                              ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -5244,7 +5271,7 @@ export default function AdminView({
         handleSaveNewTeacher={handleSaveNewTeacher}
         userRole={userRole}
         currentSchoolId={currentSchoolId}
-        classGroups={classGroups}
+        groupPresets={groupPresets}
         subjectGroups={subjectGroups}
       />
       {/* Admin modal rendered above */}
