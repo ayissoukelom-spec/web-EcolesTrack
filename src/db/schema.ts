@@ -160,6 +160,7 @@ export const parents = pgTable('parents', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
   phone: text('phone'),
   address: text('address'),
+  profession: text('profession'),
   studentId: integer('student_id'),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
 });
@@ -350,6 +351,19 @@ export const notifications = pgTable('notifications', {
   body: text('body').notNull(),
   type: text('type').notNull(), // 'absence' | 'grade' | 'info'
   isRead: boolean('is_read').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 12b. Notification attachments
+export const notificationAttachments = pgTable('notification_attachments', {
+  id: serial('id').primaryKey(),
+  notificationId: integer('notification_id').references(() => notifications.id, { onDelete: 'cascade' }).notNull(),
+  fileName: text('file_name').notNull(),
+  filePath: text('file_path').notNull(),
+  mimeType: text('mime_type').notNull(),
+  fileSize: integer('file_size').notNull(),
+  uploadedBy: integer('uploaded_by').references(() => users.id, { onDelete: 'set null' }).notNull(),
+  uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -667,6 +681,17 @@ export const absencesRelations = relations(absences, ({ one }) => ({
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   recipient: one(users, {
     fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
+
+export const notificationAttachmentsRelations = relations(notificationAttachments, ({ one }) => ({
+  notification: one(notifications, {
+    fields: [notificationAttachments.notificationId],
+    references: [notifications.id],
+  }),
+  uploader: one(users, {
+    fields: [notificationAttachments.uploadedBy],
     references: [users.id],
   }),
 }));
