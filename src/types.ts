@@ -244,6 +244,19 @@ export interface SystemNotification {
   type: 'absence' | 'grade' | 'info';
   isRead: boolean;
   createdAt?: string;
+  attachments?: NotificationAttachment[];
+}
+
+export interface NotificationAttachment {
+  id: number;
+  notificationId: number;
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedBy: number;
+  uploadedAt?: string;
+  createdAt?: string;
 }
 
 export interface AuditEvent {

@@ -804,12 +804,27 @@ export default function App() {
     }
   };
 
-  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number }) => {
+  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number; files?: File[] }) => {
     try {
-      await apiFetch('/api/notifications/send', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
+      if (data.files && data.files.length > 0) {
+        const formData = new FormData();
+        formData.append('title', data.title);
+        formData.append('body', data.body);
+        formData.append('type', data.type);
+        if (data.userId != null) formData.append('userId', String(data.userId));
+        if (data.classId != null) formData.append('classId', String(data.classId));
+        data.files.forEach((file) => formData.append('files', file));
+
+        await apiFetch('/api/notifications/send', {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        await apiFetch('/api/notifications/send', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+      }
       fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -1258,9 +1273,9 @@ export default function App() {
                 <NotificationView
                   userRole={currentRole}
                   notificationsList={notificationsList}
+                  usersList={usersList}
                   classesList={classesList}
                   studentsList={studentsList}
-                  usersList={usersList}
                   onSendNotification={handleSendNotification}
                   onMarkAllAsRead={handleMarkAllAsRead}
                   onNotificationRead={handleNotificationRead}

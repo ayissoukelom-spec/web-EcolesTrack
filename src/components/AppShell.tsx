@@ -324,8 +324,20 @@ export default function AppShell() {
     }));
   };
 
-  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number }) => {
-    await apiFetch('/api/notifications/send', { method: 'POST', body: JSON.stringify(data) });
+  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number; files?: File[] }) => {
+    if (data.files && data.files.length > 0) {
+      const formData = new FormData();
+      formData.append('title', data.title);
+      formData.append('body', data.body);
+      formData.append('type', data.type);
+      if (data.userId != null) formData.append('userId', String(data.userId));
+      if (data.classId != null) formData.append('classId', String(data.classId));
+      data.files.forEach((file) => formData.append('files', file));
+
+      await apiFetch('/api/notifications/send', { method: 'POST', body: formData });
+    } else {
+      await apiFetch('/api/notifications/send', { method: 'POST', body: JSON.stringify(data) });
+    }
     await fetchAllData();
   };
 
