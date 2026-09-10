@@ -520,16 +520,13 @@ export default function AdminView({
   const parentFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // New item forms state
-  const defaultClassGroups = [
-    { id: 'ceg', name: 'CEG (6ème à 3ème)', classNames: ['6ème', '5ème', '4ème', '3ème'] },
-    { id: 'lycee', name: 'Lycée (2nde à Tle)', classNames: ['2nde', '1ère', 'Tle'] },
-  ];
+  const classGroupsStorageKey = 'ecoletrack-class-groups:v2';
   const defaultSubjectGroups: any[] = [];
   const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [groupPresets, setGroupPresets] = useState<any[]>(() => {
-    if (typeof window === 'undefined') return defaultClassGroups;
+    if (typeof window === 'undefined') return [];
     try {
-      const stored = window.localStorage.getItem('ecoletrack-class-groups');
+      const stored = window.localStorage.getItem(classGroupsStorageKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -545,7 +542,7 @@ export default function AdminView({
     } catch (err) {
       console.error('Failed to load class groups', err);
     }
-    return defaultClassGroups;
+    return [];
   });
   const [subjectGroups, setSubjectGroups] = useState<any[]>(() => {
     if (typeof window === 'undefined') return defaultSubjectGroups;
@@ -627,7 +624,7 @@ export default function AdminView({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('ecoletrack-class-groups', JSON.stringify(groupPresets));
+    window.localStorage.setItem(classGroupsStorageKey, JSON.stringify(groupPresets));
   }, [groupPresets]);
 
   useEffect(() => {
@@ -4326,8 +4323,11 @@ export default function AdminView({
                   )}
                 </div>
                 <h4 className="mt-4 text-sm font-semibold text-slate-800">Presets de création</h4>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {groupPresets.map((group) => (
+                {groupPresets.length === 0 ? (
+                  <p className="mt-2 text-xs text-slate-500">Aucun groupe de classes créé.</p>
+                ) : (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {groupPresets.map((group) => (
                     <div key={group.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-semibold text-slate-800">{group.name}</div>
@@ -4342,8 +4342,9 @@ export default function AdminView({
                         ))}
                       </div>
                     </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
                   <h4 className="text-sm font-semibold text-slate-800">Groupes disponibles pour l’école sélectionnée</h4>
                   {superAdminSchoolFilterId == null ? (

@@ -199,7 +199,7 @@ describe('AdminView create-user teacher form', () => {
   it('shows configured class groups and filters classes when creating a school', async () => {
     const localStorageMock = window.localStorage as any;
     localStorageMock.getItem.mockImplementation((key: string) => {
-      if (key === 'ecoletrack-class-groups') {
+      if (key === 'ecoletrack-class-groups:v2') {
         return JSON.stringify([{ id: 'ceg', name: 'CEG', classNames: ['6ème', '5ème', '3ème'] }]);
       }
       return null;
@@ -258,7 +258,7 @@ describe('AdminView create-user teacher form', () => {
   it('allows selecting multiple class groups at once', async () => {
     const localStorageMock = window.localStorage as any;
     localStorageMock.getItem.mockImplementation((key: string) => {
-      if (key === 'ecoletrack-class-groups') {
+      if (key === 'ecoletrack-class-groups:v2') {
         return JSON.stringify([
           { id: 'ceg', name: 'CEG', classNames: ['6ème', '5ème', '3ème'] },
           { id: 'lycee', name: 'Lycée', classNames: ['2nde', '1ère', 'Tle'] },

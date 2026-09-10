@@ -117,6 +117,17 @@ describe('AdminModal class groups synchronization', () => {
     );
   });
 
+  it('does not create default groups when no presets were configured', () => {
+    renderModal({
+      ...createBaseProps(),
+      groupPresets: [],
+      sortedClasses: [],
+    });
+
+    expect(screen.queryByText('CEG (Collège)')).toBeNull();
+    expect(screen.queryByText('Lycée')).toBeNull();
+  });
+
   it('should remove only automatic classes when deselecting a group (not manual ones)', () => {
     const mockSetSchoolForm = vi.fn();
     const props = {
