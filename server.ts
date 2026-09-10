@@ -539,6 +539,54 @@ function signInternalPayload(payload: any): { signature: string; timestamp: stri
   return { signature, timestamp };
 }
 
+function verifyInternalJustificationAuth(req: any, res: any, next: any) {
+  const signature = req.headers['x-internal-signature'];
+  const timestamp = req.headers['x-internal-timestamp'];
+  const internalSecret = process.env.INTERNAL_SECRET;
+  const uploadedFile = req.file;
+
+  if (!internalSecret || !internalSecret.trim() || typeof signature !== 'string' || typeof timestamp !== 'string') {
+    return res.status(401).json({ error: 'Invalid internal authentication' });
+  }
+
+  const requestTime = Number(timestamp);
+  if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
+    return res.status(401).json({ error: 'Expired internal authentication' });
+  }
+
+  if (!uploadedFile) {
+    return res.status(400).json({ error: 'Missing justification file' });
+  }
+
+  const payload = {
+    absenceId: String(req.body?.absenceId ?? ''),
+    parentId: String(req.body?.parentId ?? ''),
+    justificationReason: String(req.body?.justificationReason ?? ''),
+    fileName: String(req.body?.fileName ?? ''),
+    fileMimeType: String(req.body?.fileMimeType ?? ''),
+    fileSize: String(req.body?.fileSize ?? ''),
+    fileSha256: String(req.body?.fileSha256 ?? ''),
+  };
+  const actualFileSha256 = crypto.createHash('sha256').update(uploadedFile.buffer).digest('hex');
+  if (
+    payload.fileName !== uploadedFile.originalname ||
+    payload.fileMimeType !== uploadedFile.mimetype ||
+    payload.fileSize !== String(uploadedFile.size) ||
+    payload.fileSha256 !== actualFileSha256
+  ) {
+    return res.status(401).json({ error: 'Invalid internal payload' });
+  }
+
+  const hmac = crypto.createHmac('sha256', internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  const expectedSignature = hmac.digest('hex');
+  if (signature.length !== expectedSignature.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    return res.status(401).json({ error: 'Invalid internal authentication' });
+  }
+
+  return next();
+}
+
 export async function createApp() {
   const app = express();
 
@@ -621,6 +669,27 @@ export async function createApp() {
 
       console.error('❌ Multer error for absence justification upload:', err);
       return res.status(400).json({ error: err.message || 'Invalid file upload' });
+    });
+  };
+
+  const internalJustificationUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg'];
+      if (!allowedTypes.includes(file.mimetype)) {
+        return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+
+  const handleInternalJustificationUpload = (req: any, res: any, next: any) => {
+    internalJustificationUpload.single('file')(req, res, (err: any) => {
+      if (err) {
+        return res.status(400).json({ error: err.message || 'Invalid file upload' });
+      }
+      return next();
     });
   };
 
@@ -5487,6 +5556,97 @@ export async function createApp() {
       res.json(updated[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to validate absence justification' });
+    }
+  });
+
+  app.post('/api/internal/absence-justification', handleInternalJustificationUpload, verifyInternalJustificationAuth, async (req: any, res) => {
+    const absenceId = parseInt(String(req.body?.absenceId ?? ''), 10);
+    const parentId = parseInt(String(req.body?.parentId ?? ''), 10);
+    const justificationReason = typeof req.body?.justificationReason === 'string'
+      ? req.body.justificationReason.trim()
+      : '';
+    const uploadedFile = req.file as Express.Multer.File | undefined;
+
+    if (!Number.isFinite(absenceId) || !Number.isFinite(parentId) || !justificationReason || !uploadedFile) {
+      return res.status(400).json({ error: 'Invalid internal justification request' });
+    }
+
+    try {
+      const [parent] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.id, parentId), eq(users.role, 'parent'), eq(users.isDeleted, false)));
+      if (!parent) return res.status(403).json({ error: 'Invalid parent identity' });
+
+      const [absence] = await db
+        .select()
+        .from(absences)
+        .where(eq(absences.id, absenceId));
+      if (!absence) return res.status(404).json({ error: 'Absence not found' });
+
+      const [absenceStudent] = await db
+        .select({ id: students.id })
+        .from(students)
+        .where(eq(students.id, absence.studentId));
+      if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
+
+      const childStudentIds = await getParentChildStudentIds(parentId);
+      if (!childStudentIds.includes(absenceStudent.id)) {
+        return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
+      }
+
+      const safeName = uploadedFile.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storedFileName = `${Date.now()}-${crypto.randomBytes(16).toString('hex')}-${safeName}`;
+      const storedFilePath = path.join(uploadStorageDir, storedFileName);
+      await fsPromises.writeFile(storedFilePath, uploadedFile.buffer);
+      let persisted = false;
+
+      try {
+        const updated = await db.update(absences)
+          .set({ isJustified: true, justificationReason })
+          .where(eq(absences.id, absenceId))
+          .returning();
+
+        const inserted = await db.insert(absenceJustifications).values({
+          absenceId,
+          fileName: uploadedFile.originalname,
+          filePath: storedFileName,
+          mimeType: uploadedFile.mimetype,
+          fileSize: Number(uploadedFile.size),
+          uploadedBy: parentId,
+        }).returning();
+        persisted = true;
+
+        const actor = {
+          ...parent,
+          uid: parent.uid,
+          role: parent.role,
+          schoolId: parent.schoolId ?? null,
+        } as any;
+        await logAuditEvent(
+          actor,
+          'create',
+          'absence_justification',
+          absenceId,
+          parent.schoolId ?? null,
+          `Uploaded justification file ${uploadedFile.originalname} for absence ${absenceId}`,
+        );
+
+        return res.status(201).json({
+          ...updated[0],
+          justificationFileId: inserted[0]?.id ?? null,
+          justificationFileName: inserted[0]?.fileName ?? null,
+          justificationFilesCount: inserted.length,
+        });
+      } catch (error) {
+        if (!persisted) {
+          await fsPromises.unlink(storedFilePath).catch(() => undefined);
+        }
+        throw error;
+      }
+    } catch (err: any) {
+      console.error('Failed to receive internal absence justification:', err?.message || err);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
