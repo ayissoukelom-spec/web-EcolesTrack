@@ -8038,8 +8038,15 @@ if (uniqueParentIds.length > 0) {
             type,
           }).returning();
 
+          let notificationAttachmentMetadata: Array<{
+            attachmentId: number;
+            fileName: string;
+            mimeType: string;
+            fileSize: number;
+          }> = [];
+
           if (uploadedFiles.length > 0) {
-            await db.insert(notificationAttachments).values(
+            const insertedAttachments = await db.insert(notificationAttachments).values(
               uploadedFiles.map((file: any) => ({
                 notificationId: insertedNotification.id,
                 fileName: file.originalname,
@@ -8048,7 +8055,19 @@ if (uniqueParentIds.length > 0) {
                 fileSize: Number(file.size),
                 uploadedBy: req.user!.id!,
               }))
-            );
+            ).returning({
+              id: notificationAttachments.id,
+              fileName: notificationAttachments.fileName,
+              mimeType: notificationAttachments.mimeType,
+              fileSize: notificationAttachments.fileSize,
+            });
+
+            notificationAttachmentMetadata = insertedAttachments.map((attachment) => ({
+              attachmentId: attachment.id,
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              fileSize: Number(attachment.fileSize),
+            }));
           }
 
           const infoNotificationPayload = {
@@ -8057,7 +8076,10 @@ if (uniqueParentIds.length > 0) {
             message: body,
             category: "info",
             metadata: {
-              target: "info",
+              target: "announcement",
+              notificationId: insertedNotification.id,
+              attachmentCount: notificationAttachmentMetadata.length,
+              attachments: notificationAttachmentMetadata,
               deepLink: "ecoletrack://dashboard",
             },
             dedupeKey: `info-${Date.now()}-${id}`,
