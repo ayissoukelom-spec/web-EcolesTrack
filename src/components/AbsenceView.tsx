@@ -273,6 +273,15 @@ export default function AbsenceView({
     resetJustificationForm();
   };
 
+  const isClassInSelectedSchool = (klass: Class, schoolId: string) => {
+    if (String(klass.schoolId ?? '') === schoolId) return true;
+    if (klass.schoolId != null) return false;
+
+    return studentsList.some((student) => (
+      student.classId === klass.id && String(student.schoolId) === schoolId
+    ));
+  };
+
   // Filter absences
   const subjectOptions = Array.from(
     new Set(absencesList.map((abs) => abs.subjectName || '').filter(Boolean))
@@ -285,7 +294,7 @@ export default function AbsenceView({
   const filteredAbsences = absencesList.filter((abs) => {
     if (filterSchool) {
       const cls = classesList.find((c) => c.id === abs.classId);
-      if (!cls || String((cls as any).schoolId) !== filterSchool) return false;
+      if (!cls || !isClassInSelectedSchool(cls, filterSchool)) return false;
     }
     if (filterClass && String(abs.classId) !== filterClass) return false;
 
@@ -602,7 +611,7 @@ export default function AbsenceView({
           >
             <option value="">Toutes les classes</option>
             {sortedClasses
-              .filter((c) => !filterSchool || String((c as any).schoolId) === filterSchool)
+              .filter((c) => !filterSchool || isClassInSelectedSchool(c, filterSchool))
               .map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
