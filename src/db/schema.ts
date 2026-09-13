@@ -1,5 +1,9 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, customType, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
 
 // 1. Schools
 export const schools = pgTable('schools', {
@@ -200,6 +204,9 @@ export const students = pgTable('students', {
   parentId: integer('parent_id').references(() => parents.id, { onDelete: 'set null' }),
   schoolAdminId: integer('school_admin_id').references(() => users.id, { onDelete: 'set null' }),
   enrolledAt: timestamp('enrolled_at').defaultNow().notNull(), // Date when student was enrolled in this class
+  photoData: bytea('photo_data'),
+  photoMimeType: text('photo_mime_type'),
+  photoUpdatedAt: timestamp('photo_updated_at'),
 });
 
 export const studentAcademicYearStatuses = pgTable('student_academic_year_statuses', {

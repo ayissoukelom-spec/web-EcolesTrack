@@ -1,0 +1,4 @@
+ALTER TABLE students
+  ADD COLUMN IF NOT EXISTS photo_data BYTEA,
+  ADD COLUMN IF NOT EXISTS photo_mime_type TEXT,
+  ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMP;
