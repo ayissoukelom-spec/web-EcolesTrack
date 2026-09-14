@@ -4382,7 +4382,7 @@ export default function AdminView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {classesList
+                {(studentFilterClasses ?? classesList)
                   .filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name))
                   .map((cls) => (
                     <tr key={cls.id} className="hover:bg-slate-50/60 transition-colors">
@@ -4430,7 +4430,7 @@ export default function AdminView({
                       </td>
                     </tr>
                   ))}
-                {classesList.filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name)).length === 0 && (
+                {(studentFilterClasses ?? classesList).filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name)).length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucune classe trouvée.</td>
                   </tr>
