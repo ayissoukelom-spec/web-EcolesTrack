@@ -58,6 +58,7 @@ import {
   grades,
   absences,
   absenceJustifications,
+  absenceControls,
   notificationAttachments,
   notifications,
   auditEvents,
@@ -5243,6 +5244,147 @@ export async function createApp() {
   // ==========================================
   // MODULE ABSENCES API
   // ==========================================
+
+  app.get('/api/absence-controls', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      let query = db.select().from(absenceControls);
+      if (actor.role !== 'super_admin') {
+        if (actor.schoolId == null) return res.json([]);
+
+        if (actor.role === 'teacher') {
+          if (!actor.id) return res.json([]);
+          const [teacherRow] = await db
+            .select({ id: teachers.id })
+            .from(teachers)
+            .where(eq(teachers.userId, actor.id));
+          if (!teacherRow) return res.json([]);
+
+          const assignmentRows = await db
+            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+            .from(classTeachers)
+            .innerJoin(classes, eq(classTeachers.classId, classes.id))
+            .where(eq(classTeachers.teacherId, teacherRow.id));
+          const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+          if (teacherClassIds.length === 0) return res.json([]);
+
+          query = query.where(and(
+            eq(absenceControls.schoolId, actor.schoolId),
+            inArray(absenceControls.classId, teacherClassIds),
+          )) as any;
+        } else {
+          query = query.where(eq(absenceControls.schoolId, actor.schoolId)) as any;
+        }
+      }
+
+      const rows = await query.orderBy(desc(absenceControls.createdAt));
+      return res.json(rows);
+    } catch (error: any) {
+      console.error('❌ GET /api/absence-controls ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/absence-controls', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'teacher') {
+        return res.status(403).json({ error: 'Only teachers may create an absence-control none record' });
+      }
+      if (!actor.id || actor.schoolId == null) {
+        return res.status(403).json({ error: 'Teacher identity or school is missing' });
+      }
+
+      const { classId, date, period, subjectId, startTime, endTime, controlType } = req.body;
+      const normalClassId = Number(classId);
+      const parsedDate = typeof date === 'string' ? date : '';
+      if (!normalClassId || !parsedDate || controlType !== 'none') {
+        return res.status(400).json({ error: 'Missing mandatory absence-control parameters' });
+      }
+
+      const normalizedSubjectId = subjectId != null && subjectId !== '' ? Number(subjectId) : null;
+      const normalizedStartTime = typeof startTime === 'string' && startTime.trim() ? startTime.trim() : null;
+      const normalizedEndTime = typeof endTime === 'string' && endTime.trim() ? endTime.trim() : null;
+      const normalizedPeriod = typeof period === 'string' && period.trim()
+        ? period.trim()
+        : normalizedStartTime && normalizedEndTime
+          ? (() => {
+            const [startHour] = normalizedStartTime.split(':').map(Number);
+            const [endHour] = normalizedEndTime.split(':').map(Number);
+            if (startHour < 12 && endHour > 14) return 'all_day';
+            return startHour >= 12 ? 'afternoon' : 'morning';
+          })()
+          : null;
+
+      const [teacherRow] = await db.select({ id: teachers.id, schoolId: teachers.schoolId }).from(teachers).where(eq(teachers.userId, actor.id));
+      if (!teacherRow) {
+        return res.status(403).json({ error: 'Teacher profile not found for the authenticated user' });
+      }
+
+      const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, normalClassId));
+      if (!classRecord) {
+        return res.status(404).json({ error: 'Class not found' });
+      }
+
+      if (!(await isApprovedClassForSchool(normalClassId, actor.schoolId))) {
+        return res.status(403).json({ error: 'Teacher cannot control a class outside authenticated school scope' });
+      }
+
+      const assignmentRows = await db.select().from(classTeachers).where(and(eq(classTeachers.teacherId, teacherRow.id), eq(classTeachers.classId, normalClassId)));
+      if (assignmentRows.length === 0) {
+        return res.status(403).json({ error: 'Teacher is not authorized for this class' });
+      }
+
+      const existingDuplicate = await db.select().from(absenceControls).where(and(
+        eq(absenceControls.classId, normalClassId),
+        eq(absenceControls.date, parsedDate),
+        eq(absenceControls.controlType, 'none'),
+        normalizedSubjectId != null ? eq(absenceControls.subjectId, normalizedSubjectId) : sql`${absenceControls.subjectId} IS NULL`,
+        normalizedPeriod ? eq(absenceControls.period, normalizedPeriod) : sql`${absenceControls.period} IS NULL`,
+        normalizedStartTime ? eq(absenceControls.startTime, normalizedStartTime) : sql`${absenceControls.startTime} IS NULL`,
+        normalizedEndTime ? eq(absenceControls.endTime, normalizedEndTime) : sql`${absenceControls.endTime} IS NULL`,
+      ));
+      if (existingDuplicate.length > 0) {
+        return res.status(409).json({ error: 'Duplicate absence-control none already exists for this context' });
+      }
+
+      const conflictingAbsence = await db.select().from(absences).where(and(
+        eq(absences.classId, normalClassId),
+        eq(absences.date, parsedDate),
+        normalizedSubjectId != null ? eq(absences.subjectId, normalizedSubjectId) : sql`${absences.subjectId} IS NULL`,
+        normalizedStartTime ? eq(absences.startTime, normalizedStartTime) : sql`${absences.startTime} IS NULL`,
+        normalizedEndTime ? eq(absences.endTime, normalizedEndTime) : sql`${absences.endTime} IS NULL`,
+        normalizedPeriod ? eq(absences.period, normalizedPeriod) : sql`${absences.period} IS NULL`,
+      ));
+      if (conflictingAbsence.length > 0) {
+        return res.status(409).json({ error: 'An absence already exists for the same context; no contradictory absence-control record can be created' });
+      }
+
+      const [inserted] = await db.insert(absenceControls).values({
+        schoolId: actor.schoolId,
+        classId: normalClassId,
+        teacherId: teacherRow.id,
+        date: parsedDate,
+        period: normalizedPeriod,
+        subjectId: normalizedSubjectId,
+        startTime: normalizedStartTime,
+        endTime: normalizedEndTime,
+        controlType: 'none',
+      }).returning();
+
+      await logAuditEvent(actor, 'create', 'absence_control', inserted.id, actor.schoolId ?? null, `Teacher registered absence-control none for class=${normalClassId} date=${parsedDate}`);
+      return res.status(201).json(inserted);
+    } catch (error: any) {
+      console.error('❌ POST /api/absence-controls ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   app.get('/api/absences', requireAuth, async (req: AuthRequest, res) => {
     try {

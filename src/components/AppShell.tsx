@@ -52,7 +52,7 @@ export default function AppShell() {
   } = useAdminDashboard();
   const { classes: classesList, refresh: refreshClasses, addClass: addClassApi, deleteClass: deleteClassApi } = useClasses();
   const { students: studentsList, refresh: refreshStudents, addStudent: addStudentApi, updateStudent: updateStudentApi, batchCreateStudents } = useStudents();
-  const { absences: absencesList, refresh: refreshAbsences, addAbsence: addAbsenceApi, justifyAbsence } = useAbsences();
+  const { absences: absencesList, refresh: refreshAbsences, addAbsence: addAbsenceApi, justifyAbsence, recordAbsenceControl: recordAbsenceControlApi } = useAbsences();
 
   const simulatedUser = user;
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
@@ -297,6 +297,17 @@ export default function AppShell() {
     await fetchAllData();
   };
 
+  const handleRecordAbsenceControl = async (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => {
+    try {
+      await recordAbsenceControlApi(data);
+      await fetchAllData();
+      setErrorMsg(null);
+    } catch (error: any) {
+      const message = error?.message || 'Impossible d’enregistrer le contrôle Néant.';
+      setErrorMsg(message);
+    }
+  };
+
   const handleJustifyAbsence = async (id: number, reason: string, files?: File[] | File | null) => {
     await justifyAbsence(id, reason, files);
     await fetchAllData();
@@ -427,6 +438,7 @@ export default function AppShell() {
         teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
         onAddAbsence={handleAddAbsence}
         onJustifyAbsence={handleJustifyAbsence}
+        onRecordAbsenceControl={handleRecordAbsenceControl}
       />;
     }
 

@@ -28,6 +28,14 @@ export function useAbsences() {
     await refresh();
   }, [refresh]);
 
+  const recordAbsenceControl = useCallback(async (data: any) => {
+    await apiFetch('/api/absence-controls', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    await refresh();
+  }, [refresh]);
+
   const justifyAbsence = useCallback(async (id: number, reason: string, files?: File[] | File | null) => {
     const normalizedFiles = Array.isArray(files) ? files : files ? [files] : [];
 
@@ -58,6 +66,7 @@ export function useAbsences() {
     setError,
     refresh,
     addAbsence,
+    recordAbsenceControl,
     justifyAbsence,
   };
 }

@@ -19,6 +19,7 @@ interface AbsenceViewProps {
   teacherSpecializations?: string[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
+  onRecordAbsenceControl?: (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => Promise<void>;
 }
 
 export default function AbsenceView({
@@ -33,6 +34,7 @@ export default function AbsenceView({
   teacherSpecializations,
   onAddAbsence,
   onJustifyAbsence,
+  onRecordAbsenceControl,
 }: AbsenceViewProps) {
   const sortedClasses = sortClasses(classesList || []);
   const sortedStudents = (studentsList || []).slice().sort((a, b) => {
@@ -57,6 +59,7 @@ export default function AbsenceView({
   const [justificationText, setJustificationText] = useState('');
   const [selectedJustificationFiles, setSelectedJustificationFiles] = useState<File[]>([]);
   const [justificationUploadError, setJustificationUploadError] = useState<string | null>(null);
+  const [absenceControlError, setAbsenceControlError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const MAX_JUSTIFICATION_FILES = 5;
   const MAX_JUSTIFICATION_FILE_SIZE = 5 * 1024 * 1024;
@@ -565,6 +568,56 @@ export default function AbsenceView({
               </button>
               <button
                 type="button"
+                onClick={async () => {
+                  if (
+                    !onRecordAbsenceControl
+                    || !newAbsenceForm.classId
+                    || !newAbsenceForm.date
+                    || !newAbsenceForm.subjectId
+                    || !newAbsenceForm.startTime
+                    || !newAbsenceForm.endTime
+                  ) {
+                    setAbsenceControlError('Veuillez renseigner la classe, la date, la matière, l\'heure de début et l\'heure de fin avant de signaler Néant.');
+                    return;
+                  }
+                  setAbsenceControlError(null);
+                  const classId = Number(newAbsenceForm.classId);
+                  try {
+                    await onRecordAbsenceControl({
+                      classId,
+                      date: newAbsenceForm.date,
+                      subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
+                      startTime: newAbsenceForm.startTime,
+                      endTime: newAbsenceForm.endTime,
+                      controlType: 'none',
+                    } as any);
+                    setIsFormOpen(false);
+                    setNewAbsenceForm({
+                      studentId: '',
+                      classId: '',
+                      lastName: '',
+                      firstName: '',
+                      date: new Date().toISOString().split('T')[0],
+                      subjectId: '',
+                      startTime: '08:00',
+                      endTime: '09:30',
+                    });
+                  } catch (error) {
+                    if ((error as any)?.status === 409) {
+                      setAbsenceControlError('Ce contrôle Néant existe déjà pour cette classe, cette matière, cette date et cet horaire.');
+                    } else {
+                      setAbsenceControlError('Impossible d\'enregistrer le contrôle Néant.');
+                    }
+                    console.error('Néant control failed', error);
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm rounded-xl shadow-md transition-colors cursor-pointer"
+                id="btn-absence-none"
+              >
+                Néant
+              </button>
+              <button
+                type="button"
                 onClick={handleCreateMultipleAbsences}
                 disabled={selectedAbsentStudentIds.length === 0 || isMultipleSaveInProgress}
                 className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -580,6 +633,11 @@ export default function AbsenceView({
                 Annuler
               </button>
             </div>
+            {absenceControlError && (
+              <p className="md:col-span-4 text-xs font-semibold text-rose-600" role="alert">
+                {absenceControlError}
+              </p>
+            )}
           </form>
         </div>
       )}

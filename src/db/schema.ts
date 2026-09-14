@@ -349,6 +349,21 @@ export const absenceJustifications = pgTable('absence_justifications', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Web-only teacher control record; never writes to absences or notifications.
+export const absenceControls = pgTable('absence_controls', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  date: text('date').notNull(),
+  period: text('period'),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
+  startTime: text('start_time'),
+  endTime: text('end_time'),
+  controlType: text('control_type').default('none').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // 12. Notifications
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),

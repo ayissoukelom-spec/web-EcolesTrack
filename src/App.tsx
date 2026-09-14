@@ -31,6 +31,7 @@ import DashboardView from './components/DashboardView.tsx';
 import AdminView from './components/AdminView.tsx';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
 import AbsenceView from './components/AbsenceView.tsx';
+import AbsenceControlsView from './components/AbsenceControlsView.tsx';
 import NotesView from './components/NotesView.tsx';
 import NotificationView from './components/NotificationView.tsx';
 import AuditView from './components/AuditView.tsx';
@@ -57,7 +58,7 @@ import {
 
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
-  const { justifyAbsence } = useAbsences();
+  const { justifyAbsence, recordAbsenceControl } = useAbsences();
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
@@ -103,6 +104,7 @@ export default function App() {
     });
   };
   const [absencesList, setAbsencesList] = useState<any[]>([]);
+  const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
   const unjustifiedAbsencesCount = absencesList.filter((absence: any) => !absence.isJustified).length;
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
@@ -229,6 +231,7 @@ export default function App() {
         '/api/students',
         '/api/parents',
         '/api/absences',
+        '/api/absence-controls',
         '/api/evaluations',
         '/api/grades',
         '/api/notifications',
@@ -265,6 +268,7 @@ export default function App() {
 
       if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
       if (Array.isArray(map['/api/absences'])) setAbsencesList(map['/api/absences']);
+      if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
       if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
       if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
       if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
@@ -960,6 +964,21 @@ export default function App() {
                 )}
               </button>
 
+              {currentRole === 'school_admin' && (
+                <button
+                  onClick={() => setActiveTab('absence-controls')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'absence-controls'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-absence-controls"
+                >
+                  <CalendarDays className="h-4.5 w-4.5" />
+                  <span>Contrôles Néant</span>
+                </button>
+              )}
+
               {currentRole === 'parent' && (
                 <button
                   onClick={() => setActiveTab('notes')}
@@ -1202,6 +1221,16 @@ export default function App() {
                   teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
                   onAddAbsence={handleAddAbsence}
                   onJustifyAbsence={handleJustifyAbsence}
+                  onRecordAbsenceControl={recordAbsenceControl}
+                />
+              )}
+
+              {activeTab === 'absence-controls' && currentRole === 'school_admin' && (
+                <AbsenceControlsView
+                  absenceControlsList={absenceControlsList}
+                  classesList={classesList}
+                  teachersList={teachersList}
+                  approvedSubjectsList={approvedSubjectsList}
                 />
               )}
 
