@@ -5,7 +5,6 @@ import { setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedU
 import { School, AcademicYear, Class, Teacher, Student, Parent, User, UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import CustomDropdown from './CustomDropdown';
-import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 
@@ -192,7 +191,34 @@ export default function SimulatorHeader({
   const createTeacherSchoolId = createRole === 'teacher'
     ? (currentRole === 'school_admin' ? Number(simUser?.schoolId) : (Number(createSchoolId) || undefined))
     : undefined;
-  const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
+  const [teacherSchoolClasses, setTeacherSchoolClasses] = useState<Class[] | null>(null);
+
+  useEffect(() => {
+    setCreateAssignedClassIds([]);
+
+    if (createTeacherSchoolId == null) {
+      setTeacherSchoolClasses(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTeacherSchoolClasses([]);
+    apiFetch(`/api/classes?schoolId=${createTeacherSchoolId}`)
+      .then((payload) => {
+        if (!cancelled) setTeacherSchoolClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch(() => {
+        if (!cancelled) setTeacherSchoolClasses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [createTeacherSchoolId]);
+
+  const availableTeacherClasses = createTeacherSchoolId
+    ? (teacherSchoolClasses ?? [])
+    : (classesList || []);
 
   const teacherSpecializations = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
@@ -909,8 +935,7 @@ export default function SimulatorHeader({
                       <RequiredLabel label="Classes assignées" required />
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 text-sm">
-                      {(classesList || [])
-                        .filter((cls) => !createTeacherSchoolId || isApprovedForSchool(cls, createTeacherSchoolId))
+                      {availableTeacherClasses
                         .map((cls) => (
                           <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
                             <input
@@ -928,7 +953,7 @@ export default function SimulatorHeader({
                             <span className="truncate">{cls.name}</span>
                           </label>
                         ))}
-                      {(classesList || []).filter((cls) => !createTeacherSchoolId || isApprovedForSchool(cls, createTeacherSchoolId)).length === 0 && (
+                      {availableTeacherClasses.length === 0 && (
                         <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
                       )}
                     </div>
@@ -936,7 +961,7 @@ export default function SimulatorHeader({
                     {createAssignedClassIds.length > 0 && (
                       <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded-lg border border-slate-200">
                         <strong>Classes sélectionnées :</strong>{' '}
-                        {(classesList || [])
+                        {availableTeacherClasses
                           .filter((cls) => createAssignedClassIds.includes(cls.id))
                           .map((cls) => cls.name)
                           .join(', ')}

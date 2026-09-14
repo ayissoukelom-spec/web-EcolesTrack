@@ -286,6 +286,34 @@ export default function AdminModal(props: any) {
   const autoAssignedParentSchoolId = userRole === 'school_admin' ? currentSchoolId : undefined;
   const autoAssignedParentSchoolName = schoolsList.find((s: any) => s.id === autoAssignedParentSchoolId)?.name || autoSelectedSchoolName;
 
+  const teacherFormSchoolId = teacherForm.schoolId ? parseInt(teacherForm.schoolId, 10) : undefined;
+  const newTeacherFormSchoolId = newTeacherForm.schoolId ? parseInt(newTeacherForm.schoolId, 10) : undefined;
+  const selectedTeacherSchoolId = userRole === 'school_admin'
+    ? (currentSchoolId ?? autoSelectedSchoolId)
+    : (newTeacherMode ? newTeacherFormSchoolId : teacherFormSchoolId);
+  const [teacherSchoolClasses, setTeacherSchoolClasses] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    if (selectedTeacherSchoolId == null) {
+      setTeacherSchoolClasses(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTeacherSchoolClasses([]);
+    apiFetch(`/api/classes?schoolId=${selectedTeacherSchoolId}`)
+      .then((payload) => {
+        if (!cancelled) setTeacherSchoolClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch(() => {
+        if (!cancelled) setTeacherSchoolClasses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTeacherSchoolId]);
+
   useEffect(() => {
     if (userRole === 'school_admin' && currentSchoolId != null && !parentForm.schoolId) {
       setParentForm((prev: any) => ({ ...prev, schoolId: String(currentSchoolId) }));
@@ -789,7 +817,7 @@ export default function AdminModal(props: any) {
                     {schoolsList.find((s: any) => s.id === (currentSchoolId ?? schoolsList[0]?.id))?.name || 'Votre école sera assignée automatiquement'}
                   </div>
                 ) : (
-                  <select required value={teacherForm.schoolId} onChange={e => setTeacherForm({...teacherForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                  <select required value={teacherForm.schoolId} onChange={e => setTeacherForm({ ...teacherForm, schoolId: e.target.value, assignedClassIds: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                     <option value="">-- Choisissez une école --</option>
                     {schoolsList.map((school: any) => (
                       <option key={school.id} value={String(school.id)}>{school.name}</option>
@@ -844,8 +872,7 @@ export default function AdminModal(props: any) {
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                 {(() => {
-                  const teacherSelectedSchoolId = userRole === 'school_admin' ? autoSelectedSchoolId : (teacherForm.schoolId ? parseInt(teacherForm.schoolId, 10) : undefined);
-                  const available = (sortedClasses || []).filter((c: any) => !teacherSelectedSchoolId || isClassVisibleToSchool(c, teacherSelectedSchoolId));
+                  const available = (teacherSchoolClasses ?? sortedClasses);
                   return (
                     <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}
@@ -999,7 +1026,7 @@ export default function AdminModal(props: any) {
                         {autoSelectedSchoolName}
                       </div>
                     ) : (
-                      <select required value={newTeacherForm.schoolId} onChange={e => setNewTeacherForm({...newTeacherForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                      <select required value={newTeacherForm.schoolId} onChange={e => setNewTeacherForm({ ...newTeacherForm, schoolId: e.target.value, assignedClassIds: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                         <option value="">-- Choisissez une école --</option>
                         {schoolsList.map((school: any) => (
                           <option key={school.id} value={String(school.id)}>{school.name}</option>
@@ -1018,8 +1045,7 @@ export default function AdminModal(props: any) {
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                     {(() => {
-                      const selectedSchoolId = userRole === 'school_admin' ? autoSelectedSchoolId : (newTeacherForm.schoolId ? parseInt(newTeacherForm.schoolId, 10) : undefined);
-                      const available = (sortedClasses || []).filter((c: any) => !selectedSchoolId || isClassVisibleToSchool(c, selectedSchoolId));
+                      const available = (teacherSchoolClasses ?? sortedClasses);
                       return (
                         <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}
