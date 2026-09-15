@@ -1991,6 +1991,21 @@ export default function AdminView({
   const selectedEditStudentSchoolId = editStudentForm.schoolId ? parseInt(editStudentForm.schoolId) : undefined;
   const availableEditSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedEditStudentSchoolId || u.schoolId === selectedEditStudentSchoolId));
 
+  const filteredParentsList = parentsList.filter((p) =>
+    (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
+    (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
+    p.email.toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
+    filterBySearch(p.name)
+  );
+
+  const sortedVisibleParents = [...filteredParentsList].sort((a, b) =>
+    String(a.name ?? '').localeCompare(
+      String(b.name ?? ''),
+      'fr',
+      { sensitivity: 'base' }
+    )
+  );
+
   return (
     <div className="space-y-6" id="admin-view">
       <input
@@ -5001,12 +5016,7 @@ export default function AdminView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {parentsList.filter((p) => 
-                  (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
-                  (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
-                  p.email.toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
-                  filterBySearch(p.name)
-                ).map((pt) => (
+                {sortedVisibleParents.map((pt) => (
                   <tr key={pt.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{pt.name}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.phone || '—'}</td>

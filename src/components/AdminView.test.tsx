@@ -241,6 +241,46 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.queryByText('Kossi Doe')).toBeNull();
   });
 
+  it('sorts the visible parents list alphabetically by name in the DOM', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const parents: Parent[] = [
+      { id: 55, userId: 6, name: 'tano Moussa', email: 'tano@example.com', phone: '+228 90000000', schoolId: 1 },
+      { id: 56, userId: 7, name: 'Koffi Awa', email: 'koffi@example.com', phone: '+228 90000001', schoolId: 1 },
+      { id: 57, userId: 8, name: 'amani Koffi', email: 'amani@example.com', phone: '+228 90000002', schoolId: 1 },
+      { id: 58, userId: 9, name: 'Élodie Yao', email: 'elodie@example.com', phone: '+228 90000003', schoolId: 1 },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={schools}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={parents}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+
+    const renderedNames = Array.from(document.querySelectorAll('tbody tr'))
+      .filter((row) => !row.querySelector('td[colspan]'))
+      .map((row) => row.querySelector('td')?.textContent?.trim());
+
+    expect(renderedNames).toEqual(['amani Koffi', 'Élodie Yao', 'Koffi Awa', 'tano Moussa']);
+  });
+
   it('counts parents by selected school for super admin', () => {
     const schools: School[] = [
       { id: 1, name: 'École du Lac', address: '', phone: '' },
