@@ -788,12 +788,15 @@ export default function AdminView({
     return parentsList.find((p) => p.email && simEmail && p.email.toLowerCase() === simEmail);
   })();
 
-  const filteredStudentsList = studentsList.filter((st) =>
+  const studentsInCurrentScope = studentsList.filter((st) =>
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || st.schoolId === superAdminSchoolFilterId) &&
     (userRole !== 'teacher' || currentTeacherClassIds.includes(st.classId)) &&
     (userRole !== 'parent' || (currentParent ? st.parentId === currentParent.id : false)) &&
     (userRole !== 'teacher' || teacherStudentClassFilterId === null || st.classId === teacherStudentClassFilterId) &&
-    (userRole === 'teacher' || !studentClassFilterId || st.classId === studentClassFilterId) &&
+    (userRole === 'teacher' || !studentClassFilterId || st.classId === studentClassFilterId)
+  );
+
+  const filteredStudentsList = studentsInCurrentScope.filter((st) =>
     filterBySearch(`${st.firstName} ${st.lastName} ${st.className || ''} ${st.parentName || ''} ${st.yearName || ''}`)
   );
 
@@ -4876,6 +4879,9 @@ export default function AdminView({
                 </div>
               </div>
             )}
+            <div className="mb-4 text-sm font-semibold text-slate-700" data-testid="students-total-count">
+              Effectif total : {studentsInCurrentScope.length} élèves
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
                 <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
@@ -4931,6 +4937,11 @@ export default function AdminView({
         {/* TAB 6: PARENTS */}
         {activeTab === 'parents' && (
           <div>
+            <div className="mb-4 text-sm font-semibold text-slate-700">
+              Effectif total : {parentsList.filter((parent) =>
+                userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(parent, superAdminSchoolFilterId)
+              ).length} parents
+            </div>
             <div className="mb-4">
               <label htmlFor="parent-email-search" className="block mb-1 text-slate-600 text-xs sm:text-sm font-semibold">
                 Rechercher par email

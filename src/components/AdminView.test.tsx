@@ -226,17 +226,157 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    expect(screen.getByText('Effectif total : 2 parents')).toBeTruthy();
     expect(screen.getByText('Awa Mensah')).toBeTruthy();
     expect(screen.getByText('Kossi Doe')).toBeTruthy();
 
     const emailSearch = screen.getByLabelText(/Rechercher par email/i);
     fireEvent.change(emailSearch, { target: { value: 'AWA@GMAIL.COM' } });
+    expect(screen.getByText('Effectif total : 2 parents')).toBeTruthy();
     expect(screen.getByText('Awa Mensah')).toBeTruthy();
     expect(screen.queryByText('Kossi Doe')).toBeNull();
 
     fireEvent.change(emailSearch, { target: { value: 'absent@example.com' } });
     expect(screen.queryByText('Awa Mensah')).toBeNull();
     expect(screen.queryByText('Kossi Doe')).toBeNull();
+  });
+
+  it('counts parents by selected school for super admin', () => {
+    const schools: School[] = [
+      { id: 1, name: 'École du Lac', address: '', phone: '' },
+      { id: 2, name: 'École du Nord', address: '', phone: '' },
+    ];
+    const parents: Parent[] = [
+      { id: 55, userId: 6, name: 'Awa Mensah', email: 'awa@gmail.com', schoolId: 1 },
+      { id: 56, userId: 7, name: 'Kossi Doe', email: 'kossi@example.com', schoolId: 2 },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={parents}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    expect(screen.getByText('Effectif total : 2 parents')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '1' } });
+    expect(screen.getByText('Effectif total : 1 parents')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Rechercher par email/i), { target: { value: 'awa@gmail.com' } });
+    expect(screen.getByText('Effectif total : 1 parents')).toBeTruthy();
+  });
+
+  it('counts students by current scope and keeps the total stable under text search', () => {
+    const schools: School[] = [
+      { id: 1, name: 'École du Lac', address: '', phone: '' },
+      { id: 2, name: 'École du Nord', address: '', phone: '' },
+    ];
+    const years: AcademicYear[] = [
+      { id: 1, name: '2024-2025', isActive: true, schoolId: 1 },
+      { id: 2, name: '2024-2025', isActive: true, schoolId: 2 },
+    ];
+    const classes: Class[] = [
+      { id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 },
+      { id: 11, name: 'CM2', schoolId: 1, academicYearId: 1 },
+      { id: 20, name: 'CP', schoolId: 2, academicYearId: 2 },
+    ];
+    const students: Student[] = [
+      { id: 1, firstName: 'Koffi', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 2, firstName: 'Awa', lastName: 'Kouassi', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 3, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearId: 1, yearName: '2024-2025' },
+      { id: 4, firstName: 'Sonia', lastName: 'Yao', schoolId: 2, classId: 20, className: 'CP', yearId: 2, yearName: '2024-2025' },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={[]}
+        studentsList={students}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+    expect(screen.getByTestId('students-total-count').textContent).toContain('4');
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '2' } });
+    expect(screen.getByTestId('students-total-count').textContent).toContain('1');
+
+    fireEvent.change(screen.getByPlaceholderText(/Rechercher parmi les étudiants/i), { target: { value: 'KOFFI' } });
+    expect(screen.getByTestId('students-total-count').textContent).toContain('1');
+    expect(screen.queryByText(/Amani\s+Koffi/i)).toBeNull();
+    expect(screen.queryByText(/Koffi\s+Amani/i)).toBeNull();
+  });
+
+  it('respects the class filter when calculating the student total', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [
+      { id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 },
+      { id: 11, name: 'CM2', schoolId: 1, academicYearId: 1 },
+    ];
+    const students: Student[] = [
+      { id: 1, firstName: 'Koffi', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 2, firstName: 'Awa', lastName: 'Kouassi', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 3, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearId: 1, yearName: '2024-2025' },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={[]}
+        studentsList={students}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+    expect(screen.getByTestId('students-total-count').textContent).toContain('2');
+
+    fireEvent.change(screen.getByPlaceholderText(/Rechercher parmi les étudiants/i), { target: { value: 'KOFFI' } });
+    expect(screen.getByTestId('students-total-count').textContent).toContain('2');
+    expect(screen.getByText(/Amani\s+Koffi/i)).toBeTruthy();
   });
 
   it('displays mixed and successful parent import results clearly', () => {
