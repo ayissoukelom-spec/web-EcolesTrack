@@ -140,7 +140,7 @@ export default function App() {
       studentsList,
       gradesList,
       currentRole as UserRole,
-      currentRole === 'teacher' ? currentTeacherProfile?.id : undefined,
+      undefined,
     )
     : 0;
 

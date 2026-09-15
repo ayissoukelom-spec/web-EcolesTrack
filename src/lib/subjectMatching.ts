@@ -8,6 +8,20 @@ export function normalizeSubjectName(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
+export function isSubjectAssignedToTeacher(
+  subject: string,
+  specializations: string | string[] | null | undefined,
+): boolean {
+  const normalizedSubject = normalizeSubjectName(subject);
+  if (!normalizedSubject) return false;
+
+  const values = Array.isArray(specializations)
+    ? specializations
+    : String(specializations || '').split(/[,;&|/+]/);
+
+  return values.some((value) => normalizeSubjectName(String(value)) === normalizedSubject);
+}
+
 export function getTeacherAvailableSubjects(
   approvedSubjectsList: { id: number; name: string }[] = [],
   teacherSpecializations: string[] = [],

@@ -364,7 +364,7 @@ export default function AppShell() {
       studentsList,
       gradesList,
       currentRole,
-      currentRole === 'teacher' ? currentTeacherProfile?.id : undefined,
+      undefined,
     );
 
   const content = (() => {
