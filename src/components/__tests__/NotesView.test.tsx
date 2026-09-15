@@ -124,7 +124,7 @@ const baseProps = {
 };
 
 test('teacher sees only non-completed evaluations and archive contains completed', () => {
-  renderWithAuth(<NotesView {...baseProps} teacherId={10} teacherClassIds={[85]} /> as any, 'teacher', 1);
+  renderWithAuth(<NotesView {...baseProps} teacherId={10} teacherClassIds={[85]} teacherSpecializations={['Math']} /> as any, 'teacher', 1);
 
   // evaluation select should contain Eval 1 but not Eval 2
   const evalSelect = findEvaluationSelect();
@@ -134,6 +134,57 @@ test('teacher sees only non-completed evaluations and archive contains completed
   // archive section should be present and include Eval 2
   screen.getByText(/Archive des devoirs terminés/);
   screen.getByText(/Eval 2/);
+});
+
+test('teacher sees a same-class same-subject evaluation even when teacherId differs', () => {
+  const evaluations = [
+    { id: 3, classId: 85, teacherId: 99, subject: 'Math', title: 'Admin-created Math', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 4, classId: 85, teacherId: 99, subject: 'Science', title: 'Other subject', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+  ];
+
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      evaluationsList={evaluations}
+      teacherId={10}
+      teacherClassIds={[85]}
+      teacherSpecializations={['Math']}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const evalSelect = findEvaluationSelect();
+  within(evalSelect).getByText(/Admin-created Math/);
+  expect(within(evalSelect).queryByText(/Other subject/)).toBeNull();
+});
+
+test('teacher sees an approved global class evaluation but not an unapproved global class evaluation', () => {
+  const evaluations = [
+    { id: 5, classId: 85, teacherId: 99, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 6, classId: 86, teacherId: 99, subject: 'Math', title: 'Unapproved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+  ];
+  const classes = [
+    { id: 85, schoolId: null, academicYearId: 2026, name: 'Global approved', status: 'approved' },
+    { id: 86, schoolId: null, academicYearId: 2026, name: 'Global unapproved' },
+  ];
+
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      evaluationsList={evaluations}
+      classesList={classes}
+      teacherId={10}
+      teacherClassIds={[85, 86]}
+      teacherSpecializations={['Math']}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const evalSelect = findEvaluationSelect();
+  within(evalSelect).getByText(/Approved global class/);
+  expect(within(evalSelect).queryByText(/Unapproved global class/)).toBeNull();
 });
 
 test('school_admin sees archived label on completed evaluations in dropdown', () => {

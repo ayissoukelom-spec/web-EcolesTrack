@@ -28,7 +28,7 @@ import {
 } from '../lib/evaluationUtils';
 import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
-import { getTeacherAvailableSubjects } from '../lib/subjectMatching';
+import { getTeacherAvailableSubjects, isSubjectAssignedToTeacher } from '../lib/subjectMatching';
 
 interface NotesViewProps {
   evaluationsList: Evaluation[];
@@ -88,9 +88,18 @@ export default function NotesView({
     ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
     : availableClasses, [availableClasses, schoolFilterId]);
 
-  // Use the raw evaluations list here; class-level approval/sync issues
-  // are handled at the NotesView UI filtering level.
-  const approvedEvaluations = evaluationsList;
+  const isTeacherEvaluationVisible = (evaluation: Evaluation) => {
+    if (userRole !== 'teacher') return true;
+    const evaluationClass = classesList.find((klass) => Number(klass.id) === Number(evaluation.classId));
+    return teacherClassIds.includes(Number(evaluation.classId))
+      && evaluationClass != null
+      && isClassVisibleToSchool(evaluationClass, currentSchoolId)
+      && isSubjectAssignedToTeacher(evaluation.subject, teacherSpecializations);
+  };
+
+  const approvedEvaluations = userRole === 'teacher'
+    ? evaluationsList.filter(isTeacherEvaluationVisible)
+    : evaluationsList;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
   const selectedClassIdNumber = selectedClassId ? Number(selectedClassId) : null;
@@ -120,15 +129,6 @@ export default function NotesView({
     { value: 'devoir', label: 'Devoir' },
     { value: 'composition', label: 'Composition' },
   ];
-
-  const normalizeSubjectName = (value: string) =>
-    String(value || '')
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/\p{Diacritic}/gu, '')
-      .replace(/[^a-z0-9 ]+/g, '')
-      .replace(/\s+/g, ' ');
 
   const approvedSubjectNames = approvedSubjectsList && approvedSubjectsList.length > 0
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
@@ -392,10 +392,6 @@ export default function NotesView({
     isEvaluationCompletedUtil(ev, studentsList, gradesList);
 
   const openEvaluations = approvedEvaluations.filter((ev) => {
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
-    }
     if (!selectedClassId) return false;
     if (String(ev.classId) !== selectedClassId) return false;
     return !isEvaluationFullyGraded(ev);
@@ -420,11 +416,7 @@ export default function NotesView({
     if (selectedClassIdNumber === null) return false;
     if (Number(ev.classId) !== selectedClassIdNumber) return false;
 
-    if (userRole === 'teacher') {
-      if (teacherId == null) return false;
-      if (ev.teacherId !== teacherId) return false;
-      return !isEvaluationCompleted(ev);
-    }
+    if (userRole === 'teacher') return !isEvaluationCompleted(ev);
 
     if (userRole === 'school_admin') {
       return !isSchoolAdminEvaluationLocked(ev)
@@ -514,8 +506,7 @@ export default function NotesView({
       if (userRole === 'super_admin') return false;
 
       if (userRole === 'teacher') {
-        if (teacherId == null) return false;
-        if (ev.teacherId !== teacherId) return false;
+        if (!isTeacherEvaluationVisible(ev)) return false;
       }
 
       if (selectedClassIdNumber === null) return false;
@@ -553,7 +544,7 @@ export default function NotesView({
   }).length;
 
   const today = new Date();
-  const overdueEvaluations = getOverdueEvaluations(evaluationsList, studentsList, gradesList, userRole, teacherId);
+  const overdueEvaluations = getOverdueEvaluations(approvedEvaluations, studentsList, gradesList, userRole);
   const overdueCount = overdueEvaluations.length;
   const overdueEvaluationRows = overdueEvaluations
     .map((ev) => {
@@ -607,8 +598,7 @@ export default function NotesView({
     let studentGrades = gradesList.filter((g) => g.studentId === studentId);
     if (userRole === 'teacher' && teacherId != null) {
       studentGrades = studentGrades.filter((g) => {
-        const evaluation = evaluationsList.find((ev) => ev.id === g.evaluationId);
-        return evaluation ? evaluation.teacherId === teacherId : false;
+        return approvedEvaluations.some((evaluation) => evaluation.id === g.evaluationId);
       });
     }
     if (studentGrades.length === 0) return '—';

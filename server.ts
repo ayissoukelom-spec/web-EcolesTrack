@@ -71,6 +71,7 @@ import {
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray, ilike } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
+import { isSubjectAssignedToTeacher } from './src/lib/subjectMatching.ts';
 import studentAccess from './src/lib/studentAccess.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
@@ -3605,8 +3606,28 @@ export async function createApp() {
           .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
           .where(inArray(classes.id, classIds));
 
+        const schoolClassRows = await db
+          .select({ classId: schoolClasses.classId, status: schoolClasses.status })
+          .from(schoolClasses)
+          .where(and(
+            eq(schoolClasses.schoolId, targetSchoolId),
+            inArray(schoolClasses.classId, classIds),
+          ));
+        const schoolClassStatus = new Map(schoolClassRows.map((row) => [row.classId, row.status]));
+        const scopedAssignedClasses = assignedClasses
+          .map((klass) => ({
+            ...klass,
+            status: klass.schoolId === targetSchoolId
+              ? 'approved'
+              : schoolClassStatus.get(klass.id) ?? 'pending',
+          }))
+          .filter((klass) => (
+            klass.schoolId === targetSchoolId
+            || (klass.schoolId == null && klass.status === 'approved')
+          ));
+
         res.set('Cache-Control', 'no-store');
-        res.json(assignedClasses);
+        res.json(scopedAssignedClasses);
         return;
       }
 
@@ -6865,15 +6886,34 @@ export async function createApp() {
           return res.json([]);
         }
 
-        if (actor.role === 'teacher') {
-          if (actor.id == null) {
-            return res.json([]);
-          }
-          query = query.where(eq(teachers.userId, actor.id)) as any;
-        }
       }
 
-      const list = await query;
+      let list = await query;
+      if (actor.role === 'teacher') {
+        if (actor.id == null) return res.json([]);
+
+        const [teacherProfile] = await db
+          .select({ id: teachers.id, schoolId: teachers.schoolId, specialization: teachers.specialization })
+          .from(teachers)
+          .where(eq(teachers.userId, actor.id));
+        if (!teacherProfile) return res.json([]);
+
+        const assignmentRows = await db
+          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+          .from(classTeachers)
+          .innerJoin(classes, eq(classTeachers.classId, classes.id))
+          .where(eq(classTeachers.teacherId, teacherProfile.id));
+        const teacherClassIds = new Set(
+          teacherProfile.schoolId === actor.schoolId
+            ? getTeacherClassIdSet(assignmentRows, actor.schoolId)
+            : [],
+        );
+
+        list = list.filter((evaluation) =>
+          teacherClassIds.has(evaluation.classId)
+          && isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization)
+        );
+      }
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to load evaluations list' });
@@ -7463,16 +7503,32 @@ if (uniqueParentIds.length > 0) {
         }
       }
 
-      // Teachers can only record grades for their own evaluations and cannot edit existing grades
+      // Teachers can record grades only for an assigned class and matching subject.
       if (actor.role === 'teacher') {
         const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, actor.id));
         if (!teacherProfile) {
           return res.status(403).json({ error: 'Profile enseignant introuvable' });
         }
-        if (evaluation.teacherId !== teacherProfile.id) {
-          return res.status(403).json({ error: 'Vous ne pouvez pas modifier une note d’une évaluation qui ne vous appartient pas' });
+
+        const [assignment] = await db
+          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+          .from(classTeachers)
+          .innerJoin(classes, eq(classTeachers.classId, classes.id))
+          .where(and(
+            eq(classTeachers.classId, evaluation.classId),
+            eq(classTeachers.teacherId, teacherProfile.id),
+          ));
+        const sameSchoolClass = assignment && actor.schoolId != null && teacherProfile.schoolId === actor.schoolId && (
+          assignment.schoolId === actor.schoolId
+          || (assignment.schoolId == null && await isApprovedClassForSchool(evaluation.classId, actor.schoolId))
+        );
+        if (!sameSchoolClass || !isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization)) {
+          return res.status(403).json({ error: 'Vous n’êtes pas autorisé à noter cette évaluation' });
         }
-        if (actor.schoolId && student.schoolId !== actor.schoolId) {
+        if (student.classId !== evaluation.classId) {
+          return res.status(403).json({ error: 'Vous ne pouvez pas noter un élève d’une autre classe' });
+        }
+        if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot record grade for student in another school' });
         }
       }

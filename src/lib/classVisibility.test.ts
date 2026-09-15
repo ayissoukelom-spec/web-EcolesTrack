@@ -1,4 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { isClassVisibleToSchool } from './classVisibility';
+
+describe('isClassVisibleToSchool', () => {
+  it('accepts a globally defined class approved for the active school', () => {
+    expect(isClassVisibleToSchool({ id: 124, name: '1ère D', schoolId: null, academicYearId: 1, status: 'approved' }, 14)).toBe(true);
+  });
+
+  it('rejects a globally defined class without approval', () => {
+    expect(isClassVisibleToSchool({ id: 124, name: '1ère D', schoolId: null, academicYearId: 1 }, 14)).toBe(false);
+  });
+});import { describe, expect, it } from 'vitest';
 import { getClassGroupsVisibleToSchool } from './classVisibility';
 
 const classGroups = [
