@@ -4805,6 +4805,31 @@ export async function createApp() {
         } catch (e: any) {
           console.warn('Failed to insert user_schools for imported parent', e?.message || e);
         }
+
+        try {
+          const passwordToSet = '123456';
+          const crypto = await import('node:crypto');
+          const salt = crypto.randomBytes(16).toString('hex');
+          const hash = crypto.pbkdf2Sync(passwordToSet, salt, 310000, 64, 'sha512').toString('hex');
+          const existingLocal = await db.select().from(localAuths).where(eq(localAuths.userId, createdUser.id));
+          if (existingLocal.length > 0) {
+            await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: true }).where(eq(localAuths.userId, createdUser.id));
+          } else {
+            await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt, mustReset: true }).returning();
+          }
+        } catch (e: any) {
+          console.warn('Failed to set default password for imported parent', {
+            userId: createdUser.id,
+            message: e?.message,
+            code: e?.code,
+            detail: e?.detail,
+            constraint: e?.constraint,
+            table: e?.table,
+            column: e?.column,
+            where: e?.where,
+          });
+        }
+
         inserted.push({ user: createdUser, parentId: parentRes[0].id });
       }
 

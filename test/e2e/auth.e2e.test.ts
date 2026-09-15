@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from 'vites
 import request from 'supertest';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 // Mock DB and Auth middleware before importing the server so the real server
 // uses our test doubles when startServer() runs on import.
@@ -1229,6 +1230,18 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.insertedCount).toBe(1);
     expect(res.body.inserted[0].user.email).toBe('localparent@x.test');
     expect(res.body.inserted[0].user.schoolId).toBe(10);
+
+    const importedUserId = res.body.inserted[0].user.id;
+    const auth = FIXTURES.localAuths.find((row: any) => row.userId === importedUserId);
+    expect(auth).toBeDefined();
+    expect(auth.mustReset).toBe(true);
+    expect(crypto.pbkdf2Sync('123456', auth.salt, 310000, 64, 'sha512').toString('hex')).toBe(auth.passwordHash);
+
+    const login = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'localparent@x.test', password: '123456' });
+    expect(login.status).toBe(200);
+    expect(login.body.mustReset).toBe(true);
   });
 
   it('3o0. school_admin can batch import multiple parents without students', async () => {
