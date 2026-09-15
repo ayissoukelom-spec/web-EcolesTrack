@@ -800,6 +800,24 @@ export default function AdminView({
     filterBySearch(`${st.firstName} ${st.lastName} ${st.className || ''} ${st.parentName || ''} ${st.yearName || ''}`)
   );
 
+  const sortedVisibleStudents = [...filteredStudentsList].sort((a, b) => {
+    const lastNameCompare = String(a.lastName ?? '').localeCompare(
+      String(b.lastName ?? ''),
+      'fr',
+      { sensitivity: 'base' }
+    );
+
+    if (lastNameCompare !== 0) {
+      return lastNameCompare;
+    }
+
+    return String(a.firstName ?? '').localeCompare(
+      String(b.firstName ?? ''),
+      'fr',
+      { sensitivity: 'base' }
+    );
+  });
+
   const isStudentExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
 
   const getStudentAcademicYearName = (st: Student) =>
@@ -4895,7 +4913,7 @@ export default function AdminView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredStudentsList.map((st) => (
+                  {sortedVisibleStudents.map((st) => (
                     <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.lastName} {st.firstName}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{st.className || '—'}</td>

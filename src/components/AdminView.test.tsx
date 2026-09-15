@@ -379,6 +379,49 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByText(/Amani\s+Koffi/i)).toBeTruthy();
   });
 
+  it('sorts the visible students list alphabetically by last name then first name in the DOM', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
+    const classes: Class[] = [
+      { id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 },
+      { id: 11, name: 'CM2', schoolId: 1, academicYearId: 1 },
+    ];
+    const students: Student[] = [
+      { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearId: 1, yearName: '2024-2025' },
+      { id: 2, firstName: 'Koffi', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 3, firstName: 'Awa', lastName: 'Koffi', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+      { id: 4, firstName: 'Ali', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={schools}
+        yearsList={years}
+        classesList={classes}
+        teachersList={[]}
+        studentsList={students}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+
+    const renderedNames = Array.from(document.querySelectorAll('tbody tr')).filter((row) => !row.querySelector('td[colspan]')).map((row) => row.querySelector('td')?.textContent?.trim());
+
+    expect(renderedNames).toEqual(['Amani Ali', 'Amani Koffi', 'Koffi Awa', 'Tano Moussa']);
+  });
+
   it('displays mixed and successful parent import results clearly', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const baseProps = {
