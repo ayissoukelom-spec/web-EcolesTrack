@@ -1749,6 +1749,7 @@ export default function AdminView({
   const [importPreviewHeaders, setImportPreviewHeaders] = useState<string[] | null>(null);
   const [importErrorsList, setImportErrorsList] = useState<string[] | null>(null);
   const [importRowErrors, setImportRowErrors] = useState<{row: number; errors: string[]}[] | null>(null);
+  const [parentEmailSearchQuery, setParentEmailSearchQuery] = useState('');
 
   const confirmImport = async () => {
     if (!importPreviewRecords || importPreviewRecords.length === 0) return;
@@ -3650,6 +3651,28 @@ export default function AdminView({
         {/* Import results panel */}
         {importResult && (
           <div className="p-4 border-b border-slate-100 bg-slate-50 text-sm">
+            <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
+              <h3 className="font-bold text-slate-800">Importation terminée</h3>
+              <p className="mt-1 text-slate-600">{Number(importResult.insertedCount || 0)} parent(s) importé(s).</p>
+              {Array.isArray(importResult.errors) && importResult.errors.length === 0 ? (
+                <p className="mt-1 font-semibold text-emerald-700">Toutes les lignes ont été importées avec succès.</p>
+              ) : (
+                <>
+                  <p className="mt-1 font-semibold text-rose-700">{Array.isArray(importResult.errors) ? importResult.errors.length : 0} ligne(s) non importée(s).</p>
+                  <div className="mt-3 space-y-2" role="alert">
+                    <h4 className="font-semibold text-slate-800">Doublons / erreurs</h4>
+                    {(importResult.errors || []).map((item: { row?: number; name?: string; email?: string; error?: string }, index: number) => (
+                      <div key={`${item.row ?? 'row'}-${item.email ?? index}`} className="rounded border border-rose-100 bg-rose-50 p-3 text-rose-800">
+                        <div className="font-semibold">
+                          Ligne {item.row ?? '—'}{item.name ? ` — ${item.name}` : ''}{item.email ? ` — ${item.email}` : ''}
+                        </div>
+                        <div>{item.error || 'Erreur inconnue'}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par classe</label>
               <select
@@ -4908,6 +4931,19 @@ export default function AdminView({
         {/* TAB 6: PARENTS */}
         {activeTab === 'parents' && (
           <div>
+            <div className="mb-4">
+              <label htmlFor="parent-email-search" className="block mb-1 text-slate-600 text-xs sm:text-sm font-semibold">
+                Rechercher par email
+              </label>
+              <input
+                id="parent-email-search"
+                type="search"
+                value={parentEmailSearchQuery}
+                onChange={(e) => setParentEmailSearchQuery(e.target.value)}
+                placeholder="awa@gmail.com"
+                className="w-full max-w-md px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+              />
+            </div>
             {userRole === 'super_admin' && (
               <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
                 <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
@@ -4939,6 +4975,7 @@ export default function AdminView({
                 {parentsList.filter((p) => 
                   (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
                   (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
+                  p.email.toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
                   filterBySearch(p.name)
                 ).map((pt) => (
                   <tr key={pt.id} className="hover:bg-slate-50/60 transition-colors">

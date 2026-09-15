@@ -196,6 +196,98 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByRole('button', { name: /Refuser/i })).toBeTruthy();
   });
 
+  it('filters the parents list by email case-insensitively', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const parents: Parent[] = [
+      { id: 55, userId: 6, name: 'Awa Mensah', email: 'awa@gmail.com', phone: '+228 90000000', schoolId: 1 },
+      { id: 56, userId: 7, name: 'Kossi Doe', email: 'kossi@example.com', phone: '+228 90000001', schoolId: 1 },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={schools}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={parents}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    expect(screen.getByText('Awa Mensah')).toBeTruthy();
+    expect(screen.getByText('Kossi Doe')).toBeTruthy();
+
+    const emailSearch = screen.getByLabelText(/Rechercher par email/i);
+    fireEvent.change(emailSearch, { target: { value: 'AWA@GMAIL.COM' } });
+    expect(screen.getByText('Awa Mensah')).toBeTruthy();
+    expect(screen.queryByText('Kossi Doe')).toBeNull();
+
+    fireEvent.change(emailSearch, { target: { value: 'absent@example.com' } });
+    expect(screen.queryByText('Awa Mensah')).toBeNull();
+    expect(screen.queryByText('Kossi Doe')).toBeNull();
+  });
+
+  it('displays mixed and successful parent import results clearly', () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const baseProps = {
+      userRole: 'school_admin' as const,
+      schoolsList: schools,
+      yearsList: [] as AcademicYear[],
+      classesList: [] as Class[],
+      teachersList: [] as Teacher[],
+      studentsList: [] as Student[],
+      parentsList: [] as Parent[],
+      usersList: [] as User[],
+      onAddSchool: async () => ({}),
+      onAddYear: () => undefined,
+      onAddClass: async () => undefined,
+      onAddTeacher: async () => ({}),
+      onAddParent: async () => ({}),
+      onAddStudent: () => undefined,
+      onDeleteClass: () => undefined,
+      onDeleteSchool: () => undefined,
+      currentSchoolId: 1,
+    };
+
+    const view = renderWithAuth(
+      <AdminView
+        {...baseProps}
+        importResult={{
+          insertedCount: 1,
+          errors: [
+            { row: 12, name: 'AWA KOFFI', email: 'awa@gmail.com', error: 'duplicate email in this school' },
+            { row: 27, name: 'JOHN DOE', email: 'john@gmail.com', error: 'Cet email est déjà utilisé et ne peut pas être importé dans cet établissement' },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText('1 parent(s) importé(s).')).toBeTruthy();
+    expect(screen.getByText('2 ligne(s) non importée(s).')).toBeTruthy();
+    expect(screen.getByText(/Ligne 12 — AWA KOFFI — awa@gmail.com/)).toBeTruthy();
+    expect(screen.getByText('duplicate email in this school')).toBeTruthy();
+    expect(screen.getByText(/Ligne 27 — JOHN DOE — john@gmail.com/)).toBeTruthy();
+
+    view.rerender(
+      <AuthProvider>
+        <AdminView {...baseProps} importResult={{ insertedCount: 2, errors: [] }} />
+      </AuthProvider>
+    );
+    expect(screen.getByText('Toutes les lignes ont été importées avec succès.')).toBeTruthy();
+  });
+
   it('shows configured class groups and filters classes when creating a school', async () => {
     const localStorageMock = window.localStorage as any;
     localStorageMock.getItem.mockImplementation((key: string) => {

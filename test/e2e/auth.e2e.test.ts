@@ -1272,7 +1272,21 @@ describe('E2E security: auth & privilege checks', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(0);
-    expect(res.body.errors[0]).toMatchObject({ row: 2, error: 'duplicate email in this school' });
+    expect(res.body.errors[0]).toMatchObject({ row: 2, name: 'Duplicate Parent', email: 'duplicate@x.test', error: 'duplicate email in this school' });
+  });
+
+  it('3o2. globally used email in another school is rejected before user insert', async () => {
+    FIXTURES.users.push({ id: 12, uid: 'other-school-parent-uid', email: 'global-parent@x.test', name: 'Other School Parent', role: 'parent', schoolId: 20, isDeleted: false });
+
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([{ name: 'Global Duplicate', email: 'global-parent@x.test', phonePrefix: '+228', phone: '90000004', parentType: 'pere' }]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0]).toMatchObject({ row: 2, name: 'Global Duplicate', email: 'global-parent@x.test', error: 'Cet email est déjà utilisé et ne peut pas être importé dans cet établissement' });
+    expect(FIXTURES.users.filter((user: any) => user.email === 'global-parent@x.test')).toHaveLength(1);
   });
 
   it('3p. school_admin cannot send notification to another-school user via POST /api/notifications/send', async () => {

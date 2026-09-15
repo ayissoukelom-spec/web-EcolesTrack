@@ -4733,7 +4733,7 @@ export async function createApp() {
       const rows: any[] = Array.isArray(req.body) ? req.body : req.body.rows;
       if (!rows || !Array.isArray(rows)) return res.status(400).json({ error: 'Invalid payload: expected array of rows' });
 
-      const errors: { row: number; email?: string; error: string }[] = [];
+      const errors: { row: number; name?: string; email?: string; error: string }[] = [];
       const inserted: any[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -4747,14 +4747,15 @@ export async function createApp() {
         const gender = normalizedRow.gender || null;
         const requestedSchoolId = r.schoolId != null && r.schoolId !== '' ? parseInt(String(r.schoolId), 10) : null;
         let schoolId = null;
+        const addRowError = (error: string) => errors.push({ row: i + 2, name: name || undefined, email: normalizedEmail || undefined, error });
 
         if (actor.role === 'school_admin') {
           if (actor.schoolId == null) {
-            errors.push({ row: i + 2, email: normalizedEmail || undefined, error: 'Forbidden: missing school context' });
+            addRowError('Forbidden: missing school context');
             continue;
           }
           if (requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
-            errors.push({ row: i + 2, email: normalizedEmail || undefined, error: 'Cannot import parent for another school' });
+            addRowError('Cannot import parent for another school');
             continue;
           }
 
@@ -4764,14 +4765,20 @@ export async function createApp() {
         }
 
         if (validation.errors.length > 0) {
-          errors.push({ row: i + 2, email: normalizedEmail || undefined, error: validation.errors.join('; ') });
+          addRowError(validation.errors.join('; '));
           continue;
         }
 
         // Check email uniqueness per-school (same email allowed in different schools)
         const existing = await findExistingUsersByEmailAndSchool(normalizedEmail, schoolId);
         if (existing && existing.length > 0) {
-          errors.push({ row: i + 2, email: normalizedEmail, error: 'duplicate email in this school' });
+          addRowError('duplicate email in this school');
+          continue;
+        }
+
+        const existingGlobal = await findExistingUsersByEmail(normalizedEmail);
+        if (existingGlobal.length > 0) {
+          addRowError('Cet email est déjà utilisé et ne peut pas être importé dans cet établissement');
           continue;
         }
 
@@ -4782,7 +4789,7 @@ export async function createApp() {
           const requestedStudentId = parseInt(normalizedRow.studentId, 10);
           const [srow] = await db.select().from(students).where(eq(students.id, requestedStudentId));
           if (srow) linkedStudentId = srow.id;
-          else errors.push({ row: i + 2, email: normalizedEmail, error: `studentId introuvable: ${normalizedRow.studentId}` });
+          else addRowError(`studentId introuvable: ${normalizedRow.studentId}`);
         } else if (r.studentIds) {
           const ids = String(r.studentIds).split(/[,;]+/).map((s: string) => parseInt(s.trim())).filter((n) => !isNaN(n));
           for (const sid of ids) {
@@ -4790,7 +4797,7 @@ export async function createApp() {
             if (srow) { linkedStudentId = srow.id; break; }
           }
           if (ids.length > 0 && !linkedStudentId) {
-            errors.push({ row: i + 2, email: normalizedEmail, error: `studentIds provided but no matching student found (${String(r.studentIds)})` });
+            addRowError(`studentIds provided but no matching student found (${String(r.studentIds)})`);
           }
         } else if (r.studentNames) {
           const names = String(r.studentNames).split(/[,;]+/).map((s: string) => s.trim()).filter(Boolean);
@@ -4804,7 +4811,7 @@ export async function createApp() {
             }
           }
           if (names.length > 0 && !linkedStudentId) {
-            errors.push({ row: i + 2, email: normalizedEmail, error: `studentNames provided but no matching student found (${String(r.studentNames)})` });
+            addRowError(`studentNames provided but no matching student found (${String(r.studentNames)})`);
           }
         }
 
