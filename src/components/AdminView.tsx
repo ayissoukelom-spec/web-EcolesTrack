@@ -3728,7 +3728,7 @@ export default function AdminView({
                         <div className="font-semibold">
                           Ligne {item.row ?? '—'}{item.name ? ` — ${item.name}` : ''}{item.email ? ` — ${item.email}` : ''}
                         </div>
-                        <div>{item.error || 'Erreur inconnue'}</div>
+                        <div>{item.error || item.reason || 'Erreur inconnue'}</div>
                       </div>
                     ))}
                   </div>
