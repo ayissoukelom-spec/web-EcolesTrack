@@ -309,7 +309,7 @@ export default function DashboardView({
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-emerald-50/50 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
+        {userRole !== 'surveillant' && <div className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-emerald-50/50 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
           <div className="mb-4 flex justify-between items-center">
             <h3 className="font-bold text-slate-800 flex items-center gap-2">
               <Award className="h-5 w-5 text-violet-500" />
@@ -349,7 +349,7 @@ export default function DashboardView({
               <p className="text-slate-400 py-4 text-center text-xs">Aucune note saisie récemment.</p>
             )}
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

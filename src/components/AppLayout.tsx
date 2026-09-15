@@ -101,7 +101,7 @@ export default function AppLayout({
                 <span>Tableau de Bord</span>
               </button>
 
-              <button
+              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
                 onClick={() => onTabChange('administration')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'administration'
@@ -112,7 +112,7 @@ export default function AppLayout({
               >
                 <Building2 className="h-4.5 w-4.5" />
                 <span>Administration</span>
-              </button>
+              </button>}
 
               <button
                 onClick={() => onTabChange('absences')}
@@ -127,7 +127,7 @@ export default function AppLayout({
                 <span>Absences</span>
               </button>
 
-              {currentRole !== 'parent' && (
+              {currentRole !== 'parent' && currentRole !== 'surveillant' && (
                 <>
                   <button
                     onClick={() => onTabChange('notes')}
@@ -166,7 +166,7 @@ export default function AppLayout({
                 </>
               )}
 
-              <button
+              {currentRole !== 'surveillant' && <button
                 type="button"
                 disabled={currentRole !== 'super_admin'}
                 onClick={() => {
@@ -197,7 +197,7 @@ export default function AppLayout({
                     {noteOverdueCount}
                   </span>
                 )}
-              </button>
+              </button>}
 
               {currentRole === 'super_admin' && (
                 <button
@@ -214,7 +214,7 @@ export default function AppLayout({
                 </button>
               )}
 
-              <button
+              {currentRole !== 'surveillant' && <button
                 onClick={() => onTabChange('notifications')}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'notifications'
@@ -234,7 +234,7 @@ export default function AppLayout({
                     {unreadNotifications}
                   </span>
                 )}
-              </button>
+              </button>}
 
             </nav>
           </div>

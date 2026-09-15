@@ -134,7 +134,7 @@ export default function App() {
     : [];
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
-  const noteOverdueCount = currentRole === 'teacher' || currentRole === 'school_admin' || currentRole === 'super_admin'
+  const noteOverdueCount = currentRole === 'teacher' || currentRole === 'surveillant' || currentRole === 'school_admin' || currentRole === 'super_admin'
     ? countOverdueEvaluations(
       evaluationsList,
       studentsList,
@@ -366,13 +366,13 @@ export default function App() {
     // Ensure there's a simulated user set when switching roles quickly.
     const existingSimUser = authenticatedUser;
     if (!existingSimUser) {
-      if (newRole === 'teacher') {
+      if (newRole === 'teacher' || newRole === 'surveillant') {
         // pick a teacher in the current school if available, otherwise a generic teacher
         const preferred = teachersList.find((t) => t.schoolId === currentSchoolId) || teachersList[0];
         if (preferred) {
           setSimulatedUser({ uid: `teacher_${preferred.userId || preferred.id}`, email: preferred.email || '', name: preferred.name || 'Enseignant', schoolId: preferred.schoolId });
         } else {
-          setSimulatedUser({ uid: `sim_teacher_${Date.now()}`, email: 'sim_teacher@example.test', name: 'Enseignant Simulé', schoolId: currentSchoolId });
+          setSimulatedUser({ uid: `sim_${newRole}_${Date.now()}`, email: `${newRole}@example.test`, name: newRole === 'surveillant' ? 'Surveillant Simulé' : 'Enseignant Simulé', schoolId: currentSchoolId });
         }
       } else if (newRole === 'school_admin') {
         setSimulatedUser({ uid: `sim_schooladmin_${Date.now()}`, email: 'sim_schooladmin@example.test', name: 'Admin Ecole', schoolId: currentSchoolId });
@@ -927,7 +927,7 @@ export default function App() {
               </button>
 
               {/* Tab 2: Admin standard dashboard */}
-              <button
+              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
                 onClick={() => setActiveTab('administration')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'administration'
@@ -938,7 +938,7 @@ export default function App() {
               >
                 <Building2 className="h-4.5 w-4.5" />
                 <span>Administration</span>
-              </button>
+              </button>}
 
               {/* Tab 3: Absences */}
               <button
@@ -964,7 +964,7 @@ export default function App() {
                 )}
               </button>
 
-              {currentRole === 'school_admin' && (
+              {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
                 <button
                   onClick={() => setActiveTab('absence-controls')}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -995,7 +995,7 @@ export default function App() {
               )}
 
               {/* Tab 4: Notes et bulletins (hidden for parents) */}
-              {currentRole !== 'parent' && (
+              {currentRole !== 'parent' && currentRole !== 'surveillant' && (
                 <>
                   <button
                     onClick={() => setActiveTab('notes')}
@@ -1034,7 +1034,7 @@ export default function App() {
                 </>
               )}
 
-              <button
+              {currentRole !== 'surveillant' && <button
                 type="button"
                 disabled={currentRole !== 'super_admin'}
                 onClick={() => {
@@ -1065,7 +1065,7 @@ export default function App() {
                     {noteOverdueCount}
                   </span>
                 )}
-              </button>
+              </button>}
 
               {currentRole === 'super_admin' && (
                 <button
@@ -1083,7 +1083,7 @@ export default function App() {
               )}
 
               {/* Tab 5: Real-time FCM Notifications */}
-              <button
+              {currentRole !== 'surveillant' && <button
                 onClick={() => setActiveTab('notifications')}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'notifications'
@@ -1103,7 +1103,7 @@ export default function App() {
                     {notificationsList.filter((n) => !n.isRead).length}
                   </span>
                 )}
-              </button>
+              </button>}
 
             </nav>
           </div>
@@ -1225,7 +1225,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'absence-controls' && currentRole === 'school_admin' && (
+              {activeTab === 'absence-controls' && (currentRole === 'school_admin' || currentRole === 'surveillant') && (
                 <AbsenceControlsView
                   absenceControlsList={absenceControlsList}
                   classesList={classesList}
@@ -1234,7 +1234,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'notes' && (
+              {activeTab === 'notes' && currentRole !== 'surveillant' && (
                 currentRole === 'parent' ? (
                   <ParentNotesView
                     currentRole={currentRole}
@@ -1262,7 +1262,7 @@ export default function App() {
                 )
               )}
 
-              {activeTab === 'archive' && currentRole !== 'parent' && (
+              {activeTab === 'archive' && currentRole !== 'parent' && currentRole !== 'surveillant' && (
                 <ArchiveView
                   userRole={currentRole}
                   evaluationsList={archivedEvaluations}

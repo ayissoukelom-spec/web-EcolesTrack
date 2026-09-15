@@ -3317,7 +3317,7 @@ export default function AdminView({
                         role: selectedRole,
                         schoolId: selectedRole === 'school_admin'
                           ? newUserForm.schoolId
-                          : userRole === 'school_admin' && ['teacher', 'parent'].includes(selectedRole)
+                          : userRole === 'school_admin' && ['teacher', 'surveillant', 'parent'].includes(selectedRole)
                             ? String(currentSchoolId || '')
                             : '',
                         academicYearId: selectedRole === 'school_admin' ? newUserForm.academicYearId : '',
@@ -3331,11 +3331,12 @@ export default function AdminView({
                       </>
                     )}
                     <option value="teacher">Enseignant</option>
+                    <option value="surveillant">Surveillant</option>
                     <option value="parent">Parent</option>
                   </select>
                 </div>
 
-                {newUserForm.role === 'teacher' && (
+                {(newUserForm.role === 'teacher' || newUserForm.role === 'surveillant') && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
                       <RequiredLabel label="École" required />
@@ -3360,7 +3361,7 @@ export default function AdminView({
                       </select>
                     )}
 
-                    <div className="mt-3">
+                    {newUserForm.role === 'teacher' && <div className="mt-3">
                       <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
                         <RequiredLabel label="Classes assignées" required />
                       </label>
@@ -3404,7 +3405,7 @@ export default function AdminView({
                             .join(', ')}
                         </div>
                       )}
-                    </div>
+                    </div>}
                   </div>
                 )}
 
@@ -3623,8 +3624,8 @@ export default function AdminView({
                         setCreateUserError('Une école est requise pour un parent');
                         return;
                       }
-                      if (newUserForm.role === 'teacher' && userRole !== 'school_admin' && !newUserForm.schoolId) {
-                        setCreateUserError('Une école est requise pour un enseignant');
+                      if ((newUserForm.role === 'teacher' || newUserForm.role === 'surveillant') && userRole !== 'school_admin' && !newUserForm.schoolId) {
+                        setCreateUserError('Une école est requise pour ce rôle');
                         return;
                       }
                       if (newUserForm.role === 'teacher' && (!Array.isArray(newUserForm.specialization) || newUserForm.specialization.length === 0)) {
@@ -3638,7 +3639,7 @@ export default function AdminView({
                       if (onCreateUser) {
                         const resolvedSchoolId = newUserForm.schoolId
                           ? parseInt(newUserForm.schoolId)
-                          : newUserForm.role === 'teacher' && userRole === 'school_admin'
+                          : (newUserForm.role === 'teacher' || newUserForm.role === 'surveillant') && userRole === 'school_admin'
                             ? (currentSchoolId ?? getSimulatedSchoolId() ?? undefined)
                             : undefined;
                         const resolvedSpecialization = newUserForm.role === 'teacher'

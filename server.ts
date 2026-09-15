@@ -153,7 +153,7 @@ function sendDuplicateEmailResponse(res: any) {
 }
 
 // Resolved actor shape used by business routes.
-type ResolvedActorRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | string;
+type ResolvedActorRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | 'surveillant' | string;
 
 interface ResolvedActor {
   id?: number | null;
@@ -1015,7 +1015,7 @@ export async function createApp() {
           return res.json([]);
         }
         filterConditions = and(filterConditions, eq(users.id, actor.id));
-      } else if (actor.role === 'teacher') {
+      } else if (actor.role === 'teacher' || actor.role === 'surveillant') {
         // Teachers are not allowed to list simulation users (they can only view students)
         return res.status(403).json({ error: 'Forbidden' });
       } else {
@@ -1174,12 +1174,27 @@ export async function createApp() {
       if (!normalizedEmail || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
 
       // Ensure role is one of allowed
-      const allowed = ['super_admin', 'school_admin', 'teacher', 'parent'];
+      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
       const schoolId = rawSchoolId != null && rawSchoolId !== '' ? parseInt(rawSchoolId, 10) : undefined;
       if (rawSchoolId != null && rawSchoolId !== '' && Number.isNaN(schoolId)) {
         return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+
+      if (role === 'surveillant') {
+        if (actor.role === 'super_admin' && (rawSchoolId == null || String(rawSchoolId).trim() === '')) {
+          return res.status(400).json({ error: 'schoolId is required for surveillant role' });
+        }
+        if (rawSchoolId != null && String(rawSchoolId).trim() !== '') {
+          const parsedSchoolId = Number(String(rawSchoolId).trim());
+          if (!Number.isInteger(parsedSchoolId)) {
+            return res.status(400).json({ error: 'Invalid schoolId' });
+          }
+        }
+        if (actor.role === 'school_admin' && actor.schoolId == null) {
+          return res.status(400).json({ error: 'School admin must be attached to a school' });
+        }
       }
 
       const academicYearId = rawAcademicYearId != null && rawAcademicYearId !== '' ? parseInt(rawAcademicYearId, 10) : undefined;
@@ -1197,6 +1212,10 @@ export async function createApp() {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for school_admin role' });
       }
 
+      if ((role === 'teacher' || role === 'surveillant') && (schoolId == null) && actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher and surveillant roles' });
+      }
+
       // Do not require an explicit password during creation; a default password will be applied.
       // The provided `password` field will be ignored to enforce the default.
 
@@ -1206,6 +1225,18 @@ export async function createApp() {
       }
 
       const resolvedSchoolId = schoolId != null ? schoolId : actor.role === 'school_admin' ? actor.schoolId : null;
+
+      if (role === 'surveillant') {
+        if (resolvedSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required for surveillant role' });
+        }
+        if (actor.role === 'super_admin' || actor.role === 'school_admin') {
+          const [school] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, resolvedSchoolId)).limit(1);
+          if (!school) {
+            return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+          }
+        }
+      }
 
       if (role === 'school_admin' && academicYearId == null) {
         return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -1243,6 +1274,9 @@ export async function createApp() {
 
       if (role === 'school_admin' && resolvedSchoolId != null) {
         await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
+      }
+      if (role === 'surveillant' && resolvedSchoolId != null) {
+        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'surveillant', true);
       }
 
       // Create linked profile for teacher/parent
@@ -1417,14 +1451,14 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid academicYearId' });
       }
 
-      const allowed = ['super_admin', 'school_admin', 'teacher', 'parent'];
+      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
       // Check if school_admin is modifying a user outside their school
       const [targetUser] = await db.select().from(users).where(eq(users.id, id));
       console.log('DEBUG delete: actor=', { uid: actor?.uid, role: actor?.role, schoolId: actor?.schoolId }, 'targetId=', id, 'targetUser=', targetUser ? { id: targetUser.id, role: targetUser.role, schoolId: targetUser.schoolId } : null);
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
-      if (targetUser.role === 'teacher' && role !== 'teacher') {
+      if ((targetUser.role === 'teacher' || targetUser.role === 'surveillant') && role !== targetUser.role) {
         return res.status(403).json({ error: 'Forbidden: cannot change role for teacher accounts' });
       }
       if (actor.role === 'school_admin' && actor.schoolId !== targetUser.schoolId) {
@@ -2151,7 +2185,7 @@ export async function createApp() {
       }
 
       // If user is simulated or we need to auto-create, preserve known roles, otherwise default to parent
-      const allowedRoles = ['super_admin', 'school_admin', 'teacher', 'parent'];
+      const allowedRoles = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       const normalizedRole = String(role || '').trim();
       const finalRole = allowedRoles.includes(normalizedRole) ? normalizedRole : 'parent';
 
@@ -2228,6 +2262,14 @@ export async function createApp() {
             }
           } catch (e) {
             /* ignore */
+          }
+        }
+      } else if (finalRole === 'surveillant') {
+        if (resolvedSchoolId != null) {
+          try {
+            await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'surveillant', true);
+          } catch (e: any) {
+            console.warn('Failed to insert user_schools for register-or-login surveillant', e?.message || e);
           }
         }
       }
@@ -3614,7 +3656,7 @@ export async function createApp() {
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
-      const targetSchoolId = actor.role === 'school_admin'
+      const targetSchoolId = actor.role === 'school_admin' || actor.role === 'surveillant'
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
@@ -5396,6 +5438,8 @@ export async function createApp() {
             eq(absenceControls.schoolId, actor.schoolId),
             inArray(absenceControls.classId, teacherClassIds),
           )) as any;
+        } else if (actor.role === 'surveillant') {
+          query = query.where(eq(absenceControls.schoolId, actor.schoolId)) as any;
         } else {
           query = query.where(eq(absenceControls.schoolId, actor.schoolId)) as any;
         }
@@ -5591,6 +5635,12 @@ export async function createApp() {
           }
 
           query = query.where(inArray(absences.studentId, authorizedStudentIds)) as any;
+        } else if (actor.role === 'surveillant') {
+          if (actor.schoolId) {
+            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+          } else {
+            return res.json([]);
+          }
         } else {
           if (actor.schoolId) {
             query = query.where(eq(students.schoolId, actor.schoolId)) as any;
@@ -5661,6 +5711,18 @@ export async function createApp() {
         return res.status(403).json({ error: 'Parents are not allowed to record absences' });
       }
 
+      const classBelongsToSchool = classRecord.schoolId === actor.schoolId
+        || await isApprovedClassForSchool(parseInt(classId), actor.schoolId);
+
+      if (actor.role === 'surveillant') {
+        if (actor.schoolId == null) {
+          return res.status(403).json({ error: 'Surveillant school context is missing' });
+        }
+        if (student.schoolId !== actor.schoolId || !classBelongsToSchool) {
+          return res.status(403).json({ error: 'Cannot record absence outside the surveillant school' });
+        }
+      }
+
       if (actor.role === 'teacher') {
         if (!actor.id || actor.schoolId == null) {
           return res.status(403).json({ error: 'Cannot record absence for this user' });
@@ -5687,7 +5749,7 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot record absence for student outside your assigned classes' });
         }
       } else if (actor.role !== 'super_admin') {
-        if (actor.schoolId && (student.schoolId !== actor.schoolId || classRecord.schoolId !== actor.schoolId)) {
+        if (actor.schoolId && (student.schoolId !== actor.schoolId || !classBelongsToSchool)) {
           return res.status(403).json({ error: 'Cannot record absence for student in another school' });
         }
       }
@@ -6382,7 +6444,7 @@ export async function createApp() {
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
-      const targetSchoolId = actor.role === 'school_admin'
+      const targetSchoolId = actor.role === 'school_admin' || actor.role === 'surveillant'
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
@@ -6904,6 +6966,7 @@ export async function createApp() {
       
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       let query = db
         .select({
@@ -6999,6 +7062,7 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
       if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Only school administrators can validate evaluations' });
       }
@@ -7052,6 +7116,7 @@ export async function createApp() {
         }
         return res.status(404).json({ error: 'User not found' });
       }
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
       if (actor.role !== 'super_admin' && actor.schoolId == null) {
         return res.status(403).json({ error: 'Forbidden: missing or invalid school context' });
       }
@@ -7383,6 +7448,7 @@ if (uniqueParentIds.length > 0) {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       const { evaluationId, studentId, status } = req.body ?? {};
       const parsedEvaluationId = Number(evaluationId);
@@ -7433,6 +7499,7 @@ if (uniqueParentIds.length > 0) {
       
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       let query = db
         .select({
@@ -7505,6 +7572,7 @@ if (uniqueParentIds.length > 0) {
       if (SENSITIVE_LOG) console.log('POST /api/grades payload', req.body);
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to record or update grades' });
       }
@@ -8117,7 +8185,7 @@ if (uniqueParentIds.length > 0) {
       const actor = await resolveActor(req);
       if (!actor) return res.json([]);
 
-      if (actor.role === 'teacher') return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'teacher' || actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       const userNotifications = await db
         .select()
@@ -8169,6 +8237,7 @@ if (uniqueParentIds.length > 0) {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       const [notification] = await db.select().from(notifications).where(eq(notifications.id, notificationId));
       if (!notification) return res.status(404).json({ error: 'Notification not found' });
@@ -8212,6 +8281,7 @@ if (uniqueParentIds.length > 0) {
 
       const actor = await resolveActor(req);
       if (actor) {
+        if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
         await db
           .update(notifications)
           .set({ isRead: true })
@@ -8231,6 +8301,7 @@ if (uniqueParentIds.length > 0) {
       const id = parseInt(req.params.id);
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
       // Only allow marking notifications that belong to the actor
       const updated = await db

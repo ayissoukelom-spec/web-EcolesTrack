@@ -9,7 +9,7 @@ export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 export const mapToAppRole = (rawRole?: string | null): AppRole | undefined => {
   if (!rawRole) return undefined;
   if (rawRole === 'super_admin' || rawRole === 'school_admin' || rawRole === 'admin') return 'admin';
-  if (rawRole === 'teacher') return 'teacher';
+  if (rawRole === 'teacher' || rawRole === 'surveillant') return 'teacher';
   if (rawRole === 'parent') return 'parent';
   if (rawRole === 'student') return 'student';
   return undefined;

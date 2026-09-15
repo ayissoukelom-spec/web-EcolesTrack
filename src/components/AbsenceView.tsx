@@ -198,9 +198,11 @@ export default function AbsenceView({
     ? teacherSpecializations || classTeacherSubjectNames
     : classTeacherSubjectNames;
 
-  const availableSubjects = (approvedSubjectsList || []).filter((subject) => {
-    return effectiveTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
-  });
+  const availableSubjects = userRole === 'surveillant'
+    ? approvedSubjectsList || []
+    : (approvedSubjectsList || []).filter((subject) => {
+      return effectiveTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
+    });
 
   const handleCreateAbsence = (e: React.FormEvent) => {
     e.preventDefault();
@@ -334,7 +336,7 @@ export default function AbsenceView({
         </div>
 
         {/* Teachers and admins can take attendance */}
-        {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+        {['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(userRole) && (
           <button
             onClick={() => {
               if (sortedStudents.length > 0) {

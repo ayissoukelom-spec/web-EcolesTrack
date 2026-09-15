@@ -21,6 +21,7 @@ const FIXTURES = {
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
     { id: 10, uid: 'teacher-sim', email: 'teacher@x.test', name: 'TeacherSim', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 11, uid: 'other-school-admin-uid', email: 'other-admin@x.test', name: 'OtherSchoolAdmin', role: 'school_admin', schoolId: 20, isDeleted: false },
+    { id: 12, uid: 'surveillant-uid', email: 'surveillant@school.test', name: 'Surveillant', role: 'surveillant', schoolId: 10, isDeleted: false },
   ],
   schools: [
     { id: 10, name: 'Test School' },
@@ -31,6 +32,8 @@ const FIXTURES = {
     { id: 1, name: 'Assigned Class', schoolId: 10, academicYearId: 1, teacherId: 77 },
     { id: 2, name: 'Unassigned Class', schoolId: 10, academicYearId: 1, teacherId: 88 },
     { id: 3, name: 'Other School Class', schoolId: 20, academicYearId: 1, teacherId: 88 },
+    { id: 4, name: 'Global Approved Class', schoolId: null, academicYearId: 1, teacherId: null },
+    { id: 5, name: 'Global Unapproved Class', schoolId: null, academicYearId: 1, teacherId: null },
   ],
   teachers: [
     { id: 77, userId: 3, schoolId: 10, phone: '+22911111111', specialization: 'Math' },
@@ -45,6 +48,8 @@ const FIXTURES = {
   ],
   students: [
     { id: 11, schoolId: 10, classId: 1, firstName: 'Child', lastName: 'One', birthDate: '2010-01-01', gender: 'female', parentId: 1, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' },
+    { id: 13, schoolId: 10, classId: 4, firstName: 'Global', lastName: 'Approved', birthDate: '2010-01-01', gender: 'female', parentId: null, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' },
+    { id: 14, schoolId: 10, classId: 5, firstName: 'Global', lastName: 'Unapproved', birthDate: '2010-01-01', gender: 'female', parentId: null, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' },
   ],
   classTeachers: [
     { classId: 1, teacherId: 77 },
@@ -52,6 +57,7 @@ const FIXTURES = {
   ],
   schoolClasses: [
     { id: 500, classId: 3, schoolId: 10, status: 'approved' },
+    { id: 501, classId: 4, schoolId: 10, status: 'approved' },
   ],
   absences: [
     { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
@@ -63,6 +69,7 @@ const FIXTURES = {
   userSchools: [
     { userId: 2, schoolId: 10, role: 'school_admin', isActive: true },
     { userId: 3, schoolId: 10, role: 'teacher', isActive: true },
+    { userId: 12, schoolId: 10, role: 'surveillant', isActive: true },
   ],
   auditEvents: [],
 };
@@ -158,6 +165,8 @@ function createMockDb() {
               } else {
                 result.teacherId = value === null ? null : Number(value);
               }
+            } else if (/status/.test(normalizedLast)) {
+              result.status = value;
             } else if (normalizedLast === 'id' || /^id$/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
@@ -202,6 +211,8 @@ function createMockDb() {
               } else {
                 result.teacherId = value === null ? null : Number(value);
               }
+            } else if (/status/.test(normalizedLast)) {
+              result.status = value;
             } else if (normalizedLast === 'id' || /^id$/.test(normalizedLast)) {
               if (Array.isArray(value)) {
                 result.ids = value.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
@@ -279,6 +290,7 @@ function createMockDb() {
           }
         }
         if (/teacher.*id/.test(leftStr) && rightIsPrimitive) result.teacherId = rawRight === null ? null : Number(rawRight);
+        if (/status/.test(leftStr) && rightIsPrimitive) result.status = rawRight;
         if (/id/.test(leftStr) && !/school.*id/.test(leftStr) && !/user.*id/.test(leftStr) && !/class.*id/.test(leftStr) && !/teacher.*id/.test(leftStr) && !/student.*id/.test(leftStr) && !/parent.*id/.test(leftStr)) {
           if (Array.isArray(rawRight)) {
             result.ids = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
@@ -452,6 +464,7 @@ function createMockDb() {
       if (conditions.teacherIds !== undefined) {
         if (!Array.isArray(conditions.teacherIds) || !conditions.teacherIds.includes(Number(row.teacherId))) return false;
       }
+      if (conditions.status !== undefined && row.status !== conditions.status) return false;
       return true;
     });
   };
@@ -842,6 +855,7 @@ vi.mock('../../src/middleware/auth.ts', async () => {
       if (token === 'token-super') req.user = { uid: 'super-uid', role: 'super_admin', email: 'super@x.test', simulated: false };
       else if (token === 'token-school') req.user = { uid: 'school-uid', role: 'school_admin', email: 'admin@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-teacher') req.user = { uid: 'teacher-uid', role: 'teacher', email: 'teacher@school.test', schoolId: 10, simulated: false };
+      else if (token === 'token-surveillant') req.user = { uid: 'surveillant-uid', role: 'surveillant', email: 'surveillant@school.test', schoolId: 10, simulated: false };
       else req.user = null;
       if (req.user) req.user.appRole = expr.mapToAppRole(req.user.role);
       next();
@@ -884,6 +898,7 @@ vi.mock('src/middleware/auth', async () => {
       if (token === 'token-super') req.user = { uid: 'super-uid', role: 'super_admin', email: 'super@x.test', simulated: false };
       else if (token === 'token-school') req.user = { uid: 'school-uid', role: 'school_admin', email: 'admin@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-teacher') req.user = { uid: 'teacher-uid', role: 'teacher', email: 'teacher@school.test', schoolId: 10, simulated: false };
+      else if (token === 'token-surveillant') req.user = { uid: 'surveillant-uid', role: 'surveillant', email: 'surveillant@school.test', schoolId: 10, simulated: false };
       else req.user = null;
       if (req.user) req.user.appRole = expr.mapToAppRole(req.user.role);
       next();
@@ -1003,6 +1018,140 @@ describe('E2E security: auth & privilege checks', () => {
       .set('Authorization', 'Bearer token-school')
       .send({ email: 'super@x.test', name: 'SuperChanged', role: 'super_admin' });
     expect([400, 403]).toContain(updateRes.status);
+  });
+
+  it('surveillant: super_admin creates and binds the account to the selected school', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ uid: 'surveillant-valid', email: 'surveillant-valid@x.test', name: 'Surveillant Valid', role: 'surveillant', schoolId: 20 });
+
+    expect(res.status).toBe(201);
+    const created = FIXTURES.users.find((user) => user.uid === 'surveillant-valid');
+    expect(created?.schoolId).toBe(20);
+    expect(FIXTURES.userSchools).toContainEqual(expect.objectContaining({ userId: created?.id, schoolId: 20, role: 'surveillant' }));
+  });
+
+  it('surveillant: super_admin must provide a school', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ uid: 'surveillant-no-school', email: 'surveillant-no-school@x.test', name: 'Surveillant No School', role: 'surveillant' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('surveillant: super_admin cannot select an unknown school', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ uid: 'surveillant-unknown-school', email: 'surveillant-unknown-school@x.test', name: 'Surveillant Unknown School', role: 'surveillant', schoolId: 999 });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('surveillant: school_admin defaults to its own school when schoolId is omitted', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid: 'surveillant-school-default', email: 'surveillant-school-default@x.test', name: 'Surveillant School Default', role: 'surveillant' });
+
+    expect(res.status).toBe(201);
+    const created = FIXTURES.users.find((user) => user.uid === 'surveillant-school-default');
+    expect(created?.schoolId).toBe(10);
+    expect(FIXTURES.userSchools).toContainEqual(expect.objectContaining({ userId: created?.id, schoolId: 10, role: 'surveillant' }));
+  });
+
+  it('surveillant: school_admin accepts its own schoolId', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid: 'surveillant-school-explicit', email: 'surveillant-school-explicit@x.test', name: 'Surveillant School Explicit', role: 'surveillant', schoolId: 10 });
+
+    expect(res.status).toBe(201);
+    const created = FIXTURES.users.find((user) => user.uid === 'surveillant-school-explicit');
+    expect(created?.schoolId).toBe(10);
+  });
+
+  it('surveillant: school_admin cannot select another school', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid: 'surveillant-other-school', email: 'surveillant-other-school@x.test', name: 'Surveillant Other School', role: 'surveillant', schoolId: 20 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('surveillant: records an absence for a student in the assigned school', async () => {
+    const res = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 11, classId: 1, date: '2026-06-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('surveillant: cannot record an absence outside the assigned school', async () => {
+    FIXTURES.students.push({ id: 12, schoolId: 20, classId: 3, firstName: 'Other', lastName: 'School', birthDate: '2010-01-01', gender: 'female', parentId: null, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+
+    const res = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 12, classId: 3, date: '2026-06-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('surveillant: records an absence in a global class approved for the school', async () => {
+    const res = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 13, classId: 4, date: '2026-06-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('surveillant: rejects a global class that is not approved for the school', async () => {
+    const res = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 14, classId: 5, date: '2026-06-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('surveillant: can read absence controls but cannot create one', async () => {
+    const readRes = await request(app)
+      .get('/api/absence-controls')
+      .set('Authorization', 'Bearer token-surveillant');
+    expect(readRes.status).toBe(200);
+
+    const writeRes = await request(app)
+      .post('/api/absence-controls')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ classId: 1, date: '2026-06-02', controlType: 'none' });
+    expect(writeRes.status).toBe(403);
+  });
+
+  it.each([
+    ['GET', '/api/evaluations'],
+    ['GET', '/api/grades'],
+  ])('surveillant: %s %s is forbidden', async (method, path) => {
+    const res = method === 'GET'
+      ? await request(app).get(path).set('Authorization', 'Bearer token-surveillant')
+      : await request(app).post(path).set('Authorization', 'Bearer token-surveillant').send({});
+    expect(res.status).toBe(403);
+  });
+
+  it.each([
+    ['/api/evaluations', { classId: 1, teacherId: 77, termId: 1, subject: 'Math', type: 'devoir', coefficient: 1, maxScore: 20, date: '2026-01-01' }],
+    ['/api/grades', { evaluationId: 1, studentId: 11, score: 12 }],
+  ])('surveillant: POST %s is forbidden', async (path, payload) => {
+    const res = await request(app)
+      .post(path)
+      .set('Authorization', 'Bearer token-surveillant')
+      .send(payload);
+    expect(res.status).toBe(403);
   });
 
   it('3a. school_admin cannot update a user outside their school via PUT /api/users/:id', async () => {

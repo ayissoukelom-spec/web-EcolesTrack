@@ -442,7 +442,7 @@ export default function AppShell() {
       />;
     }
 
-    if (activeTab === 'notes' && currentRole !== 'parent') {
+    if (activeTab === 'notes' && currentRole !== 'parent' && currentRole !== 'surveillant') {
       return (
         <NotesView
           evaluationsList={activeEvaluations}
@@ -461,7 +461,7 @@ export default function AppShell() {
       );
     }
 
-    if (activeTab === 'archive' && currentRole !== 'parent') {
+    if (activeTab === 'archive' && currentRole !== 'parent' && currentRole !== 'surveillant') {
       return (
         <ArchiveView
           userRole={currentRole}

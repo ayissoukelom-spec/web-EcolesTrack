@@ -26,7 +26,7 @@ vi.mock('../lib/jwt.ts', () => {
   };
 });
 
-import { requireOwnership, requireRole, type AuthRequest, verifyToken } from './auth';
+import { mapToAppRole, requireOwnership, requireRole, type AuthRequest, verifyToken } from './auth';
 
 const createMockRes = () => {
   const res: any = {};
@@ -293,6 +293,10 @@ describe('auth middleware access control', () => {
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('mappe le rôle surveillant comme accès de type enseignant', () => {
+    expect(mapToAppRole('surveillant')).toBe('teacher');
   });
 
   it('refuse un role parent sur une route admin/teacher', () => {

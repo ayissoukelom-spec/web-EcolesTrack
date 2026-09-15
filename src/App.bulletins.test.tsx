@@ -203,6 +203,22 @@ describe('App bulletin navigation', () => {
     }
   });
 
+  it('shows only the permitted navigation entries for surveillant', async () => {
+    mockGetSimulatedRole.mockReturnValue('surveillant');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-surveillant', email: 'surveillant@example.com', name: 'Surveillant', schoolId: 1, role: 'surveillant', id: 12 });
+
+    render(<AuthProvider><App /></AuthProvider>);
+
+    expect(await screen.findByRole('button', { name: /Tableau de Bord/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Absences/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Contrôles Néant/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Notes & Bulletins/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Administration$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Archive$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Messagerie & Push/i })).toBeNull();
+  });
+
   it('shows the overdue count on the Notes & Bulletins entry for non-super_admin roles while Bulletin remains blocked', async () => {
     mockCountOverdueEvaluations.mockReturnValue(2);
     mockGetSimulatedRole.mockReturnValue('school_admin');

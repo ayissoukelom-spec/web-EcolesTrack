@@ -256,6 +256,11 @@ export function getSimulationHeaders(): Record<string, string> {
     email = simulatedUser?.email ?? 'f.martin.prof@ecoletrack.fr';
     name = simulatedUser?.name ?? 'M. Francois Martin';
     schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
+  } else if (role === 'surveillant') {
+    uid = simulatedUser?.uid ?? 'sim_surveillant_123';
+    email = simulatedUser?.email ?? 'surveillant@ecoletrack.fr';
+    name = simulatedUser?.name ?? 'M. Karim Sarr';
+    schoolId = activeSchoolId != null ? String(activeSchoolId) : (simulatedUser?.schoolId ? String(simulatedUser.schoolId) : null);
   } else if (role === 'parent') {
     uid = simulatedUser?.uid ?? 'sim_parent_123';
     email = simulatedUser?.email ?? 'marianne.dubois@gmail.com';

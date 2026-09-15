@@ -1,7 +1,9 @@
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import DashboardView, { normalizeDashboardChartData } from './DashboardView';
+
+afterEach(() => cleanup());
 
 describe('normalizeDashboardChartData', () => {
   it('normalizes backend chart rows into the shape required by Recharts', () => {
@@ -51,5 +53,20 @@ describe('DashboardView absence status counts', () => {
     expect(unjustifiedRow).not.toBeNull();
     expect(justifiedRow && within(justifiedRow).getByText('5')).toBeTruthy();
     expect(unjustifiedRow && within(unjustifiedRow).getByText('3')).toBeTruthy();
+  });
+
+  it('hides recent grades for surveillant while keeping the dashboard visible', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 1, totalAbsences: 0, totalClasses: 1, totalTeachers: 1, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[{ id: 1, studentName: 'Eleve Test', subject: 'Math', score: '15' }]}
+        userRole="surveillant"
+      />
+    );
+
+    expect(screen.getAllByText('Tableau de Bord Général').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Dernières Évaluations & Notes')).toBeNull();
+    expect(screen.queryByText('Eleve Test')).toBeNull();
   });
 });

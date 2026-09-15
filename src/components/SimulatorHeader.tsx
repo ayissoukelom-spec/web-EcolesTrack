@@ -247,6 +247,14 @@ export default function SimulatorHeader({
       description: 'Saisie des notes, appel des absences, évaluations'
     },
     {
+      id: 'surveillant',
+      label: 'Surveillant',
+      color: 'bg-cyan-500/10 text-cyan-700 border-cyan-200 hover:bg-cyan-500/20',
+      activeColor: 'bg-cyan-600 text-white border-cyan-600 focus:ring-cyan-500',
+      headerBg: 'from-cyan-950/90 via-cyan-900/85 to-slate-950/80',
+      description: 'Suivi des absences et contrôles néant en lecture seule'
+    },
+    {
       id: 'parent',
       label: 'Parent',
       color: 'bg-emerald-500/10 text-emerald-700 border-emerald-200 hover:bg-emerald-500/20',
@@ -575,7 +583,7 @@ export default function SimulatorHeader({
                   className="w-full p-2 border rounded"
                   value={loginRole}
                   onChange={(e) => {
-                    const nextRole = e.target.value as 'super_admin' | 'school_admin' | 'teacher' | 'parent';
+                    const nextRole = e.target.value as 'super_admin' | 'school_admin' | 'teacher' | 'surveillant' | 'parent';
                     setLoginRole(nextRole);
                     if (nextRole !== 'super_admin') {
                       setLoginSchoolId(defaultSchoolId);
@@ -585,6 +593,7 @@ export default function SimulatorHeader({
                   <option value="super_admin">Super Admin</option>
                   <option value="school_admin">Admin École</option>
                   <option value="teacher">Enseignant</option>
+                  <option value="surveillant">Surveillant</option>
                   <option value="parent">Parent</option>
                 </select>
               </div>
@@ -706,19 +715,19 @@ export default function SimulatorHeader({
                   onChange={(e) => {
                     const selectedRole = e.target.value;
                     setCreateRole(selectedRole);
-                    if (selectedRole !== 'school_admin' && !(selectedRole === 'teacher' && currentRole === 'school_admin')) {
+                    if (selectedRole !== 'school_admin' && !(selectedRole === 'teacher' && currentRole === 'school_admin') && !(selectedRole === 'surveillant' && currentRole === 'school_admin')) {
                       setCreateSchoolId('');
                     }
                     if (selectedRole !== 'school_admin') {
                       setCreateAcademicYearId('');
                     }
-                    if (selectedRole === 'teacher' && currentRole === 'school_admin') {
+                    if ((selectedRole === 'teacher' || selectedRole === 'surveillant') && currentRole === 'school_admin') {
                       setCreateSchoolId(String(simUser?.schoolId ?? ''));
                     }
                     if (selectedRole === 'parent' && currentRole === 'school_admin') {
                       setCreateParentSchoolId(String(simUser?.schoolId ?? ''));
                     }
-                    if (selectedRole !== 'teacher') {
+                    if (selectedRole !== 'teacher' && selectedRole !== 'surveillant') {
                       setCreateAssignedClassIds([]);
                     }
                     setCreateGender('');
@@ -735,6 +744,7 @@ export default function SimulatorHeader({
                     </>
                   ) : null}
                   <option value="teacher">Enseignant</option>
+                  <option value="surveillant">Surveillant</option>
                   <option value="parent">Parent</option>
                 </select>
               </div>
@@ -903,7 +913,7 @@ export default function SimulatorHeader({
                 </div>
               )}
 
-              {createRole === 'teacher' && (
+              {(createRole === 'teacher' || createRole === 'surveillant') && (
                 <>
                   <div>
                     <label className="block text-xs">
@@ -930,7 +940,7 @@ export default function SimulatorHeader({
                     )}
                   </div>
 
-                  <div>
+                  {createRole === 'teacher' && <div>
                     <label className="block text-xs">
                       <RequiredLabel label="Classes assignées" required />
                     </label>
@@ -967,9 +977,9 @@ export default function SimulatorHeader({
                           .join(', ')}
                       </div>
                     )}
-                  </div>
+                  </div>}
 
-                  <div>
+                  {createRole === 'teacher' && <div>
                     <label className="block text-xs">
                       <RequiredLabel label="Spécialisation" required />
                     </label>
@@ -992,7 +1002,7 @@ export default function SimulatorHeader({
                         </label>
                       ))}
                     </div>
-                  </div>
+                  </div>}
                 </>
               )}
 
@@ -1063,11 +1073,13 @@ export default function SimulatorHeader({
                       return;
                     }
                   }
-                  if (createRole === 'teacher') {
+                  if (createRole === 'teacher' || createRole === 'surveillant') {
                     if (currentRole !== 'school_admin' && !createSchoolId) {
-                      setCreateError('Une école est requise pour un enseignant');
+                      setCreateError('Une école est requise pour ce rôle');
                       return;
                     }
+                  }
+                  if (createRole === 'teacher') {
                     if (!Array.isArray(createSpecializations) || createSpecializations.length === 0) {
                       setCreateError('Au moins une spécialisation est requise pour un enseignant');
                       return;
@@ -1093,11 +1105,11 @@ export default function SimulatorHeader({
                   if (createRole === 'school_admin') {
                     payload.schoolId = parseInt(createSchoolId);
                     payload.academicYearId = parseInt(createAcademicYearId);
-                  } else if (createRole === 'teacher') {
+                  } else if (createRole === 'teacher' || createRole === 'surveillant') {
                     payload.schoolId = currentRole === 'school_admin'
                       ? simUser?.schoolId
                       : parseInt(createSchoolId);
-                    payload.classIds = createAssignedClassIds;
+                    if (createRole === 'teacher') payload.classIds = createAssignedClassIds;
                   } else if (createRole === 'parent') {
                     payload.schoolId = parseInt(createParentSchoolId);
                   }
