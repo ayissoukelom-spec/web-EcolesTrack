@@ -5,6 +5,7 @@ import { AuthProvider } from '../contexts/AuthContext.tsx';
 import AdminView from './AdminView';
 import AdminModal from './AdminModal';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
+import * as XLSX from 'xlsx';
 
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 
@@ -279,6 +280,140 @@ describe('AdminView create-user teacher form', () => {
       .map((row) => row.querySelector('td')?.textContent?.trim());
 
     expect(renderedNames).toEqual(['amani Koffi', 'Élodie Yao', 'Koffi Awa', 'tano Moussa']);
+  });
+
+  it('exports the sorted visible students as an Excel workbook', async () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const students: Student[] = [
+      { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearName: '2024-2025', parentName: 'Parent Tano' },
+      { id: 2, firstName: 'Awa', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearName: '2024-2025', parentName: 'Parent Amani' },
+    ];
+    const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+    const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:students');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={schools}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={students}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+
+      const blob = createObjectURL.mock.calls[0][0] as Blob;
+      const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets['Élèves']);
+
+      expect(click).toHaveBeenCalled();
+      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
+      expect(rows).toEqual([
+        { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Tuteur: 'Parent Amani' },
+        { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Tuteur: 'Parent Tano' },
+      ]);
+    } finally {
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+      click.mockRestore();
+    }
+  });
+
+  it('exports the sorted visible parents as an Excel workbook', async () => {
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
+    const parents: Parent[] = [
+      { id: 1, userId: 1, name: 'Tano Moussa', email: 'tano@example.com', phone: '+228 90000001', address: 'Rue Tano', schoolId: 1, studentFirstName: 'Kossi', studentLastName: 'Tano', schoolName: 'École du Lac' },
+      { id: 2, userId: 2, name: 'Amani Awa', email: 'amani@example.com', phone: '+228 90000002', address: 'Rue Amani', schoolId: 1, studentFirstName: 'Ali', studentLastName: 'Amani', schoolName: 'École du Lac' },
+    ];
+    const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+    const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:parents');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={schools}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={parents}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+
+      const blob = createObjectURL.mock.calls[0][0] as Blob;
+      const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Parents);
+
+      expect(click).toHaveBeenCalled();
+      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-parents.xlsx');
+      expect(rows).toEqual([
+        {
+          Nom: 'Amani Awa',
+          Email: 'amani@example.com',
+          Téléphone: '+228 90000002',
+          Adresse: 'Rue Amani',
+          'Élève associé': 'Amani Ali',
+          'École de l’élève': 'École du Lac',
+          'Dernière connexion': 'Jamais connecté',
+        },
+        {
+          Nom: 'Tano Moussa',
+          Email: 'tano@example.com',
+          Téléphone: '+228 90000001',
+          Adresse: 'Rue Tano',
+          'Élève associé': 'Tano Kossi',
+          'École de l’élève': 'École du Lac',
+          'Dernière connexion': 'Jamais connecté',
+        },
+      ]);
+    } finally {
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+      click.mockRestore();
+    }
   });
 
   it('counts parents by selected school for super admin', () => {
