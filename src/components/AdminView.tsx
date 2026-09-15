@@ -1797,14 +1797,18 @@ export default function AdminView({
   const [importErrorsList, setImportErrorsList] = useState<string[] | null>(null);
   const [importRowErrors, setImportRowErrors] = useState<{row: number; errors: string[]}[] | null>(null);
   const [parentEmailSearchQuery, setParentEmailSearchQuery] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   const confirmImport = async () => {
     if (!importPreviewRecords || importPreviewRecords.length === 0) return;
     if (activeTab === 'parents') {
+      if (isImporting) return;
+      setIsImporting(true);
       const recordsToImport = validImportRecords && validImportRecords.length > 0 ? validImportRecords : importPreviewRecords;
       try {
         if (onBatchCreateParents) await onBatchCreateParents(recordsToImport || []);
       } finally {
+        setIsImporting(false);
         setValidImportRecords(null);
         setImportPreviewRecords(null);
         setImportPreviewHeaders(null);
@@ -3830,7 +3834,14 @@ export default function AdminView({
               <div className="flex justify-end gap-2 mt-4">
                 <button className="px-4 py-2 bg-slate-100 rounded" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); }}>Annuler</button>
                 {(validImportRecords && validImportRecords.length > 0) ? (
-                  <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={confirmImport}>Importer les lignes valides</button>
+                  <button
+                    className="px-4 py-2 bg-indigo-600 text-white rounded disabled:cursor-not-allowed disabled:opacity-70"
+                    onClick={confirmImport}
+                    disabled={isImporting}
+                  >
+                    {isImporting && <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />}
+                    {isImporting ? 'Importation en cours...' : 'Importer les lignes valides'}
+                  </button>
                 ) : (!(importErrorsList && importErrorsList.length > 0) && !(importRowErrors && importRowErrors.length > 0)) ? (
                   <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={confirmImport}>Confirmer l'import</button>
                 ) : null}
