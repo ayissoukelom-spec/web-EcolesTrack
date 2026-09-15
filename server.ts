@@ -2876,6 +2876,9 @@ export async function createApp() {
       const schoolIds = Array.from(new Set(payload.map((p: any) => p.schoolId).filter(Boolean).map((v: any) => parseInt(v))));
       const classIds = Array.from(new Set(payload.map((p: any) => p.classId).filter(Boolean).map((v: any) => parseInt(v))));
       const parentIds = Array.from(new Set(payload.map((p: any) => p.parentId).filter(Boolean).map((v: any) => parseInt(v))));
+      const parentEmails = Array.from(new Set(payload
+        .map((p: any) => normalizeEmail(p.parentEmail))
+        .filter((email): email is string => Boolean(email))));
 
       if (userRecord.role === 'school_admin' && userRecord.schoolId) {
         schoolIds.push(userRecord.schoolId);
@@ -2883,7 +2886,25 @@ export async function createApp() {
 
       const existingSchoolRows = schoolIds.length > 0 ? await db.select().from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
       const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
-      const existingParentRows = parentIds.length > 0 ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents).where(sql`${parents.id} IN ${parentIds}`) : [];
+      const parentLookupRows = parentIds.length > 0 || parentEmails.length > 0
+        ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents)
+        : [];
+      const existingParentRows = parentLookupRows;
+      const emailParentRows = parentLookupRows;
+      const emailParentUserIds = Array.from(new Set(emailParentRows.map((parent: any) => parent.userId).filter(Boolean)));
+      const emailParentUsers = emailParentUserIds.length > 0
+        ? await db.select({ id: users.id, email: users.email }).from(users)
+        : [];
+      const parentEmailById = new Map<number, string>();
+      const userEmailById = new Map<number, string>();
+      for (const user of emailParentUsers) {
+        const normalizedEmail = normalizeEmail(user.email);
+        if (normalizedEmail) userEmailById.set(Number(user.id), normalizedEmail);
+      }
+      for (const parent of emailParentRows) {
+        const normalizedEmail = userEmailById.get(Number(parent.userId));
+        if (normalizedEmail) parentEmailById.set(Number(parent.id), normalizedEmail);
+      }
 
       const existingSchoolIds = new Set(existingSchoolRows.map((r: any) => r.id));
       const existingClassIds = new Set(existingClassRows.map((r: any) => r.id));
@@ -2898,6 +2919,27 @@ export async function createApp() {
 
       const inserted: any[] = [];
       const errors: any[] = [];
+      const parentEmailResolutionCache = new Map<number, Map<string, { parent: any }[]>>();
+
+      const resolveParentsByEmail = async (email: string, schoolId: number) => {
+        let schoolCache = parentEmailResolutionCache.get(schoolId);
+        if (!schoolCache) {
+          schoolCache = new Map();
+          parentEmailResolutionCache.set(schoolId, schoolCache);
+        }
+        const cached = schoolCache.get(email);
+        if (cached) return cached;
+
+        const candidates = emailParentRows.filter((parent: any) => parentEmailById.get(Number(parent.id)) === email);
+        const authorizedCandidates: { parent: any }[] = [];
+        for (const parent of candidates) {
+          if (parent.schoolId === schoolId || await ensureUserSchoolMembership(parent.userId, schoolId, 'parent')) {
+            authorizedCandidates.push({ parent });
+          }
+        }
+        schoolCache.set(email, authorizedCandidates);
+        return schoolCache.get(email) || [];
+      };
 
       for (let i = 0; i < payload.length; i++) {
         const s = payload[i];
@@ -2907,7 +2949,10 @@ export async function createApp() {
         const resolvedSchoolId = userRecord.role === 'school_admin' ? userRecord.schoolId : s.schoolId;
         const schoolId = resolvedSchoolId ? parseInt(resolvedSchoolId) : null;
         const classId = s.classId ? parseInt(s.classId) : null;
-        const parentId = s.parentId ? parseInt(s.parentId) : null;
+        const hasParentId = s.parentId !== undefined && s.parentId !== null && String(s.parentId).trim() !== '';
+        const parentIdText = hasParentId ? String(s.parentId).trim() : '';
+        const normalizedParentEmail = normalizeEmail(s.parentEmail);
+        let parentId = hasParentId ? Number(parentIdText) : null;
         const gender = s.gender != null && s.gender !== '' ? String(s.gender).trim() : null;
 
         if (!firstName || !lastName) {
@@ -2931,7 +2976,25 @@ export async function createApp() {
           errors.push({ row: i, reason: `Invalid or missing classId: ${classId}`, data: s });
           continue;
         }
-        if (!parentId || !existingParentIds.has(parentId)) {
+        if (hasParentId && (!/^\d+$/.test(parentIdText) || parentId === null || parentId <= 0)) {
+          errors.push({ row: i, reason: `Invalid parentId: ${parentIdText}`, data: s });
+          continue;
+        }
+        const parentEmailProvided = normalizedParentEmail !== null;
+        if (!parentId && parentEmailProvided) {
+          const matches = await resolveParentsByEmail(normalizedParentEmail, schoolId);
+          if (matches.length === 0) {
+            errors.push({ row: i, reason: `Parent introuvable pour l'email ${normalizedParentEmail} dans cet établissement`, data: s });
+            continue;
+          }
+          if (matches.length > 1) {
+            errors.push({ row: i, reason: `Plusieurs parents correspondent à l'email ${normalizedParentEmail}`, data: s });
+            continue;
+          }
+          parentId = Number(matches[0].parent.id);
+        }
+
+        if (!parentId || !existingParentIds.has(parentId) && !emailParentRows.some((parent: any) => parent.id === parentId)) {
           errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
           continue;
         }
@@ -2950,16 +3013,21 @@ export async function createApp() {
         }
 
         const parentRow = existingParentRows.find((p: any) => p.id === parentId);
-        if (!parentRow) {
+        const resolvedParentRow = parentRow || emailParentRows.find((p: any) => p.id === parentId);
+        if (!resolvedParentRow) {
           errors.push({ row: i, reason: `Parent not found: ${parentId}`, data: s });
           continue;
         }
-        if (parentRow.schoolId !== schoolId) {
-          const membership = await ensureUserSchoolMembership(parentRow.userId, schoolId, 'parent');
+        if (resolvedParentRow.schoolId !== schoolId) {
+          const membership = await ensureUserSchoolMembership(resolvedParentRow.userId, schoolId, 'parent');
           if (!membership) {
             errors.push({ row: i, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
             continue;
           }
+        }
+        if (parentEmailProvided && parentEmailById.get(Number(resolvedParentRow.id)) !== normalizedParentEmail) {
+          errors.push({ row: i, reason: 'Le parentId fourni ne correspond pas au parentEmail fourni', data: s });
+          continue;
         }
 
         try {

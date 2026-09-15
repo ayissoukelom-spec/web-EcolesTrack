@@ -1289,6 +1289,135 @@ describe('E2E security: auth & privilege checks', () => {
     expect(FIXTURES.users.filter((user: any) => user.email === 'global-parent@x.test')).toHaveLength(1);
   });
 
+  describe('POST /api/students/batch parent resolution', () => {
+    const studentRow = (overrides: Record<string, any> = {}) => ({
+      firstName: 'Awa',
+      lastName: 'Koffi',
+      birthDate: '2010-01-01',
+      schoolId: 10,
+      classId: 1,
+      gender: 'Féminin',
+      schoolAdminId: 2,
+      ...overrides,
+    });
+
+    const importStudents = (rows: any[]) => request(app)
+      .post('/api/students/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send(rows);
+
+    it('accepts a valid parentId without parentEmail', async () => {
+      const res = await importStudents([studentRow({ parentId: 1 })]);
+      expect(res.status).toBe(200);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('rejects an invalid parentId', async () => {
+      const res = await importStudents([studentRow({ parentId: 999 })]);
+      expect(res.status).toBe(200);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Invalid or missing parentId');
+    });
+
+    it('rejects an invalid provided parentId instead of falling back to parentEmail', async () => {
+      const res = await importStudents([studentRow({ parentId: 'abc', parentEmail: 'parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Invalid parentId');
+      expect(res.body.inserted).toEqual([]);
+    });
+
+    it('rejects parentId zero instead of falling back to parentEmail', async () => {
+      const res = await importStudents([studentRow({ parentId: '0', parentEmail: 'parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Invalid parentId');
+      expect(res.body.inserted).toEqual([]);
+    });
+
+    it('resolves a valid parentEmail to parentId', async () => {
+      const res = await importStudents([studentRow({ parentEmail: 'parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('normalizes parentEmail casing', async () => {
+      const res = await importStudents([studentRow({ parentEmail: 'PARENT@X.TEST' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('normalizes surrounding spaces in parentEmail', async () => {
+      const res = await importStudents([studentRow({ parentEmail: '  parent@x.test  ' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('rejects an unknown parentEmail with a row-level business error', async () => {
+      const res = await importStudents([studentRow({ parentEmail: 'missing@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].error || res.body.errors[0].reason).toContain('Parent introuvable');
+    });
+
+    it('rejects a row with neither parentId nor parentEmail', async () => {
+      const res = await importStudents([studentRow()]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Invalid or missing parentId');
+    });
+
+    it('accepts matching parentId and parentEmail', async () => {
+      const res = await importStudents([studentRow({ parentId: 1, parentEmail: 'parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('rejects a parentId and parentEmail mismatch', async () => {
+      const res = await importStudents([studentRow({ parentId: 1, parentEmail: 'parent-query@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('ne correspond pas');
+    });
+
+    it('rejects a parent from another school even when the email matches', async () => {
+      FIXTURES.users.push({ id: 20, uid: 'other-school-parent', email: 'other-school-parent@x.test', name: 'Other School Parent', role: 'parent', schoolId: 20, isDeleted: false });
+      FIXTURES.parents.push({ id: 4, userId: 20, studentId: null, schoolId: 20 });
+
+      const res = await importStudents([studentRow({ parentEmail: 'other-school-parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].error || res.body.errors[0].reason).toContain('Parent introuvable');
+    });
+
+    it('reuses the same resolved parentId for multiple student rows', async () => {
+      const res = await importStudents([
+        studentRow({ firstName: 'Awa', parentEmail: 'parent@x.test' }),
+        studentRow({ firstName: 'Kossi', parentEmail: 'parent@x.test' }),
+        studentRow({ firstName: 'Kodjo', parentEmail: 'parent@x.test' }),
+      ]);
+
+      expect(res.body.insertedCount).toBe(3);
+      expect(res.body.inserted.map((row: any) => row.parentId)).toEqual([1, 1, 1]);
+    });
+
+    it('continues processing valid rows when another row is invalid', async () => {
+      const res = await importStudents([
+        studentRow({ firstName: 'Invalid', parentEmail: 'missing@x.test' }),
+        studentRow({ firstName: 'Valid', parentEmail: 'parent@x.test' }),
+      ]);
+
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+      expect(res.body.errors).toHaveLength(1);
+      expect(res.body.errors[0].row).toBe(0);
+    });
+
+    it('rejects ambiguous parentEmail without selecting an arbitrary parent', async () => {
+      FIXTURES.users.push({ id: 21, uid: 'duplicate-parent', email: 'parent@x.test', name: 'Duplicate Parent', role: 'parent', schoolId: 10, isDeleted: false });
+      FIXTURES.parents.push({ id: 5, userId: 21, studentId: null, schoolId: 10 });
+
+      const res = await importStudents([studentRow({ parentEmail: 'parent@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].error || res.body.errors[0].reason).toContain('Plusieurs parents correspondent');
+    });
+  });
+
   it('3p. school_admin cannot send notification to another-school user via POST /api/notifications/send', async () => {
     const anotherUser = { id: 99, uid: 'other-notif-uid', email: 'othernotif@x.test', name: 'OtherNotif', role: 'parent', schoolId: 20, isDeleted: false };
     (FIXTURES.users as any[]).push(anotherUser);
