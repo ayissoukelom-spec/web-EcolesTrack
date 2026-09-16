@@ -529,6 +529,17 @@ export default function App() {
     }
   };
 
+  const handleUploadSchoolLogo = async (id: number, file: File) => {
+    const formData = new FormData();
+    formData.append('logo', file);
+    const result = await apiFetch(`/api/schools/${id}/logo`, {
+      method: 'POST',
+      body: formData,
+    });
+    await fetchAllData(false);
+    return result;
+  };
+
   const handleUpdateStudent = async (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string; studentStatus?: string | null }) => {
     try {
       await apiFetch(`/api/students/${id}`, {
@@ -1176,6 +1187,7 @@ export default function App() {
                   approvedSubjectsList={approvedSubjectsList}
                   onAddSchool={handleAddSchool}
                   onUpdateSchool={handleUpdateSchool}
+                  onUploadSchoolLogo={handleUploadSchoolLogo}
                   onUpdateStudent={handleUpdateStudent}
                   onAddYear={handleAddYear}
                   onSetActiveYear={handleSetActiveYear}

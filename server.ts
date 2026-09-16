@@ -82,6 +82,17 @@ import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parent
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
 
+export const SCHOOL_LOGO_MAX_SIZE = 2 * 1024 * 1024;
+
+export const isSupportedSchoolLogo = (file: { mimetype?: string; originalname?: string }): boolean => {
+  const extension = path.extname(String(file.originalname || '')).toLowerCase();
+  const mimetype = String(file.mimetype || '');
+  return (mimetype === 'image/png' && extension === '.png')
+    || (mimetype === 'image/jpeg' && (extension === '.jpg' || extension === '.jpeg'));
+};
+
+export const buildSchoolLogoRelativePath = (fileName: string): string => path.posix.join('school-logos', path.basename(fileName));
+
 export function resolveAbsenceJustificationStorageDirs() {
   const configuredUploadRoot = (process.env.UPLOADS_DIR || '').trim();
   const primaryRoot = configuredUploadRoot ? path.resolve(configuredUploadRoot) : path.resolve(process.cwd(), 'uploads');
@@ -657,6 +668,7 @@ export async function createApp() {
 
   const { primaryDir: uploadStorageDir, legacyDir: legacyUploadStorageDir, candidates: uploadStorageDirCandidates } = resolveAbsenceJustificationStorageDirs();
   const notificationUploadStorageDir = path.join(process.cwd(), 'uploads', 'notification-attachments');
+  const schoolLogoUploadStorageDir = path.join(process.cwd(), 'uploads', 'school-logos');
 
   console.log('[uploads] absence justification storage initialized', {
     uploadEnv: process.env.UPLOADS_DIR || '(default)',
@@ -675,6 +687,7 @@ export async function createApp() {
     });
   }
   await fsPromises.mkdir(notificationUploadStorageDir, { recursive: true });
+  await fsPromises.mkdir(schoolLogoUploadStorageDir, { recursive: true });
 
   if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
     try {
@@ -701,6 +714,25 @@ export async function createApp() {
       const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg'];
       if (!allowedTypes.includes(file.mimetype)) {
         return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+
+  const schoolLogoUpload = multer({
+    storage: multer.diskStorage({
+      destination: schoolLogoUploadStorageDir,
+      filename: (req, file, cb) => {
+        const schoolId = String(req.params.id || 'school');
+        const extension = path.extname(file.originalname).toLowerCase();
+        const randomSuffix = crypto.randomBytes(16).toString('hex');
+        cb(null, `school-${schoolId}-${Date.now()}-${randomSuffix}${extension}`);
+      },
+    }),
+    limits: { fileSize: SCHOOL_LOGO_MAX_SIZE },
+    fileFilter: (_req, file, cb) => {
+      if (!isSupportedSchoolLogo(file)) {
+        return cb(new Error('Only PNG and JPG/JPEG school logos are allowed'));
       }
       cb(null, true);
     },
@@ -2884,6 +2916,90 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Error updating school:', err);
       res.status(500).json({ error: 'Failed to update school' });
+    }
+  });
+
+  app.post('/api/schools/:id/logo', requireAuth, async (req: AuthRequest, res, next) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid school id' });
+    const actor = await resolveActor(req);
+    if (!actor) return res.status(404).json({ error: 'User not found' });
+    if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      return res.status(403).json({ error: 'Only school administrators can modify school information' });
+    }
+    if (actor.role === 'school_admin' && actor.schoolId !== id) {
+      return res.status(403).json({ error: 'Cannot modify another school' });
+    }
+    const [school] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, id));
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    schoolLogoUpload.single('logo')(req, res, (err: any) => {
+      if (err) return res.status(400).json({ error: err.message || 'Invalid school logo upload' });
+      next();
+    });
+  }, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid school id' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Only school administrators can modify school information' });
+      }
+      if (actor.role === 'school_admin' && actor.schoolId !== id) {
+        return res.status(403).json({ error: 'Cannot modify another school' });
+      }
+
+      const [existingSchool] = await db.select({ id: schools.id, logoPath: schools.logoPath }).from(schools).where(eq(schools.id, id));
+      if (!existingSchool) return res.status(404).json({ error: 'School not found' });
+
+      const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+      if (!uploadedFile) return res.status(400).json({ error: 'A PNG or JPG/JPEG logo file is required' });
+
+      const logoPath = buildSchoolLogoRelativePath(uploadedFile.filename);
+      try {
+        const [updatedSchool] = await db.update(schools)
+          .set({ logoPath })
+          .where(eq(schools.id, id))
+          .returning();
+
+        if (existingSchool.logoPath) {
+          const oldFileName = path.basename(existingSchool.logoPath);
+          await fsPromises.unlink(path.join(schoolLogoUploadStorageDir, oldFileName)).catch(() => undefined);
+        }
+
+        await logAuditEvent(actor, 'update', 'school_logo', id, id, `Updated school logo for school ${id}`);
+        return res.status(200).json({ id: updatedSchool.id, logoPath: updatedSchool.logoPath });
+      } catch (error) {
+        await fsPromises.unlink(path.join(schoolLogoUploadStorageDir, uploadedFile.filename)).catch(() => undefined);
+        throw error;
+      }
+    } catch (err: any) {
+      console.error('Failed to upload school logo:', err);
+      return res.status(500).json({ error: 'Failed to upload school logo' });
+    }
+  });
+
+  app.get('/api/schools/:id/logo', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid school id' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
+      const [school] = await db.select({ id: schools.id, schoolId: schools.id, logoPath: schools.logoPath }).from(schools).where(eq(schools.id, id));
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      if (actor.role !== 'super_admin' && actor.schoolId !== school.schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (!school.logoPath) return res.status(404).json({ error: 'No school logo configured' });
+
+      const logoFileName = path.basename(school.logoPath);
+      return res.sendFile(logoFileName, { root: schoolLogoUploadStorageDir });
+    } catch (err: any) {
+      console.error('Failed to retrieve school logo:', err);
+      return res.status(500).json({ error: 'Failed to retrieve school logo' });
     }
   });
 

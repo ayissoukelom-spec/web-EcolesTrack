@@ -99,6 +99,7 @@ export interface BulletinPdfData {
     city?: string | null;
     region?: string | null;
     educationDirection?: string | null;
+    logoPath?: string | null;
     logo?: string | null;
   };
   schoolYearId: number;
@@ -451,6 +452,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
         city: schools.city,
         region: schools.region,
         educationDirection: schools.educationDirection,
+        logoPath: schools.logoPath,
       },
       schoolYearId: bulletins.schoolYearId,
       schoolYearName: academicYears.name,
@@ -655,7 +657,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       className: header.className,
       classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
-      school: header.school ? { ...header.school, logo: null } : { name: header.schoolName },
+      school: header.school ? { ...header.school, logoPath: header.school.logoPath ?? null, logo: null } : { name: header.schoolName },
       schoolYearId: header.schoolYearId,
       schoolYearName: header.schoolYearName,
       termId: header.termId,

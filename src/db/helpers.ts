@@ -235,6 +235,7 @@ export async function ensureUsersTableSchema() {
 export async function ensureSchoolsTableSchema() {
   try {
     await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS students_creation_locked BOOLEAN NOT NULL DEFAULT false;`);
+    await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS logo_path TEXT;`);
   } catch (err: any) {
     console.error('Failed to ensure schools table schema (students_creation_locked) exists:', err?.message || err);
     throw err;

@@ -13,6 +13,7 @@ export interface School {
   city?: string | null;
   region?: string | null;
   educationDirection?: string | null;
+  logoPath?: string | null;
   studentsCreationLocked?: boolean;
   createdAt?: string;
 }

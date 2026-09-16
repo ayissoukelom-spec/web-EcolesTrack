@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { apiFetch, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { apiFetch, apiFetchBlob, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
@@ -367,6 +367,7 @@ interface AdminViewProps {
   approvedSubjectsList?: any[];
   onAddSchool: (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
+  onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onSetActiveYear?: (id: number) => Promise<any>;
@@ -411,6 +412,7 @@ export default function AdminView({
   approvedSubjectsList = [],
   onAddSchool,
   onUpdateSchool,
+  onUploadSchoolLogo,
   onUpdateStudent,
   onAddYear,
   onSetActiveYear,
@@ -1887,6 +1889,11 @@ export default function AdminView({
   // States for school editing
   const [editSchoolOpen, setEditSchoolOpen] = useState(false);
   const [schoolToEdit, setSchoolToEdit] = useState<School | null>(null);
+  const [schoolLogoFile, setSchoolLogoFile] = useState<File | null>(null);
+  const [schoolLogoPreview, setSchoolLogoPreview] = useState<string | null>(null);
+  const [schoolLogoBusy, setSchoolLogoBusy] = useState(false);
+  const [schoolLogoError, setSchoolLogoError] = useState<string | null>(null);
+  const schoolLogoInputRef = useRef<HTMLInputElement | null>(null);
   const [editSchoolError, setEditSchoolError] = useState<string | null>(null);
 
   const existingEditSchoolSubjectNames = schoolToEdit
@@ -1895,6 +1902,27 @@ export default function AdminView({
       .map((subject: any) => String(subject.name || '').trim())
       .filter(Boolean)))
     : [];
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    setSchoolLogoFile(null);
+    setSchoolLogoError(null);
+    setSchoolLogoPreview(null);
+    if (!schoolToEdit?.id) return undefined;
+
+    if (schoolToEdit.logoPath) {
+      apiFetchBlob(`/api/schools/${schoolToEdit.id}/logo`)
+        .then((blob) => {
+          objectUrl = URL.createObjectURL(blob);
+          setSchoolLogoPreview(objectUrl);
+        })
+        .catch(() => setSchoolLogoPreview(null));
+    }
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [schoolToEdit]);
 
   const availableEditSchoolSubjectNames = Array.from(new Set((subjectsList || [])
     .map((subject: any) => String(subject.name || '').trim())
@@ -2211,6 +2239,64 @@ export default function AdminView({
                           />
                         </label>
                       ))}
+                    </div>
+                  </fieldset>
+                  <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Logo de l'établissement</legend>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                        {schoolLogoPreview ? (
+                          <img src={schoolLogoPreview} alt="Logo de l'établissement" className="h-full w-full object-contain" />
+                        ) : (
+                          <span className="px-2 text-center text-[10px] text-slate-400">Aucun logo configuré</span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <input
+                          ref={schoolLogoInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          className="block w-full text-xs text-slate-600"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0] ?? null;
+                            if (!file) return;
+                            if (!['image/png', 'image/jpeg'].includes(file.type)) {
+                              setSchoolLogoError('Seuls les fichiers PNG et JPG/JPEG sont acceptés.');
+                              return;
+                            }
+                            if (file.size > 2 * 1024 * 1024) {
+                              setSchoolLogoError('Le logo ne doit pas dépasser 2 Mo.');
+                              return;
+                            }
+                            setSchoolLogoError(null);
+                            setSchoolLogoFile(file);
+                            setSchoolLogoPreview(URL.createObjectURL(file));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={!schoolLogoFile || schoolLogoBusy || !onUploadSchoolLogo || !schoolToEdit}
+                          onClick={async () => {
+                            if (!schoolLogoFile || !schoolToEdit || !onUploadSchoolLogo) return;
+                            setSchoolLogoBusy(true);
+                            setSchoolLogoError(null);
+                            try {
+                              const result = await onUploadSchoolLogo(schoolToEdit.id, schoolLogoFile);
+                              setSchoolToEdit((previous) => previous ? { ...previous, logoPath: result?.logoPath ?? previous.logoPath } : previous);
+                              setSchoolLogoFile(null);
+                              if (schoolLogoInputRef.current) schoolLogoInputRef.current.value = '';
+                            } catch (error: any) {
+                              setSchoolLogoError(error?.message || 'Impossible d\'enregistrer le logo.');
+                            } finally {
+                              setSchoolLogoBusy(false);
+                            }
+                          }}
+                          className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {schoolLogoBusy ? 'Enregistrement...' : 'Enregistrer le logo'}
+                        </button>
+                        {schoolLogoError && <p className="text-xs text-rose-600">{schoolLogoError}</p>}
+                      </div>
                     </div>
                   </fieldset>
                   <div>
