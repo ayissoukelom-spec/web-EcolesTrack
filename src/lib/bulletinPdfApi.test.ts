@@ -275,16 +275,59 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Professeur');
     expect(text).toContain('Appréciation');
     expect(text).toContain('Signature');
-    expect(text).toContain('MOYENNE GÉNÉRALE');
-    expect(text).toContain('MENTION');
+    expect(text).toContain('1er semestre:');
+    expect(text).toContain('2ème semestre:');
+    expect(text).toContain('Moyennes :');
+    expect(text).toContain('Moyenne du 2ème semestre');
+    expect(text).toContain('conseil de classe');
+    expect(text).toContain('Retards : 0 fois');
+    expect(text).toContain('Absences : 0 Heures');
+    expect(text).toContain('Plus forte moyenne');
+    expect(text).toContain('Plus faible moyenne');
+    expect(text).toContain('Moyenne de la classe');
+    expect(text).toContain('Moy. Ann. =');
+    expect(text).toContain('CONSEIL DES PROFESSEURS');
+    expect(text).toContain('Distinctions spéciales');
+    expect(text).toContain('Sanctions');
+    expect(text).toContain("APPRECIATION DU CHEF D'ETABLISSEMENT");
+    expect(text).toContain('Travail :');
+    expect(text).toContain('Assiduité :');
     expect(text).toContain('SNAPSHOT_MENTION');
     expect(text).toContain('SNAPSHOT_APPRECIATION');
-    expect(text).toContain('ASSIDUITÉ');
-    expect(text).toContain('Absences : 0');
-    expect(text).toContain('Retards : 0');
-    expect(text).toContain('Signature de l établissement');
-    expect(text).toContain('Signature du parent');
+    expect(text).toContain('Signature du titulaire de classe');
+    expect(text).toContain('Le Proviseur');
     expect(text).toContain('Page 1/1');
+  });
+
+  it('conserve les zones futures quand les données optionnelles sont absentes', async () => {
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      studentMatricule: null,
+      studentGender: null,
+      studentStatus: null,
+      mention: null,
+      appreciation: null,
+      school: { name: 'ECOLE SANS METADONNEES' },
+      matieres_litteraires: [],
+      matieres_scientifiques: [],
+      lines: [],
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+
+    expect(text).toContain('MATIERES LITTERAIRES');
+    expect(text).toContain('TOTAL MATIERES LITTERAIRES');
+    expect(text).toContain('MATIERES SCIENTIFIQUES');
+    expect(text).toContain('TOTAL MATIERES SCIENTIFIQUES');
+    expect(text).toContain('Moyenne de la classe');
+    expect(text).toContain('conseil de classe');
+    expect(text).toContain('CONSEIL DES PROFESSEURS');
+    expect(text).toContain('Distinctions spéciales');
+    expect(text).toContain('Sanctions');
+    expect(text).toContain("APPRECIATION DU CHEF D'ETABLISSEMENT");
+    expect(text).not.toContain('Admis');
+    expect(text).not.toContain('Distinction obtenue');
+    expect(text).not.toContain('Aucune sanction');
   });
 
   it('affiche les groupes de matières dans l ordre littéraire puis scientifique', async () => {
@@ -570,7 +613,7 @@ describe('bulletin PDF API', () => {
     expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
   });
 
-  it('affiche les absences et retards sur une seule ligne dans la section ASSIDUITÉ', async () => {
+  it('affiche les absences et retards dans le bloc compact du modèle', async () => {
     const data: BulletinPdfData = {
       ...snapshotData,
       absences: 5,
@@ -579,9 +622,8 @@ describe('bulletin PDF API', () => {
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    expect(text).toContain('ASSIDUITÉ');
-    expect(text).toMatch(/Absences\s*:\s*5\s+Retards\s*:\s*2/);
-    expect(text).not.toMatch(/Absences\s*:\s*5\s*\n\s*Retards\s*:\s*2/);
+    expect(text).toContain('Retards : 2 fois');
+    expect(text).toContain('Absences : 5 Heures');
   });
 
   it('supprime le bloc Moyenne/Rang sous le nom de l élève', async () => {
@@ -601,9 +643,8 @@ describe('bulletin PDF API', () => {
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    expect(text).toContain('ASSIDUITÉ');
-    expect(text).toContain('Retards : 0');
-    expect(text).toContain('Absences : 0');
+    expect(text).toContain('Retards : 0 fois');
+    expect(text).toContain('Absences : 0 Heures');
   });
 
   it('compte les absences réelles d un élève dans le bulletin PDF et exclut les autres périodes', async () => {
@@ -641,9 +682,9 @@ describe('bulletin PDF API', () => {
     const text1 = extractPdfText(student1);
     const text2 = extractPdfText(student2);
 
-    expect(text1).toContain('Absences : 3');
-    expect(text1).toContain('Retards : 1');
-    expect(text2).toContain('Absences : 7');
-    expect(text2).toContain('Retards : 2');
+    expect(text1).toContain('Absences : 3 Heures');
+    expect(text1).toContain('Retards : 1 fois');
+    expect(text2).toContain('Absences : 7 Heures');
+    expect(text2).toContain('Retards : 2 fois');
   });
 });

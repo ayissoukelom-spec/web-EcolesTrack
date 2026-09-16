@@ -933,20 +933,12 @@ export const createBulletinPdfDocument = async (
   const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
   const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
     ? [
-      ...(data.matieres_litteraires && data.matieres_litteraires.length > 0
-        ? [{ groupTitle: 'MATIERES LITTERAIRES' }]
-        : []),
+      { groupTitle: 'MATIERES LITTERAIRES' },
       ...(data.matieres_litteraires ?? []).map((line) => ({ line })),
-      ...(data.matieres_litteraires && data.matieres_litteraires.length > 0
-        ? [{ subtotal: { label: 'TOTAL MATIERES LITTERAIRES', lines: data.matieres_litteraires } }]
-        : []),
-      ...(data.matieres_scientifiques && data.matieres_scientifiques.length > 0
-        ? [{ groupTitle: 'MATIERES SCIENTIFIQUES' }]
-        : []),
+      { subtotal: { label: 'TOTAL MATIERES LITTERAIRES', lines: data.matieres_litteraires ?? [] } },
+      { groupTitle: 'MATIERES SCIENTIFIQUES' },
       ...(data.matieres_scientifiques ?? []).map((line) => ({ line })),
-      ...(data.matieres_scientifiques && data.matieres_scientifiques.length > 0
-        ? [{ subtotal: { label: 'TOTAL MATIERES SCIENTIFIQUES', lines: data.matieres_scientifiques } }]
-        : []),
+      { subtotal: { label: 'TOTAL MATIERES SCIENTIFIQUES', lines: data.matieres_scientifiques ?? [] } },
       ...data.lines
         .filter((line) => !resolveBulletinSubjectType(line.subjectTypeName))
         .map((line) => ({ line })),
@@ -1082,41 +1074,77 @@ export const createBulletinPdfDocument = async (
   drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
-  const summaryHeight = 34;
-  page.drawRectangle({ x: tableX, y: cursorY - summaryHeight, width: tableWidth, height: summaryHeight, color: white, borderColor: lightBorder, borderWidth: 0.7 });
-  const summaryColumns = [
-    { label: 'MOYENNE GÉNÉRALE', value: data.average == null ? '-' : data.average.toFixed(2) },
-    { label: 'RANG', value: data.rank == null ? '-' : String(data.rank) },
-    { label: 'MENTION', value: data.mention || '-' },
-  ];
-  const summaryColumnWidth = tableWidth / summaryColumns.length;
-  summaryColumns.forEach((summary, index) => {
-    const summaryX = tableX + index * summaryColumnWidth;
-    if (index > 0) page.drawLine({ start: { x: summaryX, y: cursorY }, end: { x: summaryX, y: cursorY - summaryHeight }, color: lightBorder, thickness: 0.5 });
-    drawText(page, summary.label, summaryX + 8, cursorY - 13, 7, muted, fontBold);
-    drawText(page, summary.value, summaryX + 8, cursorY - 26, 8.5, text, fontBold);
-  });
-  cursorY -= summaryHeight + 10;
+  const drawLabelValue = (label: string, value: string, x: number, y: number, width: number, valueOffset = 92) => {
+    drawText(page, label, x, y, 7.5, text, fontRegular);
+    drawText(page, value, x + valueOffset, y, 7.5, text, fontRegular);
+    page.drawLine({ start: { x: x + valueOffset, y: y - 2 }, end: { x: x + width, y: y - 2 }, color: lightBorder, thickness: 0.45 });
+  };
 
-  const appreciationText = data.appreciation || '-';
-  const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 8.5);
-  const appreciationHeight = 26 + Math.min(appreciationLines.length, 4) * 10;
-  page.drawRectangle({ x: tableX, y: cursorY - appreciationHeight, width: tableWidth, height: appreciationHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-  drawText(page, template.labels.appreciation, tableX + 12, cursorY - 15, 8.5, primary, fontBold);
-  drawWrappedText(page, appreciationText, tableX + 12, cursorY - 28, tableWidth - 24, 8.5, text, fontRegular, 4);
-  cursorY -= appreciationHeight + 30;
+  const lowerLeftWidth = 172;
+  const lowerCenterWidth = 188;
+  const lowerRightWidth = tableWidth - lowerLeftWidth - lowerCenterWidth - 12;
+  const lowerCenterX = tableX + lowerLeftWidth + 6;
+  const lowerRightX = lowerCenterX + lowerCenterWidth + 6;
+  const emptyValue = '________________';
 
-  const attendanceHeight = 30;
-  page.drawRectangle({ x: tableX, y: cursorY - attendanceHeight, width: tableWidth, height: attendanceHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-  drawText(page, sanitizePdfTextPreservingAccents('ASSIDUITÉ'), tableX + 12, cursorY - 15, 8.5, primary, fontBold);
-  drawText(page, `Absences : ${data.absences}    Retards : ${data.retards}`, tableX + 12, cursorY - 25, 7.7, text, fontRegular);
-  cursorY -= attendanceHeight + 24;
+  // Compact three-column block matching the lower CamScanner layout.
+  const semesterStartY = cursorY - 13;
+  drawText(page, '1er semestre:', tableX, semesterStartY, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 70, semesterStartY, 7.5, text, fontRegular);
+  drawText(page, 'Rg :', tableX + 132, semesterStartY, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 151, semesterStartY, 7.5, text, fontRegular);
+  drawText(page, '2ème semestre:', tableX, semesterStartY - 14, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 70, semesterStartY - 14, 7.5, text, fontRegular);
+  drawText(page, 'Rg :', tableX + 132, semesterStartY - 14, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 151, semesterStartY - 14, 7.5, text, fontRegular);
+  page.drawLine({ start: { x: tableX, y: cursorY - 32 }, end: { x: tableX + lowerLeftWidth, y: cursorY - 32 }, color: lightBorder, thickness: 0.55 });
 
-  const signatureWidth = (tableWidth - 12) / 2;
-  page.drawRectangle({ x: margin, y: cursorY - 48, width: signatureWidth, height: 48, color: white, borderColor: lightBorder, borderWidth: 0.7 });
-  page.drawRectangle({ x: margin + signatureWidth + 12, y: cursorY - 48, width: signatureWidth, height: 48, color: white, borderColor: lightBorder, borderWidth: 0.7 });
-  drawText(page, template.labels.signatureSchool, margin + 8, cursorY - 16, 8.5, muted, fontRegular);
-  drawText(page, template.labels.signatureParent, margin + signatureWidth + 20, cursorY - 16, 8.5, muted, fontRegular);
+  drawText(page, 'Moyennes :', lowerCenterX, cursorY - 13, 8, primary, fontBold);
+  page.drawLine({ start: { x: lowerCenterX, y: cursorY - 16 }, end: { x: lowerCenterX + 72, y: cursorY - 16 }, color: primary, thickness: 0.7 });
+  drawLabelValue('Moyenne du 2ème semestre', '', lowerCenterX, cursorY - 29, lowerCenterWidth, 105);
+  drawLabelValue('Décision du conseil de classe', '', lowerCenterX, cursorY - 43, lowerCenterWidth, 105);
+  drawLabelValue('Mention :', data.mention || '', lowerCenterX, cursorY - 57, lowerCenterWidth, 48);
+  drawLabelValue('Appréciation :', data.appreciation || '', lowerCenterX, cursorY - 71, lowerCenterWidth, 64);
+  page.drawLine({ start: { x: lowerCenterX, y: cursorY - 83 }, end: { x: lowerCenterX + lowerCenterWidth, y: cursorY - 83 }, color: lightBorder, thickness: 0.55 });
+
+  page.drawRectangle({ x: lowerRightX, y: cursorY - 33, width: lowerRightWidth, height: 28, color: white, borderColor: lightBorder, borderWidth: 0.65 });
+  drawText(page, `Retards : ${data.retards == null ? '' : `${data.retards} fois`}`, lowerRightX + 6, cursorY - 16, 7, text, fontRegular);
+  drawText(page, `Absences : ${data.absences == null ? '' : `${data.absences} Heures`}`, lowerRightX + 6, cursorY - 27, 7, text, fontRegular);
+  drawLabelValue('Plus forte moyenne', '', lowerRightX, cursorY - 44, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
+  drawLabelValue('Plus faible moyenne', '', lowerRightX, cursorY - 56, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
+  drawLabelValue('Moyenne de la classe', '', lowerRightX, cursorY - 68, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
+
+  cursorY -= 94;
+  const annualWidth = lowerLeftWidth + lowerCenterWidth + 6;
+  page.drawRectangle({ x: tableX, y: cursorY - 22, width: annualWidth, height: 22, color: white, borderColor: lightBorder, borderWidth: 0.65 });
+  drawText(page, 'Moy. Ann. =', tableX + 7, cursorY - 14, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 68, cursorY - 14, 7.5, text, fontRegular);
+  drawText(page, '- Rg :', tableX + 137, cursorY - 14, 7.5, text, fontRegular);
+  drawText(page, emptyValue, tableX + 171, cursorY - 14, 7.5, text, fontRegular);
+  drawText(page, 'DECISION DU CONSEIL DES PROFESSEURS', lowerRightX, cursorY - 14, 6.8, primary, fontBold);
+  cursorY -= 29;
+
+  const halfWidth = (tableWidth - 6) / 2;
+  page.drawRectangle({ x: tableX, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
+  page.drawRectangle({ x: tableX + halfWidth + 6, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
+  drawText(page, 'Distinctions spéciales', tableX + 7, cursorY - 12, 7.5, primary, fontBold);
+  drawText(page, 'Tableau d’honneur', tableX + 12, cursorY - 25, 7, text, fontRegular);
+  drawText(page, 'Encouragements', tableX + 12, cursorY - 35, 7, text, fontRegular);
+  drawText(page, 'Félicitations', tableX + 100, cursorY - 25, 7, text, fontRegular);
+  drawText(page, 'Sanctions', tableX + halfWidth + 7, cursorY - 12, 7.5, primary, fontBold);
+  cursorY -= 50;
+
+  drawText(page, "APPRECIATION DU CHEF D'ETABLISSEMENT", tableX, cursorY - 11, 7.5, primary, fontBold);
+  page.drawLine({ start: { x: tableX, y: cursorY - 14 }, end: { x: tableX + 190, y: cursorY - 14 }, color: primary, thickness: 0.7 });
+  drawLabelValue('Travail :', '', tableX, cursorY - 27, tableWidth / 2 - 8, 42);
+  drawLabelValue('Assiduité :', '', tableX + tableWidth / 2, cursorY - 27, tableWidth / 2, 52);
+  cursorY -= 40;
+
+  const signatureStartY = cursorY - 4;
+  drawText(page, 'Signature du titulaire de classe', tableX + tableWidth - 190, signatureStartY, 7.5, text, fontRegular);
+  page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 28 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 28 }, color: lightBorder, thickness: 0.65 });
+  drawText(page, 'Le Proviseur', tableX + tableWidth - 190, signatureStartY - 40, 7.5, text, fontRegular);
+  page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 55 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 55 }, color: lightBorder, thickness: 0.65 });
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
