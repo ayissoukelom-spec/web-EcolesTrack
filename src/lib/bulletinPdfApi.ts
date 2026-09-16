@@ -827,7 +827,7 @@ export const createBulletinPdfDocument = async (
 
   const pdf = await PDFDocument.create();
   const pageSize: [number, number] = [595.28, 841.89];
-  const margin = 40;
+  const margin = 16;
 
   const { regular: fontRegular, bold: fontBold } = await loadPdfFonts(pdf);
   let logo: any = null;
@@ -1006,8 +1006,8 @@ export const createBulletinPdfDocument = async (
     drawCenteredWrappedText(page, value, centerX, y, maxWidth, minSize, color, font, 2);
   };
 
-  const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 8) => {
-    const size = fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize);
+  const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 11, fitToWidth = true) => {
+    const size = fitToWidth ? fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize) : initialSize;
     const lines = computeHeaderParagraphLayout(value, maxWidth, font, size);
     lines.forEach((line, lineIndex) => {
       const lineWidth = font.widthOfTextAtSize(line.text, size);
@@ -1026,8 +1026,6 @@ export const createBulletinPdfDocument = async (
     page.drawRectangle({ x: margin, y: headerBottom, width: tableWidth, height: 118, color: white, borderColor: lightBorder, borderWidth: 0.8 });
     page.drawLine({ start: { x: margin, y: headerTop }, end: { x: width - margin, y: headerTop }, color: primary, thickness: 1.2 });
     page.drawLine({ start: { x: margin, y: headerBottom }, end: { x: width - margin, y: headerBottom }, color: primary, thickness: 1.2 });
-    page.drawLine({ start: { x: margin + 178, y: headerBottom }, end: { x: margin + 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
-    page.drawLine({ start: { x: width - margin - 178, y: headerBottom }, end: { x: width - margin - 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
     page.drawCircle({ x: centerX, y: height - 70, size: 26, borderColor: lightBorder, borderWidth: 0.8 });
     if (logo) {
       const centralRectLeft = margin + 178 + 8;
@@ -1079,7 +1077,8 @@ export const createBulletinPdfDocument = async (
         ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
     const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
-    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, leftHeaderWidth, 7.5, 5.5, text, fontBold);
+    const institutionHeaderWidth = margin + 178 - leftX;
+    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX + 25, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);
     const postalAndPhone = [

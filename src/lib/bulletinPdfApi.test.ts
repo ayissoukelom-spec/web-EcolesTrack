@@ -103,9 +103,9 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     const font = await pdf.embedFont('Helvetica');
     const layout = computeHeaderParagraphLayout(
       "ENSEIGNEMENT SECONDAIRE MINISTERE DE L'EDUCATION",
-      170,
+      172,
       font,
-      7.5,
+      9,
     );
     const words = layout.flatMap((line) => line.words);
 
@@ -116,11 +116,9 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout[0].text).toBe('ENSEIGNEMENT SECONDAIRE');
     expect(layout[1].text).toBe("MINISTERE DE L'EDUCATION");
     expect(layout.every((line) => line.justify === false)).toBe(true);
-    expect(layout.every((line) => line.wordSpacing === font.widthOfTextAtSize(' ', 7.5))).toBe(true);
-    expect(layout[0].width).toBeLessThanOrEqual(170);
-    expect(layout[1].width).toBeLessThanOrEqual(170);
-    expect((170 - layout[0].width) / 2).toBeGreaterThan(0);
-    expect((170 - layout[1].width) / 2).toBeGreaterThan(0);
+    expect(layout.every((line) => line.wordSpacing === font.widthOfTextAtSize(' ', 9))).toBe(true);
+    expect(layout[0].width).toBeGreaterThan(172);
+    expect(layout[1].width).toBeGreaterThan(172);
   });
 
   it('réduit la taille commune sans créer de troisième ligne', async () => {
