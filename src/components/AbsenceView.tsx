@@ -54,6 +54,7 @@ export default function AbsenceView({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterSubject, setFilterSubject] = useState('');
   const [filterDate, setFilterDate] = useState('');
+  const [filterJustification, setFilterJustification] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
   const [justificationText, setJustificationText] = useState('');
@@ -321,6 +322,14 @@ export default function AbsenceView({
     }
 
     if (filterDate && String(abs.date || '') !== filterDate) {
+      return false;
+    }
+
+    if (filterJustification === 'justified' && !abs.isJustified) {
+      return false;
+    }
+
+    if (filterJustification === 'unjustified' && abs.isJustified) {
       return false;
     }
 
@@ -699,6 +708,15 @@ export default function AbsenceView({
             onChange={(e) => setFilterDate(e.target.value)}
             className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
           />
+          <select
+            value={filterJustification}
+            onChange={(e) => setFilterJustification(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+          >
+            <option value="">Toutes</option>
+            <option value="justified">Justifiées</option>
+            <option value="unjustified">Injustifiées</option>
+          </select>
         </div>
       </div>
 
