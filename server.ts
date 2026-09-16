@@ -82,7 +82,7 @@ import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parent
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
 
-export const SCHOOL_LOGO_MAX_SIZE = 2 * 1024 * 1024;
+export const SCHOOL_LOGO_MAX_SIZE = 5 * 1024 * 1024;
 
 export const isSupportedSchoolLogo = (file: { mimetype?: string; originalname?: string }): boolean => {
   const extension = path.extname(String(file.originalname || '')).toLowerCase();

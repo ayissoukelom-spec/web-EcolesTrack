@@ -1,6 +1,8 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
@@ -9,6 +11,7 @@ import {
   formatStudentStatusForPdf,
   resolveStudentStatusForAcademicYear,
   calculateStudentSubjectTypeAverages,
+  computeSchoolLogoRenderMetrics,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -84,6 +87,27 @@ const extractPdfText = (pdfBytes: Uint8Array): string => {
   return streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
 };
 
+const countPdfImages = (pdfBytes: Uint8Array): number => {
+  const raw = Buffer.from(pdfBytes).toString('latin1');
+  return raw.includes('/Subtype /Image') ? 1 : 0;
+};
+
+const withStoredLogo = async (extension: string, content: string, callback: (logoPath: string) => Promise<void>) => {
+  const storageDir = path.resolve(process.cwd(), 'uploads', 'school-logos');
+  await mkdir(storageDir, { recursive: true });
+  const fileName = `bulletin-pdf-test-${Date.now()}-${Math.random().toString(16).slice(2)}.${extension}`;
+  const filePath = path.join(storageDir, fileName);
+  await writeFile(filePath, Buffer.from(content, 'base64'));
+  try {
+    await callback(`school-logos/${fileName}`);
+  } finally {
+    await unlink(filePath).catch(() => undefined);
+  }
+};
+
+const testPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+const testJpegBase64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/AP/EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8Bf//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8Bf//Z';
+
 const createApp = (
   provider: BulletinPdfDataProvider,
   pdfGenerator?: (data: BulletinPdfData) => Promise<Uint8Array>,
@@ -130,6 +154,94 @@ const withServer = async (app: express.Express): Promise<string> => {
 };
 
 describe('bulletin PDF API', () => {
+  it('calcule un rendu de logo centré et proportionnel dans une zone rectangulaire cible', () => {
+    const square = computeSchoolLogoRenderMetrics(200, 200, 140, 100, 80, 90);
+    const landscape = computeSchoolLogoRenderMetrics(300, 200, 140, 100, 80, 90);
+    const portrait = computeSchoolLogoRenderMetrics(200, 300, 140, 100, 80, 90);
+
+    expect(square.drawWidth).toBeCloseTo(90, 5);
+    expect(square.drawHeight).toBeCloseTo(90, 5);
+    expect(square.x).toBeCloseTo(55, 5);
+    expect(square.y).toBeCloseTo(35, 5);
+
+    expect(landscape.drawWidth).toBeLessThanOrEqual(140);
+    expect(landscape.drawHeight).toBeLessThanOrEqual(90);
+    expect(landscape.drawWidth / landscape.drawHeight).toBeCloseTo(300 / 200, 3);
+    expect(landscape.x).toBeCloseTo(100 - landscape.drawWidth / 2, 5);
+    expect(landscape.y).toBeCloseTo(80 - landscape.drawHeight / 2, 5);
+
+    expect(portrait.drawWidth).toBeLessThanOrEqual(140);
+    expect(portrait.drawHeight).toBeLessThanOrEqual(90);
+    expect(portrait.drawWidth / portrait.drawHeight).toBeCloseTo(200 / 300, 3);
+    expect(portrait.x).toBeCloseTo(100 - portrait.drawWidth / 2, 5);
+    expect(portrait.y).toBeCloseTo(80 - portrait.drawHeight / 2, 5);
+  });
+
+  it('embarque le logo établissement PNG dans le PDF', async () => {
+    await withStoredLogo('png', testPngBase64, async (logoPath) => {
+      const pdfBytes = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: { ...snapshotData.school, logoPath },
+      });
+
+      expect(countPdfImages(pdfBytes)).toBeGreaterThan(0);
+    });
+  });
+
+  it('résout et embarque un logo stocké sous les formats réels de la base (school-logos/ et uploads/school-logos/)', async () => {
+    const storageDir = path.resolve(process.cwd(), 'uploads', 'school-logos');
+    await mkdir(storageDir, { recursive: true });
+    const fileName = `real-format-logo-${Date.now()}.png`;
+    const filePath = path.join(storageDir, fileName);
+    await writeFile(filePath, Buffer.from(testPngBase64, 'base64'));
+
+    try {
+      for (const logoPath of [`school-logos/${fileName}`, `uploads/school-logos/${fileName}`, `/uploads/school-logos/${fileName}`]) {
+        const pdfBytes = await createBulletinPdfDocument({
+          ...snapshotData,
+          school: { ...snapshotData.school, logoPath },
+        });
+
+        expect(countPdfImages(pdfBytes)).toBeGreaterThan(0);
+      }
+    } finally {
+      await unlink(filePath).catch(() => undefined);
+    }
+  });
+
+  it('embarque le logo établissement JPG et JPEG dans le PDF', async () => {
+    for (const extension of ['jpg', 'jpeg']) {
+      await withStoredLogo(extension, testJpegBase64, async (logoPath) => {
+        const pdfBytes = await createBulletinPdfDocument({
+          ...snapshotData,
+          school: { ...snapshotData.school, logoPath },
+        });
+
+        expect(countPdfImages(pdfBytes)).toBeGreaterThan(0);
+      });
+    }
+  });
+
+  it('génère le PDF sans image lorsqu aucun logo établissement n est configuré', async () => {
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: { ...snapshotData.school, logoPath: null },
+    });
+
+    expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
+    expect(countPdfImages(pdfBytes)).toBe(0);
+  });
+
+  it('ignore un logo établissement introuvable sans bloquer la génération', async () => {
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: { ...snapshotData.school, logoPath: 'school-logos/logo-introuvable.png' },
+    });
+
+    expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
+    expect(countPdfImages(pdfBytes)).toBe(0);
+  });
+
   it('calcule la Moy. interro uniquement avec les notes de l élève demandé', () => {
     const rows = [
       [22, 10], [23, 11], [24, 8], [25, 12], [26, 9], [29, 14], [30, 9],

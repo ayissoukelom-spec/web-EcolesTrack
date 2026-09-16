@@ -2264,8 +2264,8 @@ export default function AdminView({
                               setSchoolLogoError('Seuls les fichiers PNG et JPG/JPEG sont acceptés.');
                               return;
                             }
-                            if (file.size > 2 * 1024 * 1024) {
-                              setSchoolLogoError('Le logo ne doit pas dépasser 2 Mo.');
+                            if (file.size > 5 * 1024 * 1024) {
+                              setSchoolLogoError('Le logo ne doit pas dépasser 5 Mo.');
                               return;
                             }
                             setSchoolLogoError(null);

@@ -1,7 +1,8 @@
 import type express from 'express';
 import { and, eq, or, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
@@ -696,6 +697,35 @@ const drawText = (
   });
 };
 
+export const computeSchoolLogoRenderMetrics = (
+  imageWidth: number,
+  imageHeight: number,
+  targetWidth: number,
+  centerX = 0,
+  centerY = 0,
+  targetHeight?: number,
+) => {
+  const safeTargetWidth = Math.max(1, Number.isFinite(targetWidth) ? targetWidth : 44);
+  const safeTargetHeight = Number.isFinite(targetHeight) ? Math.max(1, targetHeight) : safeTargetWidth;
+  const width = Math.max(1, Number.isFinite(imageWidth) ? imageWidth : 1);
+  const height = Math.max(1, Number.isFinite(imageHeight) ? imageHeight : 1);
+  const scale = Math.min(safeTargetWidth / width, safeTargetHeight / height);
+  const drawWidth = width * scale;
+  const drawHeight = height * scale;
+  const x = centerX - drawWidth / 2;
+  const y = centerY - drawHeight / 2;
+
+  return {
+    targetWidth: safeTargetWidth,
+    targetHeight: safeTargetHeight,
+    scale,
+    drawWidth,
+    drawHeight,
+    x,
+    y,
+  };
+};
+
 export const createBulletinPdfDocument = async (
   data: BulletinPdfData,
   templateOverrides?: Partial<BulletinPdfTemplate>,
@@ -719,14 +749,97 @@ export const createBulletinPdfDocument = async (
 
   const { regular: fontRegular, bold: fontBold } = await loadPdfFonts(pdf);
   let logo: any = null;
-  if (template.logoFilePath) {
+  let resolvedLogoPath: string | null = null;
+  const logoPath = data.school?.logoPath?.trim();
+  if (logoPath) {
     try {
-      const logoBytes = await readFile(template.logoFilePath);
-      logo = template.logoFilePath.toLowerCase().endsWith('.png')
+      const rawLogoPath = logoPath.replace(/\\/g, '/');
+      const logoStorageDir = path.resolve(process.cwd(), 'uploads', 'school-logos');
+      const candidatePaths = new Set<string>();
+
+      const addCandidate = (candidate: string | undefined | null) => {
+        if (!candidate) return;
+        const cleaned = candidate.trim().replace(/\\/g, '/');
+        if (!cleaned) return;
+
+        const normalized = cleaned.startsWith('/') ? path.resolve(cleaned) : path.resolve(process.cwd(), cleaned);
+        candidatePaths.add(normalized);
+
+        const relativeCandidate = cleaned.replace(/^\.\//, '');
+        if (relativeCandidate.startsWith('uploads/')) {
+          candidatePaths.add(path.resolve(process.cwd(), relativeCandidate));
+        }
+        if (relativeCandidate.startsWith('school-logos/')) {
+          candidatePaths.add(path.resolve(process.cwd(), 'uploads', relativeCandidate));
+          candidatePaths.add(path.resolve(logoStorageDir, path.basename(relativeCandidate)));
+        }
+        candidatePaths.add(path.resolve(logoStorageDir, path.basename(cleaned)));
+      };
+
+      addCandidate(rawLogoPath);
+      addCandidate(path.basename(rawLogoPath));
+
+      const candidate = Array.from(candidatePaths)
+        .find((filePath) => (filePath === logoStorageDir || filePath.startsWith(`${logoStorageDir}${path.sep}`)) && !filePath.includes(`${path.sep}..${path.sep}`));
+
+      resolvedLogoPath = candidate ?? null;
+      const logoFilePath = resolvedLogoPath ?? path.resolve(logoStorageDir, path.basename(rawLogoPath));
+      const logoExtension = path.extname(logoFilePath).toLowerCase();
+      const isSupportedType = ['.png', '.jpg', '.jpeg'].includes(logoExtension);
+      const isInsideLogoStorage = logoFilePath === logoStorageDir || logoFilePath.startsWith(`${logoStorageDir}${path.sep}`);
+
+      let fileExists = false;
+      let fileSize = 0;
+      try {
+        const fileInfo = await stat(logoFilePath);
+        fileExists = fileInfo.isFile();
+        fileSize = fileInfo.size;
+      } catch (statErr) {
+        console.warn('[bulletinPdf] school logo file missing', {
+          rawLogoPath,
+          resolvedPath: logoFilePath,
+          extension: logoExtension,
+          isInsideLogoStorage,
+          fileExists: false,
+          error: statErr instanceof Error ? statErr.message : String(statErr),
+        });
+      }
+
+      if (!isInsideLogoStorage || !isSupportedType) {
+        throw new Error(`Unsupported school logo path: ${rawLogoPath}`);
+      }
+
+      if (!fileExists) {
+        throw new Error(`School logo file not found: ${logoFilePath}`);
+      }
+
+      console.warn('[bulletinPdf] school logo diagnostics', {
+        rawLogoPath,
+        resolvedPath: logoFilePath,
+        exists: fileExists,
+        extension: logoExtension,
+        size: fileSize,
+        isInsideLogoStorage,
+      });
+
+      const logoBytes = new Uint8Array(await readFile(logoFilePath));
+      logo = logoExtension === '.png'
         ? await pdf.embedPng(logoBytes)
         : await pdf.embedJpg(logoBytes);
-    } catch {
-      // Ignore logo loading errors to keep PDF generation robust.
+
+      console.info('[bulletinPdf] LOGO_EMBEDDED_AND_DRAWN', {
+        rawLogoPath,
+        resolvedPath: logoFilePath,
+        extension: logoExtension,
+        width: logo.width,
+        height: logo.height,
+      });
+    } catch (err) {
+      console.warn('[bulletinPdf] school logo load failed', {
+        rawLogoPath: logoPath,
+        resolvedPath: resolvedLogoPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -826,12 +939,45 @@ export const createBulletinPdfDocument = async (
     page.drawLine({ start: { x: width - margin - 178, y: headerBottom }, end: { x: width - margin - 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
     page.drawCircle({ x: centerX, y: height - 70, size: 26, borderColor: lightBorder, borderWidth: 0.8 });
     if (logo) {
-      const scaled = logo.scale(0.16);
+      const centralRectLeft = margin + 178 + 8;
+      const centralRectRight = width - margin - 178 - 8;
+      const centralRectBottom = headerBottom + 8;
+      const centralRectTop = headerTop - 8;
+      const centralRectWidth = Math.max(1, centralRectRight - centralRectLeft);
+      const centralRectHeight = Math.max(1, centralRectTop - centralRectBottom);
+      const logoZoneCenterX = (centralRectLeft + centralRectRight) / 2;
+      const logoZoneCenterY = (centralRectBottom + centralRectTop) / 2;
+
+      const logoRender = computeSchoolLogoRenderMetrics(
+        logo.width,
+        logo.height,
+        centralRectWidth,
+        logoZoneCenterX,
+        logoZoneCenterY,
+        centralRectHeight,
+      );
+
       page.drawImage(logo, {
-        x: centerX - scaled.width / 2,
-        y: height - 78,
-        width: scaled.width,
-        height: scaled.height,
+        x: logoRender.x,
+        y: logoRender.y,
+        width: logoRender.drawWidth,
+        height: logoRender.drawHeight,
+      });
+      console.info('[bulletinPdf] LOGO_EMBEDDED_AND_DRAWN', {
+        x: logoRender.x,
+        y: logoRender.y,
+        width: logoRender.drawWidth,
+        height: logoRender.drawHeight,
+        targetWidth: logoRender.targetWidth,
+        targetHeight: logoRender.targetHeight,
+        logoZone: {
+          left: centralRectLeft,
+          right: centralRectRight,
+          top: centralRectTop,
+          bottom: centralRectBottom,
+          width: centralRectWidth,
+          height: centralRectHeight,
+        },
       });
     }
     const leftColumnCenter = margin + 89;

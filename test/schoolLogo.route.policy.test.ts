@@ -14,7 +14,7 @@ describe('school logo infrastructure', () => {
   });
 
   it('uses a bounded size and a collision-resistant relative storage reference', () => {
-    expect(SCHOOL_LOGO_MAX_SIZE).toBe(2 * 1024 * 1024);
+    expect(SCHOOL_LOGO_MAX_SIZE).toBe(5 * 1024 * 1024);
     expect(buildSchoolLogoRelativePath('../unsafe-logo.png')).toBe('school-logos/unsafe-logo.png');
   });
 
@@ -34,5 +34,6 @@ describe('school logo infrastructure', () => {
     expect(pdf).toContain('logoPath: schools.logoPath');
     expect(pdf).toContain('logoPath: header.school.logoPath ?? null');
     expect(server).not.toContain("src/assets/logo.png");
+    expect(pdf).not.toContain("src/assets/logo.png");
   });
 });
