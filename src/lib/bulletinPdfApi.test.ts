@@ -219,7 +219,7 @@ describe('bulletin PDF API', () => {
     expect(text).toMatch(/STATUT :[\s\S]*SEXE :/);
   });
 
-  it('affiche le libellé Moy. Général dans l en-tête du tableau PDF', async () => {
+  it('affiche le libellé Note /20 dans l en-tête du tableau PDF', async () => {
     const pdfBytes = await createBulletinPdfDocument(snapshotData);
     const raw = Buffer.from(pdfBytes).toString('latin1');
     const streams: string[] = [];
@@ -231,9 +231,60 @@ describe('bulletin PDF API', () => {
       }
     }
     const text = streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
-    expect(BULLETIN_FINAL_AVERAGE_LABEL).toBe('Moy. Général');
-    expect(text).not.toContain('Note /20');
-    expect(text).toContain('Devoir');
+    expect(BULLETIN_FINAL_AVERAGE_LABEL).toBe('Note /20');
+    expect(text).toContain('Note');
+    expect(text).toContain('/20');
+    expect(text).toContain('Dev.');
+  });
+
+  it('rend la structure institutionnelle, élève, tableau et pied de page du bulletin', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const document = await PDFDocument.load(pdfBytes);
+    const text = extractPdfText(pdfBytes);
+
+    expect(document.getPageCount()).toBe(1);
+    expect(document.getPage(0).getWidth()).toBeCloseTo(595.28, 1);
+    expect(document.getPage(0).getHeight()).toBeCloseTo(841.89, 1);
+    expect(text).toContain('MINISTÈRE DE L EDUCATION NATIONALE');
+    expect(text).toContain('Direction regionale Maritime');
+    expect(text).toContain('COLLEGE LE SAVOIR');
+    expect(text).toContain('BP 12');
+    expect(text).toContain('+228 90000000');
+    expect(text).toContain('RÉPUBLIQUE TOGOLAISE');
+    expect(text).toContain('Le travail et la reussite');
+    expect(text).toContain('Année scolaire: 2025-2026');
+    expect(text).toContain('BULLETIN DE NOTES DU Trimestre 1');
+    expect(text).toContain('Classe: 3ème A');
+    expect(text).toContain('EFFECTIF : 42');
+    expect(text).toContain('NOM ET PRÉNOMS DE L ÉLÈVE :');
+    expect(text).toContain('Alice Dupont');
+    expect(text).toContain('N° Mle : 00001N');
+    expect(text).toContain('STATUT :');
+    expect(text).toContain('SEXE :');
+    expect(text).toContain('Matières');
+    expect(text).toContain('Inter.');
+    expect(text).toContain('Dev.');
+    expect(text).toContain('Moy.');
+    expect(text).toContain('Clas');
+    expect(text).toContain('Compo.');
+    expect(text).toContain('Note');
+    expect(text).toContain('/20');
+    expect(text).toContain('Coef.');
+    expect(text).toContain('Note');
+    expect(text).toContain('Rang');
+    expect(text).toContain('Professeur');
+    expect(text).toContain('Appréciation');
+    expect(text).toContain('Signature');
+    expect(text).toContain('MOYENNE GÉNÉRALE');
+    expect(text).toContain('MENTION');
+    expect(text).toContain('SNAPSHOT_MENTION');
+    expect(text).toContain('SNAPSHOT_APPRECIATION');
+    expect(text).toContain('ASSIDUITÉ');
+    expect(text).toContain('Absences : 0');
+    expect(text).toContain('Retards : 0');
+    expect(text).toContain('Signature de l établissement');
+    expect(text).toContain('Signature du parent');
+    expect(text).toContain('Page 1/1');
   });
 
   it('affiche les groupes de matières dans l ordre littéraire puis scientifique', async () => {
@@ -458,7 +509,7 @@ describe('bulletin PDF API', () => {
     expect(textA).toMatch(/(?:^|\s)F(?:\s|$)/);
     expect(textA).toContain('COLLEGE A');
     expect(textA).toContain('DIRECTION RÉGIONALE DE L\'ÉDUCATION GRAND LOMÉ');
-    expect(textA).not.toContain('Excellence');
+    expect(textA).toContain('Excellence');
     expect(textA).toContain('BP : 1234 Tél : 90 00 00 01');
     expect(textA).not.toContain('ADRESSE A');
     expect(textA).not.toContain('District');

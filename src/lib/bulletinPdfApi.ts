@@ -424,7 +424,7 @@ const loadPdfFonts = async (pdf: PDFDocument) => {
   };
 };
 
-export const BULLETIN_FINAL_AVERAGE_LABEL = 'Moy. Général';
+export const BULLETIN_FINAL_AVERAGE_LABEL = 'Note /20';
 
 const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
   const [header] = await db
@@ -736,32 +736,32 @@ export const createBulletinPdfDocument = async (
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
   const columns = [
-    { label: 'Matières', width: 70 },
+    { label: 'Matières', width: 86 },
     { label: 'Moy. interro', width: 30 },
     { label: 'Devoir', width: 30 },
-    { label: 'Moy. Clas', width: 35 },
-    { label: 'Compo.', width: 30 },
-    { label: BULLETIN_FINAL_AVERAGE_LABEL, width: 35 },
+    { label: 'Moy. Clas', width: 36 },
+    { label: 'Compo.', width: 32 },
+    { label: BULLETIN_FINAL_AVERAGE_LABEL, width: 38 },
     { label: 'Coef.', width: 28 },
-    { label: 'Note coef.', width: 40 },
+    { label: 'Note coef.', width: 46 },
     { label: 'Rang', width: 28 },
-    { label: 'Prof.', width: 40 },
-    { label: 'Appréciation', width: 50 },
-    { label: 'Signature', width: 40 },
+    { label: 'Professeur', width: 55 },
+    { label: 'Appréciation', width: 70 },
+    { label: 'Signature', width: 36 },
   ];
 
   // Define multi-line headers for better space usage
   const headerLines = [
     ['Matières'],
-    ['Moy.', 'interro'],
-    ['Devoir'],
+    ['Inter.'],
+    ['Dev.'],
     ['Moy.', 'Clas'],
     ['Compo.'],
-    ['Moy.', 'Général'],
+    ['Note', '/20'],
     ['Coef.'],
     ['Note', 'coef.'],
     ['Rang'],
-    ['Prof.'],
+    ['Professeur'],
     ['Appréciation'],
     ['Signature'],
   ];
@@ -813,15 +813,16 @@ export const createBulletinPdfDocument = async (
     const width = page.getWidth();
     const height = page.getHeight();
     const headerTop = height - 18;
-    const headerBottom = height - 132;
+    const headerBottom = height - 136;
     const leftX = margin + 6;
     const centerX = width / 2;
     const rightX = width - margin - 145;
-    page.drawRectangle({ x: margin, y: headerBottom, width: tableWidth, height: 114, color: white, borderColor: lightBorder, borderWidth: 0.8 });
+    page.drawRectangle({ x: margin, y: headerBottom, width: tableWidth, height: 118, color: white, borderColor: lightBorder, borderWidth: 0.8 });
     page.drawLine({ start: { x: margin, y: headerTop }, end: { x: width - margin, y: headerTop }, color: primary, thickness: 1.2 });
     page.drawLine({ start: { x: margin, y: headerBottom }, end: { x: width - margin, y: headerBottom }, color: primary, thickness: 1.2 });
     page.drawLine({ start: { x: margin + 178, y: headerBottom }, end: { x: margin + 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
     page.drawLine({ start: { x: width - margin - 178, y: headerBottom }, end: { x: width - margin - 178, y: headerTop }, color: lightBorder, thickness: 0.6 });
+    page.drawCircle({ x: centerX, y: height - 70, size: 26, borderColor: lightBorder, borderWidth: 0.8 });
     if (logo) {
       const scaled = logo.scale(0.16);
       page.drawImage(logo, {
@@ -832,10 +833,11 @@ export const createBulletinPdfDocument = async (
       });
     }
     const leftColumnCenter = margin + 89;
-    const regionalLabel = school.region?.trim()
-      ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
-      : "DIRECTION RÉGIONALE DE L'ÉDUCATION";
-    drawText(page, 'MINISTERE DE L EDUCATION NATIONALE', leftX, height - 34, 7.5, text, fontBold);
+    const regionalLabel = school.educationDirection?.trim()
+      || (school.region?.trim()
+        ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
+        : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
+    drawText(page, 'MINISTÈRE DE L EDUCATION NATIONALE', leftX, height - 34, 7.5, text, fontBold);
     drawCenteredSingleLine(page, regionalLabel, leftColumnCenter, height - 55, 170, 7.5, 5.5, muted, fontRegular);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);
@@ -846,10 +848,10 @@ export const createBulletinPdfDocument = async (
     if (postalAndPhone.length > 0) {
       drawCenteredSingleLine(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, 5.5, muted, fontRegular);
     }
-    drawText(page, 'REPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
-    drawText(page, 'Travail-Liberte-Patrie', rightX, height - 56, 8, muted, fontRegular);
+    drawText(page, 'RÉPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
+    drawText(page, school.motto?.trim() || 'Travail-Liberté-Patrie', rightX, height - 56, 8, muted, fontRegular);
     drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, rightX, height - 79, 8.5, text, fontBold);
-    return height - 144;
+    return height - 148;
   };
 
   const drawTableHeader = (page: any, y: number) => {
@@ -882,12 +884,13 @@ export const createBulletinPdfDocument = async (
 
   const title = `${template.labels.title} DU ${data.termName}`;
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
+  page.drawRectangle({ x: tableX, y: cursorY - 8, width: tableWidth, height: 26, color: softBackground, borderColor: lightBorder, borderWidth: 0.8 });
   drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
   const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
   const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
   drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 22, 10, text, fontBold);
   page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
-  const studentLabel = 'NOM ET PRENOMS DE L ELEVE :';
+  const studentLabel = 'NOM ET PRÉNOMS DE L ÉLÈVE :';
   const studentName = sanitizePdfText(data.studentName);
   const studentLabelSize = 8;
   const studentNameSize = 10.5;
@@ -1048,6 +1051,12 @@ export const createBulletinPdfDocument = async (
     // Column 12: Signature (leave empty for signature)
     drawText(page, '', x + 7, cursorY - 13, 7.5, text, fontRegular);
 
+    let separatorX = tableX;
+    columns.slice(0, -1).forEach((column) => {
+      separatorX += column.width;
+      page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - rowHeight }, color: lightBorder, thickness: 0.35 });
+    });
+
     cursorY -= rowHeight;
   }
 
@@ -1073,6 +1082,22 @@ export const createBulletinPdfDocument = async (
   drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
+  const summaryHeight = 34;
+  page.drawRectangle({ x: tableX, y: cursorY - summaryHeight, width: tableWidth, height: summaryHeight, color: white, borderColor: lightBorder, borderWidth: 0.7 });
+  const summaryColumns = [
+    { label: 'MOYENNE GÉNÉRALE', value: data.average == null ? '-' : data.average.toFixed(2) },
+    { label: 'RANG', value: data.rank == null ? '-' : String(data.rank) },
+    { label: 'MENTION', value: data.mention || '-' },
+  ];
+  const summaryColumnWidth = tableWidth / summaryColumns.length;
+  summaryColumns.forEach((summary, index) => {
+    const summaryX = tableX + index * summaryColumnWidth;
+    if (index > 0) page.drawLine({ start: { x: summaryX, y: cursorY }, end: { x: summaryX, y: cursorY - summaryHeight }, color: lightBorder, thickness: 0.5 });
+    drawText(page, summary.label, summaryX + 8, cursorY - 13, 7, muted, fontBold);
+    drawText(page, summary.value, summaryX + 8, cursorY - 26, 8.5, text, fontBold);
+  });
+  cursorY -= summaryHeight + 10;
+
   const appreciationText = data.appreciation || '-';
   const appreciationLines = wrapText(appreciationText, tableWidth - 24, fontRegular, 8.5);
   const appreciationHeight = 26 + Math.min(appreciationLines.length, 4) * 10;
@@ -1081,16 +1106,17 @@ export const createBulletinPdfDocument = async (
   drawWrappedText(page, appreciationText, tableX + 12, cursorY - 28, tableWidth - 24, 8.5, text, fontRegular, 4);
   cursorY -= appreciationHeight + 30;
 
-  const attendanceHeight = 28;
+  const attendanceHeight = 30;
   page.drawRectangle({ x: tableX, y: cursorY - attendanceHeight, width: tableWidth, height: attendanceHeight, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
   drawText(page, sanitizePdfTextPreservingAccents('ASSIDUITÉ'), tableX + 12, cursorY - 15, 8.5, primary, fontBold);
   drawText(page, `Absences : ${data.absences}    Retards : ${data.retards}`, tableX + 12, cursorY - 25, 7.7, text, fontRegular);
   cursorY -= attendanceHeight + 24;
 
-  page.drawLine({ start: { x: margin, y: cursorY }, end: { x: margin + 190, y: cursorY }, color: lightBorder, thickness: 0.8 });
-  page.drawLine({ start: { x: page.getWidth() - margin - 190, y: cursorY }, end: { x: page.getWidth() - margin, y: cursorY }, color: lightBorder, thickness: 0.8 });
-  drawText(page, template.labels.signatureSchool, margin, cursorY - 16, 8.5, muted, fontRegular);
-  drawText(page, template.labels.signatureParent, page.getWidth() - margin - 190, cursorY - 16, 8.5, muted, fontRegular);
+  const signatureWidth = (tableWidth - 12) / 2;
+  page.drawRectangle({ x: margin, y: cursorY - 48, width: signatureWidth, height: 48, color: white, borderColor: lightBorder, borderWidth: 0.7 });
+  page.drawRectangle({ x: margin + signatureWidth + 12, y: cursorY - 48, width: signatureWidth, height: 48, color: white, borderColor: lightBorder, borderWidth: 0.7 });
+  drawText(page, template.labels.signatureSchool, margin + 8, cursorY - 16, 8.5, muted, fontRegular);
+  drawText(page, template.labels.signatureParent, margin + signatureWidth + 20, cursorY - 16, 8.5, muted, fontRegular);
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
