@@ -461,6 +461,7 @@ export default function AdminModal(props: any) {
                     ['city', 'Ville'],
                     ['region', 'Région'],
                     ['educationDirection', 'Direction régionale de l’éducation'],
+                    ['ministryName', 'Ministère de l’éducation'],
                   ].map(([field, label]) => (
                     <label key={field} className="text-xs font-semibold text-slate-600">
                       {label}

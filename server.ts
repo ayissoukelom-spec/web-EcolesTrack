@@ -2406,6 +2406,7 @@ export async function createApp() {
       const city = req.body?.city != null ? String(req.body.city).trim() : null;
       const region = req.body?.region != null ? String(req.body.region).trim() : null;
       const educationDirection = req.body?.educationDirection != null ? String(req.body.educationDirection).trim() : null;
+      const ministryName = req.body?.ministryName != null ? String(req.body.ministryName).trim() : null;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 
@@ -2439,7 +2440,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -2655,7 +2656,7 @@ export async function createApp() {
       const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
       const phoneRaw = req.body?.phone;
       const phone = phoneRaw != null ? String(phoneRaw).trim() : undefined;
-      const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection'] as const;
+      const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName'] as const;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 

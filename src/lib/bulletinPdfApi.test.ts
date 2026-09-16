@@ -46,6 +46,7 @@ const snapshotData: BulletinPdfData = {
     city: 'Lome',
     region: 'Maritime',
     educationDirection: 'Direction regionale Maritime',
+    ministryName: 'MINISTERE DE L EDUCATION DU TOGO',
   },
   schoolYearId: 100,
   schoolYearName: '2025-2026',
@@ -357,7 +358,8 @@ describe('bulletin PDF API', () => {
     expect(document.getPageCount()).toBe(1);
     expect(document.getPage(0).getWidth()).toBeCloseTo(595.28, 1);
     expect(document.getPage(0).getHeight()).toBeCloseTo(841.89, 1);
-    expect(text).toContain('MINISTÈRE DE L EDUCATION NATIONALE');
+    expect(text).toContain('MINISTERE DE L EDUCATION DU TOGO');
+    expect(text).not.toContain('MINISTÈRE DE L EDUCATION NATIONALE');
     expect(text).toContain('Direction regionale Maritime');
     expect(text).toContain('COLLEGE LE SAVOIR');
     expect(text).toContain('BP 12');
@@ -723,6 +725,7 @@ describe('bulletin PDF API', () => {
     });
 
     expect(new TextDecoder().decode(pdfBytes.slice(0, 4))).toBe('%PDF');
+    expect(extractPdfText(pdfBytes)).not.toContain('MINISTÈRE DE L EDUCATION NATIONALE');
   });
 
   it('affiche les absences et retards dans le bloc compact du modèle', async () => {

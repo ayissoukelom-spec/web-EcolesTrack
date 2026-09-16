@@ -100,6 +100,7 @@ export interface BulletinPdfData {
     city?: string | null;
     region?: string | null;
     educationDirection?: string | null;
+    ministryName?: string | null;
     logoPath?: string | null;
     logo?: string | null;
   };
@@ -453,6 +454,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
         city: schools.city,
         region: schools.region,
         educationDirection: schools.educationDirection,
+        ministryName: schools.ministryName,
         logoPath: schools.logoPath,
       },
       schoolYearId: bulletins.schoolYearId,
@@ -981,11 +983,12 @@ export const createBulletinPdfDocument = async (
       });
     }
     const leftColumnCenter = margin + 89;
+    const ministryLabel = school.ministryName?.trim() ?? '';
     const regionalLabel = school.educationDirection?.trim()
       || (school.region?.trim()
         ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
-    drawText(page, 'MINISTÈRE DE L EDUCATION NATIONALE', leftX, height - 34, 7.5, text, fontBold);
+    if (ministryLabel) drawText(page, ministryLabel, leftX, height - 34, 7.5, text, fontBold);
     drawCenteredSingleLine(page, regionalLabel, leftColumnCenter, height - 55, 170, 7.5, 5.5, muted, fontRegular);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);

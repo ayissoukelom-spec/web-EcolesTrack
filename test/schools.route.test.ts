@@ -9,7 +9,8 @@ const mockState = {
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
-  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string }>,
+  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null }>,
+  lastSchoolUpdate: null as Record<string, any> | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
   subjects: [] as Array<{ id: number; name: string; schoolId: number | null }>,
@@ -139,14 +140,21 @@ const mockDb = {
   }),
   update: (table: any) => ({
     set: (values: any) => ({
-      where: async () => {
+      where: () => {
         if (table === classes) {
           mockState.classes = mockState.classes.map((item) => (item.id === values.id ? { ...item, ...values } : item));
         }
         if (table === schools) {
+          mockState.lastSchoolUpdate = values;
           mockState.schools = mockState.schools.map((item) => (item.id === values.id ? { ...item, ...values } : item));
         }
-        return [{ id: 1 }];
+        const result = [{ id: 1, ...values }];
+        return {
+          then(resolve: (value: any) => void) {
+            return Promise.resolve(result).then(resolve);
+          },
+          returning: async () => result,
+        };
       },
     }),
   }),
@@ -210,6 +218,7 @@ describe('POST /api/schools', () => {
       { id: 1, name: '2024-2025', isActive: true, schoolId: null },
     ];
     mockState.schools = [];
+    mockState.lastSchoolUpdate = null;
     mockState.classes = [];
     mockState.schoolClasses = [];
     mockState.subjects = [];
@@ -237,10 +246,22 @@ describe('POST /api/schools', () => {
   it('creates a school when classNames and subjectNames are provided', async () => {
     const res = await request(app)
       .post('/api/schools')
-      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère du Togo', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
       .expect(201);
 
-    expect(res.body).toMatchObject({ id: 1 });
+    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo' });
+    expect((await request(app).get('/api/schools').expect(200)).body[0]).toMatchObject({ ministryName: 'Ministère du Togo' });
+  });
+
+  it('transmet ministryName lors de la modification d une école', async () => {
+    mockState.schools = [{ id: 1, name: 'École du Lac', phone: '+228 90000000', ministryName: null }];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère modifié' })
+      .expect(200);
+
+    expect(mockState.lastSchoolUpdate).toMatchObject({ ministryName: 'Ministère modifié' });
   });
 
   it('reuses an existing global class instead of creating a duplicate class row', async () => {
