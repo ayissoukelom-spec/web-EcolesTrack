@@ -82,6 +82,37 @@ import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parent
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
 
+export function resolveAbsenceJustificationStorageDirs() {
+  const configuredUploadRoot = (process.env.UPLOADS_DIR || '').trim();
+  const primaryRoot = configuredUploadRoot ? path.resolve(configuredUploadRoot) : path.resolve(process.cwd(), 'uploads');
+  const primaryDir = path.resolve(primaryRoot, 'absence-justifications');
+  const legacyDir = path.resolve(process.cwd(), 'uploads', 'absence-justifications');
+  const candidates = Array.from(new Set([primaryDir, legacyDir].filter(Boolean)));
+  return { primaryDir, legacyDir, candidates };
+}
+
+export async function resolveAbsenceJustificationFilePath(fileName: string): Promise<string | null> {
+  const safeFileName = path.basename(String(fileName || ''));
+  if (!safeFileName) return null;
+
+  const normalizedCandidates = resolveAbsenceJustificationStorageDirs().candidates;
+  for (const dir of normalizedCandidates) {
+    const candidate = path.resolve(dir, safeFileName);
+    const rootDir = path.resolve(dir);
+    const insideRoot = candidate === rootDir || candidate.startsWith(rootDir + path.sep);
+    if (!insideRoot) continue;
+
+    try {
+      await fsPromises.access(candidate);
+      return candidate;
+    } catch {
+      // Keep trying the remaining fallback locations.
+    }
+  }
+
+  return null;
+}
+
 function toUserDto(user: any) {
   return {
     id: user.id,
@@ -624,11 +655,26 @@ export async function createApp() {
   // JSON parsing middleware
   app.use(express.json());
 
-  const uploadStorageDir = path.join(process.cwd(), 'uploads', 'absence-justifications');
+  const { primaryDir: uploadStorageDir, legacyDir: legacyUploadStorageDir, candidates: uploadStorageDirCandidates } = resolveAbsenceJustificationStorageDirs();
   const notificationUploadStorageDir = path.join(process.cwd(), 'uploads', 'notification-attachments');
 
-  await fsPromises.mkdir(notificationUploadStorageDir, { recursive: true });
+  console.log('[uploads] absence justification storage initialized', {
+    uploadEnv: process.env.UPLOADS_DIR || '(default)',
+    primaryDir: uploadStorageDir,
+    legacyDir: legacyUploadStorageDir,
+    candidates: uploadStorageDirCandidates,
+  });
+
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
+  if (legacyUploadStorageDir !== uploadStorageDir) {
+    await fsPromises.mkdir(legacyUploadStorageDir, { recursive: true }).catch((mkdirErr: any) => {
+      console.warn('[uploads] could not create legacy absence justification directory', {
+        legacyDir: legacyUploadStorageDir,
+        error: mkdirErr?.message || String(mkdirErr),
+      });
+    });
+  }
+  await fsPromises.mkdir(notificationUploadStorageDir, { recursive: true });
 
   if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
     try {
@@ -6229,10 +6275,13 @@ export async function createApp() {
       }
 
       const safeFileName = path.basename(String(justification.filePath));
-      const absoluteFilePath = path.join(uploadStorageDir, safeFileName);
-      try {
-        await fsPromises.access(absoluteFilePath);
-      } catch {
+      const absoluteFilePath = await resolveAbsenceJustificationFilePath(safeFileName);
+      if (!absoluteFilePath) {
+        console.warn('[uploads] absence justification file missing during download', {
+          absenceId: id,
+          fileName: safeFileName,
+          checkedDirs: uploadStorageDirCandidates,
+        });
         return res.status(404).json({ error: 'Justification file not found on disk' });
       }
 
