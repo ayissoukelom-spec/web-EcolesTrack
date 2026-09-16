@@ -12,6 +12,7 @@ import {
   resolveStudentStatusForAcademicYear,
   calculateStudentSubjectTypeAverages,
   computeSchoolLogoRenderMetrics,
+  computeJustifiedTextLayout,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -92,6 +93,45 @@ const countPdfImages = (pdfBytes: Uint8Array): number => {
   const raw = Buffer.from(pdfBytes).toString('latin1');
   return raw.includes('/Subtype /Image') ? 1 : 0;
 };
+
+describe('justification typographique du bulletin PDF', () => {
+  it('distribue l espace sur les lignes non finales et conserve la dernière ligne à gauche', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const lines = computeJustifiedTextLayout('Lorem ipsum dolor sit amet consectetur adipiscing elit', 120, font, 10, 10);
+
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines[0].justify).toBe(true);
+    expect(lines[0].wordSpacing).toBeGreaterThan(0);
+    expect(lines[0].width).toBeCloseTo(120, 5);
+    expect(lines.at(-1)?.justify).toBe(false);
+    expect(lines.at(-1)?.wordSpacing).toBe(0);
+  });
+
+  it('respecte les textes courts, les mots longs, les accents et les retours à la ligne', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const shortText = computeJustifiedTextLayout('Très court', 120, font, 10, 2);
+    const explicitBreaks = computeJustifiedTextLayout('Ligne une\nLigne deux', 120, font, 10, 2);
+    const longWord = computeJustifiedTextLayout('anticonstitutionnellement', 40, font, 10, 2);
+
+    expect(shortText).toHaveLength(1);
+    expect(shortText[0].justify).toBe(false);
+    expect(explicitBreaks).toHaveLength(2);
+    expect(explicitBreaks.every((line) => line.justify === false)).toBe(true);
+    expect(longWord).toHaveLength(1);
+    expect(longWord[0].words).toEqual(['anticonstitutionnellement']);
+  });
+
+  it('tronque le paragraphe à la limite de lignes demandée', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const lines = computeJustifiedTextLayout('Un texte suffisamment long pour produire plusieurs lignes', 80, font, 10, 2);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[1].justify).toBe(false);
+  });
+});
 
 const withStoredLogo = async (extension: string, content: string, callback: (logoPath: string) => Promise<void>) => {
   const storageDir = path.resolve(process.cwd(), 'uploads', 'school-logos');
