@@ -403,74 +403,6 @@ const sanitizePdfText = (value: string): string => {
 
 const sanitizePdfTextPreservingAccents = sanitizePdfText;
 
-export interface JustifiedTextLayoutLine {
-  words: string[];
-  wordSpacing: number;
-  justify: boolean;
-  width: number;
-}
-
-export const computeJustifiedTextLayout = (
-  value: string | null | undefined,
-  maxWidth: number,
-  font: any,
-  size: number,
-  maxLines = Number.POSITIVE_INFINITY,
-): JustifiedTextLayoutLine[] => {
-  const safeWidth = Math.max(1, maxWidth);
-  const paragraphs = String(value ?? '').replace(/\r\n/g, '\n').split('\n');
-  const lines: JustifiedTextLayoutLine[] = [];
-
-  paragraphs.forEach((paragraph) => {
-    const normalizedParagraph = sanitizePdfText(paragraph);
-    if (!normalizedParagraph) {
-      lines.push({ words: [], wordSpacing: 0, justify: false, width: 0 });
-      return;
-    }
-
-    let words: string[] = [];
-    let wordsWidth = 0;
-    const paragraphLines: JustifiedTextLayoutLine[] = [];
-    normalizedParagraph.split(' ').forEach((word) => {
-      const wordWidth = font.widthOfTextAtSize(word, size);
-      const nextWidth = wordsWidth + (words.length > 0 ? font.widthOfTextAtSize(' ', size) : 0) + wordWidth;
-      if (words.length > 0 && nextWidth > safeWidth) {
-        paragraphLines.push({ words, wordSpacing: 0, justify: false, width: wordsWidth });
-        words = [];
-        wordsWidth = 0;
-      }
-      words.push(word);
-      wordsWidth += (words.length > 1 ? font.widthOfTextAtSize(' ', size) : 0) + wordWidth;
-    });
-    if (words.length > 0) {
-      paragraphLines.push({ words, wordSpacing: 0, justify: false, width: wordsWidth });
-    }
-
-    paragraphLines.forEach((line, index) => {
-      const isParagraphFinalLine = index === paragraphLines.length - 1;
-      const gaps = line.words.length - 1;
-      const wordWidth = line.words.reduce((total, word) => total + font.widthOfTextAtSize(word, size), 0);
-      const justify = !isParagraphFinalLine && gaps > 0;
-      const wordSpacing = justify ? Math.max(0, (safeWidth - wordWidth) / gaps) : 0;
-      lines.push({
-        words: line.words,
-        wordSpacing,
-        justify,
-        width: wordWidth + (justify ? wordSpacing * gaps : gaps > 0 ? line.width - wordWidth : 0),
-      });
-    });
-  });
-
-  return lines.slice(0, Math.max(0, Math.floor(maxLines))).map((line, index, visibleLines) => {
-    if (index === visibleLines.length - 1 || line.words.length < 2) {
-      const width = line.words.reduce((total, word) => total + font.widthOfTextAtSize(word, size), 0)
-        + Math.max(0, line.words.length - 1) * font.widthOfTextAtSize(' ', size);
-      return { ...line, justify: false, wordSpacing: 0, width };
-    }
-    return line;
-  });
-};
-
 const loadPdfFonts = async (pdf: PDFDocument) => {
   const candidates = [
     { regular: 'C:/Windows/Fonts/calibri.ttf', bold: 'C:/Windows/Fonts/calibrib.ttf' },
@@ -796,6 +728,86 @@ export const computeSchoolLogoRenderMetrics = (
   };
 };
 
+export interface HeaderParagraphLineLayout {
+  text: string;
+  words: string[];
+  wordSpacing: number;
+  justify: boolean;
+  width: number;
+}
+
+export const computeHeaderParagraphLayout = (
+  value: string,
+  maxWidth: number,
+  font: any,
+  size: number,
+): HeaderParagraphLineLayout[] => {
+  const rawValue = String(value ?? '');
+  const forcedBreakIndex = rawValue.indexOf('|');
+  const createLine = (lineText: string): HeaderParagraphLineLayout => {
+    const text = sanitizePdfText(lineText);
+    const words = text.split(' ').filter(Boolean);
+    return {
+      text,
+      words,
+      wordSpacing: words.length > 1 ? font.widthOfTextAtSize(' ', size) : 0,
+      justify: false,
+      width: font.widthOfTextAtSize(text, size),
+    };
+  };
+
+  if (forcedBreakIndex >= 0) {
+    return [
+      createLine(rawValue.slice(0, forcedBreakIndex)),
+      createLine(rawValue.slice(forcedBreakIndex + 1)),
+    ];
+  }
+
+  const words = sanitizePdfText(rawValue.replace(/\s+/g, ' ')).split(' ').filter(Boolean);
+  if (words.length === 0) {
+    return [
+      { text: '', words: [], wordSpacing: 0, justify: false, width: 0 },
+      { text: '', words: [], wordSpacing: 0, justify: false, width: 0 },
+    ];
+  }
+
+  const candidateLines = (cut: number) => {
+    const lineWords = [words.slice(0, cut), words.slice(cut)];
+    return lineWords.map((group) => createLine(group.join(' ')));
+  };
+
+  if (words.length === 1) return candidateLines(1);
+
+  let bestLines = candidateLines(1);
+  let bestScore = Number.POSITIVE_INFINITY;
+  let bestBalance = Number.POSITIVE_INFINITY;
+  for (let cut = 1; cut < words.length; cut += 1) {
+    const lines = candidateLines(cut);
+    const score = Math.max(lines[0].width, lines[1].width);
+    const balance = Math.abs(lines[0].width - lines[1].width);
+    if (score < bestScore || (score === bestScore && balance < bestBalance)) {
+      bestLines = lines;
+      bestScore = score;
+      bestBalance = balance;
+    }
+  }
+  return bestLines;
+};
+
+export const fitHeaderParagraphFontSize = (
+  value: string,
+  maxWidth: number,
+  font: any,
+  initialSize: number,
+  minSize: number,
+): number => {
+  let size = initialSize;
+  while (size > minSize && computeHeaderParagraphLayout(value, maxWidth, font, size).some((line) => line.width > maxWidth)) {
+    size -= 0.2;
+  }
+  return size;
+};
+
 export const createBulletinPdfDocument = async (
   data: BulletinPdfData,
   templateOverrides?: Partial<BulletinPdfTemplate>,
@@ -973,20 +985,6 @@ export const createBulletinPdfDocument = async (
     lines.forEach((line, index) => drawText(page, line, x, y - index * (size + 2), size, color, font));
   };
 
-  const drawJustifiedParagraph = (page: any, value: string | null | undefined, x: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines: number) => {
-    const lines = computeJustifiedTextLayout(value, maxWidth, font, size, maxLines);
-    lines.forEach((line, lineIndex) => {
-      let cursorX = x;
-      line.words.forEach((word, wordIndex) => {
-        drawText(page, word, cursorX, y - lineIndex * (size + 2), size, color, font);
-        cursorX += font.widthOfTextAtSize(word, size);
-        if (wordIndex < line.words.length - 1) {
-          cursorX += line.justify ? line.wordSpacing : font.widthOfTextAtSize(' ', size);
-        }
-      });
-    });
-  };
-
   const drawCenteredWrappedText = (page: any, value: string, centerX: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines = 2) => {
     const lines = wrapText(value, maxWidth, font, size).slice(0, maxLines);
     lines.forEach((line, index) => {
@@ -1006,6 +1004,15 @@ export const createBulletinPdfDocument = async (
       return;
     }
     drawCenteredWrappedText(page, value, centerX, y, maxWidth, minSize, color, font, 2);
+  };
+
+  const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 8) => {
+    const size = fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize);
+    const lines = computeHeaderParagraphLayout(value, maxWidth, font, size);
+    lines.forEach((line, lineIndex) => {
+      const lineWidth = font.widthOfTextAtSize(line.text, size);
+      drawText(page, line.text, x + (maxWidth - lineWidth) / 2, y - lineIndex * lineSpacing, size, color, font);
+    });
   };
 
   const drawHeader = (page: any, _includeStudentBlock: boolean) => {
@@ -1065,13 +1072,14 @@ export const createBulletinPdfDocument = async (
       });
     }
     const leftColumnCenter = margin + 89;
+    const leftHeaderWidth = 170;
     const ministryLabel = school.ministryName?.trim() ?? '';
-    const regionalLabel = school.educationDirection?.trim()
+    const educationDirectionLabel = school.educationDirection?.trim()
       || (school.region?.trim()
         ? `DIRECTION RÉGIONALE DE L'ÉDUCATION ${school.region.trim()}`
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
-    if (ministryLabel) drawText(page, ministryLabel, leftX, height - 34, 7.5, text, fontBold);
-    drawCenteredSingleLine(page, regionalLabel, leftColumnCenter, height - 55, 170, 7.5, 5.5, muted, fontRegular);
+    const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
+    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, leftHeaderWidth, 7.5, 5.5, text, fontBold);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);
     const postalAndPhone = [
@@ -1214,7 +1222,7 @@ export const createBulletinPdfDocument = async (
     const line = entry.line;
     if (!line) continue;
     const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
-    const commentLines = computeJustifiedTextLayout(line.teacherComment || '-', columns[10].width - 14, fontRegular, 7.2, 2);
+    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: renderEntries.indexOf(entry) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
     let x = tableX;
@@ -1270,7 +1278,7 @@ export const createBulletinPdfDocument = async (
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawJustifiedParagraph(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontRegular, 2);
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontRegular, 2);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
@@ -1313,12 +1321,6 @@ export const createBulletinPdfDocument = async (
     page.drawLine({ start: { x: x + valueOffset, y: y - 2 }, end: { x: x + width, y: y - 2 }, color: lightBorder, thickness: 0.45 });
   };
 
-  const drawJustifiedLabelValue = (label: string, value: string | null | undefined, x: number, y: number, width: number, valueOffset: number, maxLines: number) => {
-    drawText(page, label, x, y, 7.5, text, fontRegular);
-    drawJustifiedParagraph(page, value, x + valueOffset, y, width - valueOffset, 7.5, text, fontRegular, maxLines);
-    page.drawLine({ start: { x: x + valueOffset, y: y - 2 }, end: { x: x + width, y: y - 2 }, color: lightBorder, thickness: 0.45 });
-  };
-
   const lowerLeftWidth = 172;
   const lowerCenterWidth = 188;
   const lowerRightWidth = tableWidth - lowerLeftWidth - lowerCenterWidth - 12;
@@ -1343,7 +1345,7 @@ export const createBulletinPdfDocument = async (
   drawLabelValue('Moyenne du 2ème semestre', '', lowerCenterX, cursorY - 29, lowerCenterWidth, 105);
   drawLabelValue('Décision du conseil de classe', '', lowerCenterX, cursorY - 43, lowerCenterWidth, 105);
   drawLabelValue('Mention :', data.mention || '', lowerCenterX, cursorY - 57, lowerCenterWidth, 48);
-  drawJustifiedLabelValue('Appréciation :', data.appreciation, lowerCenterX, cursorY - 71, lowerCenterWidth, 64, 2);
+  drawLabelValue('Appréciation :', data.appreciation || '', lowerCenterX, cursorY - 71, lowerCenterWidth, 64);
   page.drawLine({ start: { x: lowerCenterX, y: cursorY - 83 }, end: { x: lowerCenterX + lowerCenterWidth, y: cursorY - 83 }, color: lightBorder, thickness: 0.55 });
 
   page.drawRectangle({ x: lowerRightX, y: cursorY - 33, width: lowerRightWidth, height: 28, color: white, borderColor: lightBorder, borderWidth: 0.65 });

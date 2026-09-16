@@ -12,7 +12,8 @@ import {
   resolveStudentStatusForAcademicYear,
   calculateStudentSubjectTypeAverages,
   computeSchoolLogoRenderMetrics,
-  computeJustifiedTextLayout,
+  computeHeaderParagraphLayout,
+  fitHeaderParagraphFontSize,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -86,7 +87,9 @@ const extractPdfText = (pdfBytes: Uint8Array): string => {
       streams.push(match[1]);
     }
   }
-  return streams.join('\n').replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+  return streams.join('\n')
+    .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'))
+    .replace(/Tj/g, ' ');
 };
 
 const countPdfImages = (pdfBytes: Uint8Array): number => {
@@ -94,42 +97,75 @@ const countPdfImages = (pdfBytes: Uint8Array): number => {
   return raw.includes('/Subtype /Image') ? 1 : 0;
 };
 
-describe('justification typographique du bulletin PDF', () => {
-  it('distribue l espace sur les lignes non finales et conserve la dernière ligne à gauche', async () => {
+describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
+  it('traite les deux anciens champs comme un paragraphe de deux lignes normales', async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont('Helvetica');
-    const lines = computeJustifiedTextLayout('Lorem ipsum dolor sit amet consectetur adipiscing elit', 120, font, 10, 10);
+    const layout = computeHeaderParagraphLayout(
+      "ENSEIGNEMENT SECONDAIRE MINISTERE DE L'EDUCATION",
+      170,
+      font,
+      7.5,
+    );
+    const words = layout.flatMap((line) => line.words);
 
-    expect(lines.length).toBeGreaterThan(1);
-    expect(lines[0].justify).toBe(true);
-    expect(lines[0].wordSpacing).toBeGreaterThan(0);
-    expect(lines[0].width).toBeCloseTo(120, 5);
-    expect(lines.at(-1)?.justify).toBe(false);
-    expect(lines.at(-1)?.wordSpacing).toBe(0);
+    expect(words).toEqual(['ENSEIGNEMENT', 'SECONDAIRE', 'MINISTERE', 'DE', "L'EDUCATION"]);
+    expect(layout).toHaveLength(2);
+    expect(layout[0].words).toEqual(['ENSEIGNEMENT', 'SECONDAIRE']);
+    expect(layout[1].words).toEqual(['MINISTERE', 'DE', "L'EDUCATION"]);
+    expect(layout[0].text).toBe('ENSEIGNEMENT SECONDAIRE');
+    expect(layout[1].text).toBe("MINISTERE DE L'EDUCATION");
+    expect(layout.every((line) => line.justify === false)).toBe(true);
+    expect(layout.every((line) => line.wordSpacing === font.widthOfTextAtSize(' ', 7.5))).toBe(true);
+    expect(layout[0].width).toBeLessThanOrEqual(170);
+    expect(layout[1].width).toBeLessThanOrEqual(170);
+    expect((170 - layout[0].width) / 2).toBeGreaterThan(0);
+    expect((170 - layout[1].width) / 2).toBeGreaterThan(0);
   });
 
-  it('respecte les textes courts, les mots longs, les accents et les retours à la ligne', async () => {
+  it('réduit la taille commune sans créer de troisième ligne', async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont('Helvetica');
-    const shortText = computeJustifiedTextLayout('Très court', 120, font, 10, 2);
-    const explicitBreaks = computeJustifiedTextLayout('Ligne une\nLigne deux', 120, font, 10, 2);
-    const longWord = computeJustifiedTextLayout('anticonstitutionnellement', 40, font, 10, 2);
+    const value = "ENSEIGNEMENT SECONDAIRE MINISTERE DE L'EDUCATION";
+    const size = fitHeaderParagraphFontSize(value, 80, font, 7.5, 5.5);
+    const layout = computeHeaderParagraphLayout(value, 80, font, size);
 
-    expect(shortText).toHaveLength(1);
-    expect(shortText[0].justify).toBe(false);
-    expect(explicitBreaks).toHaveLength(2);
-    expect(explicitBreaks.every((line) => line.justify === false)).toBe(true);
-    expect(longWord).toHaveLength(1);
-    expect(longWord[0].words).toEqual(['anticonstitutionnellement']);
+    expect(size).toBeLessThan(7.5);
+    expect(layout).toHaveLength(2);
+    expect(layout.flatMap((line) => line.words)).toEqual([
+      'ENSEIGNEMENT', 'SECONDAIRE', 'MINISTERE', 'DE', "L'EDUCATION",
+    ]);
   });
 
-  it('tronque le paragraphe à la limite de lignes demandée', async () => {
+  it('répartit un texte dynamique en exactement deux lignes sans perdre ni dupliquer de mot', async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont('Helvetica');
-    const lines = computeJustifiedTextLayout('Un texte suffisamment long pour produire plusieurs lignes', 80, font, 10, 2);
+    const value = 'MINISTERE DE L EDUCATION NATIONALE DIRECTION REGIONALE DE L EDUCATION GRAND LOME';
+    const layout = computeHeaderParagraphLayout(value, 170, font, 7.5);
+    const inputWords = value.split(' ');
+    const outputWords = layout.flatMap((line) => line.words);
 
-    expect(lines).toHaveLength(2);
-    expect(lines[1].justify).toBe(false);
+    expect(layout).toHaveLength(2);
+    expect(outputWords).toEqual(inputWords);
+    expect(new Set(outputWords).size).toBe(inputWords.length);
+    expect(layout.every((line) => line.width <= 170)).toBe(true);
+  });
+
+  it('respecte le premier marqueur de coupure et retire le marqueur du rendu', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const layout = computeHeaderParagraphLayout(
+      "MINISTERE DE L'EDUCATION NATIONALE | DIRECTION REGIONALE DE L'EDUCATION GRAND LOME | EXTRA",
+      170,
+      font,
+      7.5,
+    );
+
+    expect(layout).toHaveLength(2);
+    expect(layout[0].text).toBe("MINISTERE DE L'EDUCATION NATIONALE");
+    expect(layout[1].text).toBe("DIRECTION REGIONALE DE L'EDUCATION GRAND LOME EXTRA");
+    expect(layout.flatMap((line) => line.words)).not.toContain('|');
+    expect(layout.every((line) => line.width <= 170)).toBe(true);
   });
 });
 
@@ -398,9 +434,12 @@ describe('bulletin PDF API', () => {
     expect(document.getPageCount()).toBe(1);
     expect(document.getPage(0).getWidth()).toBeCloseTo(595.28, 1);
     expect(document.getPage(0).getHeight()).toBeCloseTo(841.89, 1);
-    expect(text).toContain('MINISTERE DE L EDUCATION DU TOGO');
+    expect(text).toContain('MINISTERE');
+    expect(text).toContain('EDUCATION');
+    expect(text).toContain('TOGO');
     expect(text).not.toContain('MINISTÈRE DE L EDUCATION NATIONALE');
-    expect(text).toContain('Direction regionale Maritime');
+    expect(text).toContain('Direction');
+    expect(text).toContain('Maritime');
     expect(text).toContain('COLLEGE LE SAVOIR');
     expect(text).toContain('BP 12');
     expect(text).toContain('+228 90000000');
@@ -705,7 +744,8 @@ describe('bulletin PDF API', () => {
     expect(textA).toContain('SEXE :');
     expect(textA).toMatch(/(?:^|\s)F(?:\s|$)/);
     expect(textA).toContain('COLLEGE A');
-    expect(textA).toContain('DIRECTION RÉGIONALE DE L\'ÉDUCATION GRAND LOMÉ');
+    expect(textA).toContain('DIRECTION');
+    expect(textA).toContain('GRAND');
     expect(textA).toContain('Excellence');
     expect(textA).toContain('BP : 1234 Tél : 90 00 00 01');
     expect(textA).not.toContain('ADRESSE A');
