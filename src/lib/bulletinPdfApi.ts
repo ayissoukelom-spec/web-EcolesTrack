@@ -933,6 +933,8 @@ export const createBulletinPdfDocument = async (
   const white = rgb(1, 1, 1);
   const muted = hexToRgb('#475569');
   const lightBorder = hexToRgb('#cbd5e1');
+  const tableBorder = rgb(0, 0, 0);
+  const tableBorderWidth = 1.0;
   const softBackground = hexToRgb('#f8fafc');
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
@@ -1124,7 +1126,7 @@ export const createBulletinPdfDocument = async (
   const drawTableHeader = (page: any, y: number) => {
     // Header height accommodates up to 2 lines of text
     const headerHeight = 28;
-    page.drawRectangle({ x: tableX, y: y - headerHeight, width: tableWidth, height: headerHeight, color: primary });
+    page.drawRectangle({ x: tableX, y: y - headerHeight, width: tableWidth, height: headerHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
     let x = tableX;
     columns.forEach((column, index) => {
       const lines = headerLines[index];
@@ -1132,16 +1134,21 @@ export const createBulletinPdfDocument = async (
       if (lines.length === 1) {
         // Single line: center vertically
         const lineWidth = fontBold.widthOfTextAtSize(lines[0], 8);
-        drawText(page, lines[0], columnCenterX - lineWidth / 2, y - 18, 8, white, fontBold);
+        drawText(page, lines[0], columnCenterX - lineWidth / 2, y - 18, 8, text, fontBold);
       } else {
         // Multi-line: spread across height
         lines.forEach((line, lineIndex) => {
           const lineWidth = fontBold.widthOfTextAtSize(line, 7.5);
           const verticalOffset = 21 - lineIndex * 8;
-          drawText(page, line, columnCenterX - lineWidth / 2, y - verticalOffset, 7.5, white, fontBold);
+          drawText(page, line, columnCenterX - lineWidth / 2, y - verticalOffset, 7.5, text, fontBold);
         });
       }
       x += column.width;
+    });
+    let separatorX = tableX;
+    columns.slice(0, -1).forEach((column) => {
+      separatorX += column.width;
+      page.drawLine({ start: { x: separatorX, y }, end: { x: separatorX, y: y - headerHeight }, color: tableBorder, thickness: tableBorderWidth });
     });
     return y - (headerHeight + 4);
   };
@@ -1232,7 +1239,7 @@ export const createBulletinPdfDocument = async (
 
   const summaryY = cursorY;
 
-  cursorY = drawTableHeader(page, summaryY - 12);
+  const tableTop = summaryY - 12;
   const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
   const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
     ? [
@@ -1248,11 +1255,21 @@ export const createBulletinPdfDocument = async (
     ]
     : data.lines.map((line) => ({ line }));
   const totalRowHeight = 20;
+  const tableContentHeight = renderEntries.reduce((height, entry) => {
+    if (entry.groupTitle || entry.subtotal) return height + totalRowHeight;
+    const line = entry.line;
+    if (!line) return height;
+    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
+    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
+    const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
+    return height + rowHeight;
+  }, 0);
+  const tableBottom = tableTop - (28 + 4) - tableContentHeight - totalRowHeight;
+  cursorY = drawTableHeader(page, tableTop);
 
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
       drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
-      page.drawLine({ start: { x: tableX + 7, y: cursorY - 19 }, end: { x: tableX + tableWidth - 7, y: cursorY - 19 }, color: lightBorder, thickness: 0.7 });
       cursorY -= 20;
       continue;
     }
@@ -1268,9 +1285,8 @@ export const createBulletinPdfDocument = async (
         y: cursorY - totalRowHeight,
         width: tableWidth,
         height: totalRowHeight,
-        color: softBackground,
-        borderColor: lightBorder,
-        borderWidth: 0.8,
+        borderColor: tableBorder,
+        borderWidth: tableBorderWidth,
       });
       drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
       const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
@@ -1286,7 +1302,7 @@ export const createBulletinPdfDocument = async (
     const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
-    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, color: renderEntries.indexOf(entry) % 2 === 0 ? white : softBackground, borderColor: lightBorder, borderWidth: 0.5 });
+    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
     let x = tableX;
     const subjectBreakdown = {
       interrogation: line.interrogation ?? null,
@@ -1349,7 +1365,7 @@ export const createBulletinPdfDocument = async (
     let separatorX = tableX;
     columns.slice(0, -1).forEach((column) => {
       separatorX += column.width;
-      page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - rowHeight }, color: lightBorder, thickness: 0.35 });
+      page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - rowHeight }, color: tableBorder, thickness: tableBorderWidth });
     });
 
     cursorY -= rowHeight;
@@ -1366,9 +1382,8 @@ export const createBulletinPdfDocument = async (
     y: cursorY - totalRowHeight,
     width: tableWidth,
     height: totalRowHeight,
-    color: secondary,
-    borderColor: lightBorder,
-    borderWidth: 0.8,
+    borderColor: tableBorder,
+    borderWidth: tableBorderWidth,
   });
   drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
@@ -1376,6 +1391,15 @@ export const createBulletinPdfDocument = async (
   drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
   drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
+
+  page.drawRectangle({
+    x: tableX,
+    y: tableBottom,
+    width: tableWidth,
+    height: tableTop - tableBottom,
+    borderColor: tableBorder,
+    borderWidth: tableBorderWidth,
+  });
 
   const drawLabelValue = (label: string, value: string, x: number, y: number, width: number, valueOffset = 92) => {
     drawText(page, label, x, y, 7.5, text, fontRegular);
