@@ -1170,8 +1170,8 @@ export const createBulletinPdfDocument = async (
   );
   drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY - studentHeaderOffsetY, 14, text, fontBold);
   const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
-  const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
-  drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 22 - studentHeaderOffsetY, 10, text, fontBold);
+  const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 14);
+  drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 25 - studentHeaderOffsetY, 14, text, fontBold);
   page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
   const studentLabel = 'NOM ET PRÉNOMS DE L ÉLÈVE :';
   const studentName = sanitizePdfText(data.studentName);
