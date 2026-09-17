@@ -405,9 +405,9 @@ const sanitizePdfTextPreservingAccents = sanitizePdfText;
 
 const loadPdfFonts = async (pdf: PDFDocument) => {
   const candidates = [
-    { regular: 'C:/Windows/Fonts/calibri.ttf', bold: 'C:/Windows/Fonts/calibrib.ttf' },
-    { regular: 'C:/Windows/Fonts/segoeui.ttf', bold: 'C:/Windows/Fonts/segoeuib.ttf' },
-    { regular: 'C:/Windows/Fonts/arial.ttf', bold: 'C:/Windows/Fonts/arialbd.ttf' },
+    { regular: 'C:/Windows/Fonts/calibri.ttf', bold: 'C:/Windows/Fonts/calibrib.ttf', boldItalic: 'C:/Windows/Fonts/calibriz.ttf' },
+    { regular: 'C:/Windows/Fonts/segoeui.ttf', bold: 'C:/Windows/Fonts/segoeuib.ttf', boldItalic: 'C:/Windows/Fonts/segoeuiz.ttf' },
+    { regular: 'C:/Windows/Fonts/arial.ttf', bold: 'C:/Windows/Fonts/arialbd.ttf', boldItalic: 'C:/Windows/Fonts/arialbi.ttf' },
   ];
 
   for (const candidate of candidates) {
@@ -415,6 +415,7 @@ const loadPdfFonts = async (pdf: PDFDocument) => {
       return {
         regular: await pdf.embedFont(await readFile(candidate.regular)),
         bold: await pdf.embedFont(await readFile(candidate.bold)),
+        boldItalic: await pdf.embedFont(await readFile(candidate.boldItalic)),
       };
     } catch {
       // Fall back to built-in fonts if a local TTF is unavailable.
@@ -424,6 +425,7 @@ const loadPdfFonts = async (pdf: PDFDocument) => {
   return {
     regular: await pdf.embedFont(StandardFonts.TimesRoman),
     bold: await pdf.embedFont(StandardFonts.TimesRomanBold),
+    boldItalic: await pdf.embedFont(StandardFonts.TimesRomanBoldItalic),
   };
 };
 
@@ -829,7 +831,7 @@ export const createBulletinPdfDocument = async (
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 16;
 
-  const { regular: fontRegular, bold: fontBold } = await loadPdfFonts(pdf);
+  const { regular: fontRegular, bold: fontBold, boldItalic: fontBoldItalic } = await loadPdfFonts(pdf);
   let logo: any = null;
   let resolvedLogoPath: string | null = null;
   const logoPath = data.school?.logoPath?.trim();
@@ -1086,7 +1088,7 @@ export const createBulletinPdfDocument = async (
       school.phone?.trim() ? `Tél : ${school.phone.trim()}` : null,
     ].filter((value): value is string => Boolean(value));
     if (postalAndPhone.length > 0) {
-      drawCenteredSingleLine(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, 5.5, muted, fontRegular);
+      drawCenteredWrappedText(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, text, fontBoldItalic, 2);
     }
     drawText(page, 'RÉPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
     drawText(page, school.motto?.trim() || 'Travail-Liberté-Patrie', rightX, height - 56, 8, muted, fontRegular);
