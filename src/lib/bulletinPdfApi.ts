@@ -1154,7 +1154,19 @@ export const createBulletinPdfDocument = async (
 
   const title = `${template.labels.title} DU ${data.termName}`;
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
-  page.drawRectangle({ x: tableX, y: cursorY - 8, width: tableWidth, height: 26, color: softBackground });
+  const titleBoxWidth = titleWidth + 16;
+  const titleBoxHeight = 26;
+  const titleBoxX = (page.getWidth() - titleBoxWidth) / 2;
+  page.drawSvgPath(
+    `M 5,0 H ${titleBoxWidth - 5} Q ${titleBoxWidth},0 ${titleBoxWidth},5 V ${titleBoxHeight - 5} Q ${titleBoxWidth},${titleBoxHeight} ${titleBoxWidth - 5},${titleBoxHeight} H 5 Q 0,${titleBoxHeight} 0,${titleBoxHeight - 5} V 5 Q 0,0 5,0 Z`,
+    {
+      x: titleBoxX,
+      y: cursorY + 13 + fontBold.heightAtSize(14, { descender: false }) / 2,
+      color: hexToRgb('#f8f8f2'),
+      borderColor: hexToRgb('#000000'),
+      borderWidth: 1.2,
+    },
+  );
   drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY, 14, text, fontBold);
   const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
   const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 10);
