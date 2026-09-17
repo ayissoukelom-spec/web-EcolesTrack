@@ -1357,8 +1357,30 @@ export const createBulletinPdfDocument = async (
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
-    const teacherName = line.teacherName || '-';
-    drawWrappedText(page, teacherName, x + 7, cursorY - 13, columns[9].width - 14, 7.2, text, fontRegular, 2);
+    const teacherName = sanitizePdfText(line.teacherName || '-');
+    const teacherNameSize = 7.2;
+    const teacherColumnWidth = columns[9].width;
+    const teacherTextMaxWidth = teacherColumnWidth - 14;
+    const teacherColumnCenterX = x + teacherColumnWidth / 2;
+    const nameParts = teacherName.split(/\s+/).filter(Boolean);
+    const familyName = nameParts[0] || '-';
+    const givenName = nameParts.slice(1).join(' ');
+    const familyNameWidth = fontRegular.widthOfTextAtSize(familyName, teacherNameSize);
+    const fullTeacherName = givenName ? `${familyName} ${givenName}` : familyName;
+    const fullTeacherNameWidth = fontRegular.widthOfTextAtSize(fullTeacherName, teacherNameSize);
+    let renderedTeacherName = fullTeacherName;
+    if (fullTeacherNameWidth > teacherTextMaxWidth && givenName) {
+      const availableGivenNameWidth = teacherTextMaxWidth - familyNameWidth - fontRegular.widthOfTextAtSize(' ', teacherNameSize);
+      let truncatedGivenName = '';
+      for (const character of givenName) {
+        const candidate = `${truncatedGivenName}${character}`;
+        if (fontRegular.widthOfTextAtSize(candidate, teacherNameSize) > availableGivenNameWidth) break;
+        truncatedGivenName = candidate;
+      }
+      renderedTeacherName = truncatedGivenName ? `${familyName} ${truncatedGivenName}` : familyName;
+    }
+    const renderedTeacherNameWidth = fontRegular.widthOfTextAtSize(renderedTeacherName, teacherNameSize);
+    drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, cursorY - 13, teacherNameSize, text, fontRegular);
     x += columns[9].width;
 
     // Column 11: Appréciation
