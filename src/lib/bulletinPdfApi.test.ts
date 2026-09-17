@@ -441,7 +441,7 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('COLLEGE LE SAVOIR');
     expect(text).toContain('BP 12');
     expect(text).toContain('+228 90000000');
-    expect(text).toContain('RÉPUBLIQUE TOGOLAISE');
+    expect(text).toContain('REPUBLIQUE TOGOLAISE');
     expect(text).toContain('Le travail et la reussite');
     expect(text).toContain('Année scolaire: 2025-2026');
     expect(text).toContain('BULLETIN DE NOTES DU Trimestre 1');

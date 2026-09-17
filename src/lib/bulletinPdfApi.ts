@@ -1107,7 +1107,12 @@ export const createBulletinPdfDocument = async (
         drawCenteredWrappedText(page, line, coordinateCenterX, height - 119 - lineIndex * 9, lineWidth, 7, text, fontBoldItalic, 1);
       });
     }
-    drawText(page, 'RÉPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
+    const republicText = 'REPUBLIQUE TOGOLAISE';
+    const republicTextWidth = fontBold.widthOfTextAtSize(republicText, 9);
+    const republicMarker = '-----------------';
+    const republicMarkerWidth = fontBold.widthOfTextAtSize('LIQUE TOG', 9);
+    drawText(page, republicText, rightX, height - 38, 9, text, fontBold);
+    drawText(page, republicMarker, rightX + (republicTextWidth - republicMarkerWidth) / 2, height - 47, 9, text, fontBold);
     drawText(page, school.motto?.trim() || 'Travail-Liberté-Patrie', rightX, height - 56, 8, muted, fontRegular);
     drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, rightX, height - 79, 8.5, text, fontBold);
     return height - 148;
