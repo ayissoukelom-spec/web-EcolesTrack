@@ -5,6 +5,7 @@ export interface School {
   name: string;
   address?: string;
   phone?: string;
+  phone2?: string | null;
   officialName?: string | null;
   abbreviation?: string | null;
   motto?: string | null;

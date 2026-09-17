@@ -365,7 +365,7 @@ interface AdminViewProps {
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
@@ -524,7 +524,7 @@ export default function AdminView({
   // New item forms state
   const classGroupsStorageKey = 'ecoletrack-class-groups:v2';
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [groupPresets, setGroupPresets] = useState<any[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -573,7 +573,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', classNames: [] as string[], subjectNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [educationCycles, setEducationCycles] = useState<any[]>([]);
@@ -1189,6 +1189,11 @@ export default function AdminView({
         return;
       }
       const fullPhone = `+228 ${phoneDigits}`;
+      const phone2Digits = String(schoolForm.phone2Digits || '').trim();
+      if (phone2Digits && (phone2Digits.length !== 8 || !/^[0-9]{8}$/.test(phone2Digits))) {
+        setStudentError('Le deuxième numéro de téléphone doit contenir exactement 8 chiffres.');
+        return;
+      }
       const selectedClassNames = (schoolForm.selectedClassNames || []).filter((name) => name.trim() !== '');
       const selectedSubjectNames = (schoolForm.selectedSubjectNames || []).filter((name) => name.trim() !== '');
       const parsedSubjectNames = (schoolForm.subjectNames || '')
@@ -1215,6 +1220,7 @@ export default function AdminView({
           name: normalizedName,
           address: String(schoolForm.address || '').trim(),
           phone: fullPhone,
+          phone2: phone2Digits ? `+228 ${phone2Digits}` : null,
           officialName: String(schoolForm.officialName || '').trim() || null,
           abbreviation: String(schoolForm.abbreviation || '').trim() || null,
           motto: String(schoolForm.motto || '').trim() || null,
@@ -1232,6 +1238,7 @@ export default function AdminView({
           address: '',
           phone: '',
           phoneDigits: '',
+          phone2Digits: '',
           officialName: '',
           abbreviation: '',
           motto: '',
@@ -2218,6 +2225,19 @@ export default function AdminView({
                       />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Téléphone 2</label>
+                    <div className="flex gap-2">
+                      <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
+                      <input
+                        className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-slate-800 focus:outline-indigo-500"
+                        placeholder="90000000"
+                        value={editSchoolForm.phone2Digits}
+                        onChange={(e) => setEditSchoolForm({ ...editSchoolForm, phone2Digits: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        maxLength={8}
+                      />
+                    </div>
+                  </div>
                   <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -2412,8 +2432,13 @@ export default function AdminView({
                       }
                       if (onUpdateSchool && schoolToEdit) {
                         const phoneDigits = editSchoolForm.phoneDigits.trim();
+                        const phone2Digits = editSchoolForm.phone2Digits.trim();
                         if (phoneDigits && phoneDigits.length !== 8) {
                           setEditSchoolError('Le numéro de téléphone doit contenir exactement 8 chiffres.');
+                          return;
+                        }
+                        if (phone2Digits && (phone2Digits.length !== 8 || !/^[0-9]{8}$/.test(phone2Digits))) {
+                          setEditSchoolError('Le deuxième numéro de téléphone doit contenir exactement 8 chiffres.');
                           return;
                         }
                         const editPayload: any = {
@@ -2437,6 +2462,7 @@ export default function AdminView({
                         if (phoneDigits) {
                           editPayload.phone = `+228 ${phoneDigits}`;
                         }
+                        editPayload.phone2 = phone2Digits ? `+228 ${phone2Digits}` : null;
                         await onUpdateSchool(schoolToEdit.id, editPayload);
                         setEditSchoolOpen(false);
                         setSchoolToEdit(null);
@@ -4006,7 +4032,8 @@ export default function AdminView({
                               onClick={() => {
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', classNames: [], subjectNames: [] });
+                                const phone2Digits = sc.phone2 ? sc.phone2.replace(/\D/g, '').slice(-8) : '';
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}

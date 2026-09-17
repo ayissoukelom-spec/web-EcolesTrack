@@ -96,6 +96,7 @@ export interface BulletinPdfData {
     address?: string | null;
     postalBox?: string | null;
     phone?: string | null;
+    phone2?: string | null;
     email?: string | null;
     city?: string | null;
     region?: string | null;
@@ -452,6 +453,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
         address: schools.address,
         postalBox: schools.postalBox,
         phone: schools.phone,
+        phone2: schools.phone2,
         email: schools.email,
         city: schools.city,
         region: schools.region,
@@ -1085,11 +1087,25 @@ export const createBulletinPdfDocument = async (
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 11, text, fontBold, 2);
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
-      school.phone?.trim() ? `Tél : ${school.phone.trim()}` : null,
+      school.phone?.trim()
+        ? school.phone2?.trim()
+          ? `Tél : ${school.phone.trim()} / ${school.phone2.trim().replace(/^\+228\s*/, '')}`
+          : `Tél : ${school.phone.trim()}`
+        : school.phone2?.trim() ? `Tél : ${school.phone2.trim()}` : null,
       school.email?.trim() ? `Email : ${school.email.trim()}` : null,
     ].filter((value): value is string => Boolean(value));
     if (postalAndPhone.length > 0) {
-      drawCenteredWrappedText(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, text, fontBoldItalic, 2);
+      const emailLine = school.email?.trim() ? `Email : ${school.email.trim()}` : null;
+      const nonEmailLines = postalAndPhone.filter((value) => !value.startsWith('Email :'));
+      const coordinateLines = emailLine
+        ? nonEmailLines.length > 0 ? [nonEmailLines.join(' '), emailLine] : [emailLine]
+        : [postalAndPhone.join(' ')];
+      const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
+      const coordinateCenterX = leftX + 25 + firstLineWidth / 2;
+      coordinateLines.forEach((line, lineIndex) => {
+        const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);
+        drawCenteredWrappedText(page, line, coordinateCenterX, height - 119 - lineIndex * 9, lineWidth, 7, text, fontBoldItalic, 1);
+      });
     }
     drawText(page, 'RÉPUBLIQUE TOGOLAISE', rightX, height - 38, 9, text, fontBold);
     drawText(page, school.motto?.trim() || 'Travail-Liberté-Patrie', rightX, height - 56, 8, muted, fontRegular);

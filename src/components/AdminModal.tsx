@@ -449,6 +449,13 @@ export default function AdminModal(props: any) {
                   <input required type="text" value={schoolForm.phoneDigits} onChange={e => setSchoolForm({...schoolForm, phoneDigits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                 </div>
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Téléphone 2</label>
+                <div className="flex gap-2">
+                  <input type="text" disabled value="+228" className="w-20 px-3 py-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-xl font-bold cursor-not-allowed" />
+                  <input type="text" value={schoolForm.phone2Digits || ''} onChange={e => setSchoolForm({...schoolForm, phone2Digits: e.target.value.replace(/\D/g, '').slice(0, 8)})} placeholder="90000000" maxLength={8} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                </div>
+              </div>
               <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

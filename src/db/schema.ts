@@ -11,6 +11,7 @@ export const schools = pgTable('schools', {
   name: text('name').notNull(),
   address: text('address'),
   phone: text('phone'),
+  phone2: text('phone2'),
   officialName: text('official_name'),
   abbreviation: text('abbreviation'),
   motto: text('motto'),

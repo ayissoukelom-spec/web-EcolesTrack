@@ -2398,6 +2398,7 @@ export async function createApp() {
       const name = String(req.body?.name || '').trim();
       const address = req.body?.address != null ? String(req.body.address).trim() : '';
       const phone = String(req.body?.phone || '').trim();
+      const phone2 = req.body?.phone2 != null ? String(req.body.phone2).trim() : null;
       const officialName = req.body?.officialName != null ? String(req.body.officialName).trim() : null;
       const abbreviation = req.body?.abbreviation != null ? String(req.body.abbreviation).trim() : null;
       const motto = req.body?.motto != null ? String(req.body.motto).trim() : null;
@@ -2414,6 +2415,9 @@ export async function createApp() {
       if (!phone) return res.status(400).json({ error: 'Phone is required' });
       if (!/^\+228\s[0-9]{8}$/.test(phone)) {
         return res.status(400).json({ error: 'Phone must be in the format +228 12345678' });
+      }
+      if (phone2 && !/^\+228\s[0-9]{8}$/.test(phone2)) {
+        return res.status(400).json({ error: 'Phone 2 must be in the format +228 12345678' });
       }
       if (!Array.isArray(classNames) || classNames.length === 0) {
         return res.status(400).json({ error: 'classNames must be a non-empty array' });
@@ -2440,7 +2444,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -2656,6 +2660,8 @@ export async function createApp() {
       const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
       const phoneRaw = req.body?.phone;
       const phone = phoneRaw != null ? String(phoneRaw).trim() : undefined;
+      const phone2Raw = req.body?.phone2;
+      const phone2 = phone2Raw != null ? String(phone2Raw).trim() : undefined;
       const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName'] as const;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
@@ -2668,6 +2674,9 @@ export async function createApp() {
         if (!/^\+228\s[0-9]{8}$/.test(phone)) {
           return res.status(400).json({ error: 'Phone must be in the format +228 12345678' });
         }
+      }
+      if (phone2 !== undefined && phone2 !== '' && !/^\+228\s[0-9]{8}$/.test(phone2)) {
+        return res.status(400).json({ error: 'Phone 2 must be in the format +228 12345678' });
       }
       if (classNames != null) {
         if (!Array.isArray(classNames)) {
@@ -2706,6 +2715,7 @@ export async function createApp() {
       const updatePayload: any = { name };
       if (address !== undefined) updatePayload.address = address;
       if (phone !== undefined) updatePayload.phone = phone;
+      if (phone2 !== undefined) updatePayload.phone2 = phone2 || null;
       administrativeFields.forEach((field) => {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
