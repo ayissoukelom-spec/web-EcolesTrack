@@ -1027,9 +1027,6 @@ export const createBulletinPdfDocument = async (
     const leftX = margin + 6;
     const centerX = width / 2;
     const rightX = width - margin - 145;
-    page.drawRectangle({ x: margin, y: headerBottom, width: tableWidth, height: 118, color: white, borderColor: lightBorder, borderWidth: 0.8 });
-    page.drawLine({ start: { x: margin, y: headerTop }, end: { x: width - margin, y: headerTop }, color: primary, thickness: 1.2 });
-    page.drawLine({ start: { x: margin, y: headerBottom }, end: { x: width - margin, y: headerBottom }, color: primary, thickness: 1.2 });
     page.drawCircle({ x: centerX, y: height - 70, size: 26, borderColor: lightBorder, borderWidth: 0.8 });
     if (logo) {
       const centralRectLeft = margin + 178 + 8;
@@ -1150,11 +1147,24 @@ export const createBulletinPdfDocument = async (
   };
 
   const page = pdf.addPage(pageSize);
+  const studentHeaderOffsetY = 8;
+  const outerBoxTop = page.getHeight() - 18 + 8;
+  const outerBoxBottom = page.getHeight() - 148 - 25 - studentHeaderOffsetY - 10;
+  const outerBoxWidth = tableWidth;
+  const outerBoxHeight = outerBoxTop - outerBoxBottom;
+  page.drawSvgPath(
+    `M 8,0 H ${outerBoxWidth - 8} Q ${outerBoxWidth},0 ${outerBoxWidth},8 V ${outerBoxHeight - 8} Q ${outerBoxWidth},${outerBoxHeight} ${outerBoxWidth - 8},${outerBoxHeight} H 8 Q 0,${outerBoxHeight} 0,${outerBoxHeight - 8} V 8 Q 0,0 8,0 Z`,
+    {
+      x: margin,
+      y: outerBoxTop,
+      borderColor: hexToRgb('#000000'),
+      borderWidth: 1.2,
+    },
+  );
   let cursorY = drawHeader(page, true);
 
   const title = `${template.labels.title} DU ${data.termName}`;
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
-  const studentHeaderOffsetY = 8;
   const titleBoxWidth = titleWidth + 16;
   const titleBoxHeight = 26;
   const titleBoxX = (page.getWidth() - titleBoxWidth) / 2;
@@ -1172,7 +1182,6 @@ export const createBulletinPdfDocument = async (
   const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
   const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 14);
   drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 25 - studentHeaderOffsetY, 14, text, fontBold);
-  page.drawRectangle({ x: tableX, y: cursorY - 78, width: tableWidth, height: 44, color: softBackground, borderColor: lightBorder, borderWidth: 0.7 });
   const studentLabel = 'NOM ET PRÉNOMS DE L ÉLÈVE :';
   const studentName = sanitizePdfText(data.studentName);
   const studentLabelSize = 8;
