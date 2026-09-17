@@ -1117,7 +1117,10 @@ export const createBulletinPdfDocument = async (
     const mottoWidth = fontBold.widthOfTextAtSize(mottoText, 8);
     const mottoX = rightX + (republicTextWidth - mottoWidth) / 2;
     drawText(page, mottoText, mottoX, height - 56, 8, text, fontBold);
-    drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, rightX, height - 79, 8.5, text, fontBold);
+    const schoolYearText = `${template.labels.schoolYear}: ${data.schoolYearName}`;
+    const schoolYearWidth = fontBold.widthOfTextAtSize(schoolYearText, 11);
+    const schoolYearX = rightX + (republicTextWidth - schoolYearWidth) / 2;
+    drawText(page, schoolYearText, schoolYearX, height - 98, 11, text, fontBold);
     return height - 148;
   };
 
