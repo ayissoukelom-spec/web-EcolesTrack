@@ -25,7 +25,8 @@ import {
   buildSubjectTeacherNameMap,
   groupBulletinLinesBySubjectType,
   loadSubjectTypeNames,
-  resolveBulletinSubjectType,
+  type BulletinSubjectGroup,
+  type SubjectTypeMetadata,
 } from './bulletinSnapshotService';
 import {
   calculateClassAverage,
@@ -65,7 +66,9 @@ export interface BulletinPdfLine {
   bulletinId: number;
   subjectId: number | null;
   subjectName: string;
+  subjectTypeId?: number | null;
   subjectTypeName?: string | null;
+  sortOrder?: number | null;
   coefficient: number | null;
   average: number | null;
   teacherName?: string | null;
@@ -119,8 +122,7 @@ export interface BulletinPdfData {
   retards: number;
   generatedAt: string | null;
   lines: BulletinPdfLine[];
-  matieres_litteraires?: BulletinPdfLine[];
-  matieres_scientifiques?: BulletinPdfLine[];
+  subjectGroups?: BulletinSubjectGroup<BulletinPdfLine>[];
 }
 
 export interface BulletinPdfDataProvider {
@@ -564,7 +566,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
 
     const subjectTypeNames = header.studentSchoolId == null
-      ? new Map<string, string>()
+      ? new Map<string, SubjectTypeMetadata>()
       : await loadSubjectTypeNames(db, header.studentSchoolId);
 
     let resolvedLines = lines.map((line) => ({
@@ -572,7 +574,9 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletinId: line.bulletinId,
       subjectId: line.subjectId,
       subjectName: line.subjectName,
-      subjectTypeName: subjectTypeNames.get(line.subjectName) ?? null,
+      subjectTypeId: subjectTypeNames.get(line.subjectName)?.subjectTypeId ?? null,
+      subjectTypeName: subjectTypeNames.get(line.subjectName)?.subjectTypeName ?? null,
+      sortOrder: subjectTypeNames.get(line.subjectName)?.sortOrder ?? null,
       coefficient: line.coefficient,
       average: parseNumber(line.average),
       teacherName: subjectTeacherMap.get(line.subjectName) ?? null,
@@ -629,7 +633,9 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       resolvedLines = buildFallbackLinesFromGrades(gradeRows).map((line) => ({
         ...line,
         bulletinId: bulletinId,
-        subjectTypeName: subjectTypeNames.get(line.subjectName) ?? null,
+        subjectTypeId: subjectTypeNames.get(line.subjectName)?.subjectTypeId ?? null,
+        subjectTypeName: subjectTypeNames.get(line.subjectName)?.subjectTypeName ?? null,
+        sortOrder: subjectTypeNames.get(line.subjectName)?.sortOrder ?? null,
       }));
     }
 
@@ -679,7 +685,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       retards: 0,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
-      ...subjectGroups,
+      subjectGroups,
     };
   },
 });
@@ -1246,19 +1252,18 @@ export const createBulletinPdfDocument = async (
   const summaryY = cursorY;
 
   const tableTop = summaryY - 12;
-  const groupedDataAvailable = data.matieres_litteraires !== undefined || data.matieres_scientifiques !== undefined;
+  const groupedDataAvailable = data.subjectGroups !== undefined;
+  const orderedSubjectGroups = [...(data.subjectGroups ?? [])].sort((a, b) => {
+    if (a.subjectTypeId == null) return 1;
+    if (b.subjectTypeId == null) return -1;
+    return a.sortOrder - b.sortOrder || a.subjectTypeId - b.subjectTypeId;
+  });
   const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
-    ? [
-      { groupTitle: 'MATIERES LITTERAIRES' },
-      ...(data.matieres_litteraires ?? []).map((line) => ({ line })),
-      { subtotal: { label: 'TOTAL MATIERES LITTERAIRES', lines: data.matieres_litteraires ?? [] } },
-      { groupTitle: 'MATIERES SCIENTIFIQUES' },
-      ...(data.matieres_scientifiques ?? []).map((line) => ({ line })),
-      { subtotal: { label: 'TOTAL MATIERES SCIENTIFIQUES', lines: data.matieres_scientifiques ?? [] } },
-      ...data.lines
-        .filter((line) => !resolveBulletinSubjectType(line.subjectTypeName))
-        .map((line) => ({ line })),
-    ]
+    ? orderedSubjectGroups.flatMap((group) => [
+      { groupTitle: `MATIERES ${group.subjectTypeName.toUpperCase()}` },
+      ...group.lines.map((line) => ({ line })),
+      { subtotal: { label: `TOTAL MATIERES ${group.subjectTypeName.toUpperCase()}`, lines: group.lines } },
+    ])
     : data.lines.map((line) => ({ line }));
   const totalRowHeight = 20;
   const tableContentHeight = renderEntries.reduce((height, entry) => {

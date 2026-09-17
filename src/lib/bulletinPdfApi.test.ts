@@ -499,17 +499,19 @@ describe('bulletin PDF API', () => {
       mention: null,
       appreciation: null,
       school: { name: 'ECOLE SANS METADONNEES' },
-      matieres_litteraires: [],
-      matieres_scientifiques: [],
+      subjectGroups: [
+        { subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 1, lines: [] },
+        { subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 2, lines: [] },
+      ],
       lines: [],
     };
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    expect(text).toContain('MATIERES LITTERAIRES');
-    expect(text).toContain('TOTAL MATIERES LITTERAIRES');
-    expect(text).toContain('MATIERES SCIENTIFIQUES');
-    expect(text).toContain('TOTAL MATIERES SCIENTIFIQUES');
+    expect(text).toContain('MATIERES LITTÉRAIRE');
+    expect(text).toContain('TOTAL MATIERES LITTÉRAIRE');
+    expect(text).toContain('MATIERES SCIENTIFIQUE');
+    expect(text).toContain('TOTAL MATIERES SCIENTIFIQUE');
     expect(text).toContain('Moyenne de la classe');
     expect(text).toContain('conseil de classe');
     expect(text).toContain('CONSEIL DES PROFESSEURS');
@@ -529,21 +531,48 @@ describe('bulletin PDF API', () => {
     const data: BulletinPdfData = {
       ...snapshotData,
       lines: [literaryLine, historyLine, mathLine, scienceLine],
-      matieres_litteraires: [literaryLine, historyLine],
-      matieres_scientifiques: [mathLine, scienceLine],
+      subjectGroups: [
+        { subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 1, lines: [literaryLine, historyLine] },
+        { subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 2, lines: [mathLine, scienceLine] },
+      ],
     };
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    const normalizedText = text.replace(/\s+/g, '');
-    expect(normalizedText).toContain('MATIERESLITTERAIRES');
-    expect(normalizedText).toContain('MATIERESSCIENTIFIQUES');
-    expect(normalizedText.indexOf('MATIERESLITTERAIRES')).toBeLessThan(normalizedText.indexOf('MATIERESSCIENTIFIQUES'));
+    const normalizedText = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+    expect(normalizedText).toContain('MATIERESLITTERAIRE');
+    expect(normalizedText).toContain('MATIERESSCIENTIFIQUE');
+    expect(normalizedText.indexOf('MATIERESLITTERAIRE')).toBeLessThan(normalizedText.indexOf('MATIERESSCIENTIFIQUE'));
     expect(text.indexOf('Fran')).toBeLessThan(text.indexOf('Math'));
     expect((text.match(/Français/g) ?? []).length).toBe(1);
     expect((text.match(/Math/g) ?? []).length).toBeGreaterThan(0);
     expect(text).toContain('14.00');
     expect(text).toContain('16.00');
+  });
+
+  it('affiche tous les groupes dynamiques dans leur ordre sortOrder', async () => {
+    const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 2, average: 14 };
+    const technicalLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Informatique', subjectTypeId: 3, subjectTypeName: 'Informatique', sortOrder: 3, average: 13 };
+    const scientificLine = { ...snapshotData.lines[0], id: 3, subjectName: 'Mathématiques', subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 1, average: 16 };
+    const untypedLine = { ...snapshotData.lines[0], id: 4, subjectName: 'Sport', subjectTypeId: null, subjectTypeName: null, sortOrder: null, average: 12 };
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      lines: [literaryLine, technicalLine, scientificLine, untypedLine],
+      subjectGroups: [
+        { subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 1, lines: [scientificLine] },
+        { subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 2, lines: [literaryLine] },
+        { subjectTypeId: 3, subjectTypeName: 'Informatique', sortOrder: 3, lines: [technicalLine] },
+        { subjectTypeId: null, subjectTypeName: 'Matières sans type', sortOrder: 0, lines: [untypedLine] },
+      ],
+    };
+
+    const normalizedText = extractPdfText(await createBulletinPdfDocument(data)).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+
+    expect(normalizedText.indexOf('MATIERESSCIENTIFIQUE')).toBeLessThan(normalizedText.indexOf('MATIERESLITTERAIRE'));
+    expect(normalizedText.indexOf('MATIERESLITTERAIRE')).toBeLessThan(normalizedText.indexOf('INFORMATIQUE'));
+    expect(normalizedText).toContain('MATIERESSANSTYPE');
+    expect(normalizedText).toContain('Informatique');
+    expect(normalizedText).toContain('Sport');
   });
 
   it('affiche le total après toutes les matières et additionne coefficients et notes coefficientées', async () => {
@@ -557,23 +586,25 @@ describe('bulletin PDF API', () => {
     const data: BulletinPdfData = {
       ...snapshotData,
       lines: [literaryLine, historyLine, mathLine, scienceLine],
-      matieres_litteraires: [literaryLine, historyLine],
-      matieres_scientifiques: [mathLine, scienceLine],
+      subjectGroups: [
+        { subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 1, lines: [literaryLine, historyLine] },
+        { subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 2, lines: [mathLine, scienceLine] },
+      ],
     };
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
-    const normalizedText = text.replace(/\s+/g, '');
+    const normalizedText = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
 
-    const literarySubtotal = normalizedText.indexOf('TOTALMATIERESLITTERAIRES');
-    const scientificGroup = normalizedText.indexOf('MATIERESSCIENTIFIQUES');
-    const scientificSubtotal = normalizedText.indexOf('TOTALMATIERESSCIENTIFIQUES');
+    const literarySubtotal = normalizedText.indexOf('TOTALMATIERESLITTERAIRE');
+    const scientificGroup = normalizedText.indexOf('MATIERESSCIENTIFIQUE');
+    const scientificSubtotal = normalizedText.indexOf('TOTALMATIERESSCIENTIFIQUE');
     const generalTotal = normalizedText.indexOf('TOTALGENERAL');
     expect(literarySubtotal).toBeGreaterThan(normalizedText.indexOf('Histoire'));
     expect(scientificGroup).toBeGreaterThan(literarySubtotal);
     expect(scientificSubtotal).toBeGreaterThan(normalizedText.indexOf('Sciences'));
     expect(generalTotal).toBeGreaterThan(scientificSubtotal);
-    expect(normalizedText.match(/TOTALMATIERESLITTERAIRES/g)?.length).toBe(1);
-    expect(normalizedText.match(/TOTALMATIERESSCIENTIFIQUES/g)?.length).toBe(1);
+    expect(normalizedText.match(/TOTALMATIERESLITTERAIRE/g)?.length).toBe(1);
+    expect(normalizedText.match(/TOTALMATIERESSCIENTIFIQUE/g)?.length).toBe(1);
     expect(normalizedText.match(/TOTALGENERAL/g)?.length).toBe(1);
     expect(normalizedText).toContain('5.00');
     expect(normalizedText).toContain('70.00');

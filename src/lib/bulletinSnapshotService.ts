@@ -43,52 +43,51 @@ export interface BulletinLineSnapshotInput {
   teacherComment?: string | null;
   rank?: number | null;
   signature?: string | null;
+  subjectTypeId?: number | null;
+  sortOrder?: number | null;
 }
 
-export type BulletinSubjectGroup = 'matieres_litteraires' | 'matieres_scientifiques';
-
-export interface BulletinSubjectGroups<T> {
-  matieres_litteraires: T[];
-  matieres_scientifiques: T[];
+export interface BulletinSubjectGroup<T> {
+  subjectTypeId: number | null;
+  subjectTypeName: string;
+  sortOrder: number;
+  lines: T[];
 }
-
-export const SUBJECT_TYPE_GROUPS: Record<string, BulletinSubjectGroup> = {
-  litteraire: 'matieres_litteraires',
-  litteraires: 'matieres_litteraires',
-  'matiere litteraire': 'matieres_litteraires',
-  'matieres litteraires': 'matieres_litteraires',
-  scientifique: 'matieres_scientifiques',
-  scientifiques: 'matieres_scientifiques',
-  'matiere scientifique': 'matieres_scientifiques',
-  'matieres scientifiques': 'matieres_scientifiques',
-};
-
-const normalizeSubjectTypeName = (value: string | null | undefined): string => String(value ?? '')
-  .normalize('NFKD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .trim()
-  .toLowerCase()
-  .replace(/\s+/g, ' ');
 
 export const groupBulletinLinesBySubjectType = <T extends { subjectTypeName?: string | null }>(
   lines: T[],
-): BulletinSubjectGroups<T> => {
-  const groups: BulletinSubjectGroups<T> = {
-    matieres_litteraires: [],
-    matieres_scientifiques: [],
-  };
+): BulletinSubjectGroup<T>[] => {
+  const groups = new Map<string, BulletinSubjectGroup<T>>();
 
   for (const line of lines) {
-    const group = SUBJECT_TYPE_GROUPS[normalizeSubjectTypeName(line.subjectTypeName)];
-    if (group) groups[group].push(line);
+    const subjectTypeId = typeof (line as { subjectTypeId?: number | null }).subjectTypeId === 'number'
+      ? (line as { subjectTypeId: number }).subjectTypeId
+      : null;
+    const subjectTypeName = line.subjectTypeName?.trim() || 'Matières sans type';
+    const sortOrder = Number((line as { sortOrder?: number | null }).sortOrder ?? 0);
+    const groupKey = subjectTypeId == null ? 'null' : String(subjectTypeId);
+    const group = groups.get(groupKey) ?? {
+      subjectTypeId,
+      subjectTypeName,
+      sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+      lines: [],
+    };
+    group.lines.push(line);
+    groups.set(groupKey, group);
   }
 
-  return groups;
+  return [...groups.values()].sort((a, b) => {
+    if (a.subjectTypeId == null) return 1;
+    if (b.subjectTypeId == null) return -1;
+    return a.sortOrder - b.sortOrder || a.subjectTypeId - b.subjectTypeId;
+  });
 };
 
-export const resolveBulletinSubjectType = (
-  subjectTypeName: string | null | undefined,
-): BulletinSubjectGroup | null => SUBJECT_TYPE_GROUPS[normalizeSubjectTypeName(subjectTypeName)] ?? null;
+export interface SubjectTypeMetadata {
+  subjectTypeId: number;
+  subjectTypeName: string;
+  sortOrder: number;
+}
 
 export interface CreateBulletinInput {
   studentId: number;
@@ -115,8 +114,7 @@ export interface BulletinSnapshotResult {
   mention: string | null;
   appreciation: string | null;
   linesCount: number;
-  matieres_litteraires: BulletinLineSnapshotInput[];
-  matieres_scientifiques: BulletinLineSnapshotInput[];
+  subjectGroups: BulletinSubjectGroup<BulletinLineSnapshotInput>[];
 }
 
 export interface BulletinSnapshotContext {
@@ -127,16 +125,18 @@ export interface BulletinSnapshotContext {
   getClassTermEvaluations(classId: number, termId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
   getTeacherNames(teacherIds: number[]): Promise<Map<number, string>>;
-  getSubjectTypes(schoolId: number): Promise<Map<string, string>>;
+  getSubjectTypes(schoolId: number): Promise<Map<string, SubjectTypeMetadata>>;
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
 
-export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<Map<string, string>> => {
+export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<Map<string, SubjectTypeMetadata>> => {
   const result = await tx.execute(sql`
     SELECT
       s.name AS "subjectName",
-      COALESCE(st_school.name, st_local.name) AS "subjectTypeName"
+      COALESCE(st_school.id, st_local.id) AS "subjectTypeId",
+      COALESCE(st_school.name, st_local.name) AS "subjectTypeName",
+      COALESCE(st_school.sort_order, st_local.sort_order, 0) AS "sortOrder"
     FROM subjects s
     LEFT JOIN school_subjects ss
       ON ss.subject_id = s.id
@@ -146,11 +146,15 @@ export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<M
     WHERE s.school_id = ${schoolId} OR s.school_id IS NULL
     ORDER BY s.id
   `);
-  const rows = (result?.rows ?? result) as Array<{ subjectName: string; subjectTypeName?: string | null }>;
+  const rows = (result?.rows ?? result) as Array<{ subjectName: string; subjectTypeId?: number | null; subjectTypeName?: string | null; sortOrder?: number | null }>;
 
   return new Map(rows
-    .filter((row: { subjectTypeName?: string | null }) => row.subjectTypeName != null)
-    .map((row: { subjectName: string; subjectTypeName: string }) => [row.subjectName, row.subjectTypeName]));
+    .filter((row) => row.subjectTypeId != null && row.subjectTypeName != null)
+    .map((row) => [row.subjectName, {
+      subjectTypeId: Number(row.subjectTypeId),
+      subjectTypeName: row.subjectTypeName as string,
+      sortOrder: Number(row.sortOrder ?? 0),
+    }]));
 };
 
 export interface BulletinSnapshotPersistence {
@@ -292,7 +296,7 @@ const computeSubjectLines = (
   termId: number,
   termEvaluations: BulletinEvaluationLike[],
   teacherNameMap: Map<number, string> = new Map(),
-  subjectTypeNames: Map<string, string> = new Map(),
+  subjectTypeNames: Map<string, SubjectTypeMetadata> = new Map(),
 ): BulletinLineSnapshotInput[] => {
   const bySubject = new Map<string, {
     coefficient: number;
@@ -376,7 +380,9 @@ const computeSubjectLines = (
       teacherComment: getGradeAppreciation(subjectAverage),
       rank,
       signature: null,
-      subjectTypeName: subjectTypeNames.get(subjectName) ?? null,
+      subjectTypeId: subjectTypeNames.get(subjectName)?.subjectTypeId ?? null,
+      subjectTypeName: subjectTypeNames.get(subjectName)?.subjectTypeName ?? null,
+      sortOrder: subjectTypeNames.get(subjectName)?.sortOrder ?? null,
     };
   });
 };
@@ -910,7 +916,7 @@ export const generateBulletinSnapshot = async (
       mention: resolveMention(finalAverage),
       appreciation: resolveAppreciation(finalAverage, term.periodType),
       linesCount: lines.length,
-      ...subjectGroups,
+      subjectGroups,
     };
   });
 };

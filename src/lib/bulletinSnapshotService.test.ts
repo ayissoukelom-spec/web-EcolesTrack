@@ -7,6 +7,7 @@ import {
   type BulletinSnapshotContext,
   type BulletinSnapshotPersistence,
   type CreateBulletinInput,
+  type SubjectTypeMetadata,
 } from './bulletinSnapshotService';
 import type { BulletinEvaluationLike, BulletinGradeLike } from './bulletinService';
 
@@ -18,7 +19,7 @@ interface FakeState {
   grades: BulletinGradeLike[];
   bulletins: Array<CreateBulletinInput & { id: number }>;
   bulletinLines: Array<BulletinLineSnapshotInput & { id: number; bulletinId: number }>;
-  subjectTypeNames: Map<string, string>;
+  subjectTypeNames: Map<string, SubjectTypeMetadata>;
 }
 
 const cloneState = (state: FakeState): FakeState => ({
@@ -120,18 +121,19 @@ describe('generateBulletinSnapshot', () => {
 
   it('regroupe les lignes selon le type de matière sans dupliquer les matières', () => {
     const lines = [
-      { subjectName: 'Français', subjectTypeName: 'Littéraire', average: 14 },
-      { subjectName: 'Histoire', subjectTypeName: 'Littéraires', average: 12 },
-      { subjectName: 'Math', subjectTypeName: 'Scientifique', average: 16 },
+      { subjectName: 'Français', subjectTypeId: 10, subjectTypeName: 'Littéraire', sortOrder: 2, average: 14 },
+      { subjectName: 'Histoire', subjectTypeId: 10, subjectTypeName: 'Littéraires', sortOrder: 2, average: 12 },
+      { subjectName: 'Math', subjectTypeId: 20, subjectTypeName: 'Scientifique', sortOrder: 1, average: 16 },
+      { subjectName: 'Informatique', subjectTypeId: 30, subjectTypeName: 'Informatique', sortOrder: 3, average: 15 },
       { subjectName: 'Sport', subjectTypeName: null, average: 18 },
     ];
 
     const groups = groupBulletinLinesBySubjectType(lines);
 
-    expect(groups.matieres_litteraires.map((line) => line.subjectName)).toEqual(['Français', 'Histoire']);
-    expect(groups.matieres_scientifiques.map((line) => line.subjectName)).toEqual(['Math']);
-    expect([...groups.matieres_litteraires, ...groups.matieres_scientifiques]).toHaveLength(3);
-    expect(groups.matieres_litteraires[0]?.average).toBe(14);
+    expect(groups.map((group) => group.subjectTypeId)).toEqual([20, 10, 30, null]);
+    expect(groups[1]?.lines.map((line) => line.subjectName)).toEqual(['Français', 'Histoire']);
+    expect(groups[2]?.lines.map((line) => line.subjectName)).toEqual(['Informatique']);
+    expect(groups[3]?.subjectTypeName).toBe('Matières sans type');
   });
 
   it('applique la classification fournie pour l école sans inventer de type', async () => {
@@ -143,19 +145,20 @@ describe('generateBulletinSnapshot', () => {
           ? { ...evaluation, countInBulletin: true }
         : evaluation),
       subjectTypeNames: new Map([
-        ['Math', 'Litteraire'],
-        ['Science', 'Scientifique'],
+        ['Math', { subjectTypeId: 10, subjectTypeName: 'Litteraire', sortOrder: 2 }],
+        ['Science', { subjectTypeId: 20, subjectTypeName: 'Scientifique', sortOrder: 1 }],
       ]),
     });
 
     const result = await generateBulletinSnapshot(1, 7, persistence);
 
-    expect(result.matieres_litteraires.map((line) => line.subjectName)).toContain('Math');
-    expect(result.matieres_scientifiques.map((line) => line.subjectName)).toContain('Science');
-    expect(result.matieres_litteraires).not.toContainEqual(expect.objectContaining({ subjectName: 'Science' }));
-    expect(result.matieres_scientifiques).not.toContainEqual(expect.objectContaining({ subjectName: 'Math' }));
-    expect(result.matieres_litteraires).toHaveLength(1);
-    expect(result.matieres_scientifiques).toHaveLength(1);
+    expect(result.subjectGroups.map((group) => group.subjectTypeId)).toEqual([20, 10, null]);
+    expect(result.subjectGroups[0]?.lines.map((line) => line.subjectName)).toContain('Science');
+    expect(result.subjectGroups[1]?.lines.map((line) => line.subjectName)).toContain('Math');
+    expect(result.subjectGroups[0]?.lines).not.toContainEqual(expect.objectContaining({ subjectName: 'Math' }));
+    expect(result.subjectGroups[1]?.lines).not.toContainEqual(expect.objectContaining({ subjectName: 'Science' }));
+    expect(result.subjectGroups[0]?.lines).toHaveLength(1);
+    expect(result.subjectGroups[1]?.lines).toHaveLength(1);
     expect(result.linesCount).toBe(3);
   });
 
