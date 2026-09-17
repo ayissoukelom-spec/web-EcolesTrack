@@ -61,7 +61,6 @@ export interface SchoolTerm {
 
 export interface SubjectType {
   id: number;
-  schoolId?: number | null;
   name: string;
   description?: string | null;
   sortOrder: number;

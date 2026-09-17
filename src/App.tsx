@@ -763,13 +763,13 @@ export default function App() {
     }
   };
 
-  const handleAddSubjectType = async (data: { schoolId: number; name: string; description?: string | null; sortOrder?: number }) => {
+  const handleAddSubjectType = async (data: { name: string; description?: string | null; sortOrder?: number }) => {
     const created = await apiFetch('/api/subject-types', { method: 'POST', body: JSON.stringify(data) });
     setSubjectTypesList((prev) => [...prev, created]);
     return created;
   };
 
-  const handleUpdateSubjectType = async (id: number, data: { schoolId?: number; name?: string; description?: string | null; sortOrder?: number }) => {
+  const handleUpdateSubjectType = async (id: number, data: { name?: string; description?: string | null; sortOrder?: number }) => {
     const updated = await apiFetch(`/api/subject-types/${id}`, { method: 'PUT', body: JSON.stringify(data) });
     setSubjectTypesList((prev) => prev.map((item) => item.id === id ? updated : item));
     return updated;

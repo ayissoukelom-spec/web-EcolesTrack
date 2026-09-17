@@ -224,17 +224,16 @@ export const studentAcademicYearStatuses = pgTable('student_academic_year_status
   studentStatusAllowedCheck: check('student_academic_year_statuses_status_check', sql`${table.status} IS NULL OR ${table.status} IN ('Nouveau', 'Doublant', 'Triplant', 'Quadruplant', 'Quintuplant', 'Sextuplant')`),
 }));
 
-// 7b. Subject types (catalogue existant, rattache a une ecole)
+// 7b. Subject types (catalogue global des types de matieres)
 export const subjectTypes = pgTable('subject_types', {
   id: serial('id').primaryKey(),
-  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   description: text('description'),
   sortOrder: integer('sort_order').default(0).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
-  subjectTypeSchoolNameUniqueIdx: uniqueIndex('subject_types_school_id_name_idx').on(table.schoolId, table.name),
+  subjectTypeNameUniqueIdx: uniqueIndex('subject_types_name_unique_idx').on(table.name),
 }));
 
 // 7c. Subjects (Matières)

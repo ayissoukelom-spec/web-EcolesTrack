@@ -88,7 +88,7 @@ describe('SubjectsView', () => {
         subjectsList={[
           { id: 1, schoolId: null, name: 'Mathématique', status: 'approved', subjectTypeId: null },
         ]}
-        subjectTypesList={[{ id: 7, schoolId: 54, name: 'Scientifique', sortOrder: 0 }]}
+        subjectTypesList={[{ id: 7, name: 'Scientifique', sortOrder: 0 }]}
         userRole="school_admin"
         schoolId={54}
         onAddSubject={vi.fn()}

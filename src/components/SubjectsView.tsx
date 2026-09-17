@@ -17,8 +17,8 @@ interface SubjectsViewProps {
   onAddSubject: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => void;
   onUpdateSubject: (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => void;
   onDeleteSubject: (id: number) => void;
-  onAddSubjectType?: (data: { schoolId: number; name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
-  onUpdateSubjectType?: (id: number, data: { schoolId?: number; name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onAddSubjectType?: (data: { name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
+  onUpdateSubjectType?: (id: number, data: { name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
   onDeleteSubjectType?: (id: number) => Promise<void>;
   onApproveSubject?: (id: number) => void;
   onRejectSubject?: (id: number) => void;
@@ -68,7 +68,6 @@ export default function SubjectsView({
   const [subjectTypeDescription, setSubjectTypeDescription] = useState('');
   const [subjectTypeSortOrder, setSubjectTypeSortOrder] = useState(0);
   const [editingSubjectTypeId, setEditingSubjectTypeId] = useState<number | null>(null);
-  const [subjectTypeSchoolId, setSubjectTypeSchoolId] = useState<number | ''>('');
 
   const handleOpenForm = (subject?: Subject) => {
     if (subject) {
@@ -126,9 +125,8 @@ export default function SubjectsView({
 
   const handleSaveSubjectType = async () => {
     const name = subjectTypeName.trim();
-    if (!name || !subjectTypeSchoolId) return;
+    if (!name) return;
     const data = {
-      schoolId: Number(subjectTypeSchoolId),
       name,
       description: subjectTypeDescription.trim() || null,
       sortOrder: subjectTypeSortOrder,
@@ -140,7 +138,6 @@ export default function SubjectsView({
 
   const handleEditSubjectType = (subjectType: SubjectType) => {
     setEditingSubjectTypeId(subjectType.id);
-    setSubjectTypeSchoolId(subjectType.schoolId ?? '');
     setSubjectTypeName(subjectType.name);
     setSubjectTypeDescription(subjectType.description ?? '');
     setSubjectTypeSortOrder(subjectType.sortOrder);
@@ -243,13 +240,9 @@ export default function SubjectsView({
         <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
           <div>
             <h3 className="text-sm font-semibold text-slate-700">Types de matières</h3>
-            <p className="text-xs text-slate-500">Les types sont propres à un établissement.</p>
+            <p className="text-xs text-slate-500">Les types sont communs à tous les établissements.</p>
           </div>
-          <div className="grid gap-3 md:grid-cols-4">
-            <select aria-label="École du type de matière" value={subjectTypeSchoolId} onChange={(e) => setSubjectTypeSchoolId(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-              <option value="">Choisir une école</option>
-              {schoolsList.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
-            </select>
+          <div className="grid gap-3 md:grid-cols-3">
             <input aria-label="Nom du type de matière" value={subjectTypeName} onChange={(e) => setSubjectTypeName(e.target.value)} placeholder="Nom du type" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
             <input aria-label="Description du type de matière" value={subjectTypeDescription} onChange={(e) => setSubjectTypeDescription(e.target.value)} placeholder="Description (optionnelle)" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
             <input aria-label="Ordre du type de matière" type="number" min="0" value={subjectTypeSortOrder} onChange={(e) => setSubjectTypeSortOrder(Number(e.target.value))} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
@@ -261,7 +254,7 @@ export default function SubjectsView({
           <div className="grid gap-2 sm:grid-cols-2">
             {subjectTypesList.map((subjectType) => (
               <div key={subjectType.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                <div><div className="font-semibold text-slate-800">{subjectType.name}</div><div className="text-xs text-slate-500">{schoolsList.find((school) => school.id === subjectType.schoolId)?.name || 'École inconnue'}</div></div>
+                <div><div className="font-semibold text-slate-800">{subjectType.name}</div></div>
                 <div className="flex gap-2"><button type="button" onClick={() => handleEditSubjectType(subjectType)} className="text-indigo-600">Modifier</button><button type="button" onClick={() => handleDeleteSubjectType(subjectType.id)} className="text-rose-600">Supprimer</button></div>
               </div>
             ))}
@@ -518,7 +511,7 @@ export default function SubjectsView({
                 </label>
                 <select id="subject-type-select" value={formSubjectTypeId} onChange={(e) => setFormSubjectTypeId(e.target.value ? Number(e.target.value) : '')} className="w-full px-4 py-2 rounded-lg border border-slate-200">
                   <option value="">Aucun type</option>
-                  {subjectTypesList.filter((subjectType) => subjectType.schoolId === (userRole === 'school_admin' ? schoolId : (editingId ? subjectsList.find((subject) => subject.id === editingId)?.schoolId : selectedSchoolId))).map((subjectType) => <option key={subjectType.id} value={subjectType.id}>{subjectType.name}</option>)}
+                  {subjectTypesList.map((subjectType) => <option key={subjectType.id} value={subjectType.id}>{subjectType.name}</option>)}
                 </select>
               </div>
 

@@ -6438,22 +6438,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const requestedSchoolId = req.query.schoolId == null || req.query.schoolId === ''
-        ? undefined
-        : Number(req.query.schoolId);
-      if (requestedSchoolId !== undefined && (!Number.isInteger(requestedSchoolId) || requestedSchoolId <= 0)) {
-        return res.status(400).json({ error: 'Invalid schoolId' });
-      }
-
-      const targetSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
-      if (actor.role === 'school_admin' && !targetSchoolId) {
-        return res.status(403).json({ error: 'School context is required' });
-      }
-
-      const query = db.select().from(subjectTypes);
-      const rows = targetSchoolId
-        ? await query.where(eq(subjectTypes.schoolId, targetSchoolId)).orderBy(subjectTypes.sortOrder, subjectTypes.id)
-        : await query.orderBy(subjectTypes.schoolId, subjectTypes.sortOrder, subjectTypes.id);
+      const rows = await db.select().from(subjectTypes).orderBy(subjectTypes.sortOrder, subjectTypes.id);
       res.json(rows);
     } catch (err: any) {
       console.error('Error fetching subject types:', err);
@@ -6471,35 +6456,30 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const { schoolId, name, description, sortOrder } = req.body ?? {};
-      const parsedSchoolId = Number(schoolId);
+      const { name, description, sortOrder } = req.body ?? {};
       const normalizedName = typeof name === 'string' ? name.trim() : '';
-      if (!Number.isInteger(parsedSchoolId) || parsedSchoolId <= 0 || !normalizedName) {
-        return res.status(400).json({ error: 'schoolId and name are required' });
+      if (!normalizedName) {
+        return res.status(400).json({ error: 'name is required' });
       }
       if (sortOrder !== undefined && (!Number.isInteger(Number(sortOrder)) || Number(sortOrder) < 0)) {
         return res.status(400).json({ error: 'Invalid sortOrder' });
       }
 
-      const [school] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, parsedSchoolId));
-      if (!school) return res.status(404).json({ error: 'School not found' });
-
       const [duplicate] = await db.select({ id: subjectTypes.id })
         .from(subjectTypes)
-        .where(and(eq(subjectTypes.schoolId, parsedSchoolId), eq(subjectTypes.name, normalizedName)));
-      if (duplicate) return res.status(409).json({ error: 'Subject type already exists for this school' });
+        .where(eq(subjectTypes.name, normalizedName));
+      if (duplicate) return res.status(409).json({ error: 'Subject type already exists' });
 
       const [created] = await db.insert(subjectTypes).values({
-        schoolId: parsedSchoolId,
         name: normalizedName,
         description: description == null ? null : String(description).trim(),
         sortOrder: sortOrder === undefined ? undefined : Number(sortOrder),
       }).returning();
 
-      await logAuditEvent(actor, 'create', 'subject_type', created.id, parsedSchoolId, `Created subject type "${created.name}"`);
+      await logAuditEvent(actor, 'create', 'subject_type', created.id, null, `Created subject type "${created.name}"`);
       res.status(201).json(created);
     } catch (err: any) {
-      if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists for this school' });
+      if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists' });
       console.error('Error creating subject type:', err);
       res.status(500).json({ error: 'Failed to create subject type' });
     }
@@ -6523,42 +6503,23 @@ export async function createApp() {
       const [existing] = await db.select().from(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
       if (!existing) return res.status(404).json({ error: 'Subject type not found' });
 
-      const { schoolId, name, description, sortOrder } = req.body ?? {};
-      const nextSchoolId = schoolId === undefined ? existing.schoolId : Number(schoolId);
+      const { name, description, sortOrder } = req.body ?? {};
       const nextName = name === undefined ? existing.name : (typeof name === 'string' ? name.trim() : '');
-      const validatedSchoolId = typeof nextSchoolId === 'number' && Number.isInteger(nextSchoolId) && nextSchoolId > 0
-        ? nextSchoolId
-        : null;
-      if (validatedSchoolId == null || !nextName) {
-        return res.status(400).json({ error: 'Invalid schoolId or name' });
-      }
-      if (existing.schoolId !== validatedSchoolId) {
-        const [usage] = await db.select({ count: sql<number>`count(*)::int` })
-          .from(subjects)
-          .where(eq(subjects.subjectTypeId, subjectTypeId));
-        if (Number(usage?.count ?? 0) > 0) {
-          return res.status(409).json({ error: 'Cannot change school of a subject type used by existing subjects' });
-        }
-      }
+      if (!nextName) return res.status(400).json({ error: 'Invalid name' });
       if (sortOrder !== undefined && (!Number.isInteger(Number(sortOrder)) || Number(sortOrder) < 0)) {
         return res.status(400).json({ error: 'Invalid sortOrder' });
       }
 
-      const [school] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, validatedSchoolId));
-      if (!school) return res.status(404).json({ error: 'School not found' });
-
       const [duplicate] = await db.select({ id: subjectTypes.id })
         .from(subjectTypes)
         .where(and(
-          eq(subjectTypes.schoolId, validatedSchoolId),
           eq(subjectTypes.name, nextName),
           sql`${subjectTypes.id} <> ${subjectTypeId}`,
         ));
-      if (duplicate) return res.status(409).json({ error: 'Subject type already exists for this school' });
+      if (duplicate) return res.status(409).json({ error: 'Subject type already exists' });
 
       const [updated] = await db.update(subjectTypes)
         .set({
-          schoolId: validatedSchoolId,
           name: nextName,
           description: description === undefined ? existing.description : (description == null ? null : String(description).trim()),
           sortOrder: sortOrder === undefined ? existing.sortOrder : Number(sortOrder),
@@ -6567,10 +6528,10 @@ export async function createApp() {
         .where(eq(subjectTypes.id, subjectTypeId))
         .returning();
 
-      await logAuditEvent(actor, 'update', 'subject_type', subjectTypeId, updated.schoolId ?? null, `Updated subject type "${updated.name}"`);
+      await logAuditEvent(actor, 'update', 'subject_type', subjectTypeId, null, `Updated subject type "${updated.name}"`);
       res.json(updated);
     } catch (err: any) {
-      if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists for this school' });
+      if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists' });
       console.error('Error updating subject type:', err);
       res.status(500).json({ error: 'Failed to update subject type' });
     }
@@ -6594,15 +6555,18 @@ export async function createApp() {
       const [existing] = await db.select().from(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
       if (!existing) return res.status(404).json({ error: 'Subject type not found' });
 
-      const [usage] = await db.select({ count: sql<number>`count(*)::int` })
+      const [subjectUsage] = await db.select({ count: sql<number>`count(*)::int` })
         .from(subjects)
         .where(eq(subjects.subjectTypeId, subjectTypeId));
-      if (Number(usage?.count ?? 0) > 0) {
+      const [schoolSubjectUsage] = await db.select({ count: sql<number>`count(*)::int` })
+        .from(schoolSubjects)
+        .where(eq(schoolSubjects.subjectTypeId, subjectTypeId));
+      if (Number(subjectUsage?.count ?? 0) > 0 || Number(schoolSubjectUsage?.count ?? 0) > 0) {
         return res.status(409).json({ error: 'Subject type is used by existing subjects' });
       }
 
       await db.delete(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
-      await logAuditEvent(actor, 'delete', 'subject_type', subjectTypeId, existing.schoolId ?? null, `Deleted subject type "${existing.name}"`);
+      await logAuditEvent(actor, 'delete', 'subject_type', subjectTypeId, null, `Deleted subject type "${existing.name}"`);
       res.json({ success: true, message: 'Subject type deleted' });
     } catch (err: any) {
       console.error('Error deleting subject type:', err);
@@ -6828,13 +6792,10 @@ export async function createApp() {
           return res.status(400).json({ error: 'Invalid subjectTypeId' });
         }
 
-        const [subjectType] = await db.select({ id: subjectTypes.id, schoolId: subjectTypes.schoolId })
+        const [subjectType] = await db.select({ id: subjectTypes.id })
           .from(subjectTypes)
           .where(eq(subjectTypes.id, finalSubjectTypeId));
         if (!subjectType) return res.status(404).json({ error: 'Subject type not found' });
-        if (finalSchoolId == null || subjectType.schoolId !== finalSchoolId) {
-          return res.status(409).json({ error: 'Subject type does not belong to the subject school' });
-        }
       } else if (bodySubjectTypeId === null) {
         finalSubjectTypeId = null;
       }
@@ -6938,13 +6899,10 @@ export async function createApp() {
               return res.status(400).json({ error: 'Invalid subjectTypeId' });
             }
 
-            const [subjectType] = await db.select({ id: subjectTypes.id, schoolId: subjectTypes.schoolId })
+            const [subjectType] = await db.select({ id: subjectTypes.id })
               .from(subjectTypes)
               .where(eq(subjectTypes.id, parsedSubjectTypeId));
             if (!subjectType) return res.status(404).json({ error: 'Subject type not found' });
-            if (subjectType.schoolId !== targetSchoolId) {
-              return res.status(409).json({ error: 'Subject type does not belong to your school' });
-            }
 
             if (subject.schoolId === null) {
               if (relation) {
@@ -6974,13 +6932,10 @@ export async function createApp() {
                 return res.status(400).json({ error: 'Invalid subjectTypeId' });
               }
 
-              const [subjectType] = await db.select({ id: subjectTypes.id, schoolId: subjectTypes.schoolId })
+              const [subjectType] = await db.select({ id: subjectTypes.id })
                 .from(subjectTypes)
                 .where(eq(subjectTypes.id, parsedSubjectTypeId));
               if (!subjectType) return res.status(404).json({ error: 'Subject type not found' });
-              if (subjectType.schoolId !== subject.schoolId) {
-                return res.status(409).json({ error: 'Subject type does not belong to the subject school' });
-              }
               updateValues.subjectTypeId = parsedSubjectTypeId;
             }
           }
