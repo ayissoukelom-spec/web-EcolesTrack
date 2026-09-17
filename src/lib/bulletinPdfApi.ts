@@ -1221,19 +1221,21 @@ export const createBulletinPdfDocument = async (
     genderValue ? { label: 'SEXE :', value: genderValue } : null,
   ].filter((block): block is { label: string; value: string } => block !== null);
   rightBlocks.forEach((block, index) => {
-    const labelWidth = block.label === 'SEXE :'
+    const isStatusBlock = block.label === 'STATUT :';
+    const isGenderBlock = block.label === 'SEXE :';
+    const labelWidth = isStatusBlock || isGenderBlock
       ? fontBold.widthOfTextAtSize(block.label, 13)
       : fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
-    const valueWidth = block.label === 'SEXE :'
+    const valueWidth = isStatusBlock || isGenderBlock
       ? fontBold.widthOfTextAtSize(block.value, 13)
       : fontBold.widthOfTextAtSize(block.value, studentNameSize);
     const blockWidth = labelWidth + studentGap + valueWidth;
-    const blockY = cursorY - 51 - index * 16 - (block.label === 'SEXE :' ? studentHeaderOffsetY : 0);
+    const blockY = cursorY - 51 - index * 16 - (isStatusBlock || isGenderBlock ? studentHeaderOffsetY : 0);
     const rightAlignedX = rightEdge - blockWidth;
     const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
     const blockX = Math.max(rightAlignedX, minimumX);
-    drawText(page, block.label, blockX, blockY, block.label === 'SEXE :' ? 13 : studentLabelSize, text, block.label === 'SEXE :' ? fontBold : fontRegular);
-    drawText(page, block.value, blockX + labelWidth + studentGap, blockY, block.label === 'SEXE :' ? 13 : studentNameSize, text, fontBold);
+    drawText(page, block.label, blockX, blockY, isStatusBlock || isGenderBlock ? 13 : studentLabelSize, text, isStatusBlock || isGenderBlock ? fontBold : fontRegular);
+    drawText(page, block.value, blockX + labelWidth + studentGap, blockY, isStatusBlock || isGenderBlock ? 13 : studentNameSize, text, fontBold);
   });
   cursorY -= 96;
 
