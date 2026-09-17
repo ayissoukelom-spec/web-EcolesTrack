@@ -1113,7 +1113,10 @@ export const createBulletinPdfDocument = async (
     const republicMarkerWidth = fontBold.widthOfTextAtSize('LIQUE TOG', 9);
     drawText(page, republicText, rightX, height - 38, 9, text, fontBold);
     drawText(page, republicMarker, rightX + (republicTextWidth - republicMarkerWidth) / 2, height - 47, 9, text, fontBold);
-    drawText(page, school.motto?.trim() || 'Travail-Liberté-Patrie', rightX, height - 56, 8, muted, fontRegular);
+    const mottoText = school.motto?.trim() || 'Travail-Liberté-Patrie';
+    const mottoWidth = fontBold.widthOfTextAtSize(mottoText, 8);
+    const mottoX = rightX + (republicTextWidth - mottoWidth) / 2;
+    drawText(page, mottoText, mottoX, height - 56, 8, text, fontBold);
     drawText(page, `${template.labels.schoolYear}: ${data.schoolYearName}`, rightX, height - 79, 8.5, text, fontBold);
     return height - 148;
   };
