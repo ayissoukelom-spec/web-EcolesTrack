@@ -1237,7 +1237,7 @@ export const createBulletinPdfDocument = async (
     drawText(page, block.label, blockX, blockY, isStatusBlock || isGenderBlock ? 13 : studentLabelSize, text, isStatusBlock || isGenderBlock ? fontBold : fontRegular);
     drawText(page, block.value, blockX + labelWidth + studentGap, blockY, isStatusBlock || isGenderBlock ? 13 : studentNameSize, text, fontBold);
   });
-  cursorY -= 96;
+  cursorY -= 80;
 
   const summaryY = cursorY;
 
