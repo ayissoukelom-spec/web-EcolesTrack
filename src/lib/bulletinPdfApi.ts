@@ -1086,6 +1086,7 @@ export const createBulletinPdfDocument = async (
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
       school.phone?.trim() ? `Tél : ${school.phone.trim()}` : null,
+      school.email?.trim() ? `Email : ${school.email.trim()}` : null,
     ].filter((value): value is string => Boolean(value));
     if (postalAndPhone.length > 0) {
       drawCenteredWrappedText(page, postalAndPhone.join(' '), leftColumnCenter, height - 119, 170, 7, text, fontBoldItalic, 2);
