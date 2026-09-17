@@ -1179,24 +1179,31 @@ export const createBulletinPdfDocument = async (
     },
   );
   drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY - studentHeaderOffsetY, 14, text, fontBold);
-  const classLine = `${template.labels.class}: ${data.className}    EFFECTIF : ${data.classStudentCount}`;
-  const classLineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLine), 14);
-  drawText(page, classLine, (page.getWidth() - classLineWidth) / 2, cursorY - 25 - studentHeaderOffsetY, 14, text, fontBold);
-  const studentLabel = 'NOM ET PRÉNOMS DE L ÉLÈVE :';
+  const classLabel = `${template.labels.class}: ${data.className}`;
+  const classEffectif = `EFFECTIF : ${data.classStudentCount}`;
+  const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabel), 14);
+  const classEffectifWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classEffectif), 14);
+  const classLineGap = 12;
+  const classLineWidth = classLabelWidth + classLineGap + classEffectifWidth;
+  const classLineX = (page.getWidth() - classLineWidth) / 2;
+  const classLineY = cursorY - 25 - studentHeaderOffsetY;
+  drawText(page, classLabel, classLineX, classLineY, 14, text, fontBold);
+  drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
+  const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
   const studentName = sanitizePdfText(data.studentName);
   const studentLabelSize = 8;
   const studentNameSize = 10.5;
   const studentGap = 4;
-  const studentLabelWidth = fontRegular.widthOfTextAtSize(studentLabel, studentLabelSize);
+  const studentLabelWidth = fontBold.widthOfTextAtSize(studentLabel, 13);
   const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
   const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
   const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
-  drawText(page, studentLabel, tableX + 12, cursorY - 51 - studentHeaderOffsetY, studentLabelSize, muted, fontRegular);
-  drawText(page, studentName, studentNameX, cursorY - 51 - studentHeaderOffsetY, studentNameSize, text, fontBold);
+  drawText(page, studentLabel, tableX + 12, cursorY - 51 - studentHeaderOffsetY, 13, text, fontBold);
+  drawText(page, studentName, studentNameX, cursorY - 51 - studentHeaderOffsetY, 13, text, fontBold);
   if (data.studentMatricule?.trim()) {
     const matriculeText = `N° Mle : ${sanitizePdfTextPreservingAccents(data.studentMatricule)}`;
     const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
-    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67 - studentHeaderOffsetY, studentLabelSize, text, fontRegular);
+    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67 - studentHeaderOffsetY, 13, text, fontBold);
   }
   const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
   const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
@@ -1207,15 +1214,19 @@ export const createBulletinPdfDocument = async (
     genderValue ? { label: 'SEXE :', value: genderValue } : null,
   ].filter((block): block is { label: string; value: string } => block !== null);
   rightBlocks.forEach((block, index) => {
-    const labelWidth = fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
-    const valueWidth = fontBold.widthOfTextAtSize(block.value, studentNameSize);
+    const labelWidth = block.label === 'SEXE :'
+      ? fontBold.widthOfTextAtSize(block.label, 13)
+      : fontRegular.widthOfTextAtSize(block.label, studentLabelSize);
+    const valueWidth = block.label === 'SEXE :'
+      ? fontBold.widthOfTextAtSize(block.value, 13)
+      : fontBold.widthOfTextAtSize(block.value, studentNameSize);
     const blockWidth = labelWidth + studentGap + valueWidth;
     const blockY = cursorY - 51 - index * 16 - (block.label === 'SEXE :' ? studentHeaderOffsetY : 0);
     const rightAlignedX = rightEdge - blockWidth;
     const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
     const blockX = Math.max(rightAlignedX, minimumX);
-    drawText(page, block.label, blockX, blockY, studentLabelSize, muted, fontRegular);
-    drawText(page, block.value, blockX + labelWidth + studentGap, blockY, studentNameSize, text, fontBold);
+    drawText(page, block.label, blockX, blockY, block.label === 'SEXE :' ? 13 : studentLabelSize, text, block.label === 'SEXE :' ? fontBold : fontRegular);
+    drawText(page, block.value, blockX + labelWidth + studentGap, blockY, block.label === 'SEXE :' ? 13 : studentNameSize, text, fontBold);
   });
   cursorY -= 96;
 
