@@ -948,9 +948,9 @@ export const createBulletinPdfDocument = async (
     { label: 'Coef.', width: 28 },
     { label: 'Note coef.', width: 46 },
     { label: 'Rang', width: 28 },
-    { label: 'Professeur', width: 55 },
+    { label: 'Professeur', width: 66 },
     { label: 'Appréciation', width: 70 },
-    { label: 'Signature', width: 36 },
+    { label: 'Signature', width: 25 },
   ];
 
   // Define multi-line headers for better space usage
@@ -1130,17 +1130,21 @@ export const createBulletinPdfDocument = async (
     let x = tableX;
     columns.forEach((column, index) => {
       const lines = headerLines[index];
-      const columnCenterX = x + column.width / 2;
+      const columnX = x;
+      const columnWidth = column.width;
       if (lines.length === 1) {
-        // Single line: center vertically
-        const lineWidth = fontBold.widthOfTextAtSize(lines[0], 8);
-        drawText(page, lines[0], columnCenterX - lineWidth / 2, y - 18, 8, text, fontBold);
+        const line = lines[0];
+        const lineWidth = fontBold.widthOfTextAtSize(line, 8);
+        const headerSize = line === 'Signature' ? (columnWidth / lineWidth) * 8 : 8;
+        const renderedWidth = fontBold.widthOfTextAtSize(line, headerSize);
+        const textX = columnX + (columnWidth - renderedWidth) / 2;
+        drawText(page, line, textX, y - 18, headerSize, text, fontBold);
       } else {
-        // Multi-line: spread across height
         lines.forEach((line, lineIndex) => {
           const lineWidth = fontBold.widthOfTextAtSize(line, 7.5);
+          const textX = columnX + (columnWidth - lineWidth) / 2;
           const verticalOffset = 21 - lineIndex * 8;
-          drawText(page, line, columnCenterX - lineWidth / 2, y - verticalOffset, 7.5, text, fontBold);
+          drawText(page, line, textX, y - verticalOffset, 7.5, text, fontBold);
         });
       }
       x += column.width;
