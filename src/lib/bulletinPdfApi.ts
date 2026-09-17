@@ -1079,8 +1079,8 @@ export const createBulletinPdfDocument = async (
     const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
     const institutionHeaderWidth = margin + 178 - leftX;
     if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX + 25, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
-    if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 8.5, text, fontBold, 1);
-    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 10.5, text, fontBold, 2);
+    if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 10, text, fontBold, 1);
+    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 11, text, fontBold, 2);
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
       school.phone?.trim() ? `Tél : ${school.phone.trim()}` : null,
