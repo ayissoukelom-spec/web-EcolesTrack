@@ -15,6 +15,7 @@ import {
   computeHeaderParagraphLayout,
   fitHeaderParagraphFontSize,
   computeWrappedTextLines,
+  formatPdfDisplayNumber,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -105,6 +106,14 @@ const countPdfImages = (pdfBytes: Uint8Array): number => {
 };
 
 describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
+  it.each([
+    { value: 10.5, expected: '10,5' },
+    { value: 14.25, expected: '14,25' },
+    { value: 15, expected: '15' },
+  ])('affiche les notes PDF avec une virgule décimale sans modifier les entiers: $value -> $expected', ({ value, expected }) => {
+    expect(formatPdfDisplayNumber(value)).toBe(expected);
+  });
+
   it('traite les deux anciens champs comme un paragraphe de deux lignes normales', async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont('Helvetica');

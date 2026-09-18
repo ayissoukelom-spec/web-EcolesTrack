@@ -184,6 +184,20 @@ const parseNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+export const formatPdfDisplayNumber = (value: number | string | null | undefined): string => {
+  if (value == null || value === '') return '-';
+  if (typeof value === 'string' && value.trim() === '-') return '-';
+
+  const numericValue = typeof value === 'string'
+    ? Number(value.trim().replace(',', '.'))
+    : Number(value);
+
+  if (!Number.isFinite(numericValue)) return '-';
+  if (Number.isInteger(numericValue)) return String(numericValue);
+
+  return numericValue.toFixed(2).replace('.', ',').replace(/,?0+$/, '');
+};
+
 const parseNumericScore = (score: string): number | null => {
   const normalized = String(score || '').trim().replace(',', '.');
   if (!normalized) return null;
@@ -1471,8 +1485,8 @@ export const createBulletinPdfDocument = async (
       drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
       const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
       const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
-      drawText(page, subtotalCoefficients.toFixed(2), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
-      drawText(page, subtotalWeightedPoints.toFixed(2), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, formatPdfDisplayNumber(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, formatPdfDisplayNumber(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
       cursorY -= totalRowHeight;
       continue;
     }
@@ -1492,7 +1506,7 @@ export const createBulletinPdfDocument = async (
       classAverage: line.classAverage ?? null,
     };
     const noteCoef = line.average != null && line.coefficient != null
-      ? (parseFloat(String(line.average)) * line.coefficient).toFixed(2)
+      ? formatPdfDisplayNumber(parseFloat(String(line.average)) * line.coefficient)
       : '-';
 
     // Column 1: Matières
@@ -1517,23 +1531,23 @@ export const createBulletinPdfDocument = async (
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.interrogation), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.devoir), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.classAverage), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.composition), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, line.average == null ? '-' : formatPdfDisplayNumber(line.average), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[5].width;
 
     // Column 7: Coef.
@@ -1608,8 +1622,8 @@ export const createBulletinPdfDocument = async (
   drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
   const totalWeightedPointsX = totalCoefficientX + columns[6].width;
-  drawText(page, totalCoefficients.toFixed(2), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
-  drawText(page, totalWeightedPoints.toFixed(2), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, formatPdfDisplayNumber(totalCoefficients), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, formatPdfDisplayNumber(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
   page.drawRectangle({
