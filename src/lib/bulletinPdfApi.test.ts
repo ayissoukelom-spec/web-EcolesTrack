@@ -993,8 +993,10 @@ describe('bulletin PDF API', () => {
       rank: 5,
     }))).replace(/\s+/g, ' ');
 
-    expect(semesterText).toContain(normalizePdfTextForAssertion('1er Semestre : 14,25 Rang : 3ème'));
-    expect(trimesterText).toContain(normalizePdfTextForAssertion('2ème Trimestre : 13,80 Rang : 5ème'));
+    expect(semesterText).toContain(normalizePdfTextForAssertion('1er Semestre : 14,25'));
+    expect(semesterText).toContain(normalizePdfTextForAssertion('Rang : 3ème'));
+    expect(trimesterText).toContain(normalizePdfTextForAssertion('2ème Trimestre : 13,80'));
+    expect(trimesterText).toContain(normalizePdfTextForAssertion('Rang : 5ème'));
   });
 
   it('affiche zéro absence quand l\'élève n\'en a aucune', async () => {

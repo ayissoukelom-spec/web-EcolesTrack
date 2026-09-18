@@ -1783,8 +1783,12 @@ export const createBulletinPdfDocument = async (
   const summaryAverage = data.average == null ? '-' : formatPdfDisplayNumberFixed(data.average).replace('.', ',');
   const summaryRank = data.rank == null ? '-' : formatGeneralRankLabel(data.rank);
   const summaryLabel = formatPeriodSummaryLabel(data.termName);
-  const summaryText = `${summaryLabel} : ${summaryAverage}     Rang : ${summaryRank}`;
-  drawText(page, summaryText, tableX + 5, summaryY, 7.5, text, fontBold);
+  const summaryLeftText = `${summaryLabel} : ${summaryAverage}`;
+  const summaryRightText = `Rang : ${summaryRank}`;
+  const summaryLeftX = tableX + 5;
+  const summaryRightX = tableX + 150 - 28.35;
+  drawText(page, summaryLeftText, summaryLeftX, summaryY, 10, text, fontBold);
+  drawText(page, summaryRightText, summaryRightX, summaryY, 10, text, fontBold);
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);
