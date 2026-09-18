@@ -154,6 +154,50 @@ describe('résolution des périodes historiques', () => {
       { termId: 4, label: 'Semestre 1', average: null, rank: null },
     ]);
   });
+
+  it('retrouve le premier semestre quand les deux périodes ont le même orderIndex mais des dates successives', () => {
+    const terms = [
+      {
+        id: 10,
+        name: '1er SEMESTRE',
+        periodType: null,
+        orderIndex: 1,
+        academicYearId: 2,
+        startDate: '2026-05-13',
+        endDate: '2026-07-23',
+      },
+      {
+        id: 18,
+        name: 'Semestre 22',
+        periodType: 'semester',
+        orderIndex: 1,
+        academicYearId: 2,
+        startDate: '2026-09-18',
+        endDate: '2026-09-20',
+      },
+    ];
+    const bulletins = [
+      { id: 349, termId: 10, studentId: 26, schoolYearId: 2, average: '12.3194', rank: 1 },
+    ];
+
+    expect(resolvePreviousPeriodSummaries({
+      currentTermId: 18,
+      studentId: 26,
+      schoolYearId: 2,
+      terms,
+      bulletins,
+    })).toEqual([
+      { termId: 10, label: '1er SEMESTRE', average: 12.3194, rank: 1 },
+    ]);
+
+    expect(resolvePreviousPeriodSummaries({
+      currentTermId: 10,
+      studentId: 26,
+      schoolYearId: 2,
+      terms,
+      bulletins,
+    })).toEqual([]);
+  });
 });
 
 describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
@@ -997,6 +1041,31 @@ describe('bulletin PDF API', () => {
     expect(semesterText).toContain(normalizePdfTextForAssertion('Rang : 3ème'));
     expect(trimesterText).toContain(normalizePdfTextForAssertion('2ème Trimestre : 13,80'));
     expect(trimesterText).toContain(normalizePdfTextForAssertion('Rang : 5ème'));
+  });
+
+  it('affiche le semestre précédent au-dessus du semestre actuel pour le 2ème semestre et n affiche pas de ligne précédente au 1er semestre', async () => {
+    const firstSemesterPdf = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Semestre 1',
+      average: 12.32,
+      rank: 1,
+      previousPeriodSummaries: [{ termId: 11, label: 'Semestre 0', average: 11.5, rank: 2 }],
+    }))).replace(/\s+/g, ' ');
+
+    const secondSemesterPdf = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Semestre 2',
+      average: 14.25,
+      rank: 2,
+      previousPeriodSummaries: [{ termId: 10, label: 'Semestre 1', average: 12.32, rank: 1 }],
+    }))).replace(/\s+/g, ' ');
+
+    expect((firstSemesterPdf.match(/1er Semestre : 12,32/g) ?? []).length).toBe(1);
+    expect((firstSemesterPdf.match(/Rang : 1er/g) ?? []).length).toBe(1);
+    expect(secondSemesterPdf).toContain(normalizePdfTextForAssertion('1er Semestre : 12,32'));
+    expect(secondSemesterPdf).toContain(normalizePdfTextForAssertion('2ème Semestre : 14,25'));
+    expect(secondSemesterPdf).toContain(normalizePdfTextForAssertion('Rang : 1er'));
+    expect(secondSemesterPdf).toContain(normalizePdfTextForAssertion('Rang : 2ème'));
   });
 
   it('affiche zéro absence quand l\'élève n\'en a aucune', async () => {

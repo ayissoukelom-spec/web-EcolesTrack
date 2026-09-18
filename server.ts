@@ -69,7 +69,7 @@ import {
   cyclePeriodTemplates,
   evaluationParticipations,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
 import { isSubjectAssignedToTeacher } from './src/lib/subjectMatching.ts';
 import studentAccess from './src/lib/studentAccess.ts';
@@ -209,6 +209,25 @@ interface ResolvedActor {
 }
 
 // Helper to resolve actor with fallback to simulated profile in dev
+export function hasSchoolTermDateOverlap(startDateA: string | null | undefined, endDateA: string | null | undefined, startDateB: string | null | undefined, endDateB: string | null | undefined): boolean {
+  if (!startDateA || !endDateA || !startDateB || !endDateB) return false;
+  return startDateA <= endDateB && endDateA >= startDateB;
+}
+
+export function findConflictingSchoolTerm(existingTerms: Array<{ id?: number | null; academicYearId?: number | null; schoolId?: number | null; cycleId?: number | null; startDate?: string | null; endDate?: string | null }>, candidate: { id?: number | null; academicYearId?: number | null; schoolId?: number | null; cycleId?: number | null; startDate?: string | null; endDate?: string | null }, ignoreId?: number | null) {
+  return existingTerms.find((term) => {
+    if (ignoreId != null && term.id != null && term.id === ignoreId) return false;
+    if (term.academicYearId != null && candidate.academicYearId != null && term.academicYearId !== candidate.academicYearId) return false;
+    if (term.schoolId != null && candidate.schoolId != null && term.schoolId !== candidate.schoolId) return false;
+    if (term.schoolId == null && candidate.schoolId != null) return false;
+    if (term.schoolId != null && candidate.schoolId == null) return false;
+    if (term.cycleId != null && candidate.cycleId != null && term.cycleId !== candidate.cycleId) return false;
+    if (term.cycleId == null && candidate.cycleId != null) return false;
+    if (term.cycleId != null && candidate.cycleId == null) return false;
+    return hasSchoolTermDateOverlap(candidate.startDate ?? null, candidate.endDate ?? null, term.startDate ?? null, term.endDate ?? null);
+  }) ?? null;
+}
+
 export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | null> {
   if (SENSITIVE_LOG) console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
@@ -3718,14 +3737,19 @@ export async function createApp() {
         }
       }
 
-      const duplicateConditions = [
+      const sameContextTerms = await db.select().from(schoolTerms).where(and(
         eq(schoolTerms.academicYearId, vals.academicYearId),
-        eq(schoolTerms.orderIndex, vals.orderIndex),
-        vals.cycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, vals.cycleId),
         targetSchoolId == null ? sql`${schoolTerms.schoolId} IS NULL` : eq(schoolTerms.schoolId, targetSchoolId),
-      ];
-      const [duplicateTerm] = await db.select({ id: schoolTerms.id }).from(schoolTerms).where(and(...duplicateConditions)).limit(1);
-      if (duplicateTerm) return res.status(409).json({ error: 'A period already exists for this cycle and academic year' });
+        vals.cycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, vals.cycleId),
+      ));
+      const conflictingTerm = findConflictingSchoolTerm(sameContextTerms, {
+        academicYearId: vals.academicYearId,
+        schoolId: targetSchoolId,
+        cycleId: vals.cycleId,
+        startDate: vals.startDate ?? null,
+        endDate: vals.endDate ?? null,
+      });
+      if (conflictingTerm) return res.status(409).json({ error: 'A period with the same school year, cycle and overlapping dates already exists' });
 
       const inserted = await db.insert(schoolTerms).values(vals).returning();
       res.status(201).json(inserted[0]);
@@ -3783,6 +3807,30 @@ export async function createApp() {
       if (endDate != null) updates.endDate = endDate;
       if (orderIndex != null) updates.orderIndex = Number(orderIndex);
       if (isActive != null) updates.isActive = !!isActive;
+
+      const nextEffectiveStartDate = updates.startDate ?? existing.startDate;
+      const nextEffectiveEndDate = updates.endDate ?? existing.endDate;
+      const nextEffectiveCycleId = updates.cycleId ?? existing.cycleId;
+      const nextEffectiveSchoolId = existing.schoolId;
+      const nextEffectiveAcademicYearId = existing.academicYearId;
+      if (nextEffectiveStartDate && nextEffectiveEndDate) {
+        const sameContextTerms = await db.select().from(schoolTerms).where(and(
+          eq(schoolTerms.academicYearId, nextEffectiveAcademicYearId),
+          nextEffectiveSchoolId == null ? sql`${schoolTerms.schoolId} IS NULL` : eq(schoolTerms.schoolId, nextEffectiveSchoolId),
+          nextEffectiveCycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, nextEffectiveCycleId),
+        ));
+        const conflictingTerm = findConflictingSchoolTerm(sameContextTerms, {
+          id,
+          academicYearId: nextEffectiveAcademicYearId,
+          schoolId: nextEffectiveSchoolId,
+          cycleId: nextEffectiveCycleId,
+          startDate: nextEffectiveStartDate,
+          endDate: nextEffectiveEndDate,
+        }, id);
+        if (conflictingTerm) {
+          return res.status(409).json({ error: 'This period overlaps with another period of the same school, year and cycle' });
+        }
+      }
 
       await db.update(schoolTerms).set(updates).where(eq(schoolTerms.id, id));
       const [row] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));

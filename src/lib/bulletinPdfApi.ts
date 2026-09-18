@@ -273,7 +273,15 @@ export const resolvePreviousPeriodSummaries = ({
   currentTermId: number;
   studentId: number;
   schoolYearId: number;
-  terms: Array<{ id: number; name: string; periodType?: string | null; orderIndex?: number | null; academicYearId?: number | null }>;
+  terms: Array<{
+    id: number;
+    name: string;
+    periodType?: string | null;
+    orderIndex?: number | null;
+    academicYearId?: number | null;
+    startDate?: string | null;
+    endDate?: string | null;
+  }>;
   bulletins: Array<{ id: number; termId: number; studentId: number; schoolYearId: number; average: number | string | null; rank: number | string | null }>;
 }): PreviousPeriodSummary[] => {
   const latestByTerm = new Map<number, { id: number; termId: number; studentId: number; schoolYearId: number; average: number | string | null; rank: number | string | null }>();
@@ -287,21 +295,38 @@ export const resolvePreviousPeriodSummaries = ({
   }
 
   const currentTerm = terms.find((term) => term.id === currentTermId) ?? null;
-  const currentType = currentTerm?.periodType ?? inferPeriodTypeFromLegacyName(currentTerm?.name) ?? null;
+  const inferHistoricalPeriodType = (termName?: string | null) => {
+    const inferred = inferPeriodTypeFromLegacyName(termName);
+    if (inferred) return inferred;
+    const normalizedName = String(termName ?? '').trim();
+    if (/semestre/i.test(normalizedName)) return 'semester';
+    if (/trimestre/i.test(normalizedName)) return 'trimester';
+    return null;
+  };
+  const currentType = currentTerm?.periodType ?? inferHistoricalPeriodType(currentTerm?.name);
   const currentOrder = currentTerm?.orderIndex ?? 0;
+  const currentHasDateRange = Boolean(currentTerm?.startDate && currentTerm?.endDate);
 
   const previousTerms = terms
     .filter((term) => term.academicYearId == null || term.academicYearId === schoolYearId)
     .filter((term) => {
       if (term.id === currentTermId) return false;
-      const inferredType = term.periodType ?? inferPeriodTypeFromLegacyName(term.name) ?? null;
+      const inferredType = term.periodType ?? inferHistoricalPeriodType(term.name);
       if (currentType && inferredType && inferredType !== currentType) return false;
       if (currentType && inferredType === currentType) {
+        if (currentHasDateRange && term.startDate && term.endDate) {
+          return term.endDate < (currentTerm?.startDate ?? '');
+        }
         return (term.orderIndex ?? 0) < currentOrder;
       }
       return false;
     })
-    .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+    .sort((a, b) => {
+      if (a.startDate && b.startDate && a.startDate !== b.startDate) {
+        return a.startDate.localeCompare(b.startDate);
+      }
+      return (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+    });
 
   return previousTerms.map((term) => {
     const latest = latestByTerm.get(term.id);
@@ -778,6 +803,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         periodType: schoolTerms.periodType,
         orderIndex: schoolTerms.orderIndex,
         academicYearId: schoolTerms.academicYearId,
+        startDate: schoolTerms.startDate,
+        endDate: schoolTerms.endDate,
       })
       .from(schoolTerms)
       .where(eq(schoolTerms.academicYearId, header.schoolYearId))
@@ -1779,16 +1806,41 @@ export const createBulletinPdfDocument = async (
   drawText(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
-  const summaryY = cursorY - 16;
-  const summaryAverage = data.average == null ? '-' : formatPdfDisplayNumberFixed(data.average).replace('.', ',');
-  const summaryRank = data.rank == null ? '-' : formatGeneralRankLabel(data.rank);
-  const summaryLabel = formatPeriodSummaryLabel(data.termName);
-  const summaryLeftText = `${summaryLabel} : ${summaryAverage}`;
-  const summaryRightText = `Rang : ${summaryRank}`;
   const summaryLeftX = tableX + 5;
   const summaryRightX = tableX + 150 - 28.35;
-  drawText(page, summaryLeftText, summaryLeftX, summaryY, 10, text, fontBold);
-  drawText(page, summaryRightText, summaryRightX, summaryY, 10, text, fontBold);
+  const summaryY = cursorY - 16;
+  const summaryBlocks: Array<{ label: string; average: number | null; rank: number | null }> = [];
+  const currentSummaryLabel = formatPeriodSummaryLabel(data.termName);
+  const currentSummary = {
+    label: currentSummaryLabel,
+    average: data.average,
+    rank: data.rank,
+  };
+
+  const isSecondSemester = /\bsemestre\b.*\b2\b|^2\s*(?:e|è|eme|ème)?\s*semestre\b/i.test(String(data.termName ?? '')) || /\b2(?:e|è|eme|ème)?\s*semestre\b/i.test(String(data.termName ?? ''));
+  const previousSummary = (data.previousPeriodSummaries ?? []).find((entry) => {
+    const entryLabel = formatPeriodSummaryLabel(entry.label);
+    if (!entryLabel) return false;
+    return /\bsemestre\b/i.test(entryLabel) && !/\b2(?:e|è|eme|ème)?\s*semestre\b/i.test(entryLabel);
+  }) ?? null;
+
+  if (isSecondSemester && previousSummary) {
+    summaryBlocks.push({
+      label: formatPeriodSummaryLabel(previousSummary.label),
+      average: previousSummary.average,
+      rank: previousSummary.rank,
+    });
+  }
+
+  summaryBlocks.push(currentSummary);
+
+  summaryBlocks.forEach((entry, index) => {
+    const averageText = `${entry.label} : ${entry.average == null ? '-' : formatPdfDisplayNumberFixed(entry.average).replace('.', ',')}`;
+    const rankText = `Rang : ${entry.rank == null ? '-' : formatGeneralRankLabel(entry.rank)}`;
+    const y = summaryY - index * 16;
+    drawText(page, averageText, summaryLeftX, y, 10, text, fontBold);
+    drawText(page, rankText, summaryRightX, y, 10, text, fontBold);
+  });
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);
