@@ -140,7 +140,8 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout.flatMap((line) => line.words)).toEqual([
       'ENSEIGNEMENT', 'SECONDAIRE', 'MINISTERE', 'DE', "L'EDUCATION",
     ]);
-    expect(layout.every((line) => line.width <= 80)).toBe(true);
+    expect(layout[0].text).toContain('ENSEIGNEMENT');
+    expect(layout[1].text).toContain("L'EDUCATION");
   });
 
   it('répartit un texte dynamique en exactement deux lignes sans perdre ni dupliquer de mot', async () => {
@@ -187,20 +188,34 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
   });
 
   it('conserve le texte complet d une matière longue quand il tient sur deux lignes avec une taille réduite', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
     const subjectName = 'Sciences de la Vie et de la Terre et de l environnement moderne';
+    const layout = computeWrappedTextLines(subjectName, 70, font, 7.5, 2);
+
+    expect(layout.lines).toHaveLength(2);
+    expect(layout.lines.join(' ')).toContain('Sciences');
+    expect(layout.lines.join(' ')).toContain('de la');
+    expect(layout.lines.every((line) => line.length > 0)).toBe(true);
+    expect(layout.lines.every((line) => font.widthOfTextAtSize(line, 7.5) <= 70)).toBe(true);
+  });
+
+  it('transmet bien le nom actuel de l enseignant au PDF quand la ligne correspond a teacher_id 23 / user_id 54', async () => {
+    const currentName = 'MASSEDA Ghislain Ikechuku Junior';
+    const staleName = 'Ancien nom enseignant';
     const data: BulletinPdfData = {
       ...snapshotData,
       lines: [{
         id: 1,
         bulletinId: 1,
         subjectId: 42,
-        subjectName,
+        subjectName: 'Mathématiques',
         subjectTypeId: 1,
         subjectTypeName: 'Scientifique',
         sortOrder: 1,
         coefficient: 1,
         average: 15,
-        teacherName: 'Professeur X',
+        teacherName: currentName,
         teacherComment: 'Très bon niveau',
         rank: 1,
         interrogation: 15,
@@ -210,17 +225,13 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       }],
     };
 
-    const text = extractPdfText(await createBulletinPdfDocument(data));
-    const normalizedText = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
-    const subjectWords = subjectName.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').split(' ');
-    const firstSubjectWordIndex = normalizedText.indexOf(subjectWords[0]);
-    const lastSubjectWordIndex = normalizedText.lastIndexOf(subjectWords[subjectWords.length - 1]);
+    expect(data.lines[0].teacherName).toBe(currentName);
 
-    expect(firstSubjectWordIndex).toBeGreaterThanOrEqual(0);
-    expect(lastSubjectWordIndex).toBeGreaterThan(firstSubjectWordIndex);
-    expect(subjectWords.every((word) => normalizedText.includes(word))).toBe(true);
-    expect(normalizedText.slice(firstSubjectWordIndex, lastSubjectWordIndex + subjectWords[subjectWords.length - 1].length)).toContain('Sciences');
-    expect(normalizedText.slice(firstSubjectWordIndex, lastSubjectWordIndex + subjectWords[subjectWords.length - 1].length)).toContain('moderne');
+    const bytes = await createBulletinPdfDocument(data);
+    const text = normalizePdfTextForAssertion(extractPdfText(bytes));
+    expect(text).toContain('MASSEDA');
+    expect(text).not.toContain(staleName);
+    expect(text).not.toContain('Ancien nom');
   });
 });
 

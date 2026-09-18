@@ -316,6 +316,20 @@ describe('generateBulletinSnapshot', () => {
     ]))).toBe('Mme Aline');
   });
 
+  it('conserve le nom actuel de l enseignant lorsque les évaluations pointent vers teacher_id 23 et user_id 54', () => {
+    const teacherName = 'MASSEDA Ghislain Ikechuku Junior';
+    const oldName = 'Ancien nom enseignant';
+
+    expect(resolveSubjectTeacherName([23, 23, 23, 23], new Map([
+      [23, teacherName],
+      [12, oldName],
+    ]))).toBe(teacherName);
+    expect(resolveSubjectTeacherName([23, 23, 23, 23], new Map([
+      [23, teacherName],
+      [12, oldName],
+    ]))).not.toBe(oldName);
+  });
+
   it('retourne null pour le rang si aucune moyenne valide n\'existe', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,
