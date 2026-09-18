@@ -1,5 +1,5 @@
 import type express from 'express';
-import { and, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, or, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -35,6 +35,7 @@ import {
   resolveSubjectCoefficientFromPublishedComposition,
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
+import { inferPeriodTypeFromLegacyName } from './educationStructure';
 import studentAccess from './studentAccess';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
@@ -77,6 +78,13 @@ export interface BulletinPdfLine {
   composition?: number | null;
   classAverage?: number | null;
   teacherComment: string | null;
+  rank: number | null;
+}
+
+export interface PreviousPeriodSummary {
+  termId: number;
+  label: string;
+  average: number | null;
   rank: number | null;
 }
 
@@ -123,6 +131,7 @@ export interface BulletinPdfData {
   generatedAt: string | null;
   lines: BulletinPdfLine[];
   subjectGroups?: BulletinSubjectGroup<BulletinPdfLine>[];
+  previousPeriodSummaries?: PreviousPeriodSummary[];
 }
 
 export interface BulletinPdfDataProvider {
@@ -196,6 +205,113 @@ export const formatPdfDisplayNumber = (value: number | string | null | undefined
   if (Number.isInteger(numericValue)) return String(numericValue);
 
   return numericValue.toFixed(2).replace('.', ',').replace(/,?0+$/, '');
+};
+
+const formatPdfDisplayNumberFixed = (value: number | string | null | undefined): string => {
+  if (value == null || value === '') return '-';
+  if (typeof value === 'string' && value.trim() === '-') return '-';
+
+  const numericValue = typeof value === 'string'
+    ? Number(value.trim().replace(',', '.'))
+    : Number(value);
+
+  if (!Number.isFinite(numericValue)) return '-';
+  return numericValue.toFixed(2);
+};
+
+const formatGeneralRankLabel = (value: number | string | null | undefined): string => {
+  const numericValue = typeof value === 'string' ? Number(value.trim().replace(',', '.')) : Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return '-';
+
+  const ordinal = Math.trunc(numericValue);
+  const suffixMap: Record<number, string> = {
+    1: 'er',
+    2: 'ème',
+    3: 'ème',
+    4: 'ème',
+    5: 'ème',
+    6: 'ème',
+    7: 'ème',
+    8: 'ème',
+    9: 'ème',
+    10: 'ème',
+  };
+  const suffix = suffixMap[ordinal] ?? 'ème';
+  return `${ordinal}${suffix}`;
+};
+
+const formatPeriodSummaryLabel = (termName?: string | null): string => {
+  const normalizedName = String(termName ?? '').trim();
+  if (!normalizedName) return 'Période';
+
+  const simpleMatch = normalizedName.match(/^(Trimestre|Semestre)\s+(\d+)/i);
+  if (simpleMatch) {
+    const periodType = simpleMatch[1].charAt(0).toUpperCase() + simpleMatch[1].slice(1).toLowerCase();
+    const ordinal = Number(simpleMatch[2]);
+    const ordinalLabel = ordinal === 1 ? '1er' : `${ordinal}ème`;
+    return `${ordinalLabel} ${periodType}`;
+  }
+
+  const ordinalMatch = normalizedName.match(/^(\d+)(er|ère|eme|ème)?\s+(Trimestre|Semestre)$/i);
+  if (ordinalMatch) {
+    const ordinalNumber = Number(ordinalMatch[1]);
+    const ordinalLabel = ordinalNumber === 1 ? '1er' : `${ordinalNumber}ème`;
+    const periodType = ordinalMatch[3].charAt(0).toUpperCase() + ordinalMatch[3].slice(1).toLowerCase();
+    return `${ordinalLabel} ${periodType}`;
+  }
+
+  return normalizedName;
+};
+
+export const resolvePreviousPeriodSummaries = ({
+  currentTermId,
+  studentId,
+  schoolYearId,
+  terms,
+  bulletins,
+}: {
+  currentTermId: number;
+  studentId: number;
+  schoolYearId: number;
+  terms: Array<{ id: number; name: string; periodType?: string | null; orderIndex?: number | null; academicYearId?: number | null }>;
+  bulletins: Array<{ id: number; termId: number; studentId: number; schoolYearId: number; average: number | string | null; rank: number | string | null }>;
+}): PreviousPeriodSummary[] => {
+  const latestByTerm = new Map<number, { id: number; termId: number; studentId: number; schoolYearId: number; average: number | string | null; rank: number | string | null }>();
+
+  for (const row of bulletins) {
+    if (row.studentId !== studentId || row.schoolYearId !== schoolYearId) continue;
+    const current = latestByTerm.get(row.termId);
+    if (!current || Number(row.id) > Number(current.id)) {
+      latestByTerm.set(row.termId, row);
+    }
+  }
+
+  const currentTerm = terms.find((term) => term.id === currentTermId) ?? null;
+  const currentType = currentTerm?.periodType ?? inferPeriodTypeFromLegacyName(currentTerm?.name) ?? null;
+  const currentOrder = currentTerm?.orderIndex ?? 0;
+
+  const previousTerms = terms
+    .filter((term) => term.academicYearId == null || term.academicYearId === schoolYearId)
+    .filter((term) => {
+      if (term.id === currentTermId) return false;
+      const inferredType = term.periodType ?? inferPeriodTypeFromLegacyName(term.name) ?? null;
+      if (currentType && inferredType && inferredType !== currentType) return false;
+      if (currentType && inferredType === currentType) {
+        return (term.orderIndex ?? 0) < currentOrder;
+      }
+      return false;
+    })
+    .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+  return previousTerms.map((term) => {
+    const latest = latestByTerm.get(term.id);
+    return {
+      termId: term.id,
+      label: term.name,
+      average: latest ? parseNumber(latest.average) : null,
+      rank: latest && latest.rank != null ? Number(latest.rank) : null,
+    };
+  });
 };
 
 const parseNumericScore = (score: string): number | null => {
@@ -655,6 +771,42 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
 
     const subjectGroups = groupBulletinLinesBySubjectType(resolvedLines);
 
+    const previousTerms = await db
+      .select({
+        id: schoolTerms.id,
+        name: schoolTerms.name,
+        periodType: schoolTerms.periodType,
+        orderIndex: schoolTerms.orderIndex,
+        academicYearId: schoolTerms.academicYearId,
+      })
+      .from(schoolTerms)
+      .where(eq(schoolTerms.academicYearId, header.schoolYearId))
+      .orderBy(schoolTerms.orderIndex);
+
+    const historicalBulletins = await db
+      .select({
+        id: bulletins.id,
+        termId: bulletins.termId,
+        studentId: bulletins.studentId,
+        schoolYearId: bulletins.schoolYearId,
+        average: bulletins.average,
+        rank: bulletins.rank,
+      })
+      .from(bulletins)
+      .where(and(
+        eq(bulletins.studentId, header.studentId),
+        eq(bulletins.schoolYearId, header.schoolYearId),
+      ))
+      .orderBy(desc(bulletins.id));
+
+    const previousPeriodSummaries = resolvePreviousPeriodSummaries({
+      currentTermId: header.termId,
+      studentId: header.studentId,
+      schoolYearId: header.schoolYearId,
+      terms: previousTerms,
+      bulletins: historicalBulletins,
+    });
+
     // Count only real absences for the student within the bulletin's class and term date range.
     // The existing schema keeps absences in the `absences` table and does not have a dedicated delays table.
     let absencesCount = 0;
@@ -700,6 +852,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
       subjectGroups,
+      previousPeriodSummaries,
     };
   },
 });
@@ -1432,9 +1585,9 @@ export const createBulletinPdfDocument = async (
   });
   cursorY -= 80;
 
-  const summaryY = cursorY;
+  const tableSummaryY = cursorY;
 
-  const tableTop = summaryY - 12;
+  const tableTop = tableSummaryY - 12;
   const groupedDataAvailable = data.subjectGroups !== undefined;
   const orderedSubjectGroups = [...(data.subjectGroups ?? [])].sort((a, b) => {
     if (a.subjectTypeId == null) return 1;
@@ -1485,8 +1638,8 @@ export const createBulletinPdfDocument = async (
       drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
       const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
       const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
-      drawText(page, formatPdfDisplayNumber(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
-      drawText(page, formatPdfDisplayNumber(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
       cursorY -= totalRowHeight;
       continue;
     }
@@ -1506,7 +1659,7 @@ export const createBulletinPdfDocument = async (
       classAverage: line.classAverage ?? null,
     };
     const noteCoef = line.average != null && line.coefficient != null
-      ? formatPdfDisplayNumber(parseFloat(String(line.average)) * line.coefficient)
+      ? formatPdfDisplayNumberFixed(parseFloat(String(line.average)) * line.coefficient)
       : '-';
 
     // Column 1: Matières
@@ -1531,23 +1684,23 @@ export const createBulletinPdfDocument = async (
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.interrogation), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.interrogation), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawText(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.devoir), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.devoir), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.classAverage), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.classAverage), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawText(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumber(subjectBreakdown.composition), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.composition), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawText(page, line.average == null ? '-' : formatPdfDisplayNumber(line.average), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, line.average == null ? '-' : formatPdfDisplayNumberFixed(line.average), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[5].width;
 
     // Column 7: Coef.
@@ -1622,90 +1775,16 @@ export const createBulletinPdfDocument = async (
   drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
   const totalWeightedPointsX = totalCoefficientX + columns[6].width;
-  drawText(page, formatPdfDisplayNumber(totalCoefficients), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
-  drawText(page, formatPdfDisplayNumber(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
   cursorY -= totalRowHeight;
 
-  page.drawRectangle({
-    x: tableX,
-    y: tableBottom,
-    width: tableWidth,
-    height: tableTop - tableBottom,
-    borderColor: tableBorder,
-    borderWidth: tableBorderWidth,
-  });
-
-  const drawLabelValue = (label: string, value: string, x: number, y: number, width: number, valueOffset = 92) => {
-    drawText(page, label, x, y, 7.5, text, fontBold);
-    drawText(page, value, x + valueOffset, y, 7.5, text, fontBold);
-    page.drawLine({ start: { x: x + valueOffset, y: y - 2 }, end: { x: x + width, y: y - 2 }, color: lightBorder, thickness: 0.45 });
-  };
-
-  const lowerLeftWidth = 172;
-  const lowerCenterWidth = 188;
-  const lowerRightWidth = tableWidth - lowerLeftWidth - lowerCenterWidth - 12;
-  const lowerCenterX = tableX + lowerLeftWidth + 6;
-  const lowerRightX = lowerCenterX + lowerCenterWidth + 6;
-  const emptyValue = '________________';
-
-  // Compact three-column block matching the lower CamScanner layout.
-  const semesterStartY = cursorY - 13;
-  drawText(page, '1er semestre:', tableX, semesterStartY, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 70, semesterStartY, 7.5, text, fontBold);
-  drawText(page, 'Rg :', tableX + 132, semesterStartY, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 151, semesterStartY, 7.5, text, fontBold);
-  drawText(page, '2ème semestre:', tableX, semesterStartY - 14, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 70, semesterStartY - 14, 7.5, text, fontBold);
-  drawText(page, 'Rg :', tableX + 132, semesterStartY - 14, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 151, semesterStartY - 14, 7.5, text, fontBold);
-  page.drawLine({ start: { x: tableX, y: cursorY - 32 }, end: { x: tableX + lowerLeftWidth, y: cursorY - 32 }, color: lightBorder, thickness: 0.55 });
-
-  drawText(page, 'Moyennes :', lowerCenterX, cursorY - 13, 8, primary, fontBold);
-  page.drawLine({ start: { x: lowerCenterX, y: cursorY - 16 }, end: { x: lowerCenterX + 72, y: cursorY - 16 }, color: primary, thickness: 0.7 });
-  drawLabelValue('Moyenne du 2ème semestre', '', lowerCenterX, cursorY - 29, lowerCenterWidth, 105);
-  drawLabelValue('Décision du conseil de classe', '', lowerCenterX, cursorY - 43, lowerCenterWidth, 105);
-  drawLabelValue('Mention :', data.mention || '', lowerCenterX, cursorY - 57, lowerCenterWidth, 48);
-  drawLabelValue('Appréciation :', data.appreciation || '', lowerCenterX, cursorY - 71, lowerCenterWidth, 64);
-  page.drawLine({ start: { x: lowerCenterX, y: cursorY - 83 }, end: { x: lowerCenterX + lowerCenterWidth, y: cursorY - 83 }, color: lightBorder, thickness: 0.55 });
-
-  page.drawRectangle({ x: lowerRightX, y: cursorY - 33, width: lowerRightWidth, height: 28, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  drawText(page, `Retards : ${data.retards == null ? '' : `${data.retards} fois`}`, lowerRightX + 6, cursorY - 16, 7, text, fontBold);
-  drawText(page, `Absences : ${data.absences == null ? '' : `${data.absences} Heures`}`, lowerRightX + 6, cursorY - 27, 7, text, fontBold);
-  drawLabelValue('Plus forte moyenne', '', lowerRightX, cursorY - 44, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
-  drawLabelValue('Plus faible moyenne', '', lowerRightX, cursorY - 56, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
-  drawLabelValue('Moyenne de la classe', '', lowerRightX, cursorY - 68, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
-
-  cursorY -= 94;
-  const annualWidth = lowerLeftWidth + lowerCenterWidth + 6;
-  page.drawRectangle({ x: tableX, y: cursorY - 22, width: annualWidth, height: 22, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  drawText(page, 'Moy. Ann. =', tableX + 7, cursorY - 14, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 68, cursorY - 14, 7.5, text, fontBold);
-  drawText(page, '- Rg :', tableX + 137, cursorY - 14, 7.5, text, fontBold);
-  drawText(page, emptyValue, tableX + 171, cursorY - 14, 7.5, text, fontBold);
-  drawText(page, 'DECISION DU CONSEIL DES PROFESSEURS', lowerRightX, cursorY - 14, 6.8, primary, fontBold);
-  cursorY -= 29;
-
-  const halfWidth = (tableWidth - 6) / 2;
-  page.drawRectangle({ x: tableX, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  page.drawRectangle({ x: tableX + halfWidth + 6, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  drawText(page, 'Distinctions spéciales', tableX + 7, cursorY - 12, 7.5, primary, fontBold);
-  drawText(page, 'Tableau d’honneur', tableX + 12, cursorY - 25, 7, text, fontBold);
-  drawText(page, 'Encouragements', tableX + 12, cursorY - 35, 7, text, fontBold);
-  drawText(page, 'Félicitations', tableX + 100, cursorY - 25, 7, text, fontBold);
-  drawText(page, 'Sanctions', tableX + halfWidth + 7, cursorY - 12, 7.5, primary, fontBold);
-  cursorY -= 50;
-
-  drawText(page, "APPRECIATION DU CHEF D'ETABLISSEMENT", tableX, cursorY - 11, 7.5, primary, fontBold);
-  page.drawLine({ start: { x: tableX, y: cursorY - 14 }, end: { x: tableX + 190, y: cursorY - 14 }, color: primary, thickness: 0.7 });
-  drawLabelValue('Travail :', '', tableX, cursorY - 27, tableWidth / 2 - 8, 42);
-  drawLabelValue('Assiduité :', '', tableX + tableWidth / 2, cursorY - 27, tableWidth / 2, 52);
-  cursorY -= 40;
-
-  const signatureStartY = cursorY - 4;
-  drawText(page, 'Signature du titulaire de classe', tableX + tableWidth - 190, signatureStartY, 7.5, text, fontBold);
-  page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 28 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 28 }, color: lightBorder, thickness: 0.65 });
-  drawText(page, 'Le Proviseur', tableX + tableWidth - 190, signatureStartY - 40, 7.5, text, fontBold);
-  page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 55 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 55 }, color: lightBorder, thickness: 0.65 });
+  const summaryY = cursorY - 16;
+  const summaryAverage = data.average == null ? '-' : formatPdfDisplayNumberFixed(data.average).replace('.', ',');
+  const summaryRank = data.rank == null ? '-' : formatGeneralRankLabel(data.rank);
+  const summaryLabel = formatPeriodSummaryLabel(data.termName);
+  const summaryText = `${summaryLabel} : ${summaryAverage}     Rang : ${summaryRank}`;
+  drawText(page, summaryText, tableX + 5, summaryY, 7.5, text, fontBold);
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);

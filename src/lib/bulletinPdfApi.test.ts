@@ -16,6 +16,7 @@ import {
   fitHeaderParagraphFontSize,
   computeWrappedTextLines,
   formatPdfDisplayNumber,
+  resolvePreviousPeriodSummaries,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -104,6 +105,56 @@ const countPdfImages = (pdfBytes: Uint8Array): number => {
   const raw = Buffer.from(pdfBytes).toString('latin1');
   return raw.includes('/Subtype /Image') ? 1 : 0;
 };
+
+describe('résolution des périodes historiques', () => {
+  it('détermine les périodes précédentes selon la vraie configuration trimestrielle et semestrielle', () => {
+    const terms = [
+      { id: 1, name: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, academicYearId: 2 },
+      { id: 2, name: 'Trimestre 2', periodType: 'trimester', orderIndex: 2, academicYearId: 2 },
+      { id: 3, name: 'Trimestre 3', periodType: 'trimester', orderIndex: 3, academicYearId: 2 },
+      { id: 4, name: 'Semestre 1', periodType: 'semester', orderIndex: 1, academicYearId: 2 },
+      { id: 5, name: 'Semestre 2', periodType: 'semester', orderIndex: 2, academicYearId: 2 },
+    ] as const;
+
+    const bulletins = [
+      { id: 101, termId: 1, studentId: 10, schoolYearId: 2, average: '12.5', rank: 5 },
+      { id: 102, termId: 2, studentId: 10, schoolYearId: 2, average: '13.2', rank: 4 },
+      { id: 104, termId: 5, studentId: 10, schoolYearId: 2, average: '14.4', rank: 2 },
+      { id: 103, termId: 2, studentId: 10, schoolYearId: 2, average: '13.8', rank: 3 },
+    ];
+
+    expect(resolvePreviousPeriodSummaries({
+      currentTermId: 2,
+      studentId: 10,
+      schoolYearId: 2,
+      terms,
+      bulletins,
+    })).toEqual([
+      { termId: 1, label: 'Trimestre 1', average: 12.5, rank: 5 },
+    ]);
+
+    expect(resolvePreviousPeriodSummaries({
+      currentTermId: 3,
+      studentId: 10,
+      schoolYearId: 2,
+      terms,
+      bulletins,
+    })).toEqual([
+      { termId: 1, label: 'Trimestre 1', average: 12.5, rank: 5 },
+      { termId: 2, label: 'Trimestre 2', average: 13.8, rank: 3 },
+    ]);
+
+    expect(resolvePreviousPeriodSummaries({
+      currentTermId: 5,
+      studentId: 10,
+      schoolYearId: 2,
+      terms,
+      bulletins,
+    })).toEqual([
+      { termId: 4, label: 'Semestre 1', average: null, rank: null },
+    ]);
+  });
+});
 
 describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
   it.each([
@@ -927,12 +978,23 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Absences : 5 Heures');
   });
 
-  it('supprime le bloc Moyenne/Rang sous le nom de l élève', async () => {
-    const text = extractPdfText(await createBulletinPdfDocument({ ...snapshotData, average: 14.5, rank: 2 }));
+  it('ajoute le recapitulatif de moyenne generale et rang sous le tableau pour les semestres et trimestres', async () => {
+    const semesterText = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Semestre 1',
+      average: 14.25,
+      rank: 3,
+    }))).replace(/\s+/g, ' ');
 
-    expect(text).not.toContain('Moyenne générale');
-    expect(text).not.toContain('Total points');
-    expect(text).not.toContain('Total coefficients');
+    const trimesterText = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Trimestre 2',
+      average: 13.8,
+      rank: 5,
+    }))).replace(/\s+/g, ' ');
+
+    expect(semesterText).toContain(normalizePdfTextForAssertion('1er Semestre : 14,25 Rang : 3ème'));
+    expect(trimesterText).toContain(normalizePdfTextForAssertion('2ème Trimestre : 13,80 Rang : 5ème'));
   });
 
   it('affiche zéro absence quand l\'élève n\'en a aucune', async () => {
