@@ -1043,6 +1043,29 @@ describe('bulletin PDF API', () => {
     expect(trimesterText).toContain(normalizePdfTextForAssertion('Rang : 5ème'));
   });
 
+  it('affiche la moyenne et le rang annuels uniquement sur la dernière période', async () => {
+    const firstSemesterText = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Semestre 1',
+      average: 12,
+      rank: 2,
+      annualAverage: null,
+      annualRank: null,
+    }))).replace(/\s+/g, ' ');
+    const secondSemesterText = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Semestre 2',
+      average: 8,
+      rank: 3,
+      annualAverage: 10,
+      annualRank: 6,
+    }))).replace(/\s+/g, ' ');
+
+    expect(firstSemesterText).not.toContain(normalizePdfTextForAssertion('Moy. Ann = 10'));
+    expect(secondSemesterText).toContain(normalizePdfTextForAssertion('Moy. Ann = 10'));
+    expect(secondSemesterText).toContain(normalizePdfTextForAssertion('Rang : 6ème'));
+  });
+
   it('affiche le semestre précédent au-dessus du semestre actuel pour le 2ème semestre et n affiche pas de ligne précédente au 1er semestre', async () => {
     const firstSemesterPdf = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
       ...snapshotData,

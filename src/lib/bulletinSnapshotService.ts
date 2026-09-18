@@ -190,6 +190,111 @@ const resolveAppreciation = (average: number | null, periodType: string | null |
   return 'Des efforts supplémentaires sont attendus.';
 };
 
+export interface AnnualPeriodLike {
+  id: number;
+  name: string;
+  periodType?: string | null;
+  orderIndex?: number | null;
+  academicYearId?: number | null;
+  cycleId?: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+export interface AnnualBulletinLike {
+  id: number;
+  studentId: number;
+  schoolYearId: number;
+  termId: number;
+  average: number | string | null;
+}
+
+const inferAnnualPeriodType = (term: AnnualPeriodLike): string | null => {
+  if (term.periodType) return term.periodType;
+  const normalizedName = String(term.name ?? '').trim();
+  if (/semestre/i.test(normalizedName)) return 'semester';
+  if (/trimestre/i.test(normalizedName)) return 'trimester';
+  return null;
+};
+
+export const resolveAnnualPeriodScope = (
+  currentTermId: number,
+  terms: AnnualPeriodLike[],
+  schoolYearId: number,
+): { periods: AnnualPeriodLike[]; isLastPeriod: boolean } => {
+  const currentTerm = terms.find((term) => term.id === currentTermId);
+  if (!currentTerm) return { periods: [], isLastPeriod: false };
+
+  const currentType = inferAnnualPeriodType(currentTerm);
+  const scopedTerms = terms.filter((term) => (
+    (term.academicYearId == null || term.academicYearId === schoolYearId)
+    && (!currentType || inferAnnualPeriodType(term) === currentType)
+    && (currentTerm.cycleId == null || term.cycleId == null || term.cycleId === currentTerm.cycleId)
+  ));
+  const hasCompleteDates = scopedTerms.every((term) => term.startDate && term.endDate);
+  const orderedTerms = [...scopedTerms].sort((a, b) => {
+    if (hasCompleteDates && a.startDate !== b.startDate) return String(a.startDate).localeCompare(String(b.startDate));
+    if (hasCompleteDates && a.endDate !== b.endDate) return String(a.endDate).localeCompare(String(b.endDate));
+    return (a.orderIndex ?? 0) - (b.orderIndex ?? 0) || a.id - b.id;
+  });
+  const expectedPeriodCount = currentType === 'semester' ? 2 : currentType === 'trimester' ? 3 : orderedTerms.length;
+  const annualTerms = orderedTerms.length > expectedPeriodCount
+    ? currentType === 'semester'
+      ? [orderedTerms[0], orderedTerms.at(-1)!]
+      : orderedTerms.slice(-expectedPeriodCount)
+    : orderedTerms;
+
+  return {
+    periods: annualTerms,
+    isLastPeriod: annualTerms.at(-1)?.id === currentTermId,
+  };
+};
+
+const parseAnnualAverage = (value: number | string | null): number | null => {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const calculateAnnualBulletinResults = ({
+  targetStudentId,
+  classStudentIds,
+  periods,
+  bulletins,
+}: {
+  targetStudentId: number;
+  classStudentIds: number[];
+  periods: AnnualPeriodLike[];
+  bulletins: AnnualBulletinLike[];
+}): { annualAverage: number | null; annualRank: number | null } => {
+  if (periods.length === 0) return { annualAverage: null, annualRank: null };
+
+  const latestByStudentTerm = new Map<string, AnnualBulletinLike>();
+  for (const bulletin of bulletins) {
+    if (!periods.some((period) => period.id === bulletin.termId)) continue;
+    const key = `${bulletin.studentId}:${bulletin.termId}`;
+    const current = latestByStudentTerm.get(key);
+    if (!current || bulletin.id > current.id) latestByStudentTerm.set(key, bulletin);
+  }
+
+  const annualAverages = classStudentIds.map((studentId) => {
+    const periodAverages = periods.map((period) => parseAnnualAverage(latestByStudentTerm.get(`${studentId}:${period.id}`)?.average ?? null));
+    const average = periodAverages.every((value) => value != null)
+      ? periodAverages.reduce((sum, value) => sum + (value as number), 0) / periodAverages.length
+      : null;
+    return { studentId, average };
+  }).filter((entry): entry is { studentId: number; average: number } => entry.average != null);
+
+  annualAverages.sort((a, b) => b.average - a.average);
+  const targetIndex = annualAverages.findIndex((entry) => entry.studentId === targetStudentId);
+  if (targetIndex < 0) return { annualAverage: null, annualRank: null };
+
+  return {
+    annualAverage: annualAverages[targetIndex].average,
+    annualRank: targetIndex + 1,
+  };
+};
+
 const buildTeacherNameMap = async (
   tx: any,
   teacherIds: number[],

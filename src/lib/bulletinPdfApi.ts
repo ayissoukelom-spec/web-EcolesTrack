@@ -23,8 +23,10 @@ import {
 } from '../db/schema.ts';
 import {
   buildSubjectTeacherNameMap,
+  calculateAnnualBulletinResults,
   groupBulletinLinesBySubjectType,
   loadSubjectTypeNames,
+  resolveAnnualPeriodScope,
   type BulletinSubjectGroup,
   type SubjectTypeMetadata,
 } from './bulletinSnapshotService';
@@ -124,6 +126,8 @@ export interface BulletinPdfData {
   totalPoints: number;
   totalCoefficients: number;
   rank: number | null;
+  annualAverage?: number | null;
+  annualRank?: number | null;
   mention: string | null;
   appreciation: string | null;
   absences: number;
@@ -624,6 +628,9 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       termName: schoolTerms.name,
       termStartDate: schoolTerms.startDate,
       termEndDate: schoolTerms.endDate,
+      termPeriodType: schoolTerms.periodType,
+      termOrderIndex: schoolTerms.orderIndex,
+      termCycleId: schoolTerms.cycleId,
       average: bulletins.average,
       totalPoints: bulletins.totalPoints,
       totalCoefficients: bulletins.totalCoefficients,
@@ -803,6 +810,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         periodType: schoolTerms.periodType,
         orderIndex: schoolTerms.orderIndex,
         academicYearId: schoolTerms.academicYearId,
+        cycleId: schoolTerms.cycleId,
         startDate: schoolTerms.startDate,
         endDate: schoolTerms.endDate,
       })
@@ -825,6 +833,33 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         eq(bulletins.schoolYearId, header.schoolYearId),
       ))
       .orderBy(desc(bulletins.id));
+
+    const annualClassStudents = await db
+      .select({ id: students.id })
+      .from(students)
+      .where(eq(students.classId, header.classId));
+    const annualBulletins = await db
+      .select({
+        id: bulletins.id,
+        studentId: bulletins.studentId,
+        schoolYearId: bulletins.schoolYearId,
+        termId: bulletins.termId,
+        average: bulletins.average,
+      })
+      .from(bulletins)
+      .where(and(
+        eq(bulletins.classId, header.classId),
+        eq(bulletins.schoolYearId, header.schoolYearId),
+      ));
+    const annualPeriodScope = resolveAnnualPeriodScope(header.termId, previousTerms, header.schoolYearId);
+    const annualResults = annualPeriodScope.isLastPeriod
+      ? calculateAnnualBulletinResults({
+        targetStudentId: header.studentId,
+        classStudentIds: annualClassStudents.map((student) => student.id),
+        periods: annualPeriodScope.periods,
+        bulletins: annualBulletins,
+      })
+      : { annualAverage: null, annualRank: null };
 
     const previousPeriodSummaries = resolvePreviousPeriodSummaries({
       currentTermId: header.termId,
@@ -872,6 +907,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       totalPoints: parseNumber(header.totalPoints) ?? 0,
       totalCoefficients: parseNumber(header.totalCoefficients) ?? 0,
       rank: header.rank,
+      annualAverage: annualResults.annualAverage,
+      annualRank: annualResults.annualRank,
       mention: header.mention,
       appreciation: header.appreciation,
       absences: absencesCount,
@@ -1841,6 +1878,14 @@ export const createBulletinPdfDocument = async (
     drawText(page, averageText, summaryLeftX, y, 10, text, fontBold);
     drawText(page, rankText, summaryRightX, y, 10, text, fontBold);
   });
+
+  if (data.annualAverage != null || data.annualRank != null) {
+    const annualY = summaryY - summaryBlocks.length * 16;
+    const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
+    const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
+    drawText(page, annualAverageText, summaryLeftX, annualY, 10, text, fontBold);
+    drawText(page, annualRankText, summaryRightX, annualY, 10, text, fontBold);
+  }
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calculateAnnualBulletinResults,
   generateBulletinSnapshot,
   groupBulletinLinesBySubjectType,
+  resolveAnnualPeriodScope,
   resolveSubjectTeacherName,
   type BulletinLineSnapshotInput,
   type BulletinSnapshotContext,
@@ -10,6 +12,49 @@ import {
   type SubjectTypeMetadata,
 } from './bulletinSnapshotService';
 import type { BulletinEvaluationLike, BulletinGradeLike } from './bulletinService';
+
+describe('calcul de la moyenne et du rang annuels', () => {
+  it('calcule la moyenne et le rang annuels sur deux semestres, sans dépendre de orderIndex', () => {
+    const terms = [
+      { id: 1, name: '1er Semestre', periodType: 'semester', orderIndex: 1, academicYearId: 100, startDate: '2025-09-01', endDate: '2025-12-31' },
+      { id: 2, name: '2ème Semestre', periodType: 'semester', orderIndex: 1, academicYearId: 100, startDate: '2026-01-01', endDate: '2026-06-30' },
+    ];
+    const bulletins = [
+      { id: 11, studentId: 1, schoolYearId: 100, termId: 1, average: 12 },
+      { id: 12, studentId: 1, schoolYearId: 100, termId: 2, average: 8 },
+      { id: 21, studentId: 2, schoolYearId: 100, termId: 1, average: 14 },
+      { id: 22, studentId: 2, schoolYearId: 100, termId: 2, average: 10 },
+    ];
+
+    expect(resolveAnnualPeriodScope(1, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(2, terms, 100).isLastPeriod).toBe(true);
+    expect(calculateAnnualBulletinResults({ targetStudentId: 1, classStudentIds: [1, 2], periods: terms, bulletins })).toEqual({
+      annualAverage: 10,
+      annualRank: 2,
+    });
+  });
+
+  it('calcule la moyenne annuelle sur trois trimestres et la réserve au troisième', () => {
+    const terms = [
+      { id: 1, name: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, academicYearId: 100, startDate: '2025-09-01', endDate: '2025-11-30' },
+      { id: 2, name: 'Trimestre 2', periodType: 'trimester', orderIndex: 1, academicYearId: 100, startDate: '2025-12-01', endDate: '2026-02-28' },
+      { id: 3, name: 'Trimestre 3', periodType: 'trimester', orderIndex: 1, academicYearId: 100, startDate: '2026-03-01', endDate: '2026-06-30' },
+    ];
+    const bulletins = [
+      { id: 11, studentId: 1, schoolYearId: 100, termId: 1, average: 12 },
+      { id: 12, studentId: 1, schoolYearId: 100, termId: 2, average: 9 },
+      { id: 13, studentId: 1, schoolYearId: 100, termId: 3, average: 15 },
+    ];
+
+    expect(resolveAnnualPeriodScope(1, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(2, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(3, terms, 100).isLastPeriod).toBe(true);
+    expect(calculateAnnualBulletinResults({ targetStudentId: 1, classStudentIds: [1], periods: terms, bulletins })).toEqual({
+      annualAverage: 12,
+      annualRank: 1,
+    });
+  });
+});
 
 interface FakeState {
   students: Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>;
