@@ -709,6 +709,81 @@ const drawText = (
   });
 };
 
+export const computeWrappedTextLines = (
+  value: string,
+  maxWidth: number,
+  font: any,
+  size: number,
+  maxLines = 2,
+): { lines: string[]; width: number } => {
+  const rawValue = sanitizePdfText(value ?? '-');
+  const normalized = rawValue.trim() ? rawValue : '-';
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return { lines: ['-'], width: font.widthOfTextAtSize('-', size) };
+  }
+
+  const lines: string[] = [];
+  let current = '';
+
+  const pushCurrent = () => {
+    if (current.trim()) {
+      lines.push(current.trim());
+    }
+    current = '';
+  };
+
+  for (const word of words) {
+    if (font.widthOfTextAtSize(word, size) > maxWidth && !current) {
+      let fragment = '';
+      for (const character of word) {
+        const candidate = `${fragment}${character}`;
+        if (font.widthOfTextAtSize(candidate, size) > maxWidth && fragment) {
+          lines.push(fragment);
+          fragment = character;
+        } else {
+          fragment = candidate;
+        }
+      }
+      current = fragment;
+      continue;
+    }
+
+    const candidate = current ? `${current} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+      current = candidate;
+    } else if (current) {
+      pushCurrent();
+      const nextCandidate = word;
+      if (font.widthOfTextAtSize(nextCandidate, size) <= maxWidth) {
+        current = nextCandidate;
+      } else {
+        let fragment = '';
+        for (const character of word) {
+          const candidateChar = `${fragment}${character}`;
+          if (font.widthOfTextAtSize(candidateChar, size) > maxWidth && fragment) {
+            lines.push(fragment);
+            fragment = character;
+          } else {
+            fragment = candidateChar;
+          }
+        }
+        current = fragment;
+      }
+    } else {
+      current = word;
+    }
+  }
+
+  if (current.trim()) {
+    lines.push(current.trim());
+  }
+
+  const clampedLines = lines.slice(0, maxLines).length > 0 ? lines.slice(0, maxLines) : ['-'];
+  const lineWidth = clampedLines.reduce((maxValue, line) => Math.max(maxValue, font.widthOfTextAtSize(line, size)), 0);
+  return { lines: clampedLines, width: lineWidth };
+};
+
 export const computeSchoolLogoRenderMetrics = (
   imageWidth: number,
   imageHeight: number,
@@ -975,30 +1050,83 @@ export const createBulletinPdfDocument = async (
     ['Signature'],
   ];
 
-  const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => {
-    const words = sanitizePdfText(value || '-').split(' ');
-    const lines: string[] = [];
-    let current = '';
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (font.widthOfTextAtSize(candidate, size) <= maxWidth || !current) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = word;
+  const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => computeWrappedTextLines(value, maxWidth, font, size, Number.MAX_SAFE_INTEGER).lines;
+
+  const fitSubjectCellLayout = (value: string, maxWidth: number, initialSize = 7.5, minSize = 5.5): { lines: string[]; size: number } => {
+    const normalizedValue = sanitizePdfText(value ?? '-').trim() || '-';
+    const words = normalizedValue.split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      return { lines: ['-'], size: initialSize };
+    }
+
+    const buildWordWrappedLines = (size: number): string[] => {
+      const lines: string[] = [];
+      let current = '';
+
+      const pushCurrent = () => {
+        if (current.trim()) {
+          lines.push(current.trim());
+        }
+        current = '';
+      };
+
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (fontRegular.widthOfTextAtSize(candidate, size) <= maxWidth) {
+          current = candidate;
+          continue;
+        }
+
+        if (current) {
+          pushCurrent();
+        }
+
+        if (fontRegular.widthOfTextAtSize(word, size) <= maxWidth) {
+          current = word;
+          continue;
+        }
+
+        let fragment = '';
+        for (const character of word) {
+          const fragmentCandidate = `${fragment}${character}`;
+          if (fontRegular.widthOfTextAtSize(fragmentCandidate, size) <= maxWidth || fragment.length === 0) {
+            fragment = fragmentCandidate;
+          } else {
+            lines.push(fragment);
+            fragment = character;
+          }
+        }
+        current = fragment;
+      }
+
+      if (current.trim()) {
+        lines.push(current.trim());
+      }
+
+      return lines.length > 0 ? lines : ['-'];
+    };
+
+    for (let size = initialSize; size >= minSize; size -= 0.2) {
+      const candidateLines = buildWordWrappedLines(size);
+      if (candidateLines.length <= 2 && candidateLines.every((line) => fontRegular.widthOfTextAtSize(line, size) <= maxWidth)) {
+        return { lines: candidateLines, size };
       }
     }
-    if (current) lines.push(current);
-    return lines.length > 0 ? lines : ['-'];
+
+    const fallbackLines = buildWordWrappedLines(minSize);
+    return {
+      lines: fallbackLines.slice(0, 2),
+      size: minSize,
+    };
   };
 
   const drawWrappedText = (page: any, value: string, x: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines = 2) => {
-    const lines = wrapText(value, maxWidth, font, size).slice(0, maxLines);
+    const lines = computeWrappedTextLines(value, maxWidth, font, size, maxLines).lines;
     lines.forEach((line, index) => drawText(page, line, x, y - index * (size + 2), size, color, font));
   };
 
   const drawCenteredWrappedText = (page: any, value: string, centerX: number, y: number, maxWidth: number, size: number, color: any, font: any, maxLines = 2) => {
-    const lines = wrapText(value, maxWidth, font, size).slice(0, maxLines);
+    const lines = computeWrappedTextLines(value, maxWidth, font, size, maxLines).lines;
     lines.forEach((line, index) => {
       const lineWidth = font.widthOfTextAtSize(sanitizePdfText(line), size);
       drawText(page, line, centerX - lineWidth / 2, y - index * (size + 2), size, color, font);
@@ -1310,7 +1438,8 @@ export const createBulletinPdfDocument = async (
 
     const line = entry.line;
     if (!line) continue;
-    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
+    const subjectLayout = fitSubjectCellLayout(line.subjectName, columns[0].width - 14, 7.5, 5.5);
+    const subjectLines = subjectLayout.lines;
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
@@ -1326,7 +1455,24 @@ export const createBulletinPdfDocument = async (
       : '-';
 
     // Column 1: Matières
-    drawWrappedText(page, line.subjectName, x + 7, cursorY - 13, columns[0].width - 14, 7.5, text, fontRegular, 2);
+    {
+      const subjectCellWidth = columns[0].width;
+      const subjectCellLeft = x;
+      const subjectTextMaxWidth = subjectCellWidth - 14;
+      const subjectLayout = fitSubjectCellLayout(line.subjectName, subjectTextMaxWidth, 7.5, 5.5);
+      const subjectTextLines = subjectLayout.lines;
+      const subjectFontSize = subjectLayout.size;
+      const lineHeight = Math.max(8.5, subjectFontSize + 1.2);
+      const textBlockHeight = Math.max(lineHeight, subjectTextLines.length * lineHeight);
+      const cellCenterY = cursorY - rowHeight / 2;
+      const firstBaselineY = cellCenterY + (textBlockHeight / 2) - (lineHeight / 2);
+      subjectTextLines.forEach((subjectLine, index) => {
+        const lineWidth = fontRegular.widthOfTextAtSize(sanitizePdfText(subjectLine), subjectFontSize);
+        const lineX = subjectCellLeft + 7 + (subjectTextMaxWidth - lineWidth) / 2;
+        const lineY = firstBaselineY - index * (lineHeight + 1);
+        drawText(page, subjectLine, lineX, lineY, subjectFontSize, text, fontRegular);
+      });
+    }
     x += columns[0].width;
 
     // Column 2: Inter.

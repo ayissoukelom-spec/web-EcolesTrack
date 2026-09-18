@@ -14,6 +14,7 @@ import {
   computeSchoolLogoRenderMetrics,
   computeHeaderParagraphLayout,
   fitHeaderParagraphFontSize,
+  computeWrappedTextLines,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -164,6 +165,49 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout[1].text).toBe("DIRECTION REGIONALE DE L'EDUCATION GRAND LOME EXTRA");
     expect(layout.flatMap((line) => line.words)).not.toContain('|');
     expect(layout.every((line) => line.width <= 170)).toBe(true);
+  });
+
+  it('limite les matières longues à deux lignes et les garde dans la largeur de la cellule', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const value = 'Sciences de la vie et de la Terre et de l environnement';
+    const layout = computeWrappedTextLines(value, 70, font, 7.5, 2);
+
+    expect(layout.lines).toHaveLength(2);
+    expect(layout.lines.every((line) => font.widthOfTextAtSize(line, 7.5) <= 70)).toBe(true);
+    expect(layout.lines.some((line) => line.length > 0)).toBe(true);
+    expect(layout.lines.join(' ')).toContain('Sciences');
+  });
+
+  it('conserve le texte complet d une matière longue quand il tient sur deux lignes avec une taille réduite', async () => {
+    const subjectName = 'Sciences de la Vie et de la Terre et de l environnement moderne';
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      lines: [{
+        id: 1,
+        bulletinId: 1,
+        subjectId: 42,
+        subjectName,
+        subjectTypeId: 1,
+        subjectTypeName: 'Scientifique',
+        sortOrder: 1,
+        coefficient: 1,
+        average: 15,
+        teacherName: 'Professeur X',
+        teacherComment: 'Très bon niveau',
+        rank: 1,
+        interrogation: 15,
+        devoir: 16,
+        composition: 14,
+        classAverage: 12,
+      }],
+    };
+
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+    const normalizedText = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+    const expected = subjectName.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+
+    expect(normalizedText).toContain(expected);
   });
 });
 
