@@ -828,10 +828,9 @@ export const computeHeaderParagraphLayout = (
   size: number,
 ): HeaderParagraphLineLayout[] => {
   const rawValue = String(value ?? '');
-  const forcedBreakIndex = rawValue.indexOf('|');
   const createLine = (lineText: string): HeaderParagraphLineLayout => {
-    const text = sanitizePdfText(lineText);
-    const words = text.split(' ').filter(Boolean);
+    const text = sanitizePdfText(lineText).replace(/\s+/g, ' ').trim();
+    const words = text.split(/\s+/).filter(Boolean);
     return {
       text,
       words,
@@ -841,14 +840,28 @@ export const computeHeaderParagraphLayout = (
     };
   };
 
-  if (forcedBreakIndex >= 0) {
+  const normalizedValue = sanitizePdfText(rawValue).replace(/\s+/g, ' ').trim();
+  if (!normalizedValue) {
     return [
-      createLine(rawValue.slice(0, forcedBreakIndex)),
-      createLine(rawValue.slice(forcedBreakIndex + 1)),
+      { text: '', words: [], wordSpacing: 0, justify: false, width: 0 },
+      { text: '', words: [], wordSpacing: 0, justify: false, width: 0 },
     ];
   }
 
-  const words = sanitizePdfText(rawValue.replace(/\s+/g, ' ')).split(' ').filter(Boolean);
+  const explicitSegments = normalizedValue
+    .split('|')
+    .map((segment) => segment.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  if (explicitSegments.length > 1) {
+    const [first, ...rest] = explicitSegments;
+    const lines = [createLine(first), createLine(rest.join(' '))].filter((line) => line.text.length > 0);
+    return lines.length > 0 ? lines : [
+      { text: normalizedValue, words: normalizedValue.split(/\s+/).filter(Boolean), wordSpacing: 0, justify: false, width: font.widthOfTextAtSize(normalizedValue, size) },
+    ];
+  }
+
+  const words = normalizedValue.split(/\s+/).filter(Boolean);
   if (words.length === 0) {
     return [
       { text: '', words: [], wordSpacing: 0, justify: false, width: 0 },
@@ -856,27 +869,46 @@ export const computeHeaderParagraphLayout = (
     ];
   }
 
-  const candidateLines = (cut: number) => {
-    const lineWords = [words.slice(0, cut), words.slice(cut)];
-    return lineWords.map((group) => createLine(group.join(' ')));
-  };
+  if (words.length === 1) {
+    return [createLine(words[0])];
+  }
 
-  if (words.length === 1) return candidateLines(1);
-
-  let bestLines = candidateLines(1);
+  let bestLeftWords: string[] = [];
+  let bestRightWords: string[] = [];
   let bestScore = Number.POSITIVE_INFINITY;
-  let bestBalance = Number.POSITIVE_INFINITY;
+
   for (let cut = 1; cut < words.length; cut += 1) {
-    const lines = candidateLines(cut);
-    const score = Math.max(lines[0].width, lines[1].width);
-    const balance = Math.abs(lines[0].width - lines[1].width);
-    if (score < bestScore || (score === bestScore && balance < bestBalance)) {
-      bestLines = lines;
+    const leftWords = words.slice(0, cut);
+    const rightWords = words.slice(cut);
+    const leftText = leftWords.join(' ');
+    const rightText = rightWords.join(' ');
+
+    const leftWidth = font.widthOfTextAtSize(leftText, size);
+    const rightWidth = font.widthOfTextAtSize(rightText, size);
+    if (leftWidth > maxWidth || rightWidth > maxWidth) continue;
+
+    const widthGap = Math.abs((leftWidth + rightWidth) - maxWidth);
+    const balancePenalty = Math.abs(leftWidth - rightWidth);
+    const score = widthGap + balancePenalty * 0.1;
+
+    if (score < bestScore) {
+      bestLeftWords = leftWords;
+      bestRightWords = rightWords;
       bestScore = score;
-      bestBalance = balance;
     }
   }
-  return bestLines;
+
+  if (bestLeftWords.length > 0 && bestRightWords.length > 0) {
+    return [createLine(bestLeftWords.join(' ')), createLine(bestRightWords.join(' '))];
+  }
+
+  const midpoint = Math.ceil(words.length / 2);
+  const fallbackLeftWords = words.slice(0, midpoint);
+  const fallbackRightWords = words.slice(midpoint);
+  return [
+    createLine(fallbackLeftWords.join(' ')),
+    createLine(fallbackRightWords.join(' ')),
+  ].filter((line) => line.text.length > 0);
 };
 
 export const fitHeaderParagraphFontSize = (
@@ -887,10 +919,18 @@ export const fitHeaderParagraphFontSize = (
   minSize: number,
 ): number => {
   let size = initialSize;
-  while (size > minSize && computeHeaderParagraphLayout(value, maxWidth, font, size).some((line) => line.width > maxWidth)) {
+  while (size >= minSize) {
+    const lines = computeHeaderParagraphLayout(value, maxWidth, font, size);
+    if (lines.every((line) => line.width <= maxWidth)) {
+      return size;
+    }
+    if (size === minSize) {
+      break;
+    }
     size -= 0.2;
   }
-  return size;
+
+  return minSize;
 };
 
 export const createBulletinPdfDocument = async (
@@ -906,9 +946,11 @@ export const createBulletinPdfDocument = async (
     },
   };
 
-  const primary = hexToRgb(template.primaryColor);
-  const secondary = hexToRgb(template.secondaryColor);
-  const text = hexToRgb(template.textColor);
+  const black = rgb(0, 0, 0);
+  const primary = black;
+  const secondary = black;
+  const text = black;
+  const muted = black;
 
   const pdf = await PDFDocument.create();
   const pageSize: [number, number] = [595.28, 841.89];
@@ -1012,7 +1054,6 @@ export const createBulletinPdfDocument = async (
 
   const school = data.school ?? { name: data.schoolName };
   const white = rgb(1, 1, 1);
-  const muted = hexToRgb('#475569');
   const lightBorder = hexToRgb('#cbd5e1');
   const tableBorder = rgb(0, 0, 0);
   const tableBorderWidth = 1.0;
@@ -1052,7 +1093,7 @@ export const createBulletinPdfDocument = async (
 
   const wrapText = (value: string, maxWidth: number, font: any, size: number): string[] => computeWrappedTextLines(value, maxWidth, font, size, Number.MAX_SAFE_INTEGER).lines;
 
-  const fitSubjectCellLayout = (value: string, maxWidth: number, initialSize = 7.5, minSize = 5.5): { lines: string[]; size: number } => {
+  const fitSubjectCellLayout = (value: string, maxWidth: number, initialSize = 7.5, minSize = 5.5, activeFont = fontBold): { lines: string[]; size: number } => {
     const normalizedValue = sanitizePdfText(value ?? '-').trim() || '-';
     const words = normalizedValue.split(/\s+/).filter(Boolean);
     if (words.length === 0) {
@@ -1072,7 +1113,7 @@ export const createBulletinPdfDocument = async (
 
       for (const word of words) {
         const candidate = current ? `${current} ${word}` : word;
-        if (fontRegular.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        if (activeFont.widthOfTextAtSize(candidate, size) <= maxWidth) {
           current = candidate;
           continue;
         }
@@ -1081,7 +1122,7 @@ export const createBulletinPdfDocument = async (
           pushCurrent();
         }
 
-        if (fontRegular.widthOfTextAtSize(word, size) <= maxWidth) {
+        if (activeFont.widthOfTextAtSize(word, size) <= maxWidth) {
           current = word;
           continue;
         }
@@ -1089,7 +1130,7 @@ export const createBulletinPdfDocument = async (
         let fragment = '';
         for (const character of word) {
           const fragmentCandidate = `${fragment}${character}`;
-          if (fontRegular.widthOfTextAtSize(fragmentCandidate, size) <= maxWidth || fragment.length === 0) {
+          if (activeFont.widthOfTextAtSize(fragmentCandidate, size) <= maxWidth || fragment.length === 0) {
             fragment = fragmentCandidate;
           } else {
             lines.push(fragment);
@@ -1108,7 +1149,7 @@ export const createBulletinPdfDocument = async (
 
     for (let size = initialSize; size >= minSize; size -= 0.2) {
       const candidateLines = buildWordWrappedLines(size);
-      if (candidateLines.length <= 2 && candidateLines.every((line) => fontRegular.widthOfTextAtSize(line, size) <= maxWidth)) {
+      if (candidateLines.length <= 2 && candidateLines.every((line) => activeFont.widthOfTextAtSize(line, size) <= maxWidth)) {
         return { lines: candidateLines, size };
       }
     }
@@ -1438,9 +1479,9 @@ export const createBulletinPdfDocument = async (
 
     const line = entry.line;
     if (!line) continue;
-    const subjectLayout = fitSubjectCellLayout(line.subjectName, columns[0].width - 14, 7.5, 5.5);
+    const subjectLayout = fitSubjectCellLayout(line.subjectName, columns[0].width - 14, 7.5, 5.5, fontBold);
     const subjectLines = subjectLayout.lines;
-    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
+    const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontBold, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
     let x = tableX;
@@ -1459,7 +1500,7 @@ export const createBulletinPdfDocument = async (
       const subjectCellWidth = columns[0].width;
       const subjectCellLeft = x;
       const subjectTextMaxWidth = subjectCellWidth - 14;
-      const subjectLayout = fitSubjectCellLayout(line.subjectName, subjectTextMaxWidth, 7.5, 5.5);
+      const subjectLayout = fitSubjectCellLayout(line.subjectName, subjectTextMaxWidth, 7.5, 5.5, fontBold);
       const subjectTextLines = subjectLayout.lines;
       const subjectFontSize = subjectLayout.size;
       const lineHeight = Math.max(8.5, subjectFontSize + 1.2);
@@ -1467,44 +1508,44 @@ export const createBulletinPdfDocument = async (
       const cellCenterY = cursorY - rowHeight / 2;
       const firstBaselineY = cellCenterY + (textBlockHeight / 2) - (lineHeight / 2);
       subjectTextLines.forEach((subjectLine, index) => {
-        const lineWidth = fontRegular.widthOfTextAtSize(sanitizePdfText(subjectLine), subjectFontSize);
+        const lineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(subjectLine), subjectFontSize);
         const lineX = subjectCellLeft + 7 + (subjectTextMaxWidth - lineWidth) / 2;
         const lineY = firstBaselineY - index * (lineHeight + 1);
-        drawText(page, subjectLine, lineX, lineY, subjectFontSize, text, fontRegular);
+        drawText(page, subjectLine, lineX, lineY, subjectFontSize, text, fontBold);
       });
     }
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : subjectBreakdown.interrogation.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : subjectBreakdown.devoir.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : subjectBreakdown.classAverage.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, subjectBreakdown.composition == null ? '-' : subjectBreakdown.composition.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, line.average == null ? '-' : line.average.toFixed(2), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[5].width;
 
     // Column 7: Coef.
-    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[6].width;
 
     // Column 8: Note coef.
-    drawText(page, String(noteCoef), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, String(noteCoef), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[7].width;
 
     // Column 9: Rang
-    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 7.5, text, fontBold);
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
@@ -1516,30 +1557,30 @@ export const createBulletinPdfDocument = async (
     const nameParts = teacherName.split(/\s+/).filter(Boolean);
     const familyName = nameParts[0] || '-';
     const givenName = nameParts.slice(1).join(' ');
-    const familyNameWidth = fontRegular.widthOfTextAtSize(familyName, teacherNameSize);
+    const familyNameWidth = fontBold.widthOfTextAtSize(familyName, teacherNameSize);
     const fullTeacherName = givenName ? `${familyName} ${givenName}` : familyName;
-    const fullTeacherNameWidth = fontRegular.widthOfTextAtSize(fullTeacherName, teacherNameSize);
+    const fullTeacherNameWidth = fontBold.widthOfTextAtSize(fullTeacherName, teacherNameSize);
     let renderedTeacherName = fullTeacherName;
     if (fullTeacherNameWidth > teacherTextMaxWidth && givenName) {
-      const availableGivenNameWidth = teacherTextMaxWidth - familyNameWidth - fontRegular.widthOfTextAtSize(' ', teacherNameSize);
+      const availableGivenNameWidth = teacherTextMaxWidth - familyNameWidth - fontBold.widthOfTextAtSize(' ', teacherNameSize);
       let truncatedGivenName = '';
       for (const character of givenName) {
         const candidate = `${truncatedGivenName}${character}`;
-        if (fontRegular.widthOfTextAtSize(candidate, teacherNameSize) > availableGivenNameWidth) break;
+        if (fontBold.widthOfTextAtSize(candidate, teacherNameSize) > availableGivenNameWidth) break;
         truncatedGivenName = candidate;
       }
       renderedTeacherName = truncatedGivenName ? `${familyName} ${truncatedGivenName}` : familyName;
     }
-    const renderedTeacherNameWidth = fontRegular.widthOfTextAtSize(renderedTeacherName, teacherNameSize);
-    drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, cursorY - 13, teacherNameSize, text, fontRegular);
+    const renderedTeacherNameWidth = fontBold.widthOfTextAtSize(renderedTeacherName, teacherNameSize);
+    drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, cursorY - 13, teacherNameSize, text, fontBold);
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontRegular, 2);
+    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontBold, 2);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
-    drawText(page, '', x + 7, cursorY - 13, 7.5, text, fontRegular);
+    drawText(page, '', x + 7, cursorY - 13, 7.5, text, fontBold);
 
     let separatorX = tableX;
     columns.slice(0, -1).forEach((column) => {
@@ -1581,8 +1622,8 @@ export const createBulletinPdfDocument = async (
   });
 
   const drawLabelValue = (label: string, value: string, x: number, y: number, width: number, valueOffset = 92) => {
-    drawText(page, label, x, y, 7.5, text, fontRegular);
-    drawText(page, value, x + valueOffset, y, 7.5, text, fontRegular);
+    drawText(page, label, x, y, 7.5, text, fontBold);
+    drawText(page, value, x + valueOffset, y, 7.5, text, fontBold);
     page.drawLine({ start: { x: x + valueOffset, y: y - 2 }, end: { x: x + width, y: y - 2 }, color: lightBorder, thickness: 0.45 });
   };
 
@@ -1595,14 +1636,14 @@ export const createBulletinPdfDocument = async (
 
   // Compact three-column block matching the lower CamScanner layout.
   const semesterStartY = cursorY - 13;
-  drawText(page, '1er semestre:', tableX, semesterStartY, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 70, semesterStartY, 7.5, text, fontRegular);
-  drawText(page, 'Rg :', tableX + 132, semesterStartY, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 151, semesterStartY, 7.5, text, fontRegular);
-  drawText(page, '2ème semestre:', tableX, semesterStartY - 14, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 70, semesterStartY - 14, 7.5, text, fontRegular);
-  drawText(page, 'Rg :', tableX + 132, semesterStartY - 14, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 151, semesterStartY - 14, 7.5, text, fontRegular);
+  drawText(page, '1er semestre:', tableX, semesterStartY, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 70, semesterStartY, 7.5, text, fontBold);
+  drawText(page, 'Rg :', tableX + 132, semesterStartY, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 151, semesterStartY, 7.5, text, fontBold);
+  drawText(page, '2ème semestre:', tableX, semesterStartY - 14, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 70, semesterStartY - 14, 7.5, text, fontBold);
+  drawText(page, 'Rg :', tableX + 132, semesterStartY - 14, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 151, semesterStartY - 14, 7.5, text, fontBold);
   page.drawLine({ start: { x: tableX, y: cursorY - 32 }, end: { x: tableX + lowerLeftWidth, y: cursorY - 32 }, color: lightBorder, thickness: 0.55 });
 
   drawText(page, 'Moyennes :', lowerCenterX, cursorY - 13, 8, primary, fontBold);
@@ -1614,8 +1655,8 @@ export const createBulletinPdfDocument = async (
   page.drawLine({ start: { x: lowerCenterX, y: cursorY - 83 }, end: { x: lowerCenterX + lowerCenterWidth, y: cursorY - 83 }, color: lightBorder, thickness: 0.55 });
 
   page.drawRectangle({ x: lowerRightX, y: cursorY - 33, width: lowerRightWidth, height: 28, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  drawText(page, `Retards : ${data.retards == null ? '' : `${data.retards} fois`}`, lowerRightX + 6, cursorY - 16, 7, text, fontRegular);
-  drawText(page, `Absences : ${data.absences == null ? '' : `${data.absences} Heures`}`, lowerRightX + 6, cursorY - 27, 7, text, fontRegular);
+  drawText(page, `Retards : ${data.retards == null ? '' : `${data.retards} fois`}`, lowerRightX + 6, cursorY - 16, 7, text, fontBold);
+  drawText(page, `Absences : ${data.absences == null ? '' : `${data.absences} Heures`}`, lowerRightX + 6, cursorY - 27, 7, text, fontBold);
   drawLabelValue('Plus forte moyenne', '', lowerRightX, cursorY - 44, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
   drawLabelValue('Plus faible moyenne', '', lowerRightX, cursorY - 56, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
   drawLabelValue('Moyenne de la classe', '', lowerRightX, cursorY - 68, lowerRightWidth, Math.min(78, lowerRightWidth - 12));
@@ -1623,10 +1664,10 @@ export const createBulletinPdfDocument = async (
   cursorY -= 94;
   const annualWidth = lowerLeftWidth + lowerCenterWidth + 6;
   page.drawRectangle({ x: tableX, y: cursorY - 22, width: annualWidth, height: 22, color: white, borderColor: lightBorder, borderWidth: 0.65 });
-  drawText(page, 'Moy. Ann. =', tableX + 7, cursorY - 14, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 68, cursorY - 14, 7.5, text, fontRegular);
-  drawText(page, '- Rg :', tableX + 137, cursorY - 14, 7.5, text, fontRegular);
-  drawText(page, emptyValue, tableX + 171, cursorY - 14, 7.5, text, fontRegular);
+  drawText(page, 'Moy. Ann. =', tableX + 7, cursorY - 14, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 68, cursorY - 14, 7.5, text, fontBold);
+  drawText(page, '- Rg :', tableX + 137, cursorY - 14, 7.5, text, fontBold);
+  drawText(page, emptyValue, tableX + 171, cursorY - 14, 7.5, text, fontBold);
   drawText(page, 'DECISION DU CONSEIL DES PROFESSEURS', lowerRightX, cursorY - 14, 6.8, primary, fontBold);
   cursorY -= 29;
 
@@ -1634,9 +1675,9 @@ export const createBulletinPdfDocument = async (
   page.drawRectangle({ x: tableX, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
   page.drawRectangle({ x: tableX + halfWidth + 6, y: cursorY - 43, width: halfWidth, height: 43, color: white, borderColor: lightBorder, borderWidth: 0.65 });
   drawText(page, 'Distinctions spéciales', tableX + 7, cursorY - 12, 7.5, primary, fontBold);
-  drawText(page, 'Tableau d’honneur', tableX + 12, cursorY - 25, 7, text, fontRegular);
-  drawText(page, 'Encouragements', tableX + 12, cursorY - 35, 7, text, fontRegular);
-  drawText(page, 'Félicitations', tableX + 100, cursorY - 25, 7, text, fontRegular);
+  drawText(page, 'Tableau d’honneur', tableX + 12, cursorY - 25, 7, text, fontBold);
+  drawText(page, 'Encouragements', tableX + 12, cursorY - 35, 7, text, fontBold);
+  drawText(page, 'Félicitations', tableX + 100, cursorY - 25, 7, text, fontBold);
   drawText(page, 'Sanctions', tableX + halfWidth + 7, cursorY - 12, 7.5, primary, fontBold);
   cursorY -= 50;
 
@@ -1647,14 +1688,14 @@ export const createBulletinPdfDocument = async (
   cursorY -= 40;
 
   const signatureStartY = cursorY - 4;
-  drawText(page, 'Signature du titulaire de classe', tableX + tableWidth - 190, signatureStartY, 7.5, text, fontRegular);
+  drawText(page, 'Signature du titulaire de classe', tableX + tableWidth - 190, signatureStartY, 7.5, text, fontBold);
   page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 28 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 28 }, color: lightBorder, thickness: 0.65 });
-  drawText(page, 'Le Proviseur', tableX + tableWidth - 190, signatureStartY - 40, 7.5, text, fontRegular);
+  drawText(page, 'Le Proviseur', tableX + tableWidth - 190, signatureStartY - 40, 7.5, text, fontBold);
   page.drawLine({ start: { x: tableX + tableWidth - 190, y: signatureStartY - 55 }, end: { x: tableX + tableWidth - 8, y: signatureStartY - 55 }, color: lightBorder, thickness: 0.65 });
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
-  drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontRegular);
-  drawText(page, 'Page 1/1', page.getWidth() - margin - 55, 38, 7.5, muted, fontRegular);
+  drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);
+  drawText(page, 'Page 1/1', page.getWidth() - margin - 55, 38, 7.5, muted, fontBold);
 
   return pdf.save({ useObjectStreams: false });
 };
