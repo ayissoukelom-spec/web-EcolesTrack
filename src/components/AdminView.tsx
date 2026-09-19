@@ -515,6 +515,8 @@ export default function AdminView({
   const [assignmentMode, setAssignmentMode] = useState<'list' | 'assign'>('list');
   const [assignmentSchoolFilter, setAssignmentSchoolFilter] = useState<number | null>(null);
   const [assignmentClassAssignments, setAssignmentClassAssignments] = useState<Map<number, number | null>>(new Map());
+  const [savedClassAssignments, setSavedClassAssignments] = useState<Map<number, number | null>>(new Map());
+  const [editingClassId, setEditingClassId] = useState<number | null>(null);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null);
@@ -752,6 +754,38 @@ export default function AdminView({
   const teacherStudentFilterClasses = classesList
     .filter((cls) => currentTeacherClassIds.includes(cls.id))
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+  const handleSaveClassAssignment = async (classId: number) => {
+    if (!assignmentClassAssignments.has(classId)) return;
+
+    const teacherId = assignmentClassAssignments.get(classId) ?? null;
+    try {
+      setAssignmentSaving(true);
+      setAssignmentError(null);
+      setAssignmentSuccess(null);
+      await apiFetch(`/api/classes/${classId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teacherId }),
+      });
+      setSavedClassAssignments((previous) => {
+        const next = new Map(previous);
+        next.set(classId, teacherId);
+        return next;
+      });
+      setAssignmentClassAssignments((previous) => {
+        const next = new Map(previous);
+        next.delete(classId);
+        return next;
+      });
+      setEditingClassId(null);
+      setAssignmentSuccess('✅ Classe mise à jour avec succès');
+    } catch (err: any) {
+      setAssignmentError(err?.message || 'Erreur lors de la sauvegarde');
+    } finally {
+      setAssignmentSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (userRole !== 'teacher' || teacherStudentFilterClasses.length === 0) {
@@ -4847,76 +4881,97 @@ export default function AdminView({
                     <div className="space-y-2">
                       {classesList
                         .filter((c) => !assignmentSchoolFilter || isClassVisibleToSchool(c, assignmentSchoolFilter))
-                        .map((cls) => (
-                          <div key={cls.id} className="flex items-center gap-2">
-                            <label className="text-xs sm:text-sm font-semibold text-slate-700 flex-1">
-                              {cls.name}
-                            </label>
-                            <select
-                              value={assignmentClassAssignments.get(cls.id) ?? cls.teacherId ?? ''}
-                              onChange={(e) => {
-                                const newMap = new Map(assignmentClassAssignments);
-                                const value = e.target.value ? parseInt(e.target.value, 10) : null;
-                                if (value === null) {
-                                  newMap.delete(cls.id);
-                                } else {
-                                  newMap.set(cls.id, value);
-                                }
-                                setAssignmentClassAssignments(newMap);
-                              }}
-                              className="px-3 py-1 border border-emerald-200 rounded bg-white text-xs sm:text-sm"
-                            >
-                              <option value="">—Aucun—</option>
-                              {teachersList
-                                .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter))
-                                .map((teacher) => (
-                                  <option key={teacher.id} value={String(teacher.id)}>
-                                    {teacher.name}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                        ))}
-                    </div>
-                    
-                    <div className="flex gap-2 mt-4">
-                      <button
-                        onClick={async () => {
-                          try {
-                            setAssignmentSaving(true);
-                            setAssignmentError(null);
-                            setAssignmentSuccess(null);
-                            let updatedCount = 0;
-                            for (const [classId, teacherId] of assignmentClassAssignments.entries()) {
-                              await apiFetch(`/api/classes/${classId}`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ teacherId }),
-                              });
-                              updatedCount++;
-                            }
-                            setAssignmentSaving(false);
-                            if (updatedCount > 0) {
-                              setAssignmentSuccess(`✅ ${updatedCount} classe(s) mise(s) à jour avec succès`);
-                              setAssignmentClassAssignments(new Map());
-                            }
-                          } catch (err: any) {
-                            setAssignmentSaving(false);
-                            setAssignmentError(err?.message || 'Erreur lors de la sauvegarde');
-                          }
-                        }}
-                        disabled={assignmentSaving || assignmentClassAssignments.size === 0}
-                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-semibold text-xs sm:text-sm rounded-lg transition-colors"
-                      >
-                        {assignmentSaving ? '⏳ Enregistrement...' : '✅ Enregistrer'}
-                      </button>
-                      <button
-                        onClick={() => setAssignmentClassAssignments(new Map())}
-                        disabled={assignmentClassAssignments.size === 0}
-                        className="px-4 py-2 bg-slate-200 hover:bg-slate-300 disabled:bg-slate-100 text-slate-700 font-semibold text-xs sm:text-sm rounded-lg transition-colors"
-                      >
-                        🔄 Réinitialiser
-                      </button>
+                        .map((cls) => {
+                          const persistedTeacherId = savedClassAssignments.has(cls.id)
+                            ? savedClassAssignments.get(cls.id) ?? null
+                            : cls.teacherId ?? null;
+                          const selectedTeacherId = assignmentClassAssignments.has(cls.id)
+                            ? assignmentClassAssignments.get(cls.id) ?? null
+                            : persistedTeacherId;
+                          const assignedTeacher = persistedTeacherId == null
+                            ? undefined
+                            : teachersList.find((teacher) => teacher.id === persistedTeacherId);
+                          const isEditing = editingClassId === cls.id;
+
+                          return (
+                            <div key={cls.id} className="flex items-center gap-2">
+                              <div className="text-xs sm:text-sm font-semibold text-slate-700 flex-1">
+                                <span>{cls.name}</span>
+                                {!isEditing && (
+                                  <span className="ml-2 font-normal text-slate-600">
+                                    Enseignant principal : {assignedTeacher?.name || 'Aucun'}
+                                  </span>
+                                )}
+                              </div>
+                              {isEditing ? (
+                                <>
+                                  <select
+                                    value={selectedTeacherId ?? ''}
+                                    onChange={(e) => {
+                                      const newMap = new Map(assignmentClassAssignments);
+                                      const value = e.target.value ? parseInt(e.target.value, 10) : null;
+                                      newMap.set(cls.id, value);
+                                      setAssignmentClassAssignments(newMap);
+                                    }}
+                                    className="px-3 py-1 border border-emerald-200 rounded bg-white text-xs sm:text-sm"
+                                  >
+                                    <option value="">—Aucun—</option>
+                                    {teachersList
+                                      .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter))
+                                      .map((teacher) => (
+                                        <option key={teacher.id} value={String(teacher.id)}>
+                                          {teacher.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveClassAssignment(cls.id)}
+                                    disabled={assignmentSaving}
+                                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs rounded"
+                                  >
+                                    Enregistrer
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAssignmentClassAssignments((previous) => {
+                                        const next = new Map(previous);
+                                        next.delete(cls.id);
+                                        return next;
+                                      });
+                                      setEditingClassId(null);
+                                    }}
+                                    disabled={assignmentSaving}
+                                    className="px-3 py-1 bg-slate-200 hover:bg-slate-300 disabled:bg-slate-100 text-slate-700 text-xs rounded"
+                                  >
+                                    Annuler
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssignmentClassAssignments((previous) => {
+                                      const next = new Map(previous);
+                                      if (editingClassId !== null && editingClassId !== cls.id) {
+                                        next.delete(editingClassId);
+                                      }
+                                      if (!next.has(cls.id)) {
+                                        next.set(cls.id, persistedTeacherId);
+                                      }
+                                      return next;
+                                    });
+                                    setEditingClassId(cls.id);
+                                  }}
+                                  className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs rounded"
+                                >
+                                  Modifier
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                     </div>
                   </div>
                 </div>
