@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
-import { students, teachers, classes, classTeachers, parents, users } from '../src/db/schema.ts';
+import { students, teachers, classes, classTeachers, parents, users, schools } from '../src/db/schema.ts';
 
 const mockState = {
   actorRole: 'super_admin' as string,
@@ -68,9 +68,48 @@ const createBuilder = (rows: any[]) => {
 const mockDb = {
   select: () => createBuilder(mockState.students),
   insert: () => ({ values: () => ({ returning: async () => [] }) }),
+  transaction: async (callback: (tx: any) => Promise<any>) => callback(mockDb),
   update: () => ({ set: () => ({ where: async () => [] }) }),
   delete: () => ({ where: async () => [] }),
   execute: async (_sql: any) => [],
+};
+
+const configureBatchImportMock = () => {
+  const insertedRows: any[] = [];
+  const buildSelectBuilder = (rows: any[] = []) => {
+    const builder: any = {
+      _rows: rows,
+      from(table: any) {
+        builder.table = table;
+        if (table === schools) builder._rows = [{ id: 10, studentsCreationLocked: false }];
+        else if (table === classes) builder._rows = [{ id: 5, schoolId: 10, academicYearId: 2 }];
+        else if (table === parents) builder._rows = [{ id: 7, userId: 99, schoolId: 10 }];
+        else if (table === users) builder._rows = [{ id: 2, email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+        else builder._rows = rows;
+        return builder;
+      },
+      innerJoin() { return builder; },
+      leftJoin() { return builder; },
+      where() { return builder; },
+      then(resolve: (value: any) => void) { return Promise.resolve(builder._rows).then(resolve); },
+      catch(reject: (reason?: any) => void) { return Promise.resolve(builder._rows).catch(reject); },
+      finally(cb: () => void) { return Promise.resolve(builder._rows).finally(cb); },
+    };
+    return builder;
+  };
+
+  mockDb.select = (projection?: any) => buildSelectBuilder(Array.isArray(projection) ? projection : []);
+  mockDb.insert = (table: any) => ({
+    values: (values: any) => {
+      insertedRows.push({ table, values });
+      return {
+        returning: async () => table === students ? [{ id: 123, ...values }] : [{ id: 1, ...values }],
+      };
+    },
+  });
+  mockDb.transaction = async (callback: (tx: any) => Promise<any>) => callback(mockDb);
+
+  return insertedRows;
 };
 
 vi.mock('../src/db/index.ts', () => ({ db: mockDb }));
@@ -327,5 +366,71 @@ describe('GET /api/students (scope)', () => {
 
     expect(res.body).toHaveLength(2);
     expect(res.body.map((s: any) => s.id).sort()).toEqual([201, 202]);
+  });
+
+  const batchRow = (overrides: Record<string, any> = {}) => ({
+    firstName: 'Import',
+    lastName: 'Statut',
+    birthDate: '2015-04-12',
+    schoolId: 10,
+    classId: 5,
+    parentId: 7,
+    academicYearId: 2,
+    schoolAdminId: 2,
+    gender: 'F',
+    ...overrides,
+  });
+
+  const importBatchRow = async (row: Record<string, any>) => {
+    const insertedRows = configureBatchImportMock();
+    const res = await request(app)
+      .post('/api/students/batch')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send([row]);
+    return { res, insertedRows };
+  };
+
+  it('creates Nouveau status for the class academic year', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ studentStatus: 'Nouveau' }));
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(1);
+    expect(insertedRows.some((row) => row.table === students)).toBe(true);
+    expect(insertedRows).toContainEqual(expect.objectContaining({ values: { studentId: 123, academicYearId: 2, status: 'Nouveau' } }));
+  });
+
+  it('creates Doublant status for the class academic year', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ studentStatus: 'Doublant' }));
+    expect(res.body.insertedCount).toBe(1);
+    expect(insertedRows).toContainEqual(expect.objectContaining({ values: { studentId: 123, academicYearId: 2, status: 'Doublant' } }));
+  });
+
+  it('keeps legacy imports without studentStatus compatible', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ studentStatus: undefined }));
+    expect(res.body.insertedCount).toBe(1);
+    expect(insertedRows.some((row) => row.table === students)).toBe(true);
+    expect(insertedRows.some((row) => row.values?.studentId === 123)).toBe(false);
+  });
+
+  it('rejects an invalid studentStatus without creating a student', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ studentStatus: 'ValeurInconnue' }));
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0].reason).toContain('studentStatus invalide');
+    expect(insertedRows).toHaveLength(0);
+  });
+
+  it('rejects an academic year that differs from the class year', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ academicYearId: 3, studentStatus: 'Nouveau' }));
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0].reason).toContain('ne correspond pas');
+    expect(insertedRows).toHaveLength(0);
+  });
+
+  it('uses the class academic year when academicYearId is absent', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ academicYearId: undefined, studentStatus: 'Nouveau' }));
+    expect(res.body.insertedCount).toBe(1);
+    expect(insertedRows).toContainEqual(expect.objectContaining({ values: { studentId: 123, academicYearId: 2, status: 'Nouveau' } }));
   });
 });

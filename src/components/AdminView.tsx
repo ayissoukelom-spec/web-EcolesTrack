@@ -25,7 +25,7 @@ import {
 
 import { sortClasses } from '../lib/classOrdering';
 import { getClassGroupsVisibleToSchool, isClassVisibleToSchool } from '../lib/classVisibility.ts';
-import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
+import { STUDENT_ACADEMIC_YEAR_STATUSES, isStudentAcademicYearStatus } from '../lib/studentAcademicYearStatus.ts';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
@@ -60,6 +60,9 @@ const validateRecords = (records: any[]) => {
       if (r.parentPhone && String(r.parentPhone).trim() !== '') {
         const digits = String(r.parentPhone).replace(/\D/g, '');
         if (digits.length !== 8) errs.push('parentPhone doit contenir 8 chiffres');
+      }
+      if (r.studentStatus && !isStudentAcademicYearStatus(String(r.studentStatus).trim())) {
+        errs.push('studentStatus invalide');
       }
       if (errs.length > 0) rowErrors.push({ row: i, errors: errs });
     }

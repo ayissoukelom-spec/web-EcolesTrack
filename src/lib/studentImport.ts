@@ -1,5 +1,5 @@
 export function getStudentImportHeaders() {
-  return ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'teacherId', 'schoolAdminId', 'gender'];
+  return ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'];
 }
 
 export function isValidStudentGender(gender: unknown): boolean {

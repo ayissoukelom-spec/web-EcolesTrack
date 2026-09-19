@@ -3065,10 +3065,10 @@ export async function createApp() {
       const XLSX = await import('xlsx');
       const rows = [
         // Headers: prefer both IDs and helpful parent contact fields for convenience
-        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'teacherId', 'schoolAdminId', 'gender'],
+        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'],
         // Example rows
-        ['Lucas', 'Dubois', '2008-04-12', 1, 1, 1, 'Marie Dubois', 'marie.dubois@example.com', '90000001', 1, 2, 1, 'Masculin'],
-        ['Chloe', 'Dubois', '2010-09-25', 1, 1, 1, 'Paul Dubois', 'paul.dubois@example.com', '90000002', 1, 3, 1, 'Féminin'],
+        ['Lucas', 'Dubois', '2008-04-12', 1, 1, 1, 'Marie Dubois', 'marie.dubois@example.com', '90000001', 1, '', 2, 1, 'Masculin'],
+        ['Chloe', 'Dubois', '2010-09-25', 1, 1, 1, 'Paul Dubois', 'paul.dubois@example.com', '90000002', 1, '', 3, 1, 'Féminin'],
       ];
       const ws = XLSX.utils.aoa_to_sheet(rows);
       const wb = XLSX.utils.book_new();
@@ -3119,7 +3119,7 @@ export async function createApp() {
       }
 
       const existingSchoolRows = schoolIds.length > 0 ? await db.select().from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
-      const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
+      const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
       const parentLookupRows = parentIds.length > 0 || parentEmails.length > 0
         ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents)
         : [];
@@ -3180,6 +3180,13 @@ export async function createApp() {
         const firstName = s.firstName?.trim();
         const lastName = s.lastName?.trim();
         const birthDate = s.birthDate?.trim() || '';
+        const rawAcademicYearId = s.academicYearId !== undefined && s.academicYearId !== null && String(s.academicYearId).trim() !== ''
+          ? String(s.academicYearId).trim()
+          : null;
+        const parsedAcademicYearId = rawAcademicYearId !== null ? Number(rawAcademicYearId) : null;
+        const normalizedStudentStatus = s.studentStatus !== undefined && s.studentStatus !== null && String(s.studentStatus).trim() !== ''
+          ? String(s.studentStatus).trim()
+          : null;
         const resolvedSchoolId = userRecord.role === 'school_admin' ? userRecord.schoolId : s.schoolId;
         const schoolId = resolvedSchoolId ? parseInt(resolvedSchoolId) : null;
         const classId = s.classId ? parseInt(s.classId) : null;
@@ -3236,6 +3243,14 @@ export async function createApp() {
         const classRow = existingClassRows.find((c: any) => c.id === classId);
         if (!classRow) {
           errors.push({ row: i, reason: `Class not found: ${classId}`, data: s });
+          continue;
+        }
+        if (normalizedStudentStatus !== null && !isStudentAcademicYearStatus(normalizedStudentStatus)) {
+          errors.push({ row: i, reason: `studentStatus invalide: ${normalizedStudentStatus}`, data: s });
+          continue;
+        }
+        if (parsedAcademicYearId !== null && (!Number.isInteger(parsedAcademicYearId) || parsedAcademicYearId <= 0 || parsedAcademicYearId !== classRow.academicYearId)) {
+          errors.push({ row: i, reason: `academicYearId ${parsedAcademicYearId} ne correspond pas à l'année de la classe ${classRow.academicYearId}`, data: s });
           continue;
         }
         if (classRow.schoolId !== schoolId) {
@@ -3306,17 +3321,31 @@ export async function createApp() {
             throw new Error('Multiple school admins found for this school. Please specify schoolAdminId in the import file.');
           })();
 
-          const result = await db.insert(students).values({
-            firstName,
-            lastName,
-            birthDate,
-            schoolId,
-            classId,
-            parentId,
-            schoolAdminId: resolvedSchoolAdminId,
-            gender,
-          }).returning();
-          inserted.push(result[0]);
+          const result = await db.transaction(async (tx) => {
+            const createdStudents = await tx.insert(students).values({
+              firstName,
+              lastName,
+              birthDate,
+              schoolId,
+              classId,
+              parentId,
+              schoolAdminId: resolvedSchoolAdminId,
+              gender,
+            }).returning();
+
+            const selectedAcademicYearId = parsedAcademicYearId ?? classRow.academicYearId;
+            if (normalizedStudentStatus !== null) {
+              await tx.insert(studentAcademicYearStatuses).values({
+                studentId: createdStudents[0].id,
+                academicYearId: selectedAcademicYearId,
+                status: normalizedStudentStatus,
+              });
+            }
+
+            return createdStudents[0];
+          });
+
+          inserted.push(result);
         } catch (e: any) {
           console.error('Insert student failed for row', i, e?.message || e);
           errors.push({ row: i, reason: e?.message || 'Insert failed', data: s });
