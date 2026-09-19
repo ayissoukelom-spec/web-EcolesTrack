@@ -4750,7 +4750,7 @@ export default function AdminView({
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  👨‍🏫 Assigner enseignants principaux
+                  👨‍🏫 Assigner des enseignants titulaires
                 </button>
               </div>
             )}
@@ -4834,7 +4834,7 @@ export default function AdminView({
               /* Assignment view - assign principal teachers to classes */
               <div className="space-y-4">
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
-                  <h3 className="font-bold text-emerald-900 mb-2">📌 Assigner des enseignants principaux</h3>
+                  <h3 className="font-bold text-emerald-900 mb-2">📌 Assigner des enseignants titulaires</h3>
                   <p className="text-xs sm:text-sm text-emerald-800 mb-4">
                     Sélectionnez une classe et l'enseignant principal à y affecter. Les modifications seront enregistrées dans la base de données.
                   </p>
