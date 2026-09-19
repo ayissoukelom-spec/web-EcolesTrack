@@ -1896,7 +1896,7 @@ export const createBulletinPdfDocument = async (
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
   const signatureLabelY = lastSummaryY - 28;
-  const signatureNameY = signatureLabelY - 52;
+  const signatureNameY = signatureLabelY - 46;
   const signatureCenterX = page.getWidth() - margin - 85;
   if (signatureNameY > 64) {
     const signatureLabel = 'Signature du titulaire de la classe';
@@ -1904,7 +1904,27 @@ export const createBulletinPdfDocument = async (
     drawText(page, signatureLabel, signatureCenterX - signatureLabelWidth / 2, signatureLabelY, 9, text, fontBold);
     const classTeacherName = sanitizePdfText(data.classTeacherName || 'Aucun');
     const classTeacherNameWidth = fontBold.widthOfTextAtSize(classTeacherName, 9);
-    drawText(page, classTeacherName, signatureCenterX - classTeacherNameWidth / 2, signatureNameY, 9, text, fontBold);
+    const classTeacherNameX = signatureCenterX - classTeacherNameWidth / 2;
+    const signatureBoxWidth = Math.max(signatureLabelWidth, classTeacherNameWidth) + 20;
+    const signatureBoxHeight = signatureLabelY - signatureNameY + 14;
+    const signatureBoxX = signatureCenterX - signatureBoxWidth / 2;
+    const signatureBoxY = signatureLabelY + 10;
+    page.drawSvgPath(
+      `M 8,0 H ${signatureBoxWidth - 8} Q ${signatureBoxWidth},0 ${signatureBoxWidth},8 V ${signatureBoxHeight - 8} Q ${signatureBoxWidth},${signatureBoxHeight} ${signatureBoxWidth - 8},${signatureBoxHeight} H 8 Q 0,${signatureBoxHeight} 0,${signatureBoxHeight - 8} V 8 Q 0,0 8,0 Z`,
+      {
+        x: signatureBoxX,
+        y: signatureBoxY,
+        borderColor: hexToRgb('#000000'),
+        borderWidth: 1.2,
+      },
+    );
+    drawText(page, classTeacherName, classTeacherNameX, signatureNameY, 9, text, fontBold);
+    page.drawLine({
+      start: { x: classTeacherNameX, y: signatureNameY - 2 },
+      end: { x: classTeacherNameX + classTeacherNameWidth, y: signatureNameY - 2 },
+      color: text,
+      thickness: 0.7,
+    });
   }
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });

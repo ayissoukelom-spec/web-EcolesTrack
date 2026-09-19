@@ -198,10 +198,10 @@ export default function BulletinDetail({
           </div>
 
           <div className="flex justify-end pt-6">
-            <div className="min-w-[220px] text-center text-xs text-slate-700">
+            <div className="min-w-[220px] rounded-xl border-2 border-black p-3 text-center text-xs text-slate-700">
               <p className="font-semibold">Signature du titulaire de la classe</p>
               <div className="h-16" aria-hidden="true" />
-              <p className="font-semibold">{classTeacherName || 'Aucun'}</p>
+              <p className="font-semibold underline">{classTeacherName || 'Aucun'}</p>
             </div>
           </div>
         </div>
