@@ -459,6 +459,10 @@ export default function BulletinsView({
     return result;
   }, [detailHook.detail, evaluationsList, gradesList, studentsList, termsFromApi]);
 
+  const classTeacherNameForDetail = detailHook.detail
+    ? classesList.find((klass) => klass.id === detailHook.detail?.classId)?.teacherName ?? null
+    : null;
+
   useEffect(() => {
     if (listHook.error && isParent) {
       listHook.setError('Votre profil parent ne peut pas afficher la liste globale. Utilisez la consultation detaillee par ID autorise.');
@@ -900,6 +904,7 @@ export default function BulletinsView({
           selectedId={selectedId}
           liveNotes={liveNotesForDetail}
           subjectBreakdown={subjectBreakdownForDetail}
+          classTeacherName={classTeacherNameForDetail}
           pdfLoading={pdfHook.loading}
           onDownloadPdf={handleDownloadPdf}
         />

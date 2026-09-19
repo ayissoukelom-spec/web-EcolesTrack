@@ -20,6 +20,8 @@ import {
   schoolTerms,
   students,
   studentAcademicYearStatuses,
+  teachers,
+  users,
 } from '../db/schema.ts';
 import {
   buildSubjectTeacherNameMap,
@@ -99,6 +101,7 @@ export interface BulletinPdfData {
   studentStatus: string | null;
   classId: number;
   className: string;
+  classTeacherName?: string | null;
   classStudentCount: number;
   schoolName: string;
   school?: {
@@ -640,11 +643,14 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       generatedAt: bulletins.generatedAt,
       studentSchoolId: students.schoolId,
       parentUserId: parents.userId,
+      classTeacherName: users.name,
     })
     .from(bulletins)
     .innerJoin(students, eq(bulletins.studentId, students.id))
     .leftJoin(parents, eq(students.parentId, parents.id))
     .innerJoin(classes, eq(bulletins.classId, classes.id))
+    .leftJoin(teachers, eq(classes.teacherId, teachers.id))
+    .leftJoin(users, eq(teachers.userId, users.id))
     .leftJoin(
       schoolClasses,
       and(
@@ -896,6 +902,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       studentStatus: header.studentStatus,
       classId: header.classId,
       className: header.className,
+      classTeacherName: header.classTeacherName,
       classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
       school: header.school ? { ...header.school, logoPath: header.school.logoPath ?? null, logo: null } : { name: header.schoolName },
@@ -1885,6 +1892,19 @@ export const createBulletinPdfDocument = async (
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
     drawText(page, annualAverageText, summaryLeftX, annualY, 10, text, fontBold);
     drawText(page, annualRankText, summaryRightX, annualY, 10, text, fontBold);
+  }
+
+  const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
+  const signatureLabelY = lastSummaryY - 28;
+  const signatureNameY = signatureLabelY - 52;
+  const signatureCenterX = page.getWidth() - margin - 85;
+  if (signatureNameY > 64) {
+    const signatureLabel = 'Signature du titulaire de la classe';
+    const signatureLabelWidth = fontBold.widthOfTextAtSize(signatureLabel, 9);
+    drawText(page, signatureLabel, signatureCenterX - signatureLabelWidth / 2, signatureLabelY, 9, text, fontBold);
+    const classTeacherName = sanitizePdfText(data.classTeacherName || 'Aucun');
+    const classTeacherNameWidth = fontBold.widthOfTextAtSize(classTeacherName, 9);
+    drawText(page, classTeacherName, signatureCenterX - classTeacherNameWidth / 2, signatureNameY, 9, text, fontBold);
   }
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
