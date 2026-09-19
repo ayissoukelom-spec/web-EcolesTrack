@@ -1548,9 +1548,11 @@ export const createBulletinPdfDocument = async (
       if (lines.length === 1) {
         const line = lines[0];
         const lineWidth = fontBold.widthOfTextAtSize(line, 8);
-        const headerSize = line === 'Signature' ? (columnWidth / lineWidth) * 8 : 8;
+        const headerSize = 8;
         const renderedWidth = fontBold.widthOfTextAtSize(line, headerSize);
-        const textX = columnX + (columnWidth - renderedWidth) / 2;
+        const textX = line === 'Signature'
+          ? columnX + (tableX + tableWidth - columnX - renderedWidth) / 2
+          : columnX + (columnWidth - renderedWidth) / 2;
         drawText(page, line, textX, y - 18, headerSize, text, fontBold);
       } else {
         lines.forEach((line, lineIndex) => {
