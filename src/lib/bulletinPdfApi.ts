@@ -1843,7 +1843,7 @@ export const createBulletinPdfDocument = async (
   page.drawRectangle({
     x: tableX,
     y: cursorY - totalRowHeight,
-    width: tableWidth,
+    width: columns.slice(0, 8).reduce((total, column) => total + column.width, 0),
     height: totalRowHeight,
     borderColor: tableBorder,
     borderWidth: tableBorderWidth,
