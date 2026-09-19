@@ -4433,8 +4433,14 @@ export async function createApp() {
         if (actor.role !== 'school_admin') {
           return res.status(403).json({ error: 'Only super_admin or school_admin can update classes' });
         }
-        if (actor.schoolId && classToUpdate.schoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Cannot update class in another school' });
+        if (actor.schoolId) {
+          const classBelongsToSchool = classToUpdate.schoolId === actor.schoolId;
+          const classIsApprovedForSchool = classToUpdate.schoolId == null
+            && await isApprovedClassForSchool(classToUpdate.id, actor.schoolId);
+
+          if (!classBelongsToSchool && !classIsApprovedForSchool) {
+            return res.status(403).json({ error: 'Cannot update class in another school' });
+          }
         }
       }
 

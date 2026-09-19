@@ -4853,7 +4853,7 @@ export default function AdminView({
                               {cls.name}
                             </label>
                             <select
-                              value={assignmentClassAssignments.get(cls.id) ?? ''}
+                              value={assignmentClassAssignments.get(cls.id) ?? cls.teacherId ?? ''}
                               onChange={(e) => {
                                 const newMap = new Map(assignmentClassAssignments);
                                 const value = e.target.value ? parseInt(e.target.value, 10) : null;
@@ -4888,14 +4888,11 @@ export default function AdminView({
                             setAssignmentSuccess(null);
                             let updatedCount = 0;
                             for (const [classId, teacherId] of assignmentClassAssignments.entries()) {
-                              const response = await apiFetch(`/api/classes/${classId}`, {
+                              await apiFetch(`/api/classes/${classId}`, {
                                 method: 'PUT',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ teacherId }),
                               });
-                              if (!response.ok) {
-                                throw new Error(`Erreur lors de la mise à jour de la classe ${classId}`);
-                              }
                               updatedCount++;
                             }
                             setAssignmentSaving(false);

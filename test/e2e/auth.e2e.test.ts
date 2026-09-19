@@ -2176,6 +2176,26 @@ describe('E2E security: auth & privilege checks', () => {
       expect(res.body).toMatchObject({ id: 1, teacherId: 88 });
     });
 
+    it('school_admin can update a globally approved class for their school', async () => {
+      const res = await request(app)
+        .put('/api/classes/4')
+        .set('Authorization', 'Bearer token-school')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: 4, teacherId: 88 });
+    });
+
+    it('school_admin cannot update a globally unapproved class for their school', async () => {
+      const res = await request(app)
+        .put('/api/classes/5')
+        .set('Authorization', 'Bearer token-school')
+        .send({ teacherId: 88 });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: 'Cannot update class in another school' });
+    });
+
     it('school_admin with schoolId cannot update a class in another school', async () => {
       const res = await request(app)
         .put('/api/classes/3')
