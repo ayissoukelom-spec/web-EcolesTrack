@@ -1716,6 +1716,10 @@ export const createBulletinPdfDocument = async (
       const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
       drawText(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
       drawText(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+      [6, 7, 8].forEach((columnCount) => {
+        const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
+        page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
+      });
       cursorY -= totalRowHeight;
       continue;
     }
