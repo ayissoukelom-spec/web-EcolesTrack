@@ -1298,19 +1298,22 @@ export const createBulletinPdfDocument = async (
   const softBackground = hexToRgb('#f8fafc');
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
+  const notationColumnWidth = 30;
+  const signatureColumnWidth = 66;
+  const professorColumnWidth = tableWidth - (86 + notationColumnWidth * 8 + 70 + signatureColumnWidth);
   const columns = [
     { label: 'Matières', width: 86 },
-    { label: 'Moy. interro', width: 30 },
-    { label: 'Devoir', width: 30 },
-    { label: 'Moy. Clas', width: 30 },
-    { label: 'Compo.', width: 30 },
-    { label: BULLETIN_FINAL_AVERAGE_LABEL, width: 30 },
-    { label: 'Coef.', width: 30 },
-    { label: 'Note coef.', width: 30 },
-    { label: 'Rang', width: 30 },
-    { label: 'Professeur', width: 66 },
+    { label: 'Moy. interro', width: notationColumnWidth },
+    { label: 'Devoir', width: notationColumnWidth },
+    { label: 'Moy. Clas', width: notationColumnWidth },
+    { label: 'Compo.', width: notationColumnWidth },
+    { label: BULLETIN_FINAL_AVERAGE_LABEL, width: notationColumnWidth },
+    { label: 'Coef.', width: notationColumnWidth },
+    { label: 'Note coef.', width: notationColumnWidth },
+    { label: 'Rang', width: notationColumnWidth },
+    { label: 'Professeur', width: professorColumnWidth },
     { label: 'Appréciation', width: 70 },
-    { label: 'Signature', width: 25 },
+    { label: 'Signature', width: signatureColumnWidth },
   ];
 
   // Define multi-line headers for better space usage
