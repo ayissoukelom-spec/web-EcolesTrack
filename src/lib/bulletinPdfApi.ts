@@ -1441,6 +1441,30 @@ export const createBulletinPdfDocument = async (
     drawText(page, value, textX, textY, size, color, font);
   };
 
+  const drawCenteredRankValue = (page: any, value: string, columnX: number, columnWidth: number, cellTopY: number, cellBottomY: number, size: number, color: any, font: any) => {
+    const rankLabel = formatGeneralRankLabel(value);
+    if (rankLabel === '-') {
+      drawCenteredCellValue(page, value, columnX, columnWidth, cellTopY, cellBottomY, size, color, font);
+      return;
+    }
+
+    const suffix = rankLabel.endsWith('er') ? 'er' : 'ème';
+    const mainText = rankLabel.slice(0, -suffix.length);
+    const suffixSize = size * 0.65;
+    const mainWidth = font.widthOfTextAtSize(mainText, size);
+    const suffixWidth = font.widthOfTextAtSize(suffix, suffixSize);
+    const suffixGap = 1;
+    const totalWidth = mainWidth + suffixGap + suffixWidth;
+    const textX = columnX + (columnWidth - totalWidth) / 2;
+    const mainHeight = font.heightAtSize(size, { descender: false });
+    const suffixHeight = font.heightAtSize(suffixSize, { descender: false });
+    const suffixRise = mainHeight * 0.55;
+    const cellCenterY = (cellTopY + cellBottomY) / 2;
+    const mainY = cellCenterY - (suffixRise + suffixHeight) / 2;
+    drawText(page, mainText, textX, mainY, size, color, font);
+    drawText(page, suffix, textX + mainWidth + suffixGap, mainY + suffixRise, suffixSize, color, font);
+  };
+
   const drawCenteredFittedCellText = (page: any, value: string, columnX: number, columnWidth: number, cellTopY: number, cellBottomY: number, initialSize: number, color: any, font: any) => {
     const cellPadding = 7;
     const maxWidth = columnWidth - cellPadding * 2;
@@ -1849,7 +1873,7 @@ export const createBulletinPdfDocument = async (
     x += columns[7].width;
 
     // Column 9: Rang
-    drawCenteredCellValue(page, line.rank == null ? '-' : String(line.rank), x, columns[8].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredRankValue(page, line.rank == null ? '-' : String(line.rank), x, columns[8].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
