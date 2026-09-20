@@ -2105,6 +2105,25 @@ export const createBulletinPdfDocument = async (
   const decisionProfessorY = decisionProfessorAnchorY - decisionProfessorGap - decisionProfessorTextHeight;
   drawText(page, decisionProfessorText, decisionProfessorX, decisionProfessorY, decisionProfessorFontSize, text, fontBold);
   page.drawLine({ start: { x: decisionProfessorX, y: decisionProfessorY - 1.5 }, end: { x: decisionProfessorX + decisionProfessorTextWidth, y: decisionProfessorY - 1.5 }, color: text, thickness: 1 });
+  const distinctionsText = 'Distinctions spéciales';
+  const sanctionsText = 'Sanctions';
+  const distinctionFontSize = 10;
+  const distinctionsWidth = fontBold.widthOfTextAtSize(distinctionsText, distinctionFontSize);
+  const sanctionsWidth = fontBold.widthOfTextAtSize(sanctionsText, distinctionFontSize);
+  const distinctionsY = decisionProfessorY - decisionProfessorTextHeight - 6;
+  const sanctionsX = decisionProfessorX + decisionProfessorTextWidth - sanctionsWidth;
+  drawText(page, distinctionsText, decisionProfessorX, distinctionsY, distinctionFontSize, text, fontBold);
+  page.drawLine({ start: { x: decisionProfessorX, y: distinctionsY - 1.5 }, end: { x: decisionProfessorX + distinctionsWidth, y: distinctionsY - 1.5 }, color: text, thickness: 1 });
+  drawText(page, sanctionsText, sanctionsX, distinctionsY, distinctionFontSize, text, fontBold);
+  page.drawLine({ start: { x: sanctionsX, y: distinctionsY - 1.5 }, end: { x: sanctionsX + sanctionsWidth, y: distinctionsY - 1.5 }, color: text, thickness: 1 });
+
+  const appreciationText = 'APPRECIATION DU CHEF D\'ETABLISSEMENT';
+  const appreciationFontSize = 12;
+  const appreciationTextWidth = fontBold.widthOfTextAtSize(appreciationText, appreciationFontSize);
+  const appreciationTextHeight = fontBold.heightAtSize(appreciationFontSize, { descender: false });
+  const appreciationY = decisionProfessorY - appreciationTextHeight - 80;
+  drawText(page, appreciationText, decisionProfessorX, appreciationY, appreciationFontSize, text, fontBold);
+  page.drawLine({ start: { x: decisionProfessorX, y: appreciationY - 1.5 }, end: { x: decisionProfessorX + appreciationTextWidth, y: appreciationY - 1.5 }, color: text, thickness: 1 });
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
   const signatureLabelY = lastSummaryY - 28;
