@@ -2117,6 +2117,16 @@ export const createBulletinPdfDocument = async (
   drawText(page, sanctionsText, sanctionsX, distinctionsY, distinctionFontSize, text, fontBold);
   page.drawLine({ start: { x: sanctionsX, y: distinctionsY - 1.5 }, end: { x: sanctionsX + sanctionsWidth, y: distinctionsY - 1.5 }, color: text, thickness: 1 });
 
+  const sanctionWarningText = 'Avertissement pour le travail';
+  const sanctionWarningFontSize = 10;
+  const sanctionWarningTextWidth = fontBold.widthOfTextAtSize(sanctionWarningText, sanctionWarningFontSize);
+  const sanctionWarningTextHeight = fontBold.heightAtSize(sanctionWarningFontSize, { descender: false });
+  const sanctionWarningY = distinctionsY - sanctionWarningTextHeight - 6;
+  const sanctionWarningX = sanctionsX + sanctionsWidth / 2 - sanctionWarningTextWidth / 2;
+  if (data.average != null && Number.isFinite(data.average) && data.average < 9) {
+    drawText(page, sanctionWarningText, sanctionWarningX, sanctionWarningY, sanctionWarningFontSize, text, fontBold);
+  }
+
   const appreciationText = 'APPRECIATION DU CHEF D\'ETABLISSEMENT';
   const appreciationFontSize = 12;
   const appreciationTextWidth = fontBold.widthOfTextAtSize(appreciationText, appreciationFontSize);
