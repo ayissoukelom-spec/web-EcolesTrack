@@ -2058,8 +2058,8 @@ export const createBulletinPdfDocument = async (
   let annualBoxBottom: number | null = null;
   if (data.annualAverage != null || data.annualRank != null) {
     const annualY = decisionBaselineY == null
-      ? summaryY - summaryBlocks.length * 16
-      : decisionBaselineY - 11 - 6;
+      ? summaryY - summaryBlocks.length * 16 - 3
+      : decisionBaselineY - 11 - 6 - 3;
     const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
     const annualFontSize = 10;
