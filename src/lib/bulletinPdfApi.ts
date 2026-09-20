@@ -1701,7 +1701,13 @@ export const createBulletinPdfDocument = async (
 
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
-      drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
+      const groupRowLeftX = tableX;
+      const groupRowRightX = tableX + tableWidth;
+      const groupRowCenterX = (groupRowLeftX + groupRowRightX) / 2;
+      const groupTitleFontSize = 9;
+      const groupTitleTextWidth = fontBold.widthOfTextAtSize(entry.groupTitle, groupTitleFontSize);
+      const groupTitleTextX = groupRowCenterX - groupTitleTextWidth / 2;
+      drawText(page, entry.groupTitle, groupTitleTextX, cursorY - 14, groupTitleFontSize, primary, fontBold);
       const groupTitleOuterOverlap = tableBorderWidth / 2;
       page.drawLine({ start: { x: tableX, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
