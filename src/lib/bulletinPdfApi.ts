@@ -2089,6 +2089,15 @@ export const createBulletinPdfDocument = async (
     );
     drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
     drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
+    const decisionProfessorText = 'DECISION DU CONSEIL DES PROFESSEURS';
+    const decisionProfessorFontSize = 9;
+    const decisionProfessorTextWidth = fontBold.widthOfTextAtSize(decisionProfessorText, decisionProfessorFontSize);
+    const decisionProfessorTextHeight = fontBold.heightAtSize(decisionProfessorFontSize, { descender: false });
+    const decisionProfessorX = annualBoxLeft;
+    const decisionProfessorGap = 6;
+    const decisionProfessorY = annualBoxBottom - decisionProfessorGap - decisionProfessorTextHeight;
+    drawText(page, decisionProfessorText, decisionProfessorX, decisionProfessorY, decisionProfessorFontSize, text, fontBold);
+    page.drawLine({ start: { x: decisionProfessorX, y: decisionProfessorY - 1.5 }, end: { x: decisionProfessorX + decisionProfessorTextWidth, y: decisionProfessorY - 1.5 }, color: text, thickness: 1 });
   }
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
