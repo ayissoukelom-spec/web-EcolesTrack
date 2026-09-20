@@ -1441,6 +1441,29 @@ export const createBulletinPdfDocument = async (
     drawText(page, value, textX, textY, size, color, font);
   };
 
+  const drawCenteredFittedCellText = (page: any, value: string, columnX: number, columnWidth: number, cellTopY: number, cellBottomY: number, initialSize: number, color: any, font: any) => {
+    const cellPadding = 7;
+    const maxWidth = columnWidth - cellPadding * 2;
+    let size = initialSize;
+    let lines = computeWrappedTextLines(value, maxWidth, font, size, 2).lines;
+    while (size > 5.5 && lines.some((line) => font.widthOfTextAtSize(sanitizePdfText(line), size) > maxWidth)) {
+      size = Math.max(5.5, size - 0.2);
+      lines = computeWrappedTextLines(value, maxWidth, font, size, 2).lines;
+    }
+
+    const textHeight = font.heightAtSize(size, { descender: false });
+    const lineSpacing = size + 2;
+    const textBlockHeight = textHeight + Math.max(0, lines.length - 1) * lineSpacing;
+    const cellCenterY = (cellTopY + cellBottomY) / 2;
+    const firstBaselineY = cellCenterY - textHeight / 2 + (textBlockHeight - textHeight) / 2;
+    lines.forEach((line, index) => {
+      const textWidth = font.widthOfTextAtSize(sanitizePdfText(line), size);
+      const textX = columnX + (columnWidth - textWidth) / 2;
+      const textY = firstBaselineY - index * lineSpacing;
+      drawText(page, line, textX, textY, size, color, font);
+    });
+  };
+
   const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 11, fitToWidth = true) => {
     const size = fitToWidth ? fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize) : initialSize;
     const lines = computeHeaderParagraphLayout(value, maxWidth, font, size);
@@ -1830,7 +1853,7 @@ export const createBulletinPdfDocument = async (
 
     // Column 10: Prof. (Teacher name)
     const teacherName = sanitizePdfText(line.teacherName || '-');
-    const teacherNameSize = 7.2;
+    const teacherNameSize = 9.2;
     const teacherColumnWidth = columns[9].width;
     const teacherTextMaxWidth = teacherColumnWidth - 14;
     const teacherColumnCenterX = x + teacherColumnWidth / 2;
@@ -1856,7 +1879,7 @@ export const createBulletinPdfDocument = async (
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawWrappedText(page, line.teacherComment || '-', x + 7, cursorY - 13, columns[10].width - 14, 7.2, text, fontBold, 2);
+    drawCenteredFittedCellText(page, line.teacherComment || '-', x, columns[10].width, cursorY, cursorY - rowHeight, 9.2, text, fontBold);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
