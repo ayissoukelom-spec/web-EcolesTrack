@@ -2125,6 +2125,23 @@ export const createBulletinPdfDocument = async (
   drawText(page, appreciationText, decisionProfessorX, appreciationY, appreciationFontSize, text, fontBold);
   page.drawLine({ start: { x: decisionProfessorX, y: appreciationY - 1.5 }, end: { x: decisionProfessorX + appreciationTextWidth, y: appreciationY - 1.5 }, color: text, thickness: 1 });
 
+  const currentBulletinAverage = data.average;
+  const currentBulletinAppreciation = (() => {
+    if (currentBulletinAverage == null || !Number.isFinite(currentBulletinAverage)) return null;
+    if (currentBulletinAverage < 8) return 'Travail faible';
+    if (currentBulletinAverage >= 8 && currentBulletinAverage < 10) return 'Travail Insuffisant';
+    if (currentBulletinAverage >= 10 && currentBulletinAverage < 12) return 'Travail Passable';
+    if (currentBulletinAverage >= 12 && currentBulletinAverage < 14) return 'Travail Assez Bien';
+    if (currentBulletinAverage >= 14 && currentBulletinAverage < 16) return 'Travail Bien';
+    if (currentBulletinAverage >= 16 && currentBulletinAverage < 18) return 'Travail Très bon Travail';
+    return 'Travail excellent';
+  })();
+  if (currentBulletinAppreciation != null) {
+    const sentimentFontSize = 10;
+    const sentimentTextY = appreciationY - appreciationTextHeight - 6;
+    drawText(page, currentBulletinAppreciation, decisionProfessorX, sentimentTextY, sentimentFontSize, text, fontBold);
+  }
+
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
   const signatureLabelY = lastSummaryY - 28;
   const signatureNameY = signatureLabelY - 46;
