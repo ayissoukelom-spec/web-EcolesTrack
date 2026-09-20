@@ -1979,6 +1979,7 @@ export const createBulletinPdfDocument = async (
   drawText(page, 'Moyennes :', moyennesX, summaryY, moyennesFontSize, text, fontBoldItalic);
   page.drawLine({ start: { x: moyennesX, y: summaryY - 1.5 }, end: { x: moyennesX + moyennesTextWidth, y: summaryY - 1.5 }, color: text, thickness: 1 });
   const periodMatch = currentSummaryLabel.match(/^(\d+)(er|ème)\s+(Semestre|Trimestre)$/i);
+  let decisionBaselineY: number | null = null;
   if (periodMatch) {
     const periodNumber = periodMatch[1];
     const periodSuffix = periodMatch[2];
@@ -2038,6 +2039,7 @@ export const createBulletinPdfDocument = async (
     const decisionGap = 6;
     const halfCentimeterInPdfPoints = 14.17;
     const decisionY = boxBottom - decisionGap - previousDecisionTextHeight - halfCentimeterInPdfPoints;
+    decisionBaselineY = decisionY;
     drawText(page, decisionText, decisionX, decisionY, decisionFontSize, text, fontBold);
     page.drawLine({ start: { x: decisionX, y: decisionY - 1.5 }, end: { x: decisionX + decisionTextWidth, y: decisionY - 1.5 }, color: text, thickness: 1 });
   }
@@ -2051,7 +2053,9 @@ export const createBulletinPdfDocument = async (
   });
 
   if (data.annualAverage != null || data.annualRank != null) {
-    const annualY = summaryY - summaryBlocks.length * 16;
+    const annualY = decisionBaselineY == null
+      ? summaryY - summaryBlocks.length * 16
+      : decisionBaselineY - 11 - 6;
     const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
     drawText(page, annualAverageText, summaryLeftX, annualY, 10, text, fontBold);
