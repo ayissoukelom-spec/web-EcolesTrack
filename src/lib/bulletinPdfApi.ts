@@ -1972,6 +1972,13 @@ export const createBulletinPdfDocument = async (
 
   summaryBlocks.push(currentSummary);
 
+  const moyennesX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
+  const moyennesFontSize = 12;
+  const moyennesText = 'Moyennes';
+  const moyennesTextWidth = fontBoldItalic.widthOfTextAtSize(moyennesText, moyennesFontSize);
+  drawText(page, 'Moyennes :', moyennesX, summaryY, moyennesFontSize, text, fontBoldItalic);
+  page.drawLine({ start: { x: moyennesX, y: summaryY - 1.5 }, end: { x: moyennesX + moyennesTextWidth, y: summaryY - 1.5 }, color: text, thickness: 1 });
+
   summaryBlocks.forEach((entry, index) => {
     const averageText = `${entry.label} : ${entry.average == null ? '-' : formatPdfDisplayNumberFixed(entry.average).replace('.', ',')}`;
     const rankText = `Rang : ${entry.rank == null ? '-' : formatGeneralRankLabel(entry.rank)}`;
