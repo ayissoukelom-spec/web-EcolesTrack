@@ -1299,8 +1299,10 @@ export const createBulletinPdfDocument = async (
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
   const notationColumnWidth = 30;
+  const noteCoefColumnWidth = 46;
   const signatureColumnWidth = 66;
-  const professorColumnWidth = tableWidth - (86 + notationColumnWidth * 8 + 70 + signatureColumnWidth);
+  const appreciationColumnWidth = 54;
+  const professorColumnWidth = tableWidth - (86 + notationColumnWidth * 7 + noteCoefColumnWidth + appreciationColumnWidth + signatureColumnWidth);
   const columns = [
     { label: 'Matières', width: 86 },
     { label: 'Moy. interro', width: notationColumnWidth },
@@ -1309,10 +1311,10 @@ export const createBulletinPdfDocument = async (
     { label: 'Compo.', width: notationColumnWidth },
     { label: BULLETIN_FINAL_AVERAGE_LABEL, width: notationColumnWidth },
     { label: 'Coef.', width: notationColumnWidth },
-    { label: 'Note coef.', width: notationColumnWidth },
+    { label: 'Note coef.', width: noteCoefColumnWidth },
     { label: 'Rang', width: notationColumnWidth },
     { label: 'Professeur', width: professorColumnWidth },
-    { label: 'Appréciation', width: 70 },
+    { label: 'Appréciation', width: appreciationColumnWidth },
     { label: 'Signature', width: signatureColumnWidth },
   ];
 
@@ -1732,8 +1734,8 @@ export const createBulletinPdfDocument = async (
       drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
       const subtotalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
       const subtotalWeightedPointsX = subtotalCoefficientX + columns[6].width;
-      drawText(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 8, primary, fontBold);
-      drawText(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+      drawText(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientX, cursorY - 14, 10, primary, fontBold);
+      drawText(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsX, cursorY - 14, 10, primary, fontBold);
       [6, 7, 8].forEach((columnCount) => {
         const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
         page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
@@ -1782,35 +1784,35 @@ export const createBulletinPdfDocument = async (
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawText(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.interrogation), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.interrogation), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawText(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.devoir), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.devoir), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawText(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.classAverage), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.classAverage), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawText(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.composition), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.composition), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawText(page, line.average == null ? '-' : formatPdfDisplayNumberFixed(line.average), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, line.average == null ? '-' : formatPdfDisplayNumberFixed(line.average), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[5].width;
 
     // Column 7: Coef.
-    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, line.coefficient == null ? '-' : String(line.coefficient), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[6].width;
 
     // Column 8: Note coef.
-    drawText(page, String(noteCoef), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, String(noteCoef), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[7].width;
 
     // Column 9: Rang
-    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 7.5, text, fontBold);
+    drawText(page, line.rank == null ? '-' : String(line.rank), x + 7, cursorY - 13, 9.5, text, fontBold);
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
@@ -1873,8 +1875,8 @@ export const createBulletinPdfDocument = async (
   drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
   const totalCoefficientX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0) + 7;
   const totalWeightedPointsX = totalCoefficientX + columns[6].width;
-  drawText(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientX, cursorY - 14, 8, primary, fontBold);
-  drawText(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 8, primary, fontBold);
+  drawText(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientX, cursorY - 14, 10, primary, fontBold);
+  drawText(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsX, cursorY - 14, 10, primary, fontBold);
   [6, 7, 8].forEach((columnCount) => {
     const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
     page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
