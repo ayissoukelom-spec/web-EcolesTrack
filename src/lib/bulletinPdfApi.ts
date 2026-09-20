@@ -1299,16 +1299,17 @@ export const createBulletinPdfDocument = async (
   const tableX = margin;
   const tableWidth = pageSize[0] - margin * 2;
   const notationColumnWidth = 30;
-  const noteCoefColumnWidth = 46;
+  const compoColumnWidth = 37;
+  const noteCoefColumnWidth = 39;
   const signatureColumnWidth = 66;
   const appreciationColumnWidth = 54;
-  const professorColumnWidth = tableWidth - (86 + notationColumnWidth * 7 + noteCoefColumnWidth + appreciationColumnWidth + signatureColumnWidth);
+  const professorColumnWidth = tableWidth - (86 + notationColumnWidth * 6 + compoColumnWidth + noteCoefColumnWidth + appreciationColumnWidth + signatureColumnWidth);
   const columns = [
     { label: 'Matières', width: 86 },
     { label: 'Moy. interro', width: notationColumnWidth },
     { label: 'Devoir', width: notationColumnWidth },
     { label: 'Moy. Clas', width: notationColumnWidth },
-    { label: 'Compo.', width: notationColumnWidth },
+    { label: 'Compo.', width: compoColumnWidth },
     { label: BULLETIN_FINAL_AVERAGE_LABEL, width: notationColumnWidth },
     { label: 'Coef.', width: notationColumnWidth },
     { label: 'Note coef.', width: noteCoefColumnWidth },
@@ -1565,8 +1566,8 @@ export const createBulletinPdfDocument = async (
       const columnWidth = column.width;
       if (lines.length === 1) {
         const line = lines[0];
-        const lineWidth = fontBold.widthOfTextAtSize(line, 8);
-        const headerSize = 8;
+        const lineWidth = fontBold.widthOfTextAtSize(line, 10);
+        const headerSize = 10;
         const renderedWidth = fontBold.widthOfTextAtSize(line, headerSize);
         const textX = line === 'Signature'
           ? columnX + (tableX + tableWidth - columnX - renderedWidth) / 2
@@ -1576,14 +1577,14 @@ export const createBulletinPdfDocument = async (
         const isNoteOverTwentyHeader = index === 5 && lines.length === 2 && lines[0] === 'Note' && lines[1] === '/20';
         const isMoyClasHeader = index === 3 && lines.length === 2 && lines[0] === 'Moy.' && lines[1] === 'Clas';
         lines.forEach((line, lineIndex) => {
-          const lineWidth = fontBold.widthOfTextAtSize(line, 7.5);
+          const lineWidth = fontBold.widthOfTextAtSize(line, 9.5);
           const textX = columnX + (columnWidth - lineWidth) / 2;
           const verticalOffset = isNoteOverTwentyHeader
             ? 13 + lineIndex * 8
             : isMoyClasHeader
               ? 13 + lineIndex * 8
               : 21 - lineIndex * 8;
-          drawText(page, line, textX, y - verticalOffset, 7.5, text, fontBold);
+          drawText(page, line, textX, y - verticalOffset, 9.5, text, fontBold);
         });
       }
       x += column.width;
@@ -1716,7 +1717,7 @@ export const createBulletinPdfDocument = async (
       const groupRowLeftX = tableX;
       const groupRowRightX = tableX + tableWidth;
       const groupRowCenterX = (groupRowLeftX + groupRowRightX) / 2;
-      const groupTitleFontSize = 9;
+      const groupTitleFontSize = 11;
       const groupTitleTextWidth = fontBold.widthOfTextAtSize(entry.groupTitle, groupTitleFontSize);
       const groupTitleTextX = groupRowCenterX - groupTitleTextWidth / 2;
       drawText(page, entry.groupTitle, groupTitleTextX, cursorY - 14, groupTitleFontSize, primary, fontBold);
@@ -1741,7 +1742,7 @@ export const createBulletinPdfDocument = async (
         borderColor: tableBorder,
         borderWidth: tableBorderWidth,
       });
-      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 8, primary, fontBold);
+      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 10, primary, fontBold);
       const subtotalCoefficientColumnX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
       const subtotalWeightedPointsColumnX = subtotalCoefficientColumnX + columns[6].width;
       drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientColumnX, columns[6].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
@@ -1779,7 +1780,7 @@ export const createBulletinPdfDocument = async (
       const subjectTextMaxWidth = subjectCellWidth - 14;
       const subjectLayout = fitSubjectCellLayout(line.subjectName, subjectTextMaxWidth, 7.5, 5.5, fontBold);
       const subjectTextLines = subjectLayout.lines;
-      const subjectFontSize = subjectLayout.size;
+      const subjectFontSize = subjectLayout.size + 2;
       const lineHeight = Math.max(8.5, subjectFontSize + 1.2);
       const textHeight = fontBold.heightAtSize(subjectFontSize, { descender: false });
       const lineSpacing = lineHeight + 1;
