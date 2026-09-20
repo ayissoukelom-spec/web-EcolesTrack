@@ -1980,6 +1980,7 @@ export const createBulletinPdfDocument = async (
   page.drawLine({ start: { x: moyennesX, y: summaryY - 1.5 }, end: { x: moyennesX + moyennesTextWidth, y: summaryY - 1.5 }, color: text, thickness: 1 });
   const periodMatch = currentSummaryLabel.match(/^(\d+)(er|ème)\s+(Semestre|Trimestre)$/i);
   let decisionBaselineY: number | null = null;
+  let decisionClassBottomY: number | null = null;
   if (periodMatch) {
     const periodNumber = periodMatch[1];
     const periodSuffix = periodMatch[2];
@@ -2032,7 +2033,7 @@ export const createBulletinPdfDocument = async (
     drawText(page, periodRest, periodRestX, periodLineY, periodMainSize, text, fontBold);
     const decisionText = 'Décision du conseil de la classe';
     const previousDecisionFontSize = 9;
-    const decisionFontSize = previousDecisionFontSize + 2;
+    const decisionFontSize = previousDecisionFontSize + 3;
     const decisionTextWidth = fontBold.widthOfTextAtSize(decisionText, decisionFontSize);
     const previousDecisionTextHeight = fontBold.heightAtSize(previousDecisionFontSize, { descender: false });
     const decisionX = tableX + columns.slice(0, 4).reduce((total, column) => total + column.width, 0);
@@ -2040,6 +2041,7 @@ export const createBulletinPdfDocument = async (
     const halfCentimeterInPdfPoints = 14.17;
     const decisionY = boxBottom - decisionGap - previousDecisionTextHeight - halfCentimeterInPdfPoints;
     decisionBaselineY = decisionY;
+    decisionClassBottomY = decisionY;
     drawText(page, decisionText, decisionX, decisionY, decisionFontSize, text, fontBold);
     page.drawLine({ start: { x: decisionX, y: decisionY - 1.5 }, end: { x: decisionX + decisionTextWidth, y: decisionY - 1.5 }, color: text, thickness: 1 });
   }
@@ -2052,6 +2054,8 @@ export const createBulletinPdfDocument = async (
     drawText(page, rankText, summaryRightX, y, 10, text, fontBold);
   });
 
+  let annualBoxLeft: number | null = null;
+  let annualBoxBottom: number | null = null;
   if (data.annualAverage != null || data.annualRank != null) {
     const annualY = decisionBaselineY == null
       ? summaryY - summaryBlocks.length * 16
@@ -2071,10 +2075,10 @@ export const createBulletinPdfDocument = async (
     };
     const annualHorizontalPadding = 4;
     const annualVerticalPadding = 4;
-    const annualBoxLeft = annualTextBounds.left - annualHorizontalPadding;
+    annualBoxLeft = annualTextBounds.left - annualHorizontalPadding;
     const annualBoxRight = annualTextBounds.right + annualHorizontalPadding;
     const annualBoxTop = annualTextBounds.top + annualVerticalPadding;
-    const annualBoxBottom = annualTextBounds.bottom - annualVerticalPadding;
+    annualBoxBottom = annualTextBounds.bottom - annualVerticalPadding;
     const annualBoxWidth = annualBoxRight - annualBoxLeft;
     const annualBoxHeight = annualBoxTop - annualBoxBottom;
     page.drawSvgPath(
@@ -2089,16 +2093,19 @@ export const createBulletinPdfDocument = async (
     );
     drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
     drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
-    const decisionProfessorText = 'DECISION DU CONSEIL DES PROFESSEURS';
-    const decisionProfessorFontSize = 9;
-    const decisionProfessorTextWidth = fontBold.widthOfTextAtSize(decisionProfessorText, decisionProfessorFontSize);
-    const decisionProfessorTextHeight = fontBold.heightAtSize(decisionProfessorFontSize, { descender: false });
-    const decisionProfessorX = annualBoxLeft;
-    const decisionProfessorGap = 6;
-    const decisionProfessorY = annualBoxBottom - decisionProfessorGap - decisionProfessorTextHeight;
-    drawText(page, decisionProfessorText, decisionProfessorX, decisionProfessorY, decisionProfessorFontSize, text, fontBold);
-    page.drawLine({ start: { x: decisionProfessorX, y: decisionProfessorY - 1.5 }, end: { x: decisionProfessorX + decisionProfessorTextWidth, y: decisionProfessorY - 1.5 }, color: text, thickness: 1 });
   }
+
+  const decisionProfessorText = 'DECISION DU CONSEIL DES PROFESSEURS';
+  const previousDecisionProfessorFontSize = 9;
+  const decisionProfessorFontSize = previousDecisionProfessorFontSize + 2;
+  const decisionProfessorTextWidth = fontBold.widthOfTextAtSize(decisionProfessorText, decisionProfessorFontSize);
+  const decisionProfessorTextHeight = fontBold.heightAtSize(previousDecisionProfessorFontSize, { descender: false });
+  const decisionProfessorX = annualBoxBottom == null ? summaryLeftX : annualBoxLeft;
+  const decisionProfessorGap = 40;
+  const decisionProfessorAnchorY = decisionClassBottomY ?? (annualBoxBottom ?? (summaryY - summaryBlocks.length * 16));
+  const decisionProfessorY = decisionProfessorAnchorY - decisionProfessorGap - decisionProfessorTextHeight;
+  drawText(page, decisionProfessorText, decisionProfessorX, decisionProfessorY, decisionProfessorFontSize, text, fontBold);
+  page.drawLine({ start: { x: decisionProfessorX, y: decisionProfessorY - 1.5 }, end: { x: decisionProfessorX + decisionProfessorTextWidth, y: decisionProfessorY - 1.5 }, color: text, thickness: 1 });
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
   const signatureLabelY = lastSummaryY - 28;
