@@ -1709,8 +1709,8 @@ export const createBulletinPdfDocument = async (
       const groupTitleTextX = groupRowCenterX - groupTitleTextWidth / 2;
       drawText(page, entry.groupTitle, groupTitleTextX, cursorY - 14, groupTitleFontSize, primary, fontBold);
       const groupTitleOuterOverlap = tableBorderWidth / 2;
-      page.drawLine({ start: { x: tableX, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
-      page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+      page.drawLine({ start: { x: tableX, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+      page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       cursorY -= 20;
       continue;
     }
