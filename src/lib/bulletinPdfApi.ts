@@ -2058,8 +2058,37 @@ export const createBulletinPdfDocument = async (
       : decisionBaselineY - 11 - 6;
     const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
-    drawText(page, annualAverageText, summaryLeftX, annualY, 10, text, fontBold);
-    drawText(page, annualRankText, summaryRightX, annualY, 10, text, fontBold);
+    const annualFontSize = 10;
+    const annualAverageWidth = fontBold.widthOfTextAtSize(annualAverageText, annualFontSize);
+    const annualRankWidth = fontBold.widthOfTextAtSize(annualRankText, annualFontSize);
+    const annualRankGap = 6;
+    const annualRankX = summaryLeftX + annualAverageWidth + annualRankGap;
+    const annualTextBounds = {
+      left: summaryLeftX,
+      right: annualRankX + annualRankWidth,
+      top: annualY + fontBold.heightAtSize(annualFontSize, { descender: false }),
+      bottom: annualY,
+    };
+    const annualHorizontalPadding = 4;
+    const annualVerticalPadding = 4;
+    const annualBoxLeft = annualTextBounds.left - annualHorizontalPadding;
+    const annualBoxRight = annualTextBounds.right + annualHorizontalPadding;
+    const annualBoxTop = annualTextBounds.top + annualVerticalPadding;
+    const annualBoxBottom = annualTextBounds.bottom - annualVerticalPadding;
+    const annualBoxWidth = annualBoxRight - annualBoxLeft;
+    const annualBoxHeight = annualBoxTop - annualBoxBottom;
+    page.drawSvgPath(
+      `M 4,0 H ${annualBoxWidth - 4} Q ${annualBoxWidth},0 ${annualBoxWidth},4 V ${annualBoxHeight - 4} Q ${annualBoxWidth},${annualBoxHeight} ${annualBoxWidth - 4},${annualBoxHeight} H 4 Q 0,${annualBoxHeight} 0,${annualBoxHeight - 4} V 4 Q 0,0 4,0 Z`,
+      {
+        x: annualBoxLeft,
+        y: annualBoxTop,
+        color: hexToRgb('#f8f8f2'),
+        borderColor: hexToRgb('#000000'),
+        borderWidth: 1.2,
+      },
+    );
+    drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
+    drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
   }
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
