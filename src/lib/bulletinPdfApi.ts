@@ -1978,6 +1978,58 @@ export const createBulletinPdfDocument = async (
   const moyennesTextWidth = fontBoldItalic.widthOfTextAtSize(moyennesText, moyennesFontSize);
   drawText(page, 'Moyennes :', moyennesX, summaryY, moyennesFontSize, text, fontBoldItalic);
   page.drawLine({ start: { x: moyennesX, y: summaryY - 1.5 }, end: { x: moyennesX + moyennesTextWidth, y: summaryY - 1.5 }, color: text, thickness: 1 });
+  const periodMatch = currentSummaryLabel.match(/^(\d+)(er|ème)\s+(Semestre|Trimestre)$/i);
+  if (periodMatch) {
+    const periodNumber = periodMatch[1];
+    const periodSuffix = periodMatch[2];
+    const periodType = periodMatch[3].toLowerCase();
+    const periodAverage = data.average == null ? '-' : formatPdfDisplayNumberFixed(data.average).replace('.', ',');
+    const periodPrefix = 'Moyenne du ';
+    const periodMain = periodNumber;
+    const periodMainSize = 10;
+    const periodSuffixSize = 6.5;
+    const periodSuffixRise = 5;
+    const periodPrefixWidth = fontBold.widthOfTextAtSize(periodPrefix, periodMainSize);
+    const periodMainWidth = fontBold.widthOfTextAtSize(periodMain, periodMainSize);
+    const periodSuffixWidth = fontBold.widthOfTextAtSize(periodSuffix, periodSuffixSize);
+    const periodSuffixGap = 1;
+    const periodRest = ` ${periodType} : ${periodAverage}`;
+    const periodRestWidth = fontBold.widthOfTextAtSize(periodRest, periodMainSize);
+    const periodTextWidth = periodPrefixWidth + periodMainWidth + periodSuffixGap + periodSuffixWidth + periodRestWidth;
+    const periodLineY = summaryY - 20;
+    const periodSuffixX = moyennesX + periodPrefixWidth + periodMainWidth + periodSuffixGap;
+    const periodRestX = periodSuffixX + periodSuffixWidth;
+    const periodMainHeight = fontBold.heightAtSize(periodMainSize, { descender: false });
+    const periodSuffixHeight = fontBold.heightAtSize(periodSuffixSize, { descender: false });
+    const textBounds = {
+      left: moyennesX,
+      right: periodRestX + periodRestWidth,
+      top: Math.max(periodLineY + periodMainHeight, periodLineY + periodSuffixRise + periodSuffixHeight),
+      bottom: periodLineY,
+    };
+    const horizontalPadding = 4;
+    const verticalPadding = 4;
+    const boxLeft = textBounds.left - horizontalPadding;
+    const boxRight = textBounds.right + horizontalPadding;
+    const boxTop = textBounds.top + verticalPadding;
+    const boxBottom = textBounds.bottom - verticalPadding;
+    const periodBoxWidth = boxRight - boxLeft;
+    const periodBoxHeight = boxTop - boxBottom;
+    page.drawSvgPath(
+      `M 4,0 H ${periodBoxWidth - 4} Q ${periodBoxWidth},0 ${periodBoxWidth},4 V ${periodBoxHeight - 4} Q ${periodBoxWidth},${periodBoxHeight} ${periodBoxWidth - 4},${periodBoxHeight} H 4 Q 0,${periodBoxHeight} 0,${periodBoxHeight - 4} V 4 Q 0,0 4,0 Z`,
+      {
+        x: boxLeft,
+        y: boxTop,
+        color: hexToRgb('#f8f8f2'),
+        borderColor: hexToRgb('#000000'),
+        borderWidth: 1.2,
+      },
+    );
+    drawText(page, periodPrefix, moyennesX, periodLineY, periodMainSize, text, fontBold);
+    drawText(page, periodMain, moyennesX + periodPrefixWidth, periodLineY, periodMainSize, text, fontBold);
+    drawText(page, periodSuffix, periodSuffixX, periodLineY + periodSuffixRise, periodSuffixSize, text, fontBold);
+    drawText(page, periodRest, periodRestX, periodLineY, periodMainSize, text, fontBold);
+  }
 
   summaryBlocks.forEach((entry, index) => {
     const averageText = `${entry.label} : ${entry.average == null ? '-' : formatPdfDisplayNumberFixed(entry.average).replace('.', ',')}`;
