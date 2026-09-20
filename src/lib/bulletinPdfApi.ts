@@ -1542,7 +1542,10 @@ export const createBulletinPdfDocument = async (
   const drawTableHeader = (page: any, y: number) => {
     // Header height accommodates up to 2 lines of text
     const headerHeight = 28;
+    const headerOuterOverlap = tableBorderWidth / 2;
     page.drawRectangle({ x: tableX, y: y - headerHeight, width: tableWidth, height: headerHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
+    page.drawLine({ start: { x: tableX, y: y + headerOuterOverlap }, end: { x: tableX, y: y - headerHeight - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+    page.drawLine({ start: { x: tableX + tableWidth, y: y + headerOuterOverlap }, end: { x: tableX + tableWidth, y: y - headerHeight - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
     let x = tableX;
     columns.forEach((column, index) => {
       const lines = headerLines[index];
@@ -1693,6 +1696,9 @@ export const createBulletinPdfDocument = async (
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
       drawText(page, entry.groupTitle, tableX + 7, cursorY - 14, 9, primary, fontBold);
+      const groupTitleOuterOverlap = tableBorderWidth / 2;
+      page.drawLine({ start: { x: tableX, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+      page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       cursorY -= 20;
       continue;
     }
