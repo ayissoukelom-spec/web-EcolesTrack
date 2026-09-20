@@ -2029,6 +2029,17 @@ export const createBulletinPdfDocument = async (
     drawText(page, periodMain, moyennesX + periodPrefixWidth, periodLineY, periodMainSize, text, fontBold);
     drawText(page, periodSuffix, periodSuffixX, periodLineY + periodSuffixRise, periodSuffixSize, text, fontBold);
     drawText(page, periodRest, periodRestX, periodLineY, periodMainSize, text, fontBold);
+    const decisionText = 'Décision du conseil de la classe';
+    const previousDecisionFontSize = 9;
+    const decisionFontSize = previousDecisionFontSize + 2;
+    const decisionTextWidth = fontBold.widthOfTextAtSize(decisionText, decisionFontSize);
+    const previousDecisionTextHeight = fontBold.heightAtSize(previousDecisionFontSize, { descender: false });
+    const decisionX = tableX + columns.slice(0, 4).reduce((total, column) => total + column.width, 0);
+    const decisionGap = 6;
+    const halfCentimeterInPdfPoints = 14.17;
+    const decisionY = boxBottom - decisionGap - previousDecisionTextHeight - halfCentimeterInPdfPoints;
+    drawText(page, decisionText, decisionX, decisionY, decisionFontSize, text, fontBold);
+    page.drawLine({ start: { x: decisionX, y: decisionY - 1.5 }, end: { x: decisionX + decisionTextWidth, y: decisionY - 1.5 }, color: text, thickness: 1 });
   }
 
   summaryBlocks.forEach((entry, index) => {
