@@ -2096,12 +2096,11 @@ export const createBulletinPdfDocument = async (
   }
 
   const decisionProfessorText = 'DECISION DU CONSEIL DES PROFESSEURS';
-  const previousDecisionProfessorFontSize = 9;
-  const decisionProfessorFontSize = previousDecisionProfessorFontSize + 2;
+  const decisionProfessorFontSize = 12;
   const decisionProfessorTextWidth = fontBold.widthOfTextAtSize(decisionProfessorText, decisionProfessorFontSize);
-  const decisionProfessorTextHeight = fontBold.heightAtSize(previousDecisionProfessorFontSize, { descender: false });
+  const decisionProfessorTextHeight = fontBold.heightAtSize(decisionProfessorFontSize, { descender: false });
   const decisionProfessorX = annualBoxBottom == null ? summaryLeftX : annualBoxLeft;
-  const decisionProfessorGap = 40;
+  const decisionProfessorGap = 50;
   const decisionProfessorAnchorY = decisionClassBottomY ?? (annualBoxBottom ?? (summaryY - summaryBlocks.length * 16));
   const decisionProfessorY = decisionProfessorAnchorY - decisionProfessorGap - decisionProfessorTextHeight;
   drawText(page, decisionProfessorText, decisionProfessorX, decisionProfessorY, decisionProfessorFontSize, text, fontBold);
