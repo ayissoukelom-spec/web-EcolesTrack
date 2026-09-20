@@ -1781,12 +1781,14 @@ export const createBulletinPdfDocument = async (
       const subjectTextLines = subjectLayout.lines;
       const subjectFontSize = subjectLayout.size;
       const lineHeight = Math.max(8.5, subjectFontSize + 1.2);
-      const textBlockHeight = Math.max(lineHeight, subjectTextLines.length * lineHeight);
+      const textHeight = fontBold.heightAtSize(subjectFontSize, { descender: false });
+      const lineSpacing = lineHeight + 1;
+      const textBlockHeight = textHeight + Math.max(0, subjectTextLines.length - 1) * lineSpacing;
       const cellCenterY = cursorY - rowHeight / 2;
-      const firstBaselineY = cellCenterY + (textBlockHeight / 2) - (lineHeight / 2);
+      const firstBaselineY = cellCenterY - textHeight / 2 + (textBlockHeight - textHeight) / 2;
       subjectTextLines.forEach((subjectLine, index) => {
         const lineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(subjectLine), subjectFontSize);
-        const lineX = subjectCellLeft + 7 + (subjectTextMaxWidth - lineWidth) / 2;
+        const lineX = subjectCellLeft + (subjectCellWidth - lineWidth) / 2;
         const lineY = firstBaselineY - index * (lineHeight + 1);
         drawText(page, subjectLine, lineX, lineY, subjectFontSize, text, fontBold);
       });
