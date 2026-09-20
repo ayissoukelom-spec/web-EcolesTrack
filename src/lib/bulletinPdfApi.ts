@@ -1590,7 +1590,7 @@ export const createBulletinPdfDocument = async (
       if (lines.length === 1) {
         const line = lines[0];
         const lineWidth = fontBold.widthOfTextAtSize(line, 10);
-        const headerSize = 10;
+        const headerSize = line === 'Appréciation' ? 9.0 : 10;
         const renderedWidth = fontBold.widthOfTextAtSize(line, headerSize);
         const textX = line === 'Signature'
           ? columnX + (tableX + tableWidth - columnX - renderedWidth) / 2
@@ -1598,13 +1598,14 @@ export const createBulletinPdfDocument = async (
         drawText(page, line, textX, y - 18, headerSize, text, fontBold);
       } else {
         const isNoteOverTwentyHeader = index === 5 && lines.length === 2 && lines[0] === 'Note' && lines[1] === '/20';
+        const isNoteCoefHeader = index === 7 && lines.length === 2 && lines[0] === 'Note' && lines[1] === 'coef.';
         const isMoyClasHeader = index === 3 && lines.length === 2 && lines[0] === 'Moy.' && lines[1] === 'Clas';
         lines.forEach((line, lineIndex) => {
           const lineWidth = fontBold.widthOfTextAtSize(line, 9.5);
           const textX = columnX + (columnWidth - lineWidth) / 2;
           const verticalOffset = isNoteOverTwentyHeader
             ? 13 + lineIndex * 8
-            : isMoyClasHeader
+            : isNoteCoefHeader || isMoyClasHeader
               ? 13 + lineIndex * 8
               : 21 - lineIndex * 8;
           drawText(page, line, textX, y - verticalOffset, 9.5, text, fontBold);
@@ -1908,7 +1909,7 @@ export const createBulletinPdfDocument = async (
     borderColor: tableBorder,
     borderWidth: tableBorderWidth,
   });
-  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 8, primary, fontBold);
+  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 11, primary, fontBold);
   const totalCoefficientColumnX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
   const totalWeightedPointsColumnX = totalCoefficientColumnX + columns[6].width;
   drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientColumnX, columns[6].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
