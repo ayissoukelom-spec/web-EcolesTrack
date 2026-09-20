@@ -1561,10 +1561,16 @@ export const createBulletinPdfDocument = async (
           : columnX + (columnWidth - renderedWidth) / 2;
         drawText(page, line, textX, y - 18, headerSize, text, fontBold);
       } else {
+        const isNoteOverTwentyHeader = index === 5 && lines.length === 2 && lines[0] === 'Note' && lines[1] === '/20';
+        const isMoyClasHeader = index === 3 && lines.length === 2 && lines[0] === 'Moy.' && lines[1] === 'Clas';
         lines.forEach((line, lineIndex) => {
           const lineWidth = fontBold.widthOfTextAtSize(line, 7.5);
           const textX = columnX + (columnWidth - lineWidth) / 2;
-          const verticalOffset = 21 - lineIndex * 8;
+          const verticalOffset = isNoteOverTwentyHeader
+            ? 13 + lineIndex * 8
+            : isMoyClasHeader
+              ? 13 + lineIndex * 8
+              : 21 - lineIndex * 8;
           drawText(page, line, textX, y - verticalOffset, 7.5, text, fontBold);
         });
       }
