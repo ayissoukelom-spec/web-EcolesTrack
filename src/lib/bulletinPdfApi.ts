@@ -2168,7 +2168,7 @@ export const createBulletinPdfDocument = async (
   }
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
-  const summaryTableTop = lastSummaryY - 8;
+  const summaryTableTop = lastSummaryY + 22;
   const summaryRowHeight = 14;
   const summaryTableWidth = 150;
   const signatureCenterX = page.getWidth() - margin - 85;
