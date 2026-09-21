@@ -5980,6 +5980,60 @@ export async function createApp() {
         createdBy: actor.id ?? null,
       }).returning();
 
+      const [parentRecord] = student.parentId != null
+        ? await db.select({ userId: parents.userId }).from(parents).where(eq(parents.id, student.parentId))
+        : [null];
+
+      if (parentRecord?.userId) {
+        const notificationTitle = `Retard enregistré pour ${student.firstName}`;
+        const notificationBody = inserted.lateMinutes != null
+          ? `Un retard de ${inserted.lateMinutes} minutes a été enregistré pour ${student.firstName} le ${inserted.date} (${inserted.period}).`
+          : `Un retard a été enregistré pour ${student.firstName} le ${inserted.date} (${inserted.period}).`;
+
+        try {
+          await db.insert(notifications).values({
+            userId: parentRecord.userId,
+            title: notificationTitle,
+            body: notificationBody,
+            type: 'absence',
+          });
+        } catch (notificationInsertError) {
+          console.error('Failed to insert late-arrival notification:', notificationInsertError);
+        }
+
+        try {
+          const notificationPayload = {
+            parentId: String(parentRecord.userId),
+            title: notificationTitle,
+            message: notificationBody,
+            category: 'absence',
+            metadata: {
+              target: 'late-arrival',
+              lateArrivalId: inserted.id,
+              studentId: inserted.studentId,
+              classId: inserted.classId,
+              date: inserted.date,
+              period: inserted.period,
+              lateMinutes: inserted.lateMinutes,
+            },
+            dedupeKey: `late-arrival-${inserted.id}`,
+          };
+
+          const { signature, timestamp } = signInternalPayload(notificationPayload);
+          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Internal-Signature': signature,
+              'X-Internal-Timestamp': timestamp,
+            },
+            body: JSON.stringify(notificationPayload),
+          });
+        } catch (pushNotificationError) {
+          console.error('Failed to dispatch late-arrival push notification:', pushNotificationError);
+        }
+      }
+
       return res.status(201).json(inserted);
     } catch (error: any) {
       console.error('❌ POST /api/late-arrivals ERROR:', error);
