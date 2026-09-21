@@ -1,7 +1,7 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import {
@@ -17,6 +17,7 @@ import {
   computeWrappedTextLines,
   formatPdfDisplayNumber,
   resolvePreviousPeriodSummaries,
+  calculateClassAverageSummary,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -1020,6 +1021,49 @@ describe('bulletin PDF API', () => {
 
     expect(text).toContain('Retard : 2 min');
     expect(text).toContain('Absences : 5');
+  });
+
+  it('calcule les trois moyennes en excluant les valeurs nulles', () => {
+    expect(calculateClassAverageSummary([16.42, 7.35, 11.28, null])).toEqual({
+      highest: 16.42,
+      lowest: 7.35,
+      average: (16.42 + 7.35 + 11.28) / 3,
+    });
+    expect(calculateClassAverageSummary([])).toEqual({ highest: null, lowest: null, average: null });
+  });
+
+  it('filtre les moyennes de classe par classe, année scolaire et période du bulletin', async () => {
+    const source = await readFile(path.resolve('src/lib/bulletinPdfApi.ts'), 'utf8');
+    expect(source).toContain('eq(bulletins.classId, header.classId)');
+    expect(source).toContain('eq(bulletins.schoolYearId, header.schoolYearId)');
+    expect(source).toContain('eq(bulletins.termId, header.termId)');
+    expect(source).toContain('sql`${bulletins.average} is not null`');
+  });
+
+  it('rend les tableaux de moyennes entre retard/absences et la signature', async () => {
+    const text = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      classHighestAverage: 16.42,
+      classLowestAverage: 7.35,
+      classAverage: 11.28,
+      retards: 15,
+      absences: 7,
+    }))).replace(/\s+/g, ' ');
+
+    expect(text).toContain('Retard : 15 min');
+    expect(text).toContain('Absences : 7');
+    expect(text).toContain('Plus forte moyenne');
+    expect(text).toContain('16,42');
+    expect(text).toContain('Plus faible moyenne');
+    expect(text).toContain('7,35');
+    expect(text).toContain('Moyenne de la classe');
+    expect(text).toContain('11,28');
+
+    const source = await import('node:fs/promises').then(({ readFile }) => readFile(path.resolve('src/lib/bulletinPdfApi.ts'), 'utf8'));
+    expect(source.indexOf('drawText(page, `Retard : ${data.retards} min`')).toBeLessThan(source.indexOf("'Plus forte moyenne'"));
+    expect(source.indexOf("'Plus forte moyenne'")).toBeLessThan(source.indexOf("'Plus faible moyenne'"));
+    expect(source.indexOf("'Plus faible moyenne'")).toBeLessThan(source.indexOf("'Moyenne de la classe'"));
+    expect(source.indexOf("'Moyenne de la classe'")).toBeLessThan(source.indexOf("const signatureLabelY = classAverageBottom"));
   });
 
   it('ajoute le recapitulatif de moyenne generale et rang sous le tableau pour les semestres et trimestres', async () => {

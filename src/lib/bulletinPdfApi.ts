@@ -136,6 +136,9 @@ export interface BulletinPdfData {
   appreciation: string | null;
   absences: number;
   retards: number;
+  classHighestAverage?: number | null;
+  classLowestAverage?: number | null;
+  classAverage?: number | null;
   generatedAt: string | null;
   lines: BulletinPdfLine[];
   subjectGroups?: BulletinSubjectGroup<BulletinPdfLine>[];
@@ -199,6 +202,26 @@ const parseNumber = (value: unknown): number | null => {
   if (value == null) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+export interface ClassAverageSummary {
+  highest: number | null;
+  lowest: number | null;
+  average: number | null;
+}
+
+export const calculateClassAverageSummary = (values: Array<number | string | null | undefined>): ClassAverageSummary => {
+  const validValues = values
+    .map((value) => parseNumber(value))
+    .filter((value): value is number => value != null);
+
+  if (validValues.length === 0) return { highest: null, lowest: null, average: null };
+
+  return {
+    highest: Math.max(...validValues),
+    lowest: Math.min(...validValues),
+    average: validValues.reduce((sum, value) => sum + value, 0) / validValues.length,
+  };
 };
 
 export const formatPdfDisplayNumber = (value: number | string | null | undefined): string => {
@@ -876,6 +899,17 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletins: historicalBulletins,
     });
 
+    const classBulletinRows = await db
+      .select({ average: bulletins.average })
+      .from(bulletins)
+      .where(and(
+        eq(bulletins.classId, header.classId),
+        eq(bulletins.schoolYearId, header.schoolYearId),
+        eq(bulletins.termId, header.termId),
+        sql`${bulletins.average} is not null`,
+      ));
+    const classAverageSummary = calculateClassAverageSummary(classBulletinRows.map((row) => row.average));
+
     let absencesCount = 0;
     let lateMinutesTotal = 0;
     if (header.termStartDate && header.termEndDate) {
@@ -935,6 +969,9 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       appreciation: header.appreciation,
       absences: absencesCount,
       retards: lateMinutesTotal,
+      classHighestAverage: classAverageSummary.highest,
+      classLowestAverage: classAverageSummary.lowest,
+      classAverage: classAverageSummary.average,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
       subjectGroups,
@@ -2191,7 +2228,41 @@ export const createBulletinPdfDocument = async (
   drawText(page, `Retard : ${data.retards} min`, summaryTableLeft + 5, summaryTableTop - 11, 9, text, fontBold);
   drawText(page, `Absences : ${data.absences}`, summaryTableLeft + 5, summaryTableBottom + 3, 9, text, fontBold);
 
-  const signatureLabelY = summaryTableBottom - 14;
+  const averageTableHeight = 14;
+  const averageTableGap = 4;
+  const averageValueColumnWidth = 48;
+  const drawAverageTable = (
+    top: number,
+    label: string,
+    value: number | null | undefined,
+    italicValue = false,
+  ): number => {
+    const bottom = top - averageTableHeight;
+    page.drawRectangle({
+      x: summaryTableLeft,
+      y: bottom,
+      width: summaryTableWidth,
+      height: averageTableHeight,
+      borderColor: text,
+      borderWidth: 0.8,
+    });
+    const dividerX = summaryTableLeft + summaryTableWidth - averageValueColumnWidth;
+    page.drawLine({
+      start: { x: dividerX, y: top },
+      end: { x: dividerX, y: bottom },
+      color: text,
+      thickness: 0.8,
+    });
+    drawText(page, label, summaryTableLeft + 5, bottom + 3, 9, text, fontBoldItalic);
+    drawText(page, value == null ? '-' : formatPdfDisplayNumber(value).replace('.', ','), dividerX + 5, bottom + 3, 9, text, italicValue ? fontBoldItalic : fontBold);
+    return bottom;
+  };
+
+  const highestAverageBottom = drawAverageTable(summaryTableBottom - 8, 'Plus forte moyenne', data.classHighestAverage);
+  const lowestAverageBottom = drawAverageTable(highestAverageBottom - averageTableGap, 'Plus faible moyenne', data.classLowestAverage);
+  const classAverageBottom = drawAverageTable(lowestAverageBottom - averageTableGap, 'Moyenne de la classe', data.classAverage, true);
+
+  const signatureLabelY = classAverageBottom - 14;
   const signatureNameY = signatureLabelY - 46;
   if (signatureNameY > 64) {
     const signatureLabel = 'Signature du titulaire de la classe';
