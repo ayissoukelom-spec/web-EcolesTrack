@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, customType, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, customType, integer, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -23,6 +23,7 @@ export const schools = pgTable('schools', {
   ministryName: text('ministry_name'),
   principalName: text('principal_name'),
   logoPath: text('logo_path'),
+  promotionThreshold: numeric('promotion_threshold', { precision: 5, scale: 2 }).default('10.00').notNull(),
   studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -269,6 +270,18 @@ export const schoolClasses = pgTable('school_classes', {
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
   schoolClassUniqueIdx: uniqueIndex('school_classes_school_id_class_id_idx').on(table.schoolId, table.classId),
+}));
+
+export const classSuccessions = pgTable('class_successions', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  sourceClassId: integer('source_class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  targetClassId: integer('target_class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  classSuccessionUniqueIdx: uniqueIndex('class_successions_school_year_source_idx').on(table.schoolId, table.academicYearId, table.sourceClassId),
 }));
 
 // 8. Evaluations

@@ -9,7 +9,7 @@ const mockState = {
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
-  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null }>,
+  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
   lastSchoolUpdate: null as Record<string, any> | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
@@ -146,7 +146,7 @@ const mockDb = {
         }
         if (table === schools) {
           mockState.lastSchoolUpdate = values;
-          mockState.schools = mockState.schools.map((item) => (item.id === values.id ? { ...item, ...values } : item));
+          mockState.schools = mockState.schools.map((item) => (item.id === values.id || (values.id == null && item.id === 1) ? { ...item, ...values } : item));
         }
         const result = [{ id: 1, ...values }];
         return {
@@ -249,8 +249,24 @@ describe('POST /api/schools', () => {
       .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
       .expect(201);
 
-    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU' });
+    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', promotionThreshold: '10.00' });
     expect((await request(app).get('/api/schools').expect(200)).body[0]).toMatchObject({ ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU' });
+  });
+
+  it('enregistre et modifie le seuil de passage de l école', async () => {
+    const created = await request(app)
+      .post('/api/schools')
+      .send({ name: 'École du Seuil', address: '', phone: '+228 90000000', promotionThreshold: 9, classNames: ['6ème'], subjectNames: ['Mathématiques'] })
+      .expect(201);
+
+    expect(created.body.promotionThreshold).toBe('9.00');
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Seuil', address: '', phone: '+228 90000000', promotionThreshold: 9.5 })
+      .expect(200);
+
+    expect(mockState.schools[0].promotionThreshold).toBe('9.50');
   });
 
   it('transmet ministryName lors de la modification d une école', async () => {

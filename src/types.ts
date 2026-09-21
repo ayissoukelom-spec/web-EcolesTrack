@@ -17,6 +17,7 @@ export interface School {
   ministryName?: string | null;
   principalName?: string | null;
   logoPath?: string | null;
+  promotionThreshold?: string | number | null;
   studentsCreationLocked?: boolean;
   createdAt?: string;
 }
@@ -147,6 +148,14 @@ export interface Class {
   teacherName?: string;
   yearName?: string;
   status?: 'pending' | 'approved' | 'rejected' | string;
+}
+
+export interface ClassSuccession {
+  id: number;
+  schoolId: number;
+  academicYearId: number;
+  sourceClassId: number;
+  targetClassId: number;
 }
 
 export interface Student {

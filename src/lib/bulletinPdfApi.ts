@@ -12,6 +12,7 @@ import {
   bulletinLines,
   bulletins,
   classes,
+  classSuccessions,
   evaluations,
   grades,
   parents,
@@ -133,6 +134,8 @@ export interface BulletinPdfData {
   rank: number | null;
   annualAverage?: number | null;
   annualRank?: number | null;
+  promotionThreshold?: number | null;
+  promotionDecision?: string | null;
   mention: string | null;
   appreciation: string | null;
   absences: number;
@@ -145,6 +148,36 @@ export interface BulletinPdfData {
   subjectGroups?: BulletinSubjectGroup<BulletinPdfLine>[];
   previousPeriodSummaries?: PreviousPeriodSummary[];
 }
+
+export const normalizeStudentGender = (value: string | null | undefined): 'male' | 'female' | null => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['m', 'masculin', 'male'].includes(normalized)) return 'male';
+  if (['f', 'féminin', 'feminin', 'female'].includes(normalized)) return 'female';
+  return null;
+};
+
+export const resolvePromotionDecision = ({
+  isLastPeriod,
+  annualAverage,
+  promotionThreshold,
+  studentGender,
+  nextClassName,
+}: {
+  isLastPeriod: boolean;
+  annualAverage: number | null | undefined;
+  promotionThreshold: number | string | null | undefined;
+  studentGender: string | null | undefined;
+  nextClassName: string | null | undefined;
+}): string | null => {
+  if (!isLastPeriod || annualAverage == null || !nextClassName?.trim()) return null;
+  const threshold = Number(promotionThreshold);
+  if (!Number.isFinite(threshold)) return null;
+  if (annualAverage < threshold) return 'Redouble la classe';
+  const gender = normalizeStudentGender(studentGender);
+  if (gender === 'male') return `Admis en classe de ${nextClassName.trim()}`;
+  if (gender === 'female') return `Admise en classe de ${nextClassName.trim()}`;
+  return null;
+};
 
 export interface BulletinPdfDataProvider {
   getById(actor: BulletinPdfActor, bulletinId: number): Promise<BulletinPdfData | null>;
@@ -651,6 +684,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
         ministryName: schools.ministryName,
         logoPath: schools.logoPath,
       },
+      promotionThreshold: schools.promotionThreshold,
       schoolYearId: bulletins.schoolYearId,
       schoolYearName: academicYears.name,
       termId: bulletins.termId,
@@ -893,6 +927,26 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       })
       : { annualAverage: null, annualRank: null };
 
+    const [succession] = header.studentSchoolId == null
+      ? []
+      : await db.select({ targetClassId: classSuccessions.targetClassId })
+        .from(classSuccessions)
+        .where(and(
+          eq(classSuccessions.schoolId, header.studentSchoolId),
+          eq(classSuccessions.academicYearId, header.schoolYearId),
+          eq(classSuccessions.sourceClassId, header.classId),
+        ));
+    const [nextClass] = succession
+      ? await db.select({ name: classes.name }).from(classes).where(eq(classes.id, succession.targetClassId))
+      : [];
+    const promotionDecision = resolvePromotionDecision({
+      isLastPeriod: annualPeriodScope.isLastPeriod,
+      annualAverage: annualResults.annualAverage,
+      promotionThreshold: header.promotionThreshold,
+      studentGender: header.studentGender,
+      nextClassName: nextClass?.name,
+    });
+
     const previousPeriodSummaries = resolvePreviousPeriodSummaries({
       currentTermId: header.termId,
       studentId: header.studentId,
@@ -968,6 +1022,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       rank: header.rank,
       annualAverage: annualResults.annualAverage,
       annualRank: annualResults.annualRank,
+      promotionThreshold: header.promotionThreshold == null ? null : Number(header.promotionThreshold),
+      promotionDecision,
       mention: header.mention,
       appreciation: header.appreciation,
       absences: absencesCount,
@@ -2099,6 +2155,12 @@ export const createBulletinPdfDocument = async (
     decisionClassBottomY = decisionY;
     drawText(page, decisionText, decisionX, decisionY, decisionFontSize, text, fontBold);
     page.drawLine({ start: { x: decisionX, y: decisionY - 1.5 }, end: { x: decisionX + decisionTextWidth, y: decisionY - 1.5 }, color: text, thickness: 1 });
+    if (data.promotionDecision) {
+      const decisionResultFontSize = 10;
+      const decisionResultY = decisionY - previousDecisionTextHeight - 8;
+      drawText(page, data.promotionDecision, decisionX, decisionResultY, decisionResultFontSize, text, fontBold);
+      decisionClassBottomY = decisionResultY;
+    }
   }
 
   summaryBlocks.forEach((entry, index) => {
@@ -2114,7 +2176,7 @@ export const createBulletinPdfDocument = async (
   if (data.annualAverage != null || data.annualRank != null) {
     const annualY = decisionBaselineY == null
       ? summaryY - summaryBlocks.length * 16 - 6
-      : decisionBaselineY - 11 - 6 - 6;
+      : (decisionClassBottomY ?? decisionBaselineY) - 11 - 6 - 6;
     const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
     const annualFontSize = 10;

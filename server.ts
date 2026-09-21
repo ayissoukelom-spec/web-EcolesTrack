@@ -54,6 +54,7 @@ import {
   subjects,
   schoolSubjects,
   schoolClasses,
+  classSuccessions,
   evaluations,
   grades,
   absences,
@@ -2429,11 +2430,18 @@ export async function createApp() {
       const educationDirection = req.body?.educationDirection != null ? String(req.body.educationDirection).trim() : null;
       const ministryName = req.body?.ministryName != null ? String(req.body.ministryName).trim() : null;
       const principalName = req.body?.principalName != null ? String(req.body.principalName).trim() : null;
+      const promotionThresholdRaw = req.body?.promotionThreshold;
+      const promotionThreshold = promotionThresholdRaw == null || promotionThresholdRaw === ''
+        ? 10
+        : Number(promotionThresholdRaw);
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 
       if (!name) return res.status(400).json({ error: 'Name is required' });
       if (!phone) return res.status(400).json({ error: 'Phone is required' });
+      if (!Number.isFinite(promotionThreshold) || promotionThreshold < 0 || promotionThreshold > 20) {
+        return res.status(400).json({ error: 'promotionThreshold must be between 0 and 20' });
+      }
       if (!/^\+228\s[0-9]{8}$/.test(phone)) {
         return res.status(400).json({ error: 'Phone must be in the format +228 12345678' });
       }
@@ -2465,7 +2473,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName, promotionThreshold: promotionThreshold.toFixed(2) }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -2684,6 +2692,7 @@ export async function createApp() {
       const phone2Raw = req.body?.phone2;
       const phone2 = phone2Raw != null ? String(phone2Raw).trim() : undefined;
       const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName', 'principalName'] as const;
+      const promotionThresholdRaw = req.body?.promotionThreshold;
       const logoPathRaw = req.body?.logoPath;
       const logoPath = logoPathRaw == null ? undefined : String(logoPathRaw).trim() || null;
       const classNames = req.body?.classNames;
@@ -2700,6 +2709,9 @@ export async function createApp() {
       }
       if (phone2 !== undefined && phone2 !== '' && !/^\+228\s[0-9]{8}$/.test(phone2)) {
         return res.status(400).json({ error: 'Phone 2 must be in the format +228 12345678' });
+      }
+      if (promotionThresholdRaw !== undefined && (!Number.isFinite(Number(promotionThresholdRaw)) || Number(promotionThresholdRaw) < 0 || Number(promotionThresholdRaw) > 20)) {
+        return res.status(400).json({ error: 'promotionThreshold must be between 0 and 20' });
       }
       if (classNames != null) {
         if (!Array.isArray(classNames)) {
@@ -2742,6 +2754,7 @@ export async function createApp() {
       administrativeFields.forEach((field) => {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
+      if (promotionThresholdRaw !== undefined) updatePayload.promotionThreshold = Number(promotionThresholdRaw).toFixed(2);
       if (logoPathRaw !== undefined) {
         updatePayload.logoPath = logoPath == null ? null : buildSchoolLogoRelativePath(path.basename(logoPath));
       }
@@ -3894,6 +3907,82 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Failed to delete school term:', err);
       res.status(500).json({ error: 'Failed to delete school term' });
+    }
+  });
+
+  app.get('/api/class-successions', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const schoolId = Number(req.query.schoolId ?? actor.schoolId);
+      const academicYearId = Number(req.query.academicYearId);
+      if (!Number.isInteger(schoolId) || schoolId <= 0 || !Number.isInteger(academicYearId) || academicYearId <= 0) {
+        return res.status(400).json({ error: 'schoolId and academicYearId are required' });
+      }
+      if (actor.role !== 'super_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+
+      const rows = await db.select().from(classSuccessions).where(and(eq(classSuccessions.schoolId, schoolId), eq(classSuccessions.academicYearId, academicYearId)));
+      const classIds = Array.from(new Set(rows.flatMap((row) => [row.sourceClassId, row.targetClassId])));
+      const classRows = classIds.length > 0 ? await db.select({ id: classes.id, name: classes.name }).from(classes).where(inArray(classes.id, classIds)) : [];
+      const classNames = new Map(classRows.map((row) => [row.id, row.name]));
+      return res.json(rows.map((row) => ({
+        ...row,
+        sourceClassName: classNames.get(row.sourceClassId) ?? null,
+        targetClassName: classNames.get(row.targetClassId) ?? null,
+      })));
+    } catch (err) {
+      console.error('Failed to retrieve class successions:', err);
+      return res.status(500).json({ error: 'Failed to retrieve class successions' });
+    }
+  });
+
+  app.put('/api/class-successions', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const schoolId = Number(req.body?.schoolId ?? actor.schoolId);
+      const academicYearId = Number(req.body?.academicYearId);
+      const sourceClassId = Number(req.body?.sourceClassId);
+      const targetClassId = Number(req.body?.targetClassId);
+      if (![schoolId, academicYearId, sourceClassId, targetClassId].every((value) => Number.isInteger(value) && value > 0) || sourceClassId === targetClassId) {
+        return res.status(400).json({ error: 'Valid school, academic year, source class and target class are required' });
+      }
+      if (actor.role !== 'super_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+
+      const classRows = await db.select({ id: classes.id, academicYearId: classes.academicYearId, schoolId: classes.schoolId }).from(classes).where(inArray(classes.id, [sourceClassId, targetClassId]));
+      const approvedLinks = await db.select({ classId: schoolClasses.classId }).from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.status, 'approved'), inArray(schoolClasses.classId, [sourceClassId, targetClassId])));
+      const approvedClassIds = new Set(approvedLinks.map((row) => row.classId));
+      if (classRows.length !== 2 || classRows.some((row) => row.academicYearId !== academicYearId || (row.schoolId !== schoolId && !approvedClassIds.has(row.id)))) {
+        return res.status(400).json({ error: 'Both classes must belong to the selected academic year' });
+      }
+
+      const [saved] = await db.insert(classSuccessions).values({ schoolId, academicYearId, sourceClassId, targetClassId }).onConflictDoUpdate({
+        target: [classSuccessions.schoolId, classSuccessions.academicYearId, classSuccessions.sourceClassId],
+        set: { targetClassId, updatedAt: new Date() },
+      }).returning();
+      return res.json(saved);
+    } catch (err) {
+      console.error('Failed to save class succession:', err);
+      return res.status(500).json({ error: 'Failed to save class succession' });
+    }
+  });
+
+  app.delete('/api/class-successions/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const id = Number(req.params.id);
+      const [row] = await db.select({ id: classSuccessions.id, schoolId: classSuccessions.schoolId }).from(classSuccessions).where(eq(classSuccessions.id, id));
+      if (!row) return res.status(404).json({ error: 'Class succession not found' });
+      if (actor.role !== 'super_admin' && actor.schoolId !== row.schoolId) return res.status(403).json({ error: 'Forbidden' });
+      await db.delete(classSuccessions).where(eq(classSuccessions.id, id));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('Failed to delete class succession:', err);
+      return res.status(500).json({ error: 'Failed to delete class succession' });
     }
   });
 

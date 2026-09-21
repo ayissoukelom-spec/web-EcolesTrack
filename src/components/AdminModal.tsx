@@ -463,6 +463,10 @@ export default function AdminModal(props: any) {
                     Nom du proviseur
                     <input type="text" value={schoolForm.principalName || ''} onChange={(e) => setSchoolForm({ ...schoolForm, principalName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
                   </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Seuil de passage (/20)
+                    <input type="number" min="0" max="20" step="0.01" value={schoolForm.promotionThreshold || '10.00'} onChange={(e) => setSchoolForm({ ...schoolForm, promotionThreshold: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
+                  </label>
                   {[
                     ['officialName', 'Nom officiel'],
                     ['abbreviation', 'District'],

@@ -368,7 +368,7 @@ interface AdminViewProps {
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
@@ -529,7 +529,7 @@ export default function AdminView({
   // New item forms state
   const classGroupsStorageKey = 'ecoletrack-class-groups:v2';
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', promotionThreshold: '10.00', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [groupPresets, setGroupPresets] = useState<any[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -578,7 +578,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', classNames: [] as string[], subjectNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', promotionThreshold: '10.00', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [educationCycles, setEducationCycles] = useState<any[]>([]);
@@ -593,6 +593,11 @@ export default function AdminView({
   const [editingTermStartDate, setEditingTermStartDate] = useState('');
   const [editingTermEndDate, setEditingTermEndDate] = useState('');
   const [classForm, setClassForm] = useState({ cycle: '', levelId: '', stream: '', section: '', group: '', schoolId: '' });
+  const [successionAcademicYearId, setSuccessionAcademicYearId] = useState('');
+  const [successionSourceClassId, setSuccessionSourceClassId] = useState('');
+  const [successionTargetClassId, setSuccessionTargetClassId] = useState('');
+  const [classSuccessionsList, setClassSuccessionsList] = useState<any[]>([]);
+  const [successionNotice, setSuccessionNotice] = useState<string | null>(null);
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
@@ -607,6 +612,22 @@ export default function AdminView({
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
   const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
   const isStudentsCreationLocked = Boolean(currentSchoolForAdmin?.studentsCreationLocked);
+  const successionSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : superAdminSchoolFilterId;
+  const successionClasses = classesList.filter((klass) => (
+    successionAcademicYearId !== '' && Number(klass.academicYearId) === Number(successionAcademicYearId)
+      && (!successionSchoolId || isClassVisibleToSchool(klass, successionSchoolId))
+  ));
+
+  useEffect(() => {
+    const yearId = Number(successionAcademicYearId);
+    if (!successionSchoolId || !Number.isInteger(yearId) || yearId <= 0) {
+      setClassSuccessionsList([]);
+      return;
+    }
+    apiFetch(`/api/class-successions?schoolId=${successionSchoolId}&academicYearId=${yearId}`)
+      .then((rows) => setClassSuccessionsList(Array.isArray(rows) ? rows : []))
+      .catch(() => setClassSuccessionsList([]));
+  }, [successionAcademicYearId, successionSchoolId]);
 
   useEffect(() => {
     if (userRole === 'school_admin') {
@@ -1268,6 +1289,7 @@ export default function AdminView({
           educationDirection: String(schoolForm.educationDirection || '').trim() || null,
           ministryName: String(schoolForm.ministryName || '').trim() || null,
           principalName: String(schoolForm.principalName || '').trim() || null,
+          promotionThreshold: Number(schoolForm.promotionThreshold || 10),
           classNames: finalClassNames,
           subjectNames: finalSubjectNames,
         });
@@ -1287,6 +1309,7 @@ export default function AdminView({
           educationDirection: '',
           ministryName: '',
           principalName: '',
+          promotionThreshold: '10.00',
           selectedClassNames: [],
           selectedClassGroups: [],
           manuallySelectedClassNames: [],
@@ -2284,6 +2307,10 @@ export default function AdminView({
                         Nom du proviseur
                         <input type="text" value={editSchoolForm.principalName} onChange={(e) => setEditSchoolForm({ ...editSchoolForm, principalName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
                       </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Seuil de passage (/20)
+                        <input type="number" min="0" max="20" step="0.01" value={editSchoolForm.promotionThreshold || '10.00'} onChange={(e) => setEditSchoolForm({ ...editSchoolForm, promotionThreshold: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
+                      </label>
                       {[
                         ['officialName', 'Nom officiel'],
                         ['abbreviation', 'District'],
@@ -2497,6 +2524,7 @@ export default function AdminView({
                           educationDirection: editSchoolForm.educationDirection.trim() || null,
                           ministryName: editSchoolForm.ministryName.trim() || null,
                           principalName: editSchoolForm.principalName.trim() || null,
+                          promotionThreshold: Number(editSchoolForm.promotionThreshold || 10),
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
                         };
                         const subjectNames = editSchoolForm.subjectNames?.filter((name) => name.trim() !== '');
@@ -4023,6 +4051,7 @@ export default function AdminView({
                       address: '',
                       phone: '',
                       phoneDigits: '',
+                      phone2Digits: '',
                       officialName: '',
                       abbreviation: '',
                       motto: '',
@@ -4033,6 +4062,7 @@ export default function AdminView({
                       educationDirection: '',
                       ministryName: '',
                       principalName: '',
+                      promotionThreshold: '10.00',
                       selectedClassNames: [],
                       selectedClassGroups: [],
                       manuallySelectedClassNames: [],
@@ -4078,7 +4108,7 @@ export default function AdminView({
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
                                 const phone2Digits = sc.phone2 ? sc.phone2.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', principalName: sc.principalName || '', classNames: [], subjectNames: [] });
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', principalName: sc.principalName || '', promotionThreshold: String(sc.promotionThreshold ?? '10.00'), classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}
@@ -4522,6 +4552,54 @@ export default function AdminView({
                   >
                     Créer une classe
                   </button>
+                )}
+              </div>
+            )}
+            {['super_admin', 'school_admin'].includes(userRole) && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 mb-4">
+                <h3 className="text-sm font-semibold text-slate-700">Progression des classes pour les décisions annuelles</h3>
+                <p className="mt-1 text-xs text-slate-500">Définissez explicitement la classe cible pour chaque établissement et chaque année scolaire.</p>
+                {!successionSchoolId ? (
+                  <p className="mt-3 text-sm text-amber-700">Sélectionnez une école pour configurer ses correspondances.</p>
+                ) : (
+                  <>
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+                      <select value={successionAcademicYearId} onChange={(event) => { setSuccessionAcademicYearId(event.target.value); setSuccessionSourceClassId(''); setSuccessionTargetClassId(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                        <option value="">Année scolaire</option>
+                        {yearsList.map((year) => <option key={year.id} value={String(year.id)}>{year.name}</option>)}
+                      </select>
+                      <select value={successionSourceClassId} onChange={(event) => setSuccessionSourceClassId(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                        <option value="">Classe actuelle</option>
+                        {successionClasses.map((klass) => <option key={klass.id} value={String(klass.id)}>{klass.name}</option>)}
+                      </select>
+                      <select value={successionTargetClassId} onChange={(event) => setSuccessionTargetClassId(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                        <option value="">Classe supérieure</option>
+                        {successionClasses.filter((klass) => String(klass.id) !== successionSourceClassId).map((klass) => <option key={klass.id} value={String(klass.id)}>{klass.name}</option>)}
+                      </select>
+                      <button type="button" className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!successionAcademicYearId || !successionSourceClassId || !successionTargetClassId} onClick={async () => {
+                        try {
+                          await apiFetch('/api/class-successions', { method: 'PUT', body: JSON.stringify({ schoolId: successionSchoolId, academicYearId: Number(successionAcademicYearId), sourceClassId: Number(successionSourceClassId), targetClassId: Number(successionTargetClassId) }) });
+                          const rows = await apiFetch(`/api/class-successions?schoolId=${successionSchoolId}&academicYearId=${successionAcademicYearId}`);
+                          setClassSuccessionsList(Array.isArray(rows) ? rows : []);
+                          setSuccessionNotice('Correspondance enregistrée.');
+                        } catch (error: any) {
+                          setSuccessionNotice(error?.message || 'Impossible d’enregistrer la correspondance.');
+                        }
+                      }}>Enregistrer</button>
+                    </div>
+                    {successionNotice && <p className="mt-2 text-xs text-slate-600">{successionNotice}</p>}
+                    <div className="mt-3 space-y-2">
+                      {classSuccessionsList.map((row) => (
+                        <div key={row.id} className="flex items-center justify-between rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                          <span>{row.sourceClassName || row.sourceClassId} → {row.targetClassName || row.targetClassId}</span>
+                          <button type="button" className="text-xs font-semibold text-rose-600" onClick={async () => {
+                            await apiFetch(`/api/class-successions/${row.id}`, { method: 'DELETE' });
+                            setClassSuccessionsList((previous) => previous.filter((item) => item.id !== row.id));
+                          }}>Supprimer</button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             )}

@@ -18,6 +18,8 @@ import {
   formatPdfDisplayNumber,
   resolvePreviousPeriodSummaries,
   calculateClassAverageSummary,
+  normalizeStudentGender,
+  resolvePromotionDecision,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -198,6 +200,46 @@ describe('résolution des périodes historiques', () => {
       terms,
       bulletins,
     })).toEqual([]);
+  });
+});
+
+describe('décision de fin d année', () => {
+  it.each([
+    [{ isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' }, 'Admis en classe de 1ère D'],
+    [{ isLastPeriod: true, annualAverage: 8, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' }, 'Redouble la classe'],
+    [{ isLastPeriod: true, annualAverage: 9, promotionThreshold: 9, studentGender: 'M', nextClassName: '1ère D' }, 'Admis en classe de 1ère D'],
+    [{ isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'F', nextClassName: '1ère D' }, 'Admise en classe de 1ère D'],
+    [{ isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'female', nextClassName: '1ère D' }, 'Admise en classe de 1ère D'],
+  ])('résout %j', (input, expected) => {
+    expect(resolvePromotionDecision(input)).toBe(expected);
+  });
+
+  it.each([
+    { isLastPeriod: false, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
+    { isLastPeriod: true, annualAverage: null, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
+    { isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: null },
+    { isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: null, nextClassName: '1ère D' },
+  ])('ne décide pas quand une condition obligatoire manque: %j', (input) => {
+    expect(resolvePromotionDecision(input)).toBeNull();
+  });
+
+  it('normalise les valeurs de sexe existantes sans inventer un genre', () => {
+    expect(normalizeStudentGender('M')).toBe('male');
+    expect(normalizeStudentGender('Masculin')).toBe('male');
+    expect(normalizeStudentGender('male')).toBe('male');
+    expect(normalizeStudentGender('F')).toBe('female');
+    expect(normalizeStudentGender('Féminin')).toBe('female');
+    expect(normalizeStudentGender('unknown')).toBeNull();
+  });
+
+  it('place la décision sous le libellé existant sans supprimer les blocs validés', async () => {
+    const text = extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Trimestre 3',
+      promotionDecision: 'Admis en classe de 1ère D',
+    }));
+    expect(text.indexOf('conseil de la classe')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('Admis en classe'));
   });
 });
 
