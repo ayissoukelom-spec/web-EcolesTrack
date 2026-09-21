@@ -6488,7 +6488,13 @@ export async function createApp() {
 
       const [absence] = await db.select().from(absences).where(eq(absences.id, id));
       if (!absence) return res.status(404).json({ error: 'Absence not found' });
-      const [student] = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId }).from(students).where(eq(students.id, absence.studentId));
+      const [student] = await db.select({
+        id: students.id,
+        classId: students.classId,
+        schoolId: students.schoolId,
+        firstName: students.firstName,
+        parentId: students.parentId,
+      }).from(students).where(eq(students.id, absence.studentId));
       if (!student) return res.status(404).json({ error: 'Student not found' });
       const [classRecord] = await db.select().from(classes).where(eq(classes.id, absence.classId));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
@@ -6517,6 +6523,17 @@ export async function createApp() {
         return res.status(403).json({ error: 'Not authorized to review justifications' });
       }
 
+      const isAlreadyFinalAndEquivalent =
+        absence.justificationStatus === status &&
+        (
+          status === 'APPROVED' ||
+          (absence.rejectionReason ?? '') === (rejectionReason || '')
+        );
+
+      if (isAlreadyFinalAndEquivalent) {
+        return res.json(absence);
+      }
+
       const updated = await db.update(absences).set({
         justificationStatus: status,
         isJustified: status === 'APPROVED',
@@ -6524,7 +6541,75 @@ export async function createApp() {
         reviewedBy: actor.id ?? null,
         reviewedAt: new Date(),
       }).where(eq(absences.id, id)).returning();
-      return res.json(updated[0]);
+
+      const reviewedAbsence = updated[0] ?? absence;
+      const studentName = student.firstName || 'l\'élève';
+
+      const reviewTitle = status === 'APPROVED'
+        ? "Justification d'absence validée"
+        : "Justification d'absence rejetée";
+
+      const rejectionSuffix = status === 'REJECTED' && rejectionReason
+        ? ` Motif : ${rejectionReason}`
+        : '';
+
+      const reviewMessage = status === 'APPROVED'
+        ? `La justification de l'absence de ${studentName} a été validée par l'établissement.`
+        : `La justification de l'absence de ${studentName} a été rejetée. Veuillez passer dans l'établissement afin de fournir les justificatifs nécessaires.${rejectionSuffix}`;
+
+      const [parentRecord] = student.parentId != null
+        ? await db.select({ userId: parents.userId }).from(parents).where(eq(parents.id, student.parentId))
+        : [null];
+
+      if (parentRecord?.userId) {
+        try {
+          await db.insert(notifications).values({
+            userId: parentRecord.userId,
+            title: reviewTitle,
+            body: reviewMessage,
+            type: 'absence',
+          });
+        } catch (notificationInsertError) {
+          console.error('Failed to insert absence justification review notification:', notificationInsertError);
+        }
+
+        try {
+          const dedupeReason = status === 'REJECTED'
+            ? String(rejectionReason || 'rejected').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 80)
+            : 'approved';
+
+          const notificationPayload = {
+            parentId: String(parentRecord.userId),
+            title: reviewTitle,
+            message: reviewMessage,
+            category: 'absence',
+            metadata: {
+              target: 'absence',
+              absenceId: reviewedAbsence.id,
+              studentId: student.id,
+              classId: absence.classId,
+              status,
+              rejectionReason: status === 'REJECTED' ? rejectionReason : null,
+            },
+            dedupeKey: `absence-justification-review-${reviewedAbsence.id}-${status}-${dedupeReason}`,
+          };
+
+          const { signature, timestamp } = signInternalPayload(notificationPayload);
+          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Internal-Signature': signature,
+              'X-Internal-Timestamp': timestamp,
+            },
+            body: JSON.stringify(notificationPayload),
+          });
+        } catch (pushNotificationError) {
+          console.error('Failed to dispatch absence justification review push notification:', pushNotificationError);
+        }
+      }
+
+      return res.json(reviewedAbsence);
     } catch (error: any) {
       console.error('Failed to review absence justification:', error);
       return res.status(500).json({ error: 'Failed to review absence justification' });

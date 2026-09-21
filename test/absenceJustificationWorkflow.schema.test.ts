@@ -23,5 +23,10 @@ describe('absence justification workflow contract', () => {
     expect(serverText).toContain("if (actor.role === 'parent') return res.status(403)");
     expect(serverText).toContain("if (status === 'REJECTED' && !rejectionReason)");
     expect(serverText).toContain("isJustified: status === 'APPROVED'");
+    expect(serverText).toContain("Justification d'absence validée");
+    expect(serverText).toContain("Justification d'absence rejetée");
+    expect(serverText).toContain("category: 'absence'");
+    expect(serverText).toContain("dedupeKey: `absence-justification-review-");
+    expect(serverText).toContain("isAlreadyFinalAndEquivalent");
   });
 });
