@@ -1092,6 +1092,105 @@ const drawText = (
   });
 };
 
+const normalizeFrenchLevelToken = (value: string): string => value.trim().replace(/[\u00A0\s]+/g, '');
+
+const getFrenchLevelTokenDetails = (value: string): { main: string; suffix: string; suffixSize: number; suffixRise: number; width: number } | null => {
+  const normalized = normalizeFrenchLevelToken(value).toLowerCase();
+
+  if (/^1(?:er|ere|ère)$/.test(normalized)) {
+    return { main: '1', suffix: 'ère', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  }
+
+  if (/^2(?:de|nde)$/.test(normalized)) {
+    return { main: '2', suffix: 'nde', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  }
+
+  if (/^3(?:e|è|eme|ème)$/.test(normalized)) {
+    return { main: '3', suffix: 'ème', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  }
+
+  if (/^t(?:le|l[eé])$/.test(normalized)) {
+    return { main: 'T', suffix: 'le', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  }
+
+  return null;
+};
+
+export const formatPromotionDecisionForPdf = (value: string): string => {
+  const trimmed = value.trim();
+  return trimmed
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      const levelToken = getFrenchLevelTokenDetails(word);
+      if (levelToken) return word;
+      return word.toLocaleUpperCase('fr-FR');
+    })
+    .join(' ');
+};
+
+const drawFrenchLevelToken = (
+  page: any,
+  token: string,
+  x: number,
+  y: number,
+  size: number,
+  color: any,
+  font: any,
+) => {
+  const levelToken = getFrenchLevelTokenDetails(token);
+  if (!levelToken) {
+    drawText(page, token, x, y, size, color, font);
+    return font.widthOfTextAtSize(token, size);
+  }
+
+  const mainText = levelToken.main;
+  const suffixText = levelToken.suffix;
+  const mainWidth = font.widthOfTextAtSize(mainText, size);
+  const suffixWidth = font.widthOfTextAtSize(suffixText, levelToken.suffixSize);
+  const gap = Math.max(1, size * 0.12);
+
+  drawText(page, mainText, x, y, size, color, font);
+  drawText(page, suffixText, x + mainWidth + gap, y + levelToken.suffixRise, levelToken.suffixSize, color, font);
+
+  return mainWidth + gap + suffixWidth;
+};
+
+const drawPromotionDecisionText = (
+  page: any,
+  decisionText: string,
+  x: number,
+  y: number,
+  size: number,
+  color: any,
+  font: any,
+): number => {
+  const trimmed = decisionText.trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  let cursorX = x;
+  let totalWidth = 0;
+
+  words.forEach((word, index) => {
+    const upperWord = formatPromotionDecisionForPdf(word);
+    const tokenWidth = getFrenchLevelTokenDetails(word)
+      ? drawFrenchLevelToken(page, word, cursorX, y, size, color, font)
+      : (() => {
+        const upperText = upperWord.toLocaleUpperCase('fr-FR');
+        drawText(page, upperText, cursorX, y, size, color, font);
+        return font.widthOfTextAtSize(upperText, size);
+      })();
+
+    if (index > 0) {
+      cursorX += font.widthOfTextAtSize(' ', size);
+    }
+
+    cursorX += tokenWidth;
+    totalWidth = cursorX - x;
+  });
+
+  return totalWidth;
+};
+
 export const computeWrappedTextLines = (
   value: string,
   maxWidth: number,
@@ -2190,9 +2289,24 @@ export const createBulletinPdfDocument = async (
     drawText(page, decisionText, decisionX, decisionY, decisionFontSize, text, fontBold);
     page.drawLine({ start: { x: decisionX, y: decisionY - 1.5 }, end: { x: decisionX + decisionTextWidth, y: decisionY - 1.5 }, color: text, thickness: 1 });
     if (data.promotionDecision) {
-      const decisionResultFontSize = 10;
-      const decisionResultY = decisionY - previousDecisionTextHeight - 8;
-      drawText(page, data.promotionDecision, decisionX, decisionResultY, decisionResultFontSize, text, fontBold);
+      const decisionResultFontSize = 11;
+      const decisionResultY = decisionY - previousDecisionTextHeight - 10;
+      const decisionResultTextWidth = drawPromotionDecisionText(
+        page,
+        data.promotionDecision,
+        decisionX,
+        decisionResultY,
+        decisionResultFontSize,
+        text,
+        fontBold,
+      );
+      const decisionResultUnderlineY = decisionResultY - 2;
+      page.drawLine({
+        start: { x: decisionX, y: decisionResultUnderlineY },
+        end: { x: decisionX + decisionResultTextWidth, y: decisionResultUnderlineY },
+        color: text,
+        thickness: 1,
+      });
       decisionClassBottomY = decisionResultY;
     }
   }

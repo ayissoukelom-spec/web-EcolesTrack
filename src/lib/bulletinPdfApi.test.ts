@@ -20,6 +20,7 @@ import {
   calculateClassAverageSummary,
   normalizeStudentGender,
   resolvePromotionDecision,
+  formatPromotionDecisionForPdf,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -215,6 +216,15 @@ describe('décision de fin d année', () => {
   });
 
   it.each([
+    ['Admis en classe de 1ère', 'ADMIS EN CLASSE DE 1ère'],
+    ['Admis en classe de 2nde', 'ADMIS EN CLASSE DE 2nde'],
+    ['Admis en classe de 3ème', 'ADMIS EN CLASSE DE 3ème'],
+    ['Admis en classe de Tle', 'ADMIS EN CLASSE DE Tle'],
+  ])('formate la décision PDF sans casser l exposant français: %s -> %s', (input, expected) => {
+    expect(formatPromotionDecisionForPdf(input)).toBe(expected);
+  });
+
+  it.each([
     { isLastPeriod: false, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
     { isLastPeriod: true, annualAverage: null, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
     { isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: null },
@@ -239,7 +249,7 @@ describe('décision de fin d année', () => {
       promotionDecision: 'Admis en classe de 1ère D',
     }));
     expect(text.indexOf('conseil de la classe')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('Admis en classe'));
+    expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('ADMIS'));
   });
 });
 
