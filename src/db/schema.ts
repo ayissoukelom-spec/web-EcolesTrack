@@ -335,6 +335,10 @@ export const absences = pgTable('absences', {
   endTime: text('end_time'),
   isJustified: boolean('is_justified').default(false).notNull(),
   justificationReason: text('justification_reason'),
+  justificationStatus: text('justification_status'),
+  rejectionReason: text('rejection_reason'),
+  reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

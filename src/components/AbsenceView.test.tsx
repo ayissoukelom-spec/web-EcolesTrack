@@ -139,6 +139,41 @@ describe('AbsenceView surveillant', () => {
     expect(screen.queryAllByRole('row').some((row) => row.textContent?.includes('Élève Absence Justifiée'))).toBe(false);
   });
 
+  it('affiche les actions de review pour une justification en attente', () => {
+    const onReviewAbsence = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[{
+          id: 30,
+          studentId: 30,
+          studentName: 'Élève En Attente',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+          justificationReason: 'Maladie',
+          justificationStatus: 'PENDING',
+        }] as any}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onReviewAbsence={onReviewAbsence}
+        onJustifyAbsence={vi.fn()}
+        onRecordAbsenceControl={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('En attente de validation')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accepter' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Rejeter' })).toBeTruthy();
+  });
+
   it('enregistre un retard avec son motif sans créer une absence', async () => {
     const onAddAbsence = vi.fn();
     const onAddLateArrival = vi.fn().mockResolvedValue(undefined);

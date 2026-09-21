@@ -224,6 +224,10 @@ export interface Absence {
   justificationReason?: string;
   justificationFileId?: number;
   justificationFileName?: string;
+  justificationStatus?: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  rejectionReason?: string | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
 }
 
 export interface LateArrival {

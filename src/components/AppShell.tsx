@@ -304,6 +304,14 @@ export default function AppShell() {
     await fetchAllData();
   };
 
+  const handleReviewAbsence = async (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => {
+    await apiFetch(`/api/absences/${id}/justification/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ status, ...(status === 'REJECTED' ? { rejectionReason } : {}) }),
+    });
+    await fetchAllData();
+  };
+
   const handleRecordAbsenceControl = async (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => {
     try {
       await recordAbsenceControlApi(data);
@@ -446,6 +454,7 @@ export default function AppShell() {
         teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
         onAddAbsence={handleAddAbsence}
         onAddLateArrival={handleAddLateArrival}
+        onReviewAbsence={handleReviewAbsence}
         onJustifyAbsence={handleJustifyAbsence}
         onRecordAbsenceControl={handleRecordAbsenceControl}
       />;

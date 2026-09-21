@@ -6077,6 +6077,10 @@ export async function createApp() {
           endTime: absences.endTime,
           isJustified: absences.isJustified,
           justificationReason: absences.justificationReason,
+          justificationStatus: sql<string | null>`coalesce(${absences.justificationStatus}, case when ${absences.isJustified} = true then 'APPROVED' else null end)`,
+          rejectionReason: absences.rejectionReason,
+          reviewedBy: absences.reviewedBy,
+          reviewedAt: absences.reviewedAt,
           justificationFileId: sql<number>`(
             select id from ${absenceJustifications}
             where ${absenceJustifications.absenceId} = ${absences.id}
@@ -6447,8 +6451,12 @@ export async function createApp() {
 
       const updated = await db.update(absences)
         .set({
-          isJustified: true,
+          isJustified: false,
           justificationReason,
+          justificationStatus: 'PENDING',
+          rejectionReason: null,
+          reviewedBy: null,
+          reviewedAt: null,
         })
         .where(eq(absences.id, id))
         .returning();
@@ -6456,6 +6464,70 @@ export async function createApp() {
       res.json(updated[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to validate absence justification' });
+    }
+  });
+
+  app.put('/api/absences/:id/justification/review', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid absence id' });
+
+      const status = typeof req.body?.status === 'string' ? req.body.status.trim().toUpperCase() : '';
+      const rejectionReason = typeof req.body?.rejectionReason === 'string' ? req.body.rejectionReason.trim() : '';
+      if (!['APPROVED', 'REJECTED'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid justification review status' });
+      }
+      if (status === 'REJECTED' && !rejectionReason) {
+        return res.status(400).json({ error: 'A rejection reason is required' });
+      }
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'parent') return res.status(403).json({ error: 'Parents cannot review justifications' });
+
+      const [absence] = await db.select().from(absences).where(eq(absences.id, id));
+      if (!absence) return res.status(404).json({ error: 'Absence not found' });
+      const [student] = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId }).from(students).where(eq(students.id, absence.studentId));
+      if (!student) return res.status(404).json({ error: 'Student not found' });
+      const [classRecord] = await db.select().from(classes).where(eq(classes.id, absence.classId));
+      if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+      if (student.classId !== absence.classId) return res.status(403).json({ error: 'Student does not belong to the absence class' });
+
+      if (actor.role === 'teacher') {
+        if (!actor.id || actor.schoolId == null) return res.status(403).json({ error: 'Teacher context is missing' });
+        const [teacher] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
+        if (!teacher) return res.status(403).json({ error: 'Teacher profile not found' });
+        const assignments = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+          .from(classTeachers)
+          .innerJoin(classes, eq(classTeachers.classId, classes.id))
+          .where(eq(classTeachers.teacherId, teacher.id));
+        const teacherClassIds = getTeacherClassIdSet(assignments, actor.schoolId);
+        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
+        if (!teacherClassIds.includes(absence.classId) || !authorizedStudentIds.includes(student.id)) {
+          return res.status(403).json({ error: 'Teacher is not assigned to this absence class' });
+        }
+      } else if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+        if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Actor is outside the student school' });
+        }
+        const classInScope = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(absence.classId, actor.schoolId);
+        if (!classInScope) return res.status(403).json({ error: 'Class is outside the actor school' });
+      } else if (actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Not authorized to review justifications' });
+      }
+
+      const updated = await db.update(absences).set({
+        justificationStatus: status,
+        isJustified: status === 'APPROVED',
+        rejectionReason: status === 'REJECTED' ? rejectionReason : null,
+        reviewedBy: actor.id ?? null,
+        reviewedAt: new Date(),
+      }).where(eq(absences.id, id)).returning();
+      return res.json(updated[0]);
+    } catch (error: any) {
+      console.error('Failed to review absence justification:', error);
+      return res.status(500).json({ error: 'Failed to review absence justification' });
     }
   });
 
@@ -6503,7 +6575,7 @@ export async function createApp() {
 
       try {
         const updated = await db.update(absences)
-          .set({ isJustified: true, justificationReason })
+          .set({ isJustified: false, justificationReason, justificationStatus: 'PENDING', rejectionReason: null, reviewedBy: null, reviewedAt: null })
           .where(eq(absences.id, absenceId))
           .returning();
 
@@ -6626,8 +6698,12 @@ export async function createApp() {
 
       const updated = await db.update(absences)
         .set({
-          isJustified: true,
+          isJustified: false,
           justificationReason,
+          justificationStatus: 'PENDING',
+          rejectionReason: null,
+          reviewedBy: null,
+          reviewedAt: null,
         })
         .where(eq(absences.id, id))
         .returning();
@@ -8478,29 +8554,31 @@ if (uniqueParentIds.length > 0) {
 
       let absenceStatusCountsQuery = db
         .select({
-          justified: sql<number>`count(case when ${absences.isJustified} = true then 1 end)::integer`,
-          unjustified: sql<number>`count(case when ${absences.isJustified} = false then 1 end)::integer`,
+          justified: sql<number>`count(case when ${absences.justificationStatus} = 'APPROVED' or (${absences.justificationStatus} is null and ${absences.isJustified} = true) then 1 end)::integer`,
+          unjustified: sql<number>`count(case when ${absences.justificationStatus} = 'REJECTED' or (${absences.justificationStatus} is null and ${absences.isJustified} = false) then 1 end)::integer`,
+          pending: sql<number>`count(case when ${absences.justificationStatus} = 'PENDING' then 1 end)::integer`,
         })
         .from(absences);
 
       if (actor.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer` }) as any;
+          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer`, pending: sql<number>`0::integer` }) as any;
         } else {
           absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, parentChildIds)) as any;
         }
       } else if (actor.role === 'teacher') {
         const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds || [] });
         if (authorizedStudentIds.length === 0) {
-          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer` }) as any;
+          absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer`, pending: sql<number>`0::integer` }) as any;
         } else {
           absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, authorizedStudentIds)) as any;
         }
       } else if (schoolFilter) {
         absenceStatusCountsQuery = db
           .select({
-            justified: sql<number>`count(case when ${absences.isJustified} = true then 1 end)::integer`,
-            unjustified: sql<number>`count(case when ${absences.isJustified} = false then 1 end)::integer`,
+            justified: sql<number>`count(case when ${absences.justificationStatus} = 'APPROVED' or (${absences.justificationStatus} is null and ${absences.isJustified} = true) then 1 end)::integer`,
+            unjustified: sql<number>`count(case when ${absences.justificationStatus} = 'REJECTED' or (${absences.justificationStatus} is null and ${absences.isJustified} = false) then 1 end)::integer`,
+            pending: sql<number>`count(case when ${absences.justificationStatus} = 'PENDING' then 1 end)::integer`,
           })
           .from(absences)
           .innerJoin(students, eq(absences.studentId, students.id))
@@ -8511,6 +8589,7 @@ if (uniqueParentIds.length > 0) {
       const absenceStatusCounts = {
         justified: Number(absenceStatusCountsResult[0]?.justified || 0),
         unjustified: Number(absenceStatusCountsResult[0]?.unjustified || 0),
+        pending: Number(absenceStatusCountsResult[0]?.pending || 0),
       };
 
       console.log('Nombre d\'élèves :', studentCountResult[0]?.count || 0);

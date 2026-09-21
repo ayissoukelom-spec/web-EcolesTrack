@@ -55,6 +55,7 @@ interface DashboardViewProps {
   absenceStatusCounts?: {
     justified: number;
     unjustified: number;
+    pending?: number;
   };
 }
 
@@ -74,11 +75,13 @@ export default function DashboardView({
 
   const attendanceData = normalizeDashboardChartData(chartData);
   const justifiedCount = absenceStatusCounts?.justified ?? recentAbsences.filter((a) => a.isJustified).length;
-  const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => !a.isJustified).length;
-  const totalAbsenceCount = justifiedCount + unjustifiedCount;
+  const pendingCount = absenceStatusCounts?.pending ?? recentAbsences.filter((a) => a.justificationStatus === 'PENDING').length;
+  const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => a.justificationStatus !== 'PENDING' && !a.isJustified).length;
+  const totalAbsenceCount = justifiedCount + unjustifiedCount + pendingCount;
   const pieData = [
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
+    { name: 'En attente', value: pendingCount, color: '#f59e0b' },
   ];
 
   return (

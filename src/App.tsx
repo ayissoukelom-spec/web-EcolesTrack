@@ -108,7 +108,7 @@ export default function App() {
   const [absencesList, setAbsencesList] = useState<any[]>([]);
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
-  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => !absence.isJustified).length;
+  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified).length;
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [summaryRecentGrades, setSummaryRecentGrades] = useState<any[]>([]);
@@ -698,6 +698,14 @@ export default function App() {
     await fetchAllData(false);
   };
 
+  const handleReviewAbsence = async (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => {
+    await apiFetch(`/api/absences/${id}/justification/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ status, ...(status === 'REJECTED' ? { rejectionReason } : {}) }),
+    });
+    await fetchAllData(false);
+  };
+
   const handleJustifyAbsence = async (id: number, reason: string, files?: File[] | File | null) => {
     try {
       await justifyAbsence(id, reason, files ?? undefined);
@@ -1243,6 +1251,7 @@ export default function App() {
                   teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
                   onAddAbsence={handleAddAbsence}
                   onAddLateArrival={handleAddLateArrival}
+                  onReviewAbsence={handleReviewAbsence}
                   onJustifyAbsence={handleJustifyAbsence}
                   onRecordAbsenceControl={recordAbsenceControl}
                 />

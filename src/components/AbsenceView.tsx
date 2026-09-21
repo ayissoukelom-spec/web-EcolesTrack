@@ -46,6 +46,7 @@ interface AbsenceViewProps {
   teacherSpecializations?: string[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
+  onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
   onRecordAbsenceControl?: (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => Promise<void>;
 }
@@ -63,6 +64,7 @@ export default function AbsenceView({
   teacherSpecializations,
   onAddAbsence,
   onAddLateArrival,
+  onReviewAbsence,
   onJustifyAbsence,
   onRecordAbsenceControl,
 }: AbsenceViewProps) {
@@ -97,6 +99,9 @@ export default function AbsenceView({
   const [lateReason, setLateReason] = useState('');
   const [lateExpectedStartTime, setLateExpectedStartTime] = useState('');
   const [lateArrivalTime, setLateArrivalTime] = useState('');
+  const [reviewingAbsence, setReviewingAbsence] = useState<Absence | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const MAX_JUSTIFICATION_FILES = 5;
   const MAX_JUSTIFICATION_FILE_SIZE = 5 * 1024 * 1024;
@@ -448,6 +453,35 @@ export default function AbsenceView({
     onJustifyAbsence(showJustifyModal.id, justificationText, selectedJustificationFiles);
     setShowJustifyModal(null);
     resetJustificationForm();
+  };
+
+  const canReviewJustification = ['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(userRole);
+  const getJustificationStatus = (absence: Absence) => absence.justificationStatus || (absence.isJustified ? 'APPROVED' : null);
+
+  const submitReview = async (status: 'APPROVED' | 'REJECTED') => {
+    if (!reviewingAbsence || !onReviewAbsence) return;
+    const reason = rejectionReason.trim();
+    if (status === 'REJECTED' && !reason) {
+      setReviewError('Le motif du rejet est obligatoire.');
+      return;
+    }
+    try {
+      await onReviewAbsence(reviewingAbsence.id, status, status === 'REJECTED' ? reason : undefined);
+      setReviewingAbsence(null);
+      setRejectionReason('');
+      setReviewError(null);
+    } catch (error: any) {
+      setReviewError(error?.message || 'Impossible de traiter la justification.');
+    }
+  };
+
+  const approveAbsenceJustification = async (absence: Absence) => {
+    if (!onReviewAbsence) return;
+    try {
+      await onReviewAbsence(absence.id, 'APPROVED');
+    } catch (error: any) {
+      setReviewError(error?.message || 'Impossible d’accepter la justification.');
+    }
   };
 
   const isClassInSelectedSchool = (klass: Class, schoolId: string) => {
@@ -1069,9 +1103,17 @@ export default function AbsenceView({
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
                         Retard
                       </span>
-                    ) : abs.isJustified ? (
+                    ) : getJustificationStatus(abs) === 'PENDING' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
+                        En attente de validation
+                      </span>
+                    ) : getJustificationStatus(abs) === 'REJECTED' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-full border border-rose-100">
+                        Justification refusée
+                      </span>
+                    ) : getJustificationStatus(abs) === 'APPROVED' ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-100">
-                        Justifiée
+                        Justification acceptée
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-full border border-rose-100">
@@ -1085,7 +1127,9 @@ export default function AbsenceView({
                     ) : (
                       <>
                         <div className="font-bold">
-                          {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                          {abs.justificationStatus === 'REJECTED'
+                            ? `Motif du refus : ${abs.rejectionReason || 'Non précisé'}`
+                            : abs.justificationReason || '— En attente de motif de l\'enfant...'}
                         </div>
                         {abs.justificationFileName ? (
                           <div className="text-[10px] text-slate-400 whitespace-normal break-words">
@@ -1118,7 +1162,27 @@ export default function AbsenceView({
                       Télécharger
                     </button>
                   ) : null}
-                  {abs.kind === 'absence' && !abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
+                  {abs.kind === 'absence' && canReviewJustification && getJustificationStatus(abs) === 'PENDING' && (
+                    <>
+                      <button
+                        onClick={() => approveAbsenceJustification(abs)}
+                        className="p-1.5 px-3 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer mr-2"
+                      >
+                        Accepter
+                      </button>
+                      <button
+                        onClick={() => {
+                          setReviewingAbsence(abs);
+                          setRejectionReason('');
+                          setReviewError(null);
+                        }}
+                        className="p-1.5 px-3 bg-rose-50 border border-rose-100 text-rose-700 hover:bg-rose-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Rejeter
+                      </button>
+                    </>
+                  )}
+                  {abs.kind === 'absence' && !getJustificationStatus(abs) && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
                     <button
                       onClick={() => {
                         setShowJustifyModal(abs);
@@ -1245,6 +1309,34 @@ export default function AbsenceView({
               </button>
             </div>
           </form>
+        </ModalSurface>
+      )}
+      {reviewingAbsence && (
+        <ModalSurface
+          isOpen={!!reviewingAbsence}
+          onClose={() => setReviewingAbsence(null)}
+          ariaLabel="Rejeter la justification"
+          contentClassName="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100"
+          overlayClassName="bg-slate-900/50 backdrop-blur-sm"
+        >
+          <div className="bg-rose-600 px-6 py-5 text-white">
+            <h3 className="font-bold text-sm sm:text-base">Rejeter la justification</h3>
+          </div>
+          <div className="p-6 space-y-4">
+            <textarea
+              required
+              rows={4}
+              value={rejectionReason}
+              onChange={(event) => setRejectionReason(event.target.value)}
+              placeholder="Motif obligatoire du rejet"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none"
+            />
+            {reviewError && <p className="text-xs font-semibold text-rose-600">{reviewError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setReviewingAbsence(null)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold">Annuler</button>
+              <button type="button" onClick={() => submitReview('REJECTED')} className="px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-semibold">Confirmer le rejet</button>
+            </div>
+          </div>
         </ModalSurface>
       )}
     </div>
