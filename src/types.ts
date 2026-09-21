@@ -15,6 +15,7 @@ export interface School {
   region?: string | null;
   educationDirection?: string | null;
   ministryName?: string | null;
+  principalName?: string | null;
   logoPath?: string | null;
   studentsCreationLocked?: boolean;
   createdAt?: string;

@@ -368,7 +368,7 @@ interface AdminViewProps {
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
@@ -529,7 +529,7 @@ export default function AdminView({
   // New item forms state
   const classGroupsStorageKey = 'ecoletrack-class-groups:v2';
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [groupPresets, setGroupPresets] = useState<any[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -578,7 +578,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', classNames: [] as string[], subjectNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [educationCycles, setEducationCycles] = useState<any[]>([]);
@@ -1267,6 +1267,7 @@ export default function AdminView({
           region: String(schoolForm.region || '').trim() || null,
           educationDirection: String(schoolForm.educationDirection || '').trim() || null,
           ministryName: String(schoolForm.ministryName || '').trim() || null,
+          principalName: String(schoolForm.principalName || '').trim() || null,
           classNames: finalClassNames,
           subjectNames: finalSubjectNames,
         });
@@ -1285,6 +1286,7 @@ export default function AdminView({
           region: '',
           educationDirection: '',
           ministryName: '',
+          principalName: '',
           selectedClassNames: [],
           selectedClassGroups: [],
           manuallySelectedClassNames: [],
@@ -2278,6 +2280,10 @@ export default function AdminView({
                   <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <label className="text-xs font-semibold text-slate-600">
+                        Nom du proviseur
+                        <input type="text" value={editSchoolForm.principalName} onChange={(e) => setEditSchoolForm({ ...editSchoolForm, principalName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
+                      </label>
                       {[
                         ['officialName', 'Nom officiel'],
                         ['abbreviation', 'District'],
@@ -2490,6 +2496,7 @@ export default function AdminView({
                           region: editSchoolForm.region.trim() || null,
                           educationDirection: editSchoolForm.educationDirection.trim() || null,
                           ministryName: editSchoolForm.ministryName.trim() || null,
+                          principalName: editSchoolForm.principalName.trim() || null,
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
                         };
                         const subjectNames = editSchoolForm.subjectNames?.filter((name) => name.trim() !== '');
@@ -4025,6 +4032,7 @@ export default function AdminView({
                       region: '',
                       educationDirection: '',
                       ministryName: '',
+                      principalName: '',
                       selectedClassNames: [],
                       selectedClassGroups: [],
                       manuallySelectedClassNames: [],
@@ -4070,7 +4078,7 @@ export default function AdminView({
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
                                 const phone2Digits = sc.phone2 ? sc.phone2.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', classNames: [], subjectNames: [] });
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', principalName: sc.principalName || '', classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}

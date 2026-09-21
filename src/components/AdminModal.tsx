@@ -459,6 +459,10 @@ export default function AdminModal(props: any) {
               <fieldset className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    Nom du proviseur
+                    <input type="text" value={schoolForm.principalName || ''} onChange={(e) => setSchoolForm({ ...schoolForm, principalName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
+                  </label>
                   {[
                     ['officialName', 'Nom officiel'],
                     ['abbreviation', 'District'],

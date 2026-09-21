@@ -105,6 +105,7 @@ export interface BulletinPdfData {
   classTeacherName?: string | null;
   classStudentCount: number;
   schoolName: string;
+  principalName?: string | null;
   school?: {
     name: string;
     officialName?: string | null;
@@ -633,6 +634,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       classId: bulletins.classId,
       className: classes.name,
       schoolName: schools.name,
+      principalName: schools.principalName,
       school: {
         name: schools.name,
         officialName: schools.officialName,
@@ -954,6 +956,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       classTeacherName: header.classTeacherName,
       classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
+      principalName: header.principalName,
       school: header.school ? { ...header.school, logoPath: header.school.logoPath ?? null, logo: null } : { name: header.schoolName },
       schoolYearId: header.schoolYearId,
       schoolYearName: header.schoolYearName,
@@ -2291,6 +2294,25 @@ export const createBulletinPdfDocument = async (
       color: text,
       thickness: 0.7,
     });
+
+    const principalLabel = 'Le Proviseur';
+    const principalLabelY = signatureNameY - 22;
+    const principalNameY = principalLabelY - 37;
+    const principalLabelWidth = fontBold.widthOfTextAtSize(principalLabel, 9);
+    const principalLabelX = signatureCenterX + 5;
+    const principalNameX = signatureCenterX + 5;
+    drawText(page, principalLabel, principalLabelX - principalLabelWidth / 2, principalLabelY, 9, text, fontBold);
+    if (data.principalName?.trim()) {
+      const principalName = sanitizePdfText(data.principalName);
+      const principalNameWidth = fontBold.widthOfTextAtSize(principalName, 9);
+      drawText(page, principalName, principalNameX - principalNameWidth / 2, principalNameY, 9, text, fontBold);
+      page.drawLine({
+        start: { x: principalNameX - principalNameWidth / 2, y: principalNameY - 2 },
+        end: { x: principalNameX + principalNameWidth / 2, y: principalNameY - 2 },
+        color: text,
+        thickness: 0.7,
+      });
+    }
   }
 
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });

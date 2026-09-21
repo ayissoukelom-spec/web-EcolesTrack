@@ -1023,6 +1023,26 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Absences : 5');
   });
 
+  it('affiche le proviseur de l établissement quand il est renseigné', async () => {
+    const text = extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      principalName: 'Kossi AYISSOU',
+    }));
+
+    expect(text).toContain('Le Proviseur');
+    expect(text).toContain('Kossi AYISSOU');
+  });
+
+  it('tolère un établissement sans proviseur renseigné', async () => {
+    const text = extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      principalName: null,
+    }));
+
+    expect(text).toContain('Le Proviseur');
+    expect(text).not.toContain('undefined');
+  });
+
   it('calcule les trois moyennes en excluant les valeurs nulles', () => {
     expect(calculateClassAverageSummary([16.42, 7.35, 11.28, null])).toEqual({
       highest: 16.42,

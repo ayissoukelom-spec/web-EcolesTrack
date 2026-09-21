@@ -21,6 +21,7 @@ export const schools = pgTable('schools', {
   region: text('region'),
   educationDirection: text('education_direction'),
   ministryName: text('ministry_name'),
+  principalName: text('principal_name'),
   logoPath: text('logo_path'),
   studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
