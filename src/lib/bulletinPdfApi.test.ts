@@ -643,8 +643,8 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Moyennes :');
     expect(text).toContain('Moyenne du 2ème semestre');
     expect(text).toContain('conseil de classe');
-    expect(text).toContain('Retards : 0 fois');
-    expect(text).toContain('Absences : 0 Heures');
+    expect(text).toContain('Retard : 0 min');
+    expect(text).toContain('Absences : 0');
     expect(text).toContain('Plus forte moyenne');
     expect(text).toContain('Plus faible moyenne');
     expect(text).toContain('Moyenne de la classe');
@@ -1018,8 +1018,8 @@ describe('bulletin PDF API', () => {
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    expect(text).toContain('Retards : 2 fois');
-    expect(text).toContain('Absences : 5 Heures');
+    expect(text).toContain('Retard : 2 min');
+    expect(text).toContain('Absences : 5');
   });
 
   it('ajoute le recapitulatif de moyenne generale et rang sous le tableau pour les semestres et trimestres', async () => {
@@ -1100,8 +1100,8 @@ describe('bulletin PDF API', () => {
 
     const text = extractPdfText(await createBulletinPdfDocument(data));
 
-    expect(text).toContain('Retards : 0 fois');
-    expect(text).toContain('Absences : 0 Heures');
+    expect(text).toContain('Retard : 0 min');
+    expect(text).toContain('Absences : 0');
   });
 
   it('compte les absences réelles d un élève dans le bulletin PDF et exclut les autres périodes', async () => {
@@ -1139,9 +1139,9 @@ describe('bulletin PDF API', () => {
     const text1 = extractPdfText(student1);
     const text2 = extractPdfText(student2);
 
-    expect(text1).toContain('Absences : 3 Heures');
-    expect(text1).toContain('Retards : 1 fois');
-    expect(text2).toContain('Absences : 7 Heures');
-    expect(text2).toContain('Retards : 2 fois');
+    expect(text1).toContain('Absences : 3');
+    expect(text1).toContain('Retard : 1 min');
+    expect(text2).toContain('Absences : 7');
+    expect(text2).toContain('Retard : 2 min');
   });
 });

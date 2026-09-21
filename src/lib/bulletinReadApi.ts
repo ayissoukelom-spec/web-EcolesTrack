@@ -9,11 +9,13 @@ import {
   academicYears,
   bulletinLines,
   bulletins,
+  absences,
   classTeachers,
   classes,
   parents,
   schoolTerms,
   students,
+  lateArrivals,
   teachers,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
@@ -47,6 +49,8 @@ export interface BulletinListItem {
   rank: number | null;
   mention: string | null;
   appreciation: string | null;
+  absences: number;
+  retards: number;
   generatedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -273,6 +277,8 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         schoolYearName: academicYears.name,
         termId: bulletins.termId,
         termName: schoolTerms.name,
+        termStartDate: schoolTerms.startDate,
+        termEndDate: schoolTerms.endDate,
         average: bulletins.average,
         totalPoints: bulletins.totalPoints,
         totalCoefficients: bulletins.totalCoefficients,
@@ -308,6 +314,36 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       .where(eq(bulletinLines.bulletinId, id))
       .orderBy(bulletinLines.id);
 
+    let absenceCount = 0;
+    let lateMinutesTotal = 0;
+    if (header.termStartDate && header.termEndDate) {
+      const [absenceSummary] = await db
+        .select({ count: sql<number>`count(distinct ${absences.id})::int` })
+        .from(absences)
+        .where(and(
+          eq(absences.studentId, header.studentId),
+          eq(absences.classId, header.classId),
+          sql`${absences.date} >= ${header.termStartDate}`,
+          sql`${absences.date} <= ${header.termEndDate}`,
+          sql`(
+            ${absences.justificationStatus} = 'REJECTED'
+            or (${absences.justificationStatus} is null and ${absences.isJustified} = false)
+          )`,
+        ));
+      absenceCount = Number(absenceSummary?.count ?? 0);
+
+      const [lateSummary] = await db
+        .select({ total: sql<number>`coalesce(sum(${lateArrivals.lateMinutes}), 0)::int` })
+        .from(lateArrivals)
+        .where(and(
+          eq(lateArrivals.studentId, header.studentId),
+          eq(lateArrivals.classId, header.classId),
+          sql`${lateArrivals.date} >= ${header.termStartDate}`,
+          sql`${lateArrivals.date} <= ${header.termEndDate}`,
+        ));
+      lateMinutesTotal = Number(lateSummary?.total ?? 0);
+    }
+
     const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
 
     return {
@@ -326,6 +362,8 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       rank: header.rank,
       mention: header.mention,
       appreciation: header.appreciation,
+      absences: absenceCount,
+      retards: lateMinutesTotal,
       generatedAt: toIso(header.generatedAt),
       createdAt: toIso(header.createdAt),
       updatedAt: toIso(header.updatedAt),

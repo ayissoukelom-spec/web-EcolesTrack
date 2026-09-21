@@ -19,6 +19,7 @@ import {
   schools,
   schoolTerms,
   students,
+  lateArrivals,
   studentAcademicYearStatuses,
   teachers,
   users,
@@ -875,9 +876,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletins: historicalBulletins,
     });
 
-    // Count only real absences for the student within the bulletin's class and term date range.
-    // The existing schema keeps absences in the `absences` table and does not have a dedicated delays table.
     let absencesCount = 0;
+    let lateMinutesTotal = 0;
     if (header.termStartDate && header.termEndDate) {
       const absenceRows = await db
         .select({ count: sql<number>`count(distinct ${absences.id})::int` })
@@ -888,9 +888,24 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
             eq(absences.classId, header.classId),
             sql`${absences.date} >= ${header.termStartDate}`,
             sql`${absences.date} <= ${header.termEndDate}`,
+            sql`(
+              ${absences.justificationStatus} = 'REJECTED'
+              or (${absences.justificationStatus} is null and ${absences.isJustified} = false)
+            )`,
           ),
         );
       absencesCount = Number(absenceRows[0]?.count ?? 0);
+
+      const lateRows = await db
+        .select({ total: sql<number>`coalesce(sum(${lateArrivals.lateMinutes}), 0)::int` })
+        .from(lateArrivals)
+        .where(and(
+          eq(lateArrivals.studentId, header.studentId),
+          eq(lateArrivals.classId, header.classId),
+          sql`${lateArrivals.date} >= ${header.termStartDate}`,
+          sql`${lateArrivals.date} <= ${header.termEndDate}`,
+        ));
+      lateMinutesTotal = Number(lateRows[0]?.total ?? 0);
     }
 
     return {
@@ -919,7 +934,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       mention: header.mention,
       appreciation: header.appreciation,
       absences: absencesCount,
-      retards: 0,
+      retards: lateMinutesTotal,
       generatedAt: header.generatedAt ? header.generatedAt.toISOString() : null,
       lines: resolvedLines,
       subjectGroups,
@@ -2153,9 +2168,31 @@ export const createBulletinPdfDocument = async (
   }
 
   const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
-  const signatureLabelY = lastSummaryY - 28;
-  const signatureNameY = signatureLabelY - 46;
+  const summaryTableTop = lastSummaryY - 8;
+  const summaryRowHeight = 14;
+  const summaryTableWidth = 150;
   const signatureCenterX = page.getWidth() - margin - 85;
+  const summaryTableLeft = signatureCenterX - summaryTableWidth / 2;
+  const summaryTableBottom = summaryTableTop - summaryRowHeight * 2;
+  page.drawRectangle({
+    x: summaryTableLeft,
+    y: summaryTableBottom,
+    width: summaryTableWidth,
+    height: summaryRowHeight * 2,
+    borderColor: text,
+    borderWidth: 0.8,
+  });
+  page.drawLine({
+    start: { x: summaryTableLeft, y: summaryTableTop - summaryRowHeight },
+    end: { x: summaryTableLeft + summaryTableWidth, y: summaryTableTop - summaryRowHeight },
+    color: text,
+    thickness: 0.8,
+  });
+  drawText(page, `Retard : ${data.retards} min`, summaryTableLeft + 5, summaryTableTop - 11, 9, text, fontBold);
+  drawText(page, `Absences : ${data.absences}`, summaryTableLeft + 5, summaryTableBottom + 3, 9, text, fontBold);
+
+  const signatureLabelY = summaryTableBottom - 14;
+  const signatureNameY = signatureLabelY - 46;
   if (signatureNameY > 64) {
     const signatureLabel = 'Signature du titulaire de la classe';
     const signatureLabelWidth = fontBold.widthOfTextAtSize(signatureLabel, 9);

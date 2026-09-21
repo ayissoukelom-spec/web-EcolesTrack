@@ -55,6 +55,8 @@ const baseDetailResponse: BulletinDetailResponse = {
   rank: 2,
   mention: 'Bien',
   appreciation: 'Très bon trimestre',
+  absences: 0,
+  retards: 0,
   generatedAt: '2026-06-26T08:00:00.000Z',
   createdAt: '2026-06-26T08:00:00.000Z',
   updatedAt: '2026-06-26T08:00:00.000Z',

@@ -98,6 +98,8 @@ const detailById: Record<number, BulletinDetailResponse> = {
     rank: 2,
     mention: 'SNAPSHOT_MENTION_1',
     appreciation: 'SNAPSHOT_APPRECIATION_1',
+    absences: 0,
+    retards: 0,
     generatedAt: '2026-06-26T08:00:00.000Z',
     createdAt: '2026-06-26T08:00:00.000Z',
     updatedAt: '2026-06-26T08:00:00.000Z',
@@ -131,6 +133,8 @@ const detailById: Record<number, BulletinDetailResponse> = {
     rank: 14,
     mention: 'SNAPSHOT_MENTION_2',
     appreciation: 'SNAPSHOT_APPRECIATION_2',
+    absences: 0,
+    retards: 0,
     generatedAt: '2026-06-26T08:00:00.000Z',
     createdAt: '2026-06-26T08:00:00.000Z',
     updatedAt: '2026-06-26T08:00:00.000Z',
@@ -168,6 +172,8 @@ const pdfById: Record<number, BulletinPdfData> = {
     rank: 2,
     mention: 'SNAPSHOT_MENTION_1',
     appreciation: 'SNAPSHOT_APPRECIATION_1',
+    absences: 0,
+    retards: 0,
     generatedAt: '2026-06-26T08:00:00.000Z',
     lines: [
       {
@@ -199,6 +205,8 @@ const pdfById: Record<number, BulletinPdfData> = {
     rank: 14,
     mention: 'SNAPSHOT_MENTION_2',
     appreciation: 'SNAPSHOT_APPRECIATION_2',
+    absences: 0,
+    retards: 0,
     generatedAt: '2026-06-26T08:00:00.000Z',
     lines: [
       {

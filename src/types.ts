@@ -331,6 +331,8 @@ export interface BulletinLine {
 export interface BulletinDetail extends BulletinListItem {
   totalPoints: number;
   totalCoefficients: number;
+  absences: number;
+  retards: number;
   lines: BulletinLine[];
 }
 

@@ -198,6 +198,10 @@ export default function BulletinDetail({
           </div>
 
           <div className="flex justify-end pt-6">
+            <div className="relative -top-3 w-fit border border-slate-300 text-xs text-slate-700 mr-4 self-start">
+              <div className="px-3 py-1.5 border-b border-slate-300 font-semibold">Retard : {detail.retards} min</div>
+              <div className="px-3 py-1.5 font-semibold">Absences : {detail.absences}</div>
+            </div>
             <div className="min-w-[220px] rounded-xl border-2 border-black p-3 text-center text-xs text-slate-700">
               <p className="font-semibold">Signature du titulaire de la classe</p>
               <div className="h-16" aria-hidden="true" />
