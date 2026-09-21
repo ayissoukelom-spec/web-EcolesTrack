@@ -292,27 +292,47 @@ export default function AdminModal(props: any) {
     ? (currentSchoolId ?? autoSelectedSchoolId)
     : (newTeacherMode ? newTeacherFormSchoolId : teacherFormSchoolId);
   const [teacherSchoolClasses, setTeacherSchoolClasses] = useState<any[] | null>(null);
+  const [teacherSchoolClassesLoading, setTeacherSchoolClassesLoading] = useState(false);
+  const [teacherSchoolClassesError, setTeacherSchoolClassesError] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedTeacherSchoolId == null) {
       setTeacherSchoolClasses(null);
+      setTeacherSchoolClassesLoading(false);
+      setTeacherSchoolClassesError(null);
       return;
     }
 
     let cancelled = false;
     setTeacherSchoolClasses([]);
+    setTeacherSchoolClassesLoading(true);
+    setTeacherSchoolClassesError(null);
     apiFetch(`/api/classes?schoolId=${selectedTeacherSchoolId}`)
       .then((payload) => {
         if (!cancelled) setTeacherSchoolClasses(Array.isArray(payload) ? payload : []);
       })
-      .catch(() => {
-        if (!cancelled) setTeacherSchoolClasses([]);
+      .catch((error: any) => {
+        if (!cancelled) {
+          setTeacherSchoolClasses([]);
+          setTeacherSchoolClassesError(error?.message || 'Impossible de charger les classes de cette école.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTeacherSchoolClassesLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
   }, [selectedTeacherSchoolId]);
+
+  const renderTeacherClassesState = (selectedSchoolId: number | undefined) => {
+    if (selectedSchoolId == null) return <p className="mt-1 text-xs text-slate-500">Sélectionnez d'abord une école pour afficher les classes.</p>;
+    if (teacherSchoolClassesLoading) return <p className="mt-1 text-xs text-slate-500">Chargement des classes...</p>;
+    if (teacherSchoolClassesError) return <p className="mt-1 text-xs text-rose-600">{teacherSchoolClassesError}</p>;
+    if (teacherSchoolClasses && teacherSchoolClasses.length === 0) return <p className="mt-1 text-xs text-slate-500">Aucune classe disponible pour cette école.</p>;
+    return null;
+  };
 
   useEffect(() => {
     if (userRole === 'school_admin' && currentSchoolId != null && !parentForm.schoolId) {
@@ -888,7 +908,7 @@ export default function AdminModal(props: any) {
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                 {(() => {
-                  const available = (teacherSchoolClasses ?? sortedClasses);
+                      const available = selectedTeacherSchoolId == null ? [] : (teacherSchoolClasses ?? []);
                   return (
                     <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}
@@ -898,6 +918,7 @@ export default function AdminModal(props: any) {
                     />
                   );
                 })()}
+                {renderTeacherClassesState(selectedTeacherSchoolId)}
               </div>
             </div>
           )}
@@ -1061,7 +1082,7 @@ export default function AdminModal(props: any) {
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Classes assignées (sélection multiple)</label>
                     {(() => {
-                      const available = (teacherSchoolClasses ?? sortedClasses);
+                      const available = selectedTeacherSchoolId == null ? [] : (teacherSchoolClasses ?? []);
                       return (
                         <MultiSelect
                       options={available.map((c: any) => ({ value: c.id, label: c.name }))}

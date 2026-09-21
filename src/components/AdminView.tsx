@@ -62,7 +62,13 @@ const validateRecords = (records: any[]) => {
         const digits = String(r.parentPhone).replace(/\D/g, '');
         if (digits.length !== 8) errs.push('parentPhone doit contenir 8 chiffres');
       }
+  const [editTeacherClasses, setEditTeacherClasses] = useState<Class[] | null>(null);
+  const [editTeacherClassesLoading, setEditTeacherClassesLoading] = useState(false);
+  const [editTeacherClassesError, setEditTeacherClassesError] = useState<string | null>(null);
       if (r.studentStatus && !isStudentAcademicYearStatus(String(r.studentStatus).trim())) {
+  const [classFormClasses, setClassFormClasses] = useState<Class[] | null>(null);
+  const [classFormClassesLoading, setClassFormClassesLoading] = useState(false);
+  const [classFormClassesError, setClassFormClassesError] = useState<string | null>(null);
         errs.push('studentStatus invalide');
       }
       if (errs.length > 0) rowErrors.push({ row: i, errors: errs });
@@ -614,6 +620,66 @@ export default function AdminView({
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
   const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
   const isStudentsCreationLocked = Boolean(currentSchoolForAdmin?.studentsCreationLocked);
+
+  useEffect(() => {
+    const schoolId = userRole === 'super_admin'
+      ? (classForm.schoolId ? Number(classForm.schoolId) : null)
+      : currentSchoolId;
+    if (!schoolId) {
+      setClassFormClasses(null);
+      setClassFormClassesLoading(false);
+      setClassFormClassesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setClassFormClassesLoading(true);
+    setClassFormClassesError(null);
+    apiFetch(`/api/classes?schoolId=${schoolId}`)
+      .then((payload) => {
+        if (!cancelled) setClassFormClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error: any) => {
+        if (!cancelled) {
+          setClassFormClasses([]);
+          setClassFormClassesError(error?.message || 'Impossible de charger les classes de cette école.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setClassFormClassesLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [classForm.schoolId, currentSchoolId, userRole]);
+
+  useEffect(() => {
+    const schoolId = userForm.role === 'teacher' && userForm.schoolId ? Number(userForm.schoolId) : null;
+    if (!schoolId) {
+      setEditTeacherClasses(null);
+      setEditTeacherClassesLoading(false);
+      setEditTeacherClassesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setEditTeacherClassesLoading(true);
+    setEditTeacherClassesError(null);
+    apiFetch(`/api/classes?schoolId=${schoolId}`)
+      .then((payload) => {
+        if (!cancelled) setEditTeacherClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error: any) => {
+        if (!cancelled) {
+          setEditTeacherClasses([]);
+          setEditTeacherClassesError(error?.message || 'Impossible de charger les classes de cette école.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEditTeacherClassesLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [userForm.role, userForm.schoolId]);
   useEffect(() => {
     const yearId = Number(successionAcademicYearId);
     if (!Number.isInteger(yearId) || yearId <= 0) {
@@ -1368,7 +1434,8 @@ export default function AdminView({
         return;
       }
       const schoolId = classForm.schoolId ? parseInt(classForm.schoolId) : null;
-      const isDuplicate = classesList.some(c =>
+      const classesForSelectedSchool = schoolId != null ? (classFormClasses ?? []) : classesList;
+      const isDuplicate = classesForSelectedSchool.some(c =>
         c.name.trim() === className.trim() &&
         c.academicYearId === defaultAcademicYearId &&
         ((schoolId == null && (c.schoolId == null)) || c.schoolId === schoolId)
@@ -2899,13 +2966,17 @@ export default function AdminView({
                 {userForm.role === 'teacher' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Classes attribuées</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
-                      {(classesList || [])
-                        .filter((c) => {
-                          const selectedSchoolId = userForm.schoolId ? Number(userForm.schoolId) : undefined;
-                          return !selectedSchoolId || isApprovedForSchool(c, selectedSchoolId);
-                        })
-                        .map((cls) => (
+                    {!userForm.schoolId ? (
+                      <div className="border border-slate-200 rounded p-3 bg-slate-50 text-sm text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
+                    ) : editTeacherClassesLoading ? (
+                      <div className="border border-slate-200 rounded p-3 bg-slate-50 text-sm text-slate-500">Chargement des classes...</div>
+                    ) : editTeacherClassesError ? (
+                      <div className="border border-rose-200 rounded p-3 bg-rose-50 text-sm text-rose-700">{editTeacherClassesError}</div>
+                    ) : (editTeacherClasses || []).length === 0 ? (
+                      <div className="border border-slate-200 rounded p-3 bg-slate-50 text-sm text-slate-500">Aucune classe disponible pour cette école.</div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded p-2 bg-slate-50 text-sm">
+                        {editTeacherClasses.map((cls) => (
                           <label key={cls.id} className="flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer hover:bg-slate-100 border border-transparent hover:border-slate-200">
                             <input
                               type="checkbox"
@@ -2922,17 +2993,12 @@ export default function AdminView({
                             <span className="truncate">{cls.name}</span>
                           </label>
                         ))}
-                      {(classesList || []).filter((c) => {
-                        const selectedSchoolId = userForm.schoolId ? Number(userForm.schoolId) : undefined;
-                        return !selectedSchoolId || isApprovedForSchool(c, selectedSchoolId);
-                      }).length === 0 && (
-                        <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                     {userForm.assignedClassIds.length > 0 && (
                       <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded border border-slate-200">
                         <strong>Classes sélectionnées :</strong>{' '}
-                        {(classesList || [])
+                        {(editTeacherClasses || [])
                           .filter((cls) => userForm.assignedClassIds.includes(cls.id))
                           .map((cls) => cls.name)
                           .join(', ')}
