@@ -62,13 +62,7 @@ const validateRecords = (records: any[]) => {
         const digits = String(r.parentPhone).replace(/\D/g, '');
         if (digits.length !== 8) errs.push('parentPhone doit contenir 8 chiffres');
       }
-  const [editTeacherClasses, setEditTeacherClasses] = useState<Class[] | null>(null);
-  const [editTeacherClassesLoading, setEditTeacherClassesLoading] = useState(false);
-  const [editTeacherClassesError, setEditTeacherClassesError] = useState<string | null>(null);
       if (r.studentStatus && !isStudentAcademicYearStatus(String(r.studentStatus).trim())) {
-  const [classFormClasses, setClassFormClasses] = useState<Class[] | null>(null);
-  const [classFormClassesLoading, setClassFormClassesLoading] = useState(false);
-  const [classFormClassesError, setClassFormClassesError] = useState<string | null>(null);
         errs.push('studentStatus invalide');
       }
       if (errs.length > 0) rowErrors.push({ row: i, errors: errs });
@@ -616,6 +610,12 @@ export default function AdminView({
   const [newTeacherMode, setNewTeacherMode] = useState(false);
   const [newTeacherForm, setNewTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
+  const [editTeacherClasses, setEditTeacherClasses] = useState<Class[] | null>(null);
+  const [editTeacherClassesLoading, setEditTeacherClassesLoading] = useState(false);
+  const [editTeacherClassesError, setEditTeacherClassesError] = useState<string | null>(null);
+  const [classFormClasses, setClassFormClasses] = useState<Class[] | null>(null);
+  const [classFormClassesLoading, setClassFormClassesLoading] = useState(false);
+  const [classFormClassesError, setClassFormClassesError] = useState<string | null>(null);
   const autoAssignedSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : undefined;
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
   const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
@@ -652,34 +652,6 @@ export default function AdminView({
     return () => { cancelled = true; };
   }, [classForm.schoolId, currentSchoolId, userRole]);
 
-  useEffect(() => {
-    const schoolId = userForm.role === 'teacher' && userForm.schoolId ? Number(userForm.schoolId) : null;
-    if (!schoolId) {
-      setEditTeacherClasses(null);
-      setEditTeacherClassesLoading(false);
-      setEditTeacherClassesError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setEditTeacherClassesLoading(true);
-    setEditTeacherClassesError(null);
-    apiFetch(`/api/classes?schoolId=${schoolId}`)
-      .then((payload) => {
-        if (!cancelled) setEditTeacherClasses(Array.isArray(payload) ? payload : []);
-      })
-      .catch((error: any) => {
-        if (!cancelled) {
-          setEditTeacherClasses([]);
-          setEditTeacherClassesError(error?.message || 'Impossible de charger les classes de cette école.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setEditTeacherClassesLoading(false);
-      });
-
-    return () => { cancelled = true; };
-  }, [userForm.role, userForm.schoolId]);
   useEffect(() => {
     const yearId = Number(successionAcademicYearId);
     if (!Number.isInteger(yearId) || yearId <= 0) {
@@ -2021,6 +1993,36 @@ export default function AdminView({
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
   const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[] });
+
+  useEffect(() => {
+    const schoolId = userForm.role === 'teacher' && userForm.schoolId ? Number(userForm.schoolId) : null;
+    if (!schoolId) {
+      setEditTeacherClasses(null);
+      setEditTeacherClassesLoading(false);
+      setEditTeacherClassesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setEditTeacherClassesLoading(true);
+    setEditTeacherClassesError(null);
+    apiFetch(`/api/classes?schoolId=${schoolId}`)
+      .then((payload) => {
+        if (!cancelled) setEditTeacherClasses(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error: any) => {
+        if (!cancelled) {
+          setEditTeacherClasses([]);
+          setEditTeacherClassesError(error?.message || 'Impossible de charger les classes de cette école.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEditTeacherClassesLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [userForm.role, userForm.schoolId]);
+
   const [editUserPassword, setEditUserPassword] = useState('');
   const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
   const [editUserError, setEditUserError] = useState<string | null>(null);
