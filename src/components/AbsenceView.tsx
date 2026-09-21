@@ -85,6 +85,7 @@ export default function AbsenceView({
   const [filterSubject, setFilterSubject] = useState('');
   const [filterDate, setFilterDate] = useState('');
   const [filterJustification, setFilterJustification] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
   const [justificationText, setJustificationText] = useState('');
@@ -480,6 +481,9 @@ export default function AbsenceView({
   ];
 
   const filteredAbsences = mergedPresenceEvents.filter((event) => {
+    if (filterStatus === 'late' && event.kind !== 'late') return false;
+    if (filterStatus === 'absent' && event.kind !== 'absence') return false;
+
     if (event.kind === 'late') {
       if (filterSchool) {
         const cls = classesList.find((c) => c.id === event.classId);
@@ -1005,6 +1009,16 @@ export default function AbsenceView({
             <option value="justified">Justifiées</option>
             <option value="unjustified">Injustifiées</option>
           </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            aria-label="Filtrer par statut"
+            className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-xs rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+          >
+            <option value="">Tous</option>
+            <option value="late">Retard</option>
+            <option value="absent">Absent</option>
+          </select>
         </div>
       </div>
 
@@ -1026,7 +1040,7 @@ export default function AbsenceView({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredAbsences.map((abs) => (
-                <tr key={abs.id} className="hover:bg-slate-50/60 transition-colors">
+                <tr key={`${abs.kind}-${abs.id}`} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-6 py-4 font-bold text-slate-800">{abs.studentName}</td>
                   <td className="px-6 py-4 text-slate-500 font-semibold">{abs.className}</td>
                   <td className="px-6 py-4 text-slate-600">

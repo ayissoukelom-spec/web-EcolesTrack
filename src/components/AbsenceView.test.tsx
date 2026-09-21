@@ -75,6 +75,70 @@ describe('AbsenceView surveillant', () => {
     expect(screen.queryByText('Alan Justifie')).toBeNull();
   });
 
+  it('filtre les retards par statut avec les filtres existants', () => {
+    const onAddAbsence = vi.fn();
+    const onAddLateArrival = vi.fn();
+
+    render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[
+          { id: 1, studentId: 1, studentName: 'Ada Absente', classId: 10, className: '6e A', date: '2026-09-01', period: 'morning', subjectName: 'Maths', isJustified: false },
+        ] as any}
+        lateArrivalsList={[
+          { id: 2, studentId: 2, studentName: 'Grace Retard', classId: 10, className: '6e A', date: '2026-09-02', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:15', lateMinutes: 15, reason: 'Trafic' },
+        ]}
+        studentsList={[]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={onAddAbsence}
+        onAddLateArrival={onAddLateArrival}
+        onJustifyAbsence={vi.fn()}
+        onRecordAbsenceControl={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Filtrer par statut')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Filtrer par statut'), { target: { value: 'late' } });
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+    fireEvent.change(document.querySelector('input[type="date"]') as HTMLInputElement, { target: { value: '2026-09-02' } });
+
+    expect(screen.getByText('Grace Retard')).toBeTruthy();
+    expect(screen.queryByText('Ada Absente')).toBeNull();
+    expect(onAddAbsence).not.toHaveBeenCalled();
+    expect(onAddLateArrival).not.toHaveBeenCalled();
+  });
+
+  it('exclut une absence justifiée lorsque le filtre Retard est sélectionné', () => {
+    render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[
+          { id: 10, studentId: 10, studentName: 'Élève Absence Justifiée', classId: 10, className: '6e A', date: '2026-09-02', period: 'morning', subjectName: 'Maths', isJustified: true },
+        ] as any}
+        lateArrivalsList={[
+          { id: 20, studentId: 20, studentName: 'Élève Retard', classId: 10, className: '6e A', date: '2026-09-02', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:15', lateMinutes: 15, reason: 'Trafic' },
+        ]}
+        studentsList={[]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onAddLateArrival={vi.fn()}
+        onJustifyAbsence={vi.fn()}
+        onRecordAbsenceControl={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Filtrer par statut'), { target: { value: 'late' } });
+
+    expect(screen.getByText('Élève Retard')).toBeTruthy();
+    expect(screen.queryAllByRole('row').some((row) => row.textContent?.includes('Élève Absence Justifiée'))).toBe(false);
+  });
+
   it('enregistre un retard avec son motif sans créer une absence', async () => {
     const onAddAbsence = vi.fn();
     const onAddLateArrival = vi.fn().mockResolvedValue(undefined);
