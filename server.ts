@@ -5917,9 +5917,10 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      const { studentId, classId, date, period, expectedStartTime, arrivalTime, reason } = req.body;
+      const { studentId, classId, date, period, expectedStartTime, arrivalTime, reason, subjectId } = req.body;
       const parsedStudentId = Number(studentId);
       const parsedClassId = Number(classId);
+      const parsedSubjectId = subjectId != null && subjectId !== '' ? Number(subjectId) : undefined;
       const parsedDate = typeof date === 'string' ? date.trim() : '';
       const normalizedExpectedStartTime = typeof expectedStartTime === 'string' ? expectedStartTime.trim() : '';
       const normalizedArrivalTime = typeof arrivalTime === 'string' ? arrivalTime.trim() : '';
@@ -5980,15 +5981,33 @@ export async function createApp() {
         createdBy: actor.id ?? null,
       }).returning();
 
+      let subjectName: string | undefined;
+      if (parsedSubjectId != null && Number.isInteger(parsedSubjectId) && parsedSubjectId > 0) {
+        const [subject] = await db.select({ name: subjects.name }).from(subjects).where(eq(subjects.id, parsedSubjectId));
+        subjectName = subject?.name;
+      }
+
       const [parentRecord] = student.parentId != null
         ? await db.select({ userId: parents.userId }).from(parents).where(eq(parents.id, student.parentId))
         : [null];
 
       if (parentRecord?.userId) {
         const notificationTitle = `Retard enregistré pour ${student.firstName}`;
-        const notificationBody = inserted.lateMinutes != null
-          ? `Un retard de ${inserted.lateMinutes} minutes a été enregistré pour ${student.firstName} le ${inserted.date} (${inserted.period}).`
-          : `Un retard a été enregistré pour ${student.firstName} le ${inserted.date} (${inserted.period}).`;
+        const periodName = inserted.period === 'morning'
+          ? 'Matin'
+          : inserted.period === 'afternoon'
+            ? 'Après-midi'
+            : inserted.period === 'all_day'
+              ? 'Toute la journée'
+              : inserted.period;
+        const periodPhrase = periodName === 'Matin'
+          ? 'la matinée'
+          : periodName === 'Après-midi'
+            ? "l'après-midi"
+            : periodName.toLowerCase();
+        const subjectText = subjectName ? ` en ${subjectName}` : '';
+        const lateDurationText = inserted.lateMinutes != null ? ` de ${inserted.lateMinutes} minutes` : '';
+        const notificationBody = `Votre enfant ${student.firstName} a été enregistré en retard${lateDurationText}${subjectText}, le ${inserted.date}, pendant ${periodPhrase}.`;
 
         try {
           await db.insert(notifications).values({
@@ -6015,6 +6034,8 @@ export async function createApp() {
               date: inserted.date,
               period: inserted.period,
               lateMinutes: inserted.lateMinutes,
+              subjectId: parsedSubjectId ?? null,
+              subjectName: subjectName ?? null,
             },
             dedupeKey: `late-arrival-${inserted.id}`,
           };

@@ -45,7 +45,7 @@ interface AbsenceViewProps {
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
-  onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
+  onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
   onRecordAbsenceControl?: (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => Promise<void>;
@@ -304,6 +304,7 @@ export default function AbsenceView({
           classId: student.classId,
           date: newAbsenceForm.date,
           period,
+          subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
           expectedStartTime: parsedExpectedStartTime,
           arrivalTime: parsedArrivalTime,
           reason: lateReason.trim() || null,
@@ -424,6 +425,7 @@ export default function AbsenceView({
             classId: student.classId,
             date: newAbsenceForm.date,
             period,
+            subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
             expectedStartTime: lateExpectedStartTime,
             arrivalTime: lateArrivalTime,
             reason: lateReason.trim() || null,

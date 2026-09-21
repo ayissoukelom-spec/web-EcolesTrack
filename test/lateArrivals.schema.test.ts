@@ -29,7 +29,14 @@ describe('late arrivals schema', () => {
     expect(creationRoute).toContain("title: notificationTitle");
     expect(creationRoute).toContain("body: notificationBody");
     expect(creationRoute).toContain('Retard enregistré pour ${student.firstName}');
-    expect(creationRoute).toContain('Un retard de ${inserted.lateMinutes} minutes');
+    expect(creationRoute).toContain('Votre enfant ${student.firstName} a été enregistré en retard');
+    expect(creationRoute).toContain('subjectId');
+    expect(creationRoute).toContain('subjectName');
+    expect(creationRoute).toContain("inserted.period === 'morning'");
+    expect(creationRoute).toContain("inserted.period === 'afternoon'");
+    expect(creationRoute).toContain("l'après-midi");
+    expect(creationRoute).toContain('Matin');
+    expect(creationRoute).toContain('${inserted.lateMinutes} minutes');
     expect(creationRoute).toContain('target: \'late-arrival\'');
     expect(creationRoute).toContain('lateArrivalId: inserted.id');
     expect(creationRoute).toContain('dedupeKey: `late-arrival-${inserted.id}`');

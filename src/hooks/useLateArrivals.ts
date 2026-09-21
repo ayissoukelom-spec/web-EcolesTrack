@@ -7,6 +7,7 @@ export interface LateArrivalInput {
   classId: number;
   date: string;
   period: 'morning' | 'afternoon' | 'all_day';
+  subjectId?: number;
   expectedStartTime: string;
   arrivalTime: string;
   reason?: string | null;
