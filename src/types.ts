@@ -143,6 +143,7 @@ export interface Class {
   schoolId?: number | null;
   academicYearId: number;
   levelId?: number | null;
+  progressionCode?: string | null;
   name: string;
   teacherId?: number;
   teacherName?: string;
@@ -156,6 +157,16 @@ export interface ClassSuccession {
   academicYearId: number;
   sourceClassId: number;
   targetClassId: number;
+}
+
+export interface ClassProgression {
+  id: number;
+  sourceCode: string;
+  targetCode: string;
+  cycleId?: number | null;
+  isActive: boolean;
+  sourceClassName?: string | null;
+  targetClassName?: string | null;
 }
 
 export interface Student {

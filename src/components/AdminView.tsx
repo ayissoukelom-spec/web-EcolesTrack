@@ -25,6 +25,7 @@ import {
 
 import { sortClasses } from '../lib/classOrdering';
 import { getClassGroupsVisibleToSchool, isClassVisibleToSchool } from '../lib/classVisibility.ts';
+import { normalizeClassProgressionCode } from '../lib/classProgression.ts';
 import { STUDENT_ACADEMIC_YEAR_STATUSES, isStudentAcademicYearStatus } from '../lib/studentAcademicYearStatus.ts';
 import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
@@ -594,9 +595,10 @@ export default function AdminView({
   const [editingTermEndDate, setEditingTermEndDate] = useState('');
   const [classForm, setClassForm] = useState({ cycle: '', levelId: '', stream: '', section: '', group: '', schoolId: '' });
   const [successionAcademicYearId, setSuccessionAcademicYearId] = useState('');
-  const [successionSourceClassId, setSuccessionSourceClassId] = useState('');
-  const [successionTargetClassId, setSuccessionTargetClassId] = useState('');
-  const [classSuccessionsList, setClassSuccessionsList] = useState<any[]>([]);
+  const [successionSourceCode, setSuccessionSourceCode] = useState('');
+  const [successionTargetCode, setSuccessionTargetCode] = useState('');
+  const [successionCatalogClasses, setSuccessionCatalogClasses] = useState<any[]>([]);
+  const [classProgressionsList, setClassProgressionsList] = useState<any[]>([]);
   const [successionNotice, setSuccessionNotice] = useState<string | null>(null);
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
@@ -612,22 +614,26 @@ export default function AdminView({
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
   const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
   const isStudentsCreationLocked = Boolean(currentSchoolForAdmin?.studentsCreationLocked);
-  const successionSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : superAdminSchoolFilterId;
-  const successionClasses = classesList.filter((klass) => (
-    successionAcademicYearId !== '' && Number(klass.academicYearId) === Number(successionAcademicYearId)
-      && (!successionSchoolId || isClassVisibleToSchool(klass, successionSchoolId))
-  ));
-
   useEffect(() => {
     const yearId = Number(successionAcademicYearId);
-    if (!successionSchoolId || !Number.isInteger(yearId) || yearId <= 0) {
-      setClassSuccessionsList([]);
+    if (!Number.isInteger(yearId) || yearId <= 0) {
+      setSuccessionCatalogClasses([]);
+      setClassProgressionsList([]);
       return;
     }
-    apiFetch(`/api/class-successions?schoolId=${successionSchoolId}&academicYearId=${yearId}`)
-      .then((rows) => setClassSuccessionsList(Array.isArray(rows) ? rows : []))
-      .catch(() => setClassSuccessionsList([]));
-  }, [successionAcademicYearId, successionSchoolId]);
+    Promise.all([
+      apiFetch(`/api/class-progression-catalog?academicYearId=${yearId}`),
+      apiFetch(`/api/class-progressions?academicYearId=${yearId}`),
+    ])
+      .then(([catalog, progressions]) => {
+        setSuccessionCatalogClasses(Array.isArray(catalog) ? catalog : []);
+        setClassProgressionsList(Array.isArray(progressions) ? progressions : []);
+      })
+      .catch(() => {
+        setSuccessionCatalogClasses([]);
+        setClassProgressionsList([]);
+      });
+  }, [successionAcademicYearId]);
 
   useEffect(() => {
     if (userRole === 'school_admin') {
@@ -4558,29 +4564,26 @@ export default function AdminView({
             {['super_admin', 'school_admin'].includes(userRole) && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 mb-4">
                 <h3 className="text-sm font-semibold text-slate-700">Progression des classes pour les décisions annuelles</h3>
-                <p className="mt-1 text-xs text-slate-500">Définissez explicitement la classe cible pour chaque établissement et chaque année scolaire.</p>
-                {!successionSchoolId ? (
-                  <p className="mt-3 text-sm text-amber-700">Sélectionnez une école pour configurer ses correspondances.</p>
-                ) : (
-                  <>
+                <p className="mt-1 text-xs text-slate-500">Définissez une fois les correspondances globales du catalogue de classes.</p>
+                <>
                     <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                      <select value={successionAcademicYearId} onChange={(event) => { setSuccessionAcademicYearId(event.target.value); setSuccessionSourceClassId(''); setSuccessionTargetClassId(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <select value={successionAcademicYearId} onChange={(event) => { setSuccessionAcademicYearId(event.target.value); setSuccessionSourceCode(''); setSuccessionTargetCode(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                         <option value="">Année scolaire</option>
                         {yearsList.map((year) => <option key={year.id} value={String(year.id)}>{year.name}</option>)}
                       </select>
-                      <select value={successionSourceClassId} onChange={(event) => setSuccessionSourceClassId(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <select value={successionSourceCode} onChange={(event) => setSuccessionSourceCode(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                         <option value="">Classe actuelle</option>
-                        {successionClasses.map((klass) => <option key={klass.id} value={String(klass.id)}>{klass.name}</option>)}
+                        {successionCatalogClasses.map((klass) => <option key={klass.progressionCode} value={klass.progressionCode}>{klass.name}</option>)}
                       </select>
-                      <select value={successionTargetClassId} onChange={(event) => setSuccessionTargetClassId(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <select value={successionTargetCode} onChange={(event) => setSuccessionTargetCode(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                         <option value="">Classe supérieure</option>
-                        {successionClasses.filter((klass) => String(klass.id) !== successionSourceClassId).map((klass) => <option key={klass.id} value={String(klass.id)}>{klass.name}</option>)}
+                        {successionCatalogClasses.filter((klass) => klass.progressionCode !== successionSourceCode).map((klass) => <option key={klass.progressionCode} value={klass.progressionCode}>{klass.name}</option>)}
                       </select>
-                      <button type="button" className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!successionAcademicYearId || !successionSourceClassId || !successionTargetClassId} onClick={async () => {
+                      <button type="button" className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!successionSourceCode || !successionTargetCode} onClick={async () => {
                         try {
-                          await apiFetch('/api/class-successions', { method: 'PUT', body: JSON.stringify({ schoolId: successionSchoolId, academicYearId: Number(successionAcademicYearId), sourceClassId: Number(successionSourceClassId), targetClassId: Number(successionTargetClassId) }) });
-                          const rows = await apiFetch(`/api/class-successions?schoolId=${successionSchoolId}&academicYearId=${successionAcademicYearId}`);
-                          setClassSuccessionsList(Array.isArray(rows) ? rows : []);
+                          await apiFetch('/api/class-progressions', { method: 'PUT', body: JSON.stringify({ sourceCode: successionSourceCode, targetCode: successionTargetCode }) });
+                          const rows = await apiFetch(`/api/class-progressions?academicYearId=${successionAcademicYearId}`);
+                          setClassProgressionsList(Array.isArray(rows) ? rows : []);
                           setSuccessionNotice('Correspondance enregistrée.');
                         } catch (error: any) {
                           setSuccessionNotice(error?.message || 'Impossible d’enregistrer la correspondance.');
@@ -4589,18 +4592,17 @@ export default function AdminView({
                     </div>
                     {successionNotice && <p className="mt-2 text-xs text-slate-600">{successionNotice}</p>}
                     <div className="mt-3 space-y-2">
-                      {classSuccessionsList.map((row) => (
+                      {classProgressionsList.map((row) => (
                         <div key={row.id} className="flex items-center justify-between rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
                           <span>{row.sourceClassName || row.sourceClassId} → {row.targetClassName || row.targetClassId}</span>
                           <button type="button" className="text-xs font-semibold text-rose-600" onClick={async () => {
-                            await apiFetch(`/api/class-successions/${row.id}`, { method: 'DELETE' });
-                            setClassSuccessionsList((previous) => previous.filter((item) => item.id !== row.id));
+                              await apiFetch(`/api/class-progressions/${row.id}`, { method: 'DELETE' });
+                              setClassProgressionsList((previous) => previous.filter((item) => item.id !== row.id));
                           }}>Supprimer</button>
                         </div>
                       ))}
                     </div>
                   </>
-                )}
               </div>
             )}
             {userRole === 'super_admin' && (

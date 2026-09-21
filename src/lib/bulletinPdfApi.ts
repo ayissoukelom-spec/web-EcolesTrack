@@ -12,6 +12,7 @@ import {
   bulletinLines,
   bulletins,
   classes,
+  classProgressions,
   classSuccessions,
   evaluations,
   grades,
@@ -43,6 +44,7 @@ import {
 import { getGradeAppreciation } from './gradeColor';
 import { inferPeriodTypeFromLegacyName } from './educationStructure';
 import studentAccess from './studentAccess';
+import { normalizeClassProgressionCode } from './classProgression';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -927,24 +929,56 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       })
       : { annualAverage: null, annualRank: null };
 
-    const [succession] = header.studentSchoolId == null
-      ? []
-      : await db.select({ targetClassId: classSuccessions.targetClassId })
+    const [sourceClass] = await db.select({ name: classes.name, progressionCode: classes.progressionCode, levelId: classes.levelId })
+      .from(classes)
+      .where(eq(classes.id, header.classId));
+    const sourceCode = sourceClass?.progressionCode || normalizeClassProgressionCode(sourceClass?.name);
+    const [globalProgression] = sourceCode
+      ? await db.select({ targetCode: classProgressions.targetCode })
+        .from(classProgressions)
+        .where(and(eq(classProgressions.sourceCode, sourceCode), eq(classProgressions.isActive, true)))
+      : [];
+
+    const yearRows = await db.select({ id: academicYears.id, name: academicYears.name })
+      .from(academicYears);
+    const currentYear = yearRows.find((year) => year.id === header.schoolYearId);
+    const currentStartMatch = String(currentYear?.name ?? '').match(/^(\d{4})-/);
+    const currentStart = currentStartMatch ? Number(currentStartMatch[1]) : null;
+    const nextYear = currentStart != null
+      ? yearRows.find((year) => String(year.name).startsWith(String(currentStart + 1)))
+      : null;
+    const targetAcademicYearId = nextYear?.id ?? header.schoolYearId;
+    const targetCandidates = globalProgression
+      ? await db.select({ name: classes.name, progressionCode: classes.progressionCode })
+        .from(classes)
+        .where(and(
+          eq(classes.academicYearId, targetAcademicYearId),
+          sql`${classes.schoolId} IS NULL`,
+        ))
+      : [];
+    const nextClass = targetCandidates.find((candidate) => (
+      (candidate.progressionCode || normalizeClassProgressionCode(candidate.name)) === globalProgression?.targetCode
+    ));
+
+    let resolvedNextClass: { name: string } | undefined = nextClass ? { name: nextClass.name } : undefined;
+    if (!resolvedNextClass && header.studentSchoolId != null) {
+      const [legacySuccession] = await db.select({ targetClassId: classSuccessions.targetClassId })
         .from(classSuccessions)
         .where(and(
           eq(classSuccessions.schoolId, header.studentSchoolId),
           eq(classSuccessions.academicYearId, header.schoolYearId),
           eq(classSuccessions.sourceClassId, header.classId),
         ));
-    const [nextClass] = succession
-      ? await db.select({ name: classes.name }).from(classes).where(eq(classes.id, succession.targetClassId))
-      : [];
+      if (legacySuccession) {
+        [resolvedNextClass] = await db.select({ name: classes.name }).from(classes).where(eq(classes.id, legacySuccession.targetClassId));
+      }
+    }
     const promotionDecision = resolvePromotionDecision({
       isLastPeriod: annualPeriodScope.isLastPeriod,
       annualAverage: annualResults.annualAverage,
       promotionThreshold: header.promotionThreshold,
       studentGender: header.studentGender,
-      nextClassName: nextClass?.name,
+      nextClassName: resolvedNextClass?.name,
     });
 
     const previousPeriodSummaries = resolvePreviousPeriodSummaries({

@@ -55,6 +55,7 @@ import {
   schoolSubjects,
   schoolClasses,
   classSuccessions,
+  classProgressions,
   evaluations,
   grades,
   absences,
@@ -80,6 +81,7 @@ import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts'
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
+import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -2581,6 +2583,7 @@ export async function createApp() {
                   name: trimmedClassName,
                   schoolId: null,
                   academicYearId: yearId,
+                  progressionCode: normalizeClassProgressionCode(trimmedClassName),
                 }).returning();
 
                 await db.insert(schoolClasses).values({
@@ -2885,6 +2888,7 @@ export async function createApp() {
                   name: trimmedClassName,
                   schoolId: null,
                   academicYearId: yearId,
+                  progressionCode: normalizeClassProgressionCode(trimmedClassName),
                 }).returning();
 
                 await db.insert(schoolClasses).values({
@@ -3910,6 +3914,107 @@ export async function createApp() {
     }
   });
 
+  app.get('/api/class-progression-catalog', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const academicYearId = Number(req.query.academicYearId);
+      if (!Number.isInteger(academicYearId) || academicYearId <= 0) return res.status(400).json({ error: 'academicYearId is required' });
+
+      const catalog = await db.select({
+        id: classes.id,
+        name: classes.name,
+        progressionCode: classes.progressionCode,
+        levelId: classes.levelId,
+        academicYearId: classes.academicYearId,
+      })
+        .from(classes)
+        .where(and(eq(classes.academicYearId, academicYearId), sql`${classes.schoolId} IS NULL`))
+        .orderBy(classes.name);
+
+      return res.json(catalog.map((item) => ({
+        ...item,
+        progressionCode: item.progressionCode || normalizeClassProgressionCode(item.name),
+      })));
+    } catch (err) {
+      console.error('Failed to retrieve global class progression catalog:', err);
+      return res.status(500).json({ error: 'Failed to retrieve global class progression catalog' });
+    }
+  });
+
+  app.get('/api/class-progressions', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const academicYearId = Number(req.query.academicYearId);
+      const rows = await db.select().from(classProgressions).where(eq(classProgressions.isActive, true));
+      if (!Number.isInteger(academicYearId) || academicYearId <= 0) return res.json(rows);
+
+      const catalog = await db.select({ name: classes.name, progressionCode: classes.progressionCode })
+        .from(classes)
+        .where(and(eq(classes.academicYearId, academicYearId), sql`${classes.schoolId} IS NULL`));
+      const namesByCode = new Map<string, string>();
+      for (const item of catalog) namesByCode.set(item.progressionCode || normalizeClassProgressionCode(item.name), item.name);
+
+      return res.json(rows.map((row) => ({
+        ...row,
+        sourceClassName: namesByCode.get(row.sourceCode) ?? null,
+        targetClassName: namesByCode.get(row.targetCode) ?? null,
+      })));
+    } catch (err) {
+      console.error('Failed to retrieve global class progressions:', err);
+      return res.status(500).json({ error: 'Failed to retrieve global class progressions' });
+    }
+  });
+
+  app.put('/api/class-progressions', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const sourceCode = normalizeClassProgressionCode(req.body?.sourceCode);
+      const targetCode = normalizeClassProgressionCode(req.body?.targetCode);
+      const cycleId = req.body?.cycleId == null || req.body.cycleId === '' ? null : Number(req.body.cycleId);
+      if (!sourceCode || !targetCode || sourceCode === targetCode || (cycleId != null && (!Number.isInteger(cycleId) || cycleId <= 0))) {
+        return res.status(400).json({ error: 'Valid distinct sourceCode and targetCode are required' });
+      }
+
+      const existingRows = await db.select({ id: classProgressions.id })
+        .from(classProgressions)
+        .where(and(
+          eq(classProgressions.sourceCode, sourceCode),
+          cycleId == null ? sql`${classProgressions.cycleId} IS NULL` : eq(classProgressions.cycleId, cycleId),
+        ));
+      const [saved] = existingRows.length > 0
+        ? await db.update(classProgressions).set({ targetCode, isActive: true, updatedAt: new Date() }).where(eq(classProgressions.id, existingRows[0].id)).returning()
+        : await db.insert(classProgressions).values({ sourceCode, targetCode, cycleId, isActive: true }).returning();
+      return res.json(saved);
+    } catch (err) {
+      console.error('Failed to save global class progression:', err);
+      return res.status(500).json({ error: 'Failed to save global class progression' });
+    }
+  });
+
+  app.delete('/api/class-progressions/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const id = Number(req.params.id);
+      await db.update(classProgressions).set({ isActive: false, updatedAt: new Date() }).where(eq(classProgressions.id, id));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('Failed to delete global class progression:', err);
+      return res.status(500).json({ error: 'Failed to delete global class progression' });
+    }
+  });
+
   app.get('/api/class-successions', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
@@ -4328,6 +4433,7 @@ export async function createApp() {
             schoolId: null,
             academicYearId: Number(academicYearId),
             levelId: resolvedLevelId,
+            progressionCode: normalizeClassProgressionCode(trimmedName),
             teacherId: teacherId ? Number(teacherId) : null,
           }).returning();
           classRow = createdClass;

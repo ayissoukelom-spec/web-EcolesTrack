@@ -238,6 +238,7 @@ export async function ensureSchoolsTableSchema() {
     await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS logo_path TEXT;`);
     await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS principal_name TEXT;`);
     await db.execute(sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS promotion_threshold NUMERIC(5,2) NOT NULL DEFAULT 10.00;`);
+    await db.execute(sql`ALTER TABLE classes ADD COLUMN IF NOT EXISTS progression_code TEXT;`);
     await db.execute(sql`CREATE TABLE IF NOT EXISTS class_successions (
       id SERIAL PRIMARY KEY,
       school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
@@ -248,6 +249,16 @@ export async function ensureSchoolsTableSchema() {
       updated_at TIMESTAMP NOT NULL DEFAULT now(),
       CONSTRAINT class_successions_source_target_different CHECK (source_class_id <> target_class_id),
       CONSTRAINT class_successions_school_year_source_unique UNIQUE (school_id, academic_year_id, source_class_id)
+    );`);
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS class_progressions (
+      id SERIAL PRIMARY KEY,
+      source_code TEXT NOT NULL,
+      target_code TEXT NOT NULL,
+      cycle_id INTEGER REFERENCES cycles(id) ON DELETE SET NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT class_progressions_source_cycle_unique UNIQUE (source_code, cycle_id)
     );`);
   } catch (err: any) {
     console.error('Failed to ensure schools table schema (students_creation_locked) exists:', err?.message || err);

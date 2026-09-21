@@ -180,6 +180,7 @@ export const classes = pgTable('classes', {
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   levelId: integer('level_id').references(() => levels.id, { onDelete: 'set null' }),
+  progressionCode: text('progression_code'),
   name: text('name').notNull(), // e.g. "6ème A"
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'set null' }), // Principal teacher
 }, (table) => ({
@@ -282,6 +283,18 @@ export const classSuccessions = pgTable('class_successions', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
   classSuccessionUniqueIdx: uniqueIndex('class_successions_school_year_source_idx').on(table.schoolId, table.academicYearId, table.sourceClassId),
+}));
+
+export const classProgressions = pgTable('class_progressions', {
+  id: serial('id').primaryKey(),
+  sourceCode: text('source_code').notNull(),
+  targetCode: text('target_code').notNull(),
+  cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  classProgressionSourceCycleUniqueIdx: uniqueIndex('class_progressions_source_cycle_idx').on(table.sourceCode, table.cycleId),
 }));
 
 // 8. Evaluations
