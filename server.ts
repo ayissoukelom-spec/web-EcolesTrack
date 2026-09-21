@@ -56,6 +56,8 @@ import {
   schoolClasses,
   classSuccessions,
   classProgressions,
+  classExamConfigurations,
+  examResults,
   evaluations,
   grades,
   absences,
@@ -82,9 +84,15 @@ import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus
 import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
+import { isExamResultStatus, isExamType } from './src/lib/examDecision.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
+
+const parsePositiveInteger = (value: unknown): number | null => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
 
 export const SCHOOL_LOGO_MAX_SIZE = 5 * 1024 * 1024;
 
@@ -4088,6 +4096,140 @@ export async function createApp() {
     } catch (err) {
       console.error('Failed to delete class succession:', err);
       return res.status(500).json({ error: 'Failed to delete class succession' });
+    }
+  });
+
+  // Exam configurations and official student results.
+  app.get('/api/class-exam-configurations', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const requestedSchoolId = parsePositiveInteger(req.query.schoolId);
+      const requestedYearId = parsePositiveInteger(req.query.academicYearId);
+      const schoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+      if (actor.role === 'school_admin' && schoolId == null) return res.status(403).json({ error: 'School context required' });
+      const conditions = [] as any[];
+      if (schoolId != null) conditions.push(eq(classExamConfigurations.schoolId, schoolId));
+      if (requestedYearId != null) conditions.push(eq(classExamConfigurations.academicYearId, requestedYearId));
+      conditions.push(eq(classExamConfigurations.isActive, true));
+      return res.json(await db.select().from(classExamConfigurations).where(and(...conditions)));
+    } catch (error) {
+      console.error('Failed to list class exam configurations:', error);
+      return res.status(500).json({ error: 'Failed to list class exam configurations' });
+    }
+  });
+
+  app.post('/api/class-exam-configurations', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const classId = parsePositiveInteger(req.body?.classId);
+      const academicYearId = parsePositiveInteger(req.body?.academicYearId);
+      const requestedSchoolId = parsePositiveInteger(req.body?.schoolId);
+      const schoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+      const examType = req.body?.examType;
+      if (classId == null || academicYearId == null || schoolId == null || !isExamType(examType)) return res.status(400).json({ error: 'classId, schoolId, academicYearId and a valid examType are required' });
+      if (actor.role === 'school_admin' && schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+
+      const [classRow] = await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
+      if (!classRow || classRow.academicYearId !== academicYearId) return res.status(400).json({ error: 'Class and academic year do not match' });
+      if (classRow.schoolId !== schoolId) {
+        const [approved] = await db.select({ id: schoolClasses.id }).from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId), eq(schoolClasses.status, 'approved')));
+        if (!approved) return res.status(403).json({ error: 'Class is not approved for this school' });
+      }
+      const [saved] = await db.insert(classExamConfigurations).values({ classId, schoolId, academicYearId, examType, isActive: true, updatedAt: new Date() }).onConflictDoUpdate({
+        target: [classExamConfigurations.classId, classExamConfigurations.schoolId, classExamConfigurations.academicYearId],
+        set: { examType, isActive: true, updatedAt: new Date() },
+      }).returning();
+      return res.status(201).json(saved);
+    } catch (error) {
+      console.error('Failed to save class exam configuration:', error);
+      return res.status(500).json({ error: 'Failed to save class exam configuration' });
+    }
+  });
+
+  app.delete('/api/class-exam-configurations/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      const id = parsePositiveInteger(req.params.id);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
+      const [configuration] = await db.select().from(classExamConfigurations).where(eq(classExamConfigurations.id, id));
+      if (!configuration) return res.status(404).json({ error: 'Exam configuration not found' });
+      if (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+      await db.update(classExamConfigurations).set({ isActive: false, updatedAt: new Date() }).where(eq(classExamConfigurations.id, id));
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to delete class exam configuration:', error);
+      return res.status(500).json({ error: 'Failed to delete class exam configuration' });
+    }
+  });
+
+  app.get('/api/exam-results', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const classId = parsePositiveInteger(req.query.classId);
+      const academicYearId = parsePositiveInteger(req.query.academicYearId);
+      const examType = req.query.examType;
+      if (classId == null || academicYearId == null || !isExamType(examType)) return res.status(400).json({ error: 'classId, academicYearId and a valid examType are required' });
+      const [configuration] = await db.select().from(classExamConfigurations).where(and(eq(classExamConfigurations.classId, classId), eq(classExamConfigurations.academicYearId, academicYearId), eq(classExamConfigurations.examType, examType), eq(classExamConfigurations.isActive, true)));
+      if (!configuration || (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
+      const studentRows = await db.select({ id: students.id, firstName: students.firstName, lastName: students.lastName, schoolId: students.schoolId, classId: students.classId }).from(students).where(eq(students.classId, classId));
+      if (actor.role === 'school_admin' && studentRows.some((row) => row.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Forbidden' });
+      const rows = studentRows.length > 0
+        ? await db.select().from(examResults).where(and(eq(examResults.academicYearId, academicYearId), eq(examResults.examType, examType), inArray(examResults.studentId, studentRows.map((row) => row.id))))
+        : [];
+      return res.json(studentRows.map((student) => ({ ...student, result: rows.find((row) => row.studentId === student.id) ?? null })));
+    } catch (error) {
+      console.error('Failed to list exam results:', error);
+      return res.status(500).json({ error: 'Failed to list exam results' });
+    }
+  });
+
+  app.delete('/api/exam-results/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      const id = parsePositiveInteger(req.params.id);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
+      const [row] = await db.select({ id: examResults.id, studentSchoolId: students.schoolId }).from(examResults).innerJoin(students, eq(examResults.studentId, students.id)).where(eq(examResults.id, id));
+      if (!row) return res.status(404).json({ error: 'Exam result not found' });
+      if (actor.role === 'school_admin' && row.studentSchoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+      await db.delete(examResults).where(eq(examResults.id, id));
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to delete exam result:', error);
+      return res.status(500).json({ error: 'Failed to delete exam result' });
+    }
+  });
+
+  app.put('/api/exam-results/batch', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      const classId = parsePositiveInteger(req.body?.classId);
+      const academicYearId = parsePositiveInteger(req.body?.academicYearId);
+      const examType = req.body?.examType;
+      const entries = Array.isArray(req.body?.results) ? req.body.results : [];
+      if (classId == null || academicYearId == null || !isExamType(examType) || entries.length === 0) return res.status(400).json({ error: 'classId, academicYearId, examType and results are required' });
+      const [configuration] = await db.select().from(classExamConfigurations).where(and(eq(classExamConfigurations.classId, classId), eq(classExamConfigurations.academicYearId, academicYearId), eq(classExamConfigurations.examType, examType), eq(classExamConfigurations.isActive, true)));
+      if (!configuration || (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
+      const studentIds = entries.map((entry: any) => parsePositiveInteger(entry.studentId)).filter((id: number | null): id is number => id != null);
+      const studentRows = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId }).from(students).where(inArray(students.id, studentIds));
+      if (studentRows.length !== studentIds.length || studentRows.some((student) => student.classId !== classId || (actor.role === 'school_admin' && student.schoolId !== actor.schoolId))) return res.status(403).json({ error: 'Every student must belong to the configured class and school' });
+      const saved = [];
+      for (const entry of entries) {
+        const studentId = parsePositiveInteger(entry.studentId);
+        if (studentId == null || !isExamResultStatus(entry.resultStatus)) return res.status(400).json({ error: 'Invalid studentId or resultStatus' });
+        const [row] = await db.insert(examResults).values({ studentId, academicYearId, examType, resultStatus: entry.resultStatus, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() }).onConflictDoUpdate({
+          target: [examResults.studentId, examResults.academicYearId, examResults.examType],
+          set: { resultStatus: entry.resultStatus, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() },
+        }).returning();
+        saved.push(row);
+      }
+      return res.json(saved);
+    } catch (error) {
+      console.error('Failed to save exam results:', error);
+      return res.status(500).json({ error: 'Failed to save exam results' });
     }
   });
 

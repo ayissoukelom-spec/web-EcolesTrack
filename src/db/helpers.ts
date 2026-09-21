@@ -260,6 +260,29 @@ export async function ensureSchoolsTableSchema() {
       updated_at TIMESTAMP NOT NULL DEFAULT now(),
       CONSTRAINT class_progressions_source_cycle_unique UNIQUE (source_code, cycle_id)
     );`);
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS class_exam_configurations (
+      id SERIAL PRIMARY KEY,
+      class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      academic_year_id INTEGER NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
+      exam_type TEXT NOT NULL CHECK (exam_type IN ('CEPD', 'BEPC', 'BAC_I', 'BAC_II')),
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT class_exam_configurations_context_unique UNIQUE (class_id, school_id, academic_year_id)
+    );`);
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS exam_results (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      academic_year_id INTEGER NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
+      exam_type TEXT NOT NULL CHECK (exam_type IN ('CEPD', 'BEPC', 'BAC_I', 'BAC_II')),
+      result_status TEXT NOT NULL CHECK (result_status IN ('ADMITTED', 'NOT_ADMITTED', 'ABSENT')),
+      exam_session TEXT,
+      recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT exam_results_student_year_type_unique UNIQUE (student_id, academic_year_id, exam_type)
+    );`);
   } catch (err: any) {
     console.error('Failed to ensure schools table schema (students_creation_locked) exists:', err?.message || err);
     throw err;

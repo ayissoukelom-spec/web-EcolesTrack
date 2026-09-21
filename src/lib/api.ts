@@ -1,4 +1,32 @@
 import type { BulletinDetail, BulletinListFilters, BulletinListResponse } from '../types.ts';
+import type { ExamResultStatus, ExamType } from './examDecision.ts';
+
+export interface ClassExamConfiguration {
+  id: number;
+  classId: number;
+  schoolId: number;
+  academicYearId: number;
+  examType: ExamType;
+  isActive: boolean;
+}
+
+export interface ExamResultRow {
+  id: number;
+  studentId: number;
+  academicYearId: number;
+  examType: ExamType;
+  resultStatus: ExamResultStatus;
+  examSession?: string | null;
+}
+
+export interface ExamResultStudentRow {
+  id: number;
+  firstName: string;
+  lastName: string;
+  classId: number;
+  schoolId: number;
+  result: ExamResultRow | null;
+}
 
 // Client-side name validation utils
 const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/\-]+$/u;
@@ -481,6 +509,35 @@ export async function downloadBulletinsPdfBatch(ids: number[]): Promise<Blob> {
   const params = new URLSearchParams();
   params.set('ids', uniqueIds.join(','));
   return apiFetchBlob(`/api/bulletins/pdf/batch?${params.toString()}`);
+}
+
+export async function fetchClassExamConfigurations(filters: { schoolId?: number; academicYearId?: number } = {}): Promise<ClassExamConfiguration[]> {
+  const params = new URLSearchParams();
+  if (filters.schoolId) params.set('schoolId', String(filters.schoolId));
+  if (filters.academicYearId) params.set('academicYearId', String(filters.academicYearId));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return apiFetch(`/api/class-exam-configurations${suffix}`);
+}
+
+export async function saveClassExamConfiguration(payload: { classId: number; schoolId: number; academicYearId: number; examType: ExamType }): Promise<ClassExamConfiguration> {
+  return apiFetch('/api/class-exam-configurations', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function deleteClassExamConfiguration(id: number): Promise<{ success: boolean }> {
+  return apiFetch(`/api/class-exam-configurations/${id}`, { method: 'DELETE' });
+}
+
+export async function fetchExamResults(filters: { classId: number; academicYearId: number; examType: ExamType }): Promise<ExamResultStudentRow[]> {
+  const params = new URLSearchParams({ classId: String(filters.classId), academicYearId: String(filters.academicYearId), examType: filters.examType });
+  return apiFetch(`/api/exam-results?${params.toString()}`);
+}
+
+export async function deleteExamResult(id: number): Promise<{ success: boolean }> {
+  return apiFetch(`/api/exam-results/${id}`, { method: 'DELETE' });
+}
+
+export async function saveExamResultsBatch(payload: { classId: number; academicYearId: number; examType: ExamType; results: Array<{ studentId: number; resultStatus: ExamResultStatus; examSession?: string | null }> }): Promise<ExamResultRow[]> {
+  return apiFetch('/api/exam-results/batch', { method: 'PUT', body: JSON.stringify(payload) });
 }
 
 // Expose a small helper so UI components can read the simulated school id

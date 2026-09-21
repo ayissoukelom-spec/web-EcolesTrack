@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { apiFetch, apiFetchBlob, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult, fetchClassExamConfigurations, fetchExamResults, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser, saveClassExamConfiguration, saveExamResultsBatch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
@@ -31,6 +31,7 @@ import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
+import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -600,6 +601,15 @@ export default function AdminView({
   const [successionCatalogClasses, setSuccessionCatalogClasses] = useState<any[]>([]);
   const [classProgressionsList, setClassProgressionsList] = useState<any[]>([]);
   const [successionNotice, setSuccessionNotice] = useState<string | null>(null);
+  const [examAcademicYearId, setExamAcademicYearId] = useState('');
+  const [examClassId, setExamClassId] = useState('');
+  const [examType, setExamType] = useState<ExamType>('BEPC');
+  const [examConfigurations, setExamConfigurations] = useState<any[]>([]);
+  const [examStudents, setExamStudents] = useState<any[]>([]);
+  const [examResultStatuses, setExamResultStatuses] = useState<Record<number, ExamResultStatus | ''>>({});
+  const [examInitialResultStatuses, setExamInitialResultStatuses] = useState<Record<number, ExamResultStatus | ''>>({});
+  const [examNotice, setExamNotice] = useState<string | null>(null);
+  const [examSaving, setExamSaving] = useState(false);
   const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
@@ -672,6 +682,92 @@ export default function AdminView({
         setClassProgressionsList([]);
       });
   }, [successionAcademicYearId]);
+
+  const examSchoolId = userRole === 'school_admin' ? currentSchoolId : superAdminSchoolFilterId;
+
+  useEffect(() => {
+    const yearId = Number(examAcademicYearId);
+    if (!Number.isInteger(yearId) || yearId <= 0 || examSchoolId == null) {
+      setExamConfigurations([]);
+      setExamStudents([]);
+      setExamResultStatuses({});
+      setExamInitialResultStatuses({});
+      return;
+    }
+    fetchClassExamConfigurations({ schoolId: examSchoolId, academicYearId: yearId })
+      .then((rows) => {
+        const configurations = Array.isArray(rows) ? rows : [];
+        setExamConfigurations(configurations);
+        const selectedConfiguration = configurations.find((configuration: any) => Number(configuration.classId) === Number(examClassId));
+        if (selectedConfiguration?.examType) setExamType(selectedConfiguration.examType as ExamType);
+      })
+      .catch((error: any) => {
+        setExamConfigurations([]);
+        setExamNotice(error?.message || 'Impossible de charger les configurations d examen.');
+      });
+  }, [examAcademicYearId, examClassId, examSchoolId]);
+
+  useEffect(() => {
+    const classId = Number(examClassId);
+    const yearId = Number(examAcademicYearId);
+    if (!Number.isInteger(classId) || classId <= 0 || !Number.isInteger(yearId) || yearId <= 0) {
+      setExamStudents([]);
+      setExamResultStatuses({});
+      setExamInitialResultStatuses({});
+      return;
+    }
+    fetchExamResults({ classId, academicYearId: yearId, examType })
+      .then((rows) => {
+        setExamStudents(Array.isArray(rows) ? rows : []);
+        const statuses = Object.fromEntries((Array.isArray(rows) ? rows : []).map((row: any) => [row.id, row.result?.resultStatus ?? '']));
+        setExamResultStatuses(statuses);
+        setExamInitialResultStatuses(statuses);
+      })
+      .catch((error: any) => {
+        setExamStudents([]);
+        setExamResultStatuses({});
+        setExamNotice(error?.message || 'Impossible de charger les élèves et leurs résultats.');
+      });
+  }, [examClassId, examAcademicYearId, examType]);
+
+  const examClasses = userRole === 'super_admin' && superAdminSchoolFilterId != null
+    ? (studentFilterClasses ?? []).filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId))
+    : classesList.filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId));
+
+  const handleSaveExamResults = async () => {
+    if (examSaving) return;
+    setExamSaving(true);
+    setExamNotice(null);
+    try {
+      const pendingResults = examStudents
+        .filter((student) => examResultStatuses[student.id] && examResultStatuses[student.id] !== examInitialResultStatuses[student.id])
+        .map((student) => ({ studentId: student.id, resultStatus: examResultStatuses[student.id] as ExamResultStatus }));
+      const resultsToDelete = examStudents.filter((student) => !examResultStatuses[student.id] && examInitialResultStatuses[student.id] && student.result?.id);
+      if (pendingResults.length === 0 && resultsToDelete.length === 0) {
+        setExamNotice('Aucune modification à enregistrer.');
+        return;
+      }
+      if (pendingResults.length > 0) {
+        await saveExamResultsBatch({
+          classId: Number(examClassId),
+          academicYearId: Number(examAcademicYearId),
+          examType,
+          results: pendingResults,
+        });
+      }
+      await Promise.all(resultsToDelete.map((student) => deleteExamResult(student.result.id)));
+      const refreshedRows = await fetchExamResults({ classId: Number(examClassId), academicYearId: Number(examAcademicYearId), examType });
+      setExamStudents(refreshedRows);
+      const refreshedStatuses = Object.fromEntries(refreshedRows.map((row: any) => [row.id, row.result?.resultStatus ?? '']));
+      setExamResultStatuses(refreshedStatuses);
+      setExamInitialResultStatuses(refreshedStatuses);
+      setExamNotice('Résultats enregistrés avec succès.');
+    } catch (error: any) {
+      setExamNotice(`Impossible d'enregistrer les résultats : ${error?.message || 'erreur inconnue'}`);
+    } finally {
+      setExamSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (userRole === 'school_admin') {
@@ -4671,6 +4767,71 @@ export default function AdminView({
                       ))}
                     </div>
                   </>
+              </div>
+            )}
+            {['super_admin', 'school_admin'].includes(userRole) && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 mb-4">
+                <h3 className="text-sm font-semibold text-slate-700">Classes d examen et résultats officiels</h3>
+                <p className="mt-1 text-xs text-slate-500">La configuration est explicite par école, classe et année. Aucun résultat absent n est interprété comme un échec.</p>
+                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+                  <select value={examAcademicYearId} onChange={(event) => { setExamAcademicYearId(event.target.value); setExamClassId(''); setExamNotice(null); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <option value="">Année scolaire</option>
+                    {yearsList.map((year) => <option key={year.id} value={String(year.id)}>{year.name}</option>)}
+                  </select>
+                  <select value={examClassId} onChange={(event) => {
+                    const nextClassId = event.target.value;
+                    const selectedConfiguration = examConfigurations.find((configuration: any) => Number(configuration.classId) === Number(nextClassId));
+                    setExamClassId(nextClassId);
+                    if (selectedConfiguration?.examType) setExamType(selectedConfiguration.examType as ExamType);
+                    setExamNotice(null);
+                  }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <option value="">Classe d examen</option>
+                    {examClasses
+                      .map((klass: any) => <option key={klass.id} value={String(klass.id)}>{klass.name}</option>)}
+                  </select>
+                  <select value={examType} onChange={(event) => setExamType(event.target.value as ExamType)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <option value="CEPD">CEPD</option>
+                    <option value="BEPC">BEPC</option>
+                    <option value="BAC_I">BAC I</option>
+                    <option value="BAC_II">BAC II</option>
+                  </select>
+                  <button type="button" disabled={!examAcademicYearId || !examClassId || examSchoolId == null} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={async () => {
+                    try {
+                      await saveClassExamConfiguration({ classId: Number(examClassId), schoolId: Number(examSchoolId), academicYearId: Number(examAcademicYearId), examType });
+                      setExamConfigurations(await fetchClassExamConfigurations({ schoolId: Number(examSchoolId), academicYearId: Number(examAcademicYearId) }));
+                      setExamNotice('Configuration d examen enregistrée.');
+                    } catch (error: any) {
+                      setExamNotice(error?.message || 'Impossible d enregistrer la configuration.');
+                    }
+                  }}>Configurer l examen</button>
+                </div>
+                {examConfigurations.length > 0 && <div className="mt-3 space-y-2">
+                  {examConfigurations.map((configuration: any) => <div key={configuration.id} className="flex items-center justify-between rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm">
+                    <span>{classesList.find((klass: any) => klass.id === configuration.classId)?.name || `Classe #${configuration.classId}`} → {configuration.examType}</span>
+                    <button type="button" className="text-xs font-semibold text-rose-600" onClick={async () => {
+                      await deleteClassExamConfiguration(configuration.id);
+                      setExamConfigurations((previous) => previous.filter((item) => item.id !== configuration.id));
+                    }}>Désactiver</button>
+                  </div>)}
+                </div>}
+                {examClassId && <div className="mt-4 rounded-lg border border-amber-100 bg-white p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Résultats des élèves</span>
+                    <button type="button" disabled={examStudents.length === 0 || examSaving} className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50" onClick={handleSaveExamResults}>
+                      {examSaving ? 'Sauvegarde...' : 'Sauvegarder les résultats'}
+                    </button>
+                  </div>
+                  {examStudents.length === 0 ? <p className="text-xs text-slate-500">Aucun élève trouvé pour cette classe.</p> : examStudents.map((student: any) => <div key={student.id} className="flex items-center justify-between gap-3 border-t border-slate-100 py-2 text-sm">
+                    <span>{student.firstName} {student.lastName}</span>
+                    <select value={examResultStatuses[student.id] || ''} onChange={(event) => setExamResultStatuses((previous) => ({ ...previous, [student.id]: event.target.value as ExamResultStatus | '' }))} className="rounded border border-slate-200 px-2 py-1 text-xs">
+                      <option value="">Résultat non disponible</option>
+                      <option value="ADMITTED">ADMIS</option>
+                      <option value="NOT_ADMITTED">NON ADMIS</option>
+                      <option value="ABSENT">ABSENT</option>
+                    </select>
+                  </div>)}
+                </div>}
+                {examNotice && <p className="mt-2 text-xs text-slate-600">{examNotice}</p>}
               </div>
             )}
             {userRole === 'super_admin' && (

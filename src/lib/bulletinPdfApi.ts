@@ -14,6 +14,8 @@ import {
   classes,
   classProgressions,
   classSuccessions,
+  classExamConfigurations,
+  examResults,
   evaluations,
   grades,
   parents,
@@ -45,6 +47,7 @@ import { getGradeAppreciation } from './gradeColor';
 import { inferPeriodTypeFromLegacyName } from './educationStructure';
 import studentAccess from './studentAccess';
 import { normalizeClassProgressionCode } from './classProgression';
+import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type ExamResultStatus } from './examDecision';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -932,7 +935,34 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     const [sourceClass] = await db.select({ name: classes.name, progressionCode: classes.progressionCode, levelId: classes.levelId })
       .from(classes)
       .where(eq(classes.id, header.classId));
-    const sourceCode = sourceClass?.progressionCode || normalizeClassProgressionCode(sourceClass?.name);
+    const [examConfiguration] = header.studentSchoolId != null
+      ? await db.select({ examType: classExamConfigurations.examType })
+        .from(classExamConfigurations)
+        .where(and(
+          eq(classExamConfigurations.classId, header.classId),
+          eq(classExamConfigurations.schoolId, header.studentSchoolId),
+          eq(classExamConfigurations.academicYearId, header.schoolYearId),
+          eq(classExamConfigurations.isActive, true),
+        ))
+      : [];
+    const examType = examConfiguration && isExamType(examConfiguration.examType)
+      ? examConfiguration.examType
+      : null;
+    const [examResult] = examType
+      ? await db.select({ resultStatus: examResults.resultStatus })
+        .from(examResults)
+        .where(and(
+          eq(examResults.studentId, header.studentId),
+          eq(examResults.academicYearId, header.schoolYearId),
+          eq(examResults.examType, examType),
+        ))
+      : [];
+    const examDecision = examType && examResult && isExamResultStatus(examResult.resultStatus)
+      ? resolveExamPromotionDecision({ examType, resultStatus: examResult.resultStatus as ExamResultStatus })
+      : examType
+        ? null
+        : undefined;
+    const sourceCode = examType ? null : sourceClass?.progressionCode || normalizeClassProgressionCode(sourceClass?.name);
     const [globalProgression] = sourceCode
       ? await db.select({ targetCode: classProgressions.targetCode })
         .from(classProgressions)
@@ -961,7 +991,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     ));
 
     let resolvedNextClass: { name: string } | undefined = nextClass ? { name: nextClass.name } : undefined;
-    if (!resolvedNextClass && header.studentSchoolId != null) {
+    if (!examType && !resolvedNextClass && header.studentSchoolId != null) {
       const [legacySuccession] = await db.select({ targetClassId: classSuccessions.targetClassId })
         .from(classSuccessions)
         .where(and(
@@ -973,13 +1003,15 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         [resolvedNextClass] = await db.select({ name: classes.name }).from(classes).where(eq(classes.id, legacySuccession.targetClassId));
       }
     }
-    const promotionDecision = resolvePromotionDecision({
-      isLastPeriod: annualPeriodScope.isLastPeriod,
-      annualAverage: annualResults.annualAverage,
-      promotionThreshold: header.promotionThreshold,
-      studentGender: header.studentGender,
-      nextClassName: resolvedNextClass?.name,
-    });
+    const promotionDecision = examType
+      ? examDecision ?? null
+      : resolvePromotionDecision({
+        isLastPeriod: annualPeriodScope.isLastPeriod,
+        annualAverage: annualResults.annualAverage,
+        promotionThreshold: header.promotionThreshold,
+        studentGender: header.studentGender,
+        nextClassName: resolvedNextClass?.name,
+      });
 
     const previousPeriodSummaries = resolvePreviousPeriodSummaries({
       currentTermId: header.termId,
@@ -1171,6 +1203,10 @@ const drawPromotionDecisionText = (
   let totalWidth = 0;
 
   words.forEach((word, index) => {
+    if (index > 0) {
+      cursorX += font.widthOfTextAtSize(' ', size);
+    }
+
     const upperWord = formatPromotionDecisionForPdf(word);
     const tokenWidth = getFrenchLevelTokenDetails(word)
       ? drawFrenchLevelToken(page, word, cursorX, y, size, color, font)
@@ -1179,10 +1215,6 @@ const drawPromotionDecisionText = (
         drawText(page, upperText, cursorX, y, size, color, font);
         return font.widthOfTextAtSize(upperText, size);
       })();
-
-    if (index > 0) {
-      cursorX += font.widthOfTextAtSize(' ', size);
-    }
 
     cursorX += tokenWidth;
     totalWidth = cursorX - x;

@@ -225,6 +225,19 @@ describe('décision de fin d année', () => {
   });
 
   it.each([
+    ['Admis au CEPD', 'ADMIS AU CEPD'],
+    ['Non admis au CEPD', 'NON ADMIS AU CEPD'],
+    ['Admis au BEPC', 'ADMIS AU BEPC'],
+    ['Non admis au BEPC', 'NON ADMIS AU BEPC'],
+    ['Admis au BAC I', 'ADMIS AU BAC I'],
+    ['Non admis au BAC I', 'NON ADMIS AU BAC I'],
+    ['Admis au BAC II', 'ADMIS AU BAC II'],
+    ['Non admis au BAC II', 'NON ADMIS AU BAC II'],
+  ])('conserve les espaces des décisions d examen: %s -> %s', (input, expected) => {
+    expect(formatPromotionDecisionForPdf(input)).toBe(expected);
+  });
+
+  it.each([
     { isLastPeriod: false, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
     { isLastPeriod: true, annualAverage: null, promotionThreshold: 10, studentGender: 'M', nextClassName: '1ère D' },
     { isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: 'M', nextClassName: null },
@@ -250,6 +263,11 @@ describe('décision de fin d année', () => {
     }));
     expect(text.indexOf('conseil de la classe')).toBeGreaterThanOrEqual(0);
     expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('ADMIS'));
+  });
+
+  it('prépare le libellé d examen avant son rendu PDF', () => {
+    expect(formatPromotionDecisionForPdf('Admis au BEPC')).toBe('ADMIS AU BEPC');
+    expect(formatPromotionDecisionForPdf('Non admis au BAC II')).toBe('NON ADMIS AU BAC II');
   });
 });
 

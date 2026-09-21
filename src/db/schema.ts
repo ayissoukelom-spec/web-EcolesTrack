@@ -297,6 +297,33 @@ export const classProgressions = pgTable('class_progressions', {
   classProgressionSourceCycleUniqueIdx: uniqueIndex('class_progressions_source_cycle_idx').on(table.sourceCode, table.cycleId),
 }));
 
+export const classExamConfigurations = pgTable('class_exam_configurations', {
+  id: serial('id').primaryKey(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  examType: text('exam_type').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  classExamConfigurationContextUniqueIdx: uniqueIndex('class_exam_configurations_context_idx').on(table.classId, table.schoolId, table.academicYearId),
+}));
+
+export const examResults = pgTable('exam_results', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  examType: text('exam_type').notNull(),
+  resultStatus: text('result_status').notNull(),
+  examSession: text('exam_session'),
+  recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  examResultStudentYearTypeUniqueIdx: uniqueIndex('exam_results_student_year_type_idx').on(table.studentId, table.academicYearId, table.examType),
+}));
+
 // 8. Evaluations
 export const evaluations = pgTable('evaluations', {
   id: serial('id').primaryKey(),
