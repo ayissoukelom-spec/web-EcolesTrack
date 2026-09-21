@@ -2246,6 +2246,7 @@ export const createBulletinPdfDocument = async (
       y: bottom,
       width: summaryTableWidth,
       height: averageTableHeight,
+      color: hexToRgb('#f7f4ee'),
       borderColor: text,
       borderWidth: 0.8,
     });
@@ -2298,14 +2299,35 @@ export const createBulletinPdfDocument = async (
     const principalLabel = 'Le Proviseur';
     const principalLabelY = signatureNameY - 22;
     const principalNameY = principalLabelY - 37;
-    const principalLabelWidth = fontBold.widthOfTextAtSize(principalLabel, 9);
+    const principalLabelFontSize = 9;
+    const principalNameFontSize = 10;
+    const principalLabelWidth = fontBold.widthOfTextAtSize(principalLabel, principalLabelFontSize);
     const principalLabelX = signatureCenterX + 5;
     const principalNameX = signatureCenterX + 5;
-    drawText(page, principalLabel, principalLabelX - principalLabelWidth / 2, principalLabelY, 9, text, fontBold);
-    if (data.principalName?.trim()) {
-      const principalName = sanitizePdfText(data.principalName);
-      const principalNameWidth = fontBold.widthOfTextAtSize(principalName, 9);
-      drawText(page, principalName, principalNameX - principalNameWidth / 2, principalNameY, 9, text, fontBold);
+    const principalLabelHeight = fontBold.heightAtSize(principalLabelFontSize, { descender: false });
+    const principalNameHeight = fontBold.heightAtSize(principalNameFontSize, { descender: false });
+    const principalBoxPaddingX = 16;
+    const principalBoxPaddingY = 8;
+    const principalNameDisplay = data.principalName?.trim() ? sanitizePdfText(data.principalName) : null;
+    const principalNameWidth = principalNameDisplay ? fontBold.widthOfTextAtSize(principalNameDisplay, principalNameFontSize) : 0;
+    const principalBoxWidth = Math.max(principalLabelWidth, principalNameWidth) + principalBoxPaddingX * 2;
+    const principalBoxLeft = principalNameX - principalBoxWidth / 2;
+    const principalBoxTop = principalLabelY + principalLabelHeight + principalBoxPaddingY;
+    const principalBoxBottom = principalNameY - principalNameHeight - principalBoxPaddingY;
+    const principalBoxHeight = principalBoxTop - principalBoxBottom;
+    page.drawSvgPath(
+      `M 10,0 H ${principalBoxWidth - 10} Q ${principalBoxWidth},0 ${principalBoxWidth},10 V ${principalBoxHeight - 10} Q ${principalBoxWidth},${principalBoxHeight} ${principalBoxWidth - 10},${principalBoxHeight} H 10 Q 0,${principalBoxHeight} 0,${principalBoxHeight - 10} V 10 Q 0,0 10,0 Z`,
+      {
+        x: principalBoxLeft,
+        y: principalBoxBottom,
+        color: hexToRgb('#f7f4ee'),
+        borderColor: hexToRgb('#000000'),
+        borderWidth: 0.8,
+      },
+    );
+    drawText(page, principalLabel, principalLabelX - principalLabelWidth / 2, principalLabelY, principalLabelFontSize, text, fontBold);
+    if (principalNameDisplay) {
+      drawText(page, principalNameDisplay, principalNameX - principalNameWidth / 2, principalNameY, principalNameFontSize, text, fontBold);
       page.drawLine({
         start: { x: principalNameX - principalNameWidth / 2, y: principalNameY - 2 },
         end: { x: principalNameX + principalNameWidth / 2, y: principalNameY - 2 },

@@ -275,6 +275,24 @@ describe('POST /api/schools', () => {
     expect(mockState.lastSchoolUpdate).toMatchObject({ principalName: 'Kossi AYISSOU' });
   });
 
+  it('preserves the current logoPath unless a new explicit logoPath is supplied', async () => {
+    mockState.schools = [{ id: 1, name: 'École du Lac', phone: '+228 90000000', logoPath: 'school-logos/old-logo.png' }];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', principalName: 'Kossi AYISSOU' })
+      .expect(200);
+
+    expect(mockState.schools[0].logoPath).toBe('school-logos/old-logo.png');
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', logoPath: 'school-logos/new-logo.png' })
+      .expect(200);
+
+    expect(mockState.schools[0].logoPath).toBe('school-logos/new-logo.png');
+  });
+
   it('reuses an existing global class instead of creating a duplicate class row', async () => {
     mockState.classes = [{ id: 10, name: '6ème', schoolId: null, academicYearId: 1 }];
 

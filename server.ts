@@ -2684,6 +2684,8 @@ export async function createApp() {
       const phone2Raw = req.body?.phone2;
       const phone2 = phone2Raw != null ? String(phone2Raw).trim() : undefined;
       const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName', 'principalName'] as const;
+      const logoPathRaw = req.body?.logoPath;
+      const logoPath = logoPathRaw == null ? undefined : String(logoPathRaw).trim() || null;
       const classNames = req.body?.classNames;
       const subjectNames = req.body?.subjectNames;
 
@@ -2740,6 +2742,9 @@ export async function createApp() {
       administrativeFields.forEach((field) => {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
+      if (logoPathRaw !== undefined) {
+        updatePayload.logoPath = logoPath == null ? null : buildSchoolLogoRelativePath(path.basename(logoPath));
+      }
       // Track changes for audit
       const changes: string[] = [];
 
