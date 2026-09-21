@@ -57,6 +57,7 @@ import {
   evaluations,
   grades,
   absences,
+  lateArrivals,
   absenceJustifications,
   absenceControls,
   notificationAttachments,
@@ -5803,6 +5804,253 @@ export async function createApp() {
       return res.status(201).json(inserted);
     } catch (error: any) {
       console.error('❌ POST /api/absence-controls ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  const parseLateArrivalTime = (value: unknown) => {
+    if (typeof value !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim())) return null;
+    const [hours, minutes] = value.trim().split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+
+  const isValidLateArrivalDate = (value: unknown) => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [year, month, day] = value.split('-').map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+  };
+
+  const calculateLateMinutes = (expectedStartTime: string, arrivalTime: string) => {
+    const expectedMinutes = parseLateArrivalTime(expectedStartTime);
+    const arrivalMinutes = parseLateArrivalTime(arrivalTime);
+    if (expectedMinutes == null || arrivalMinutes == null) return null;
+    return Math.max(0, arrivalMinutes - expectedMinutes);
+  };
+
+  const canManageLateArrival = async (actor: any, studentId: number, classId: number) => {
+    const [student] = await db.select().from(students).where(eq(students.id, studentId));
+    const [classRecord] = await db.select().from(classes).where(eq(classes.id, classId));
+    if (!student || !classRecord || student.classId !== classId || actor.role === 'parent') return false;
+    if (actor.role === 'super_admin') return true;
+
+    const classBelongsToSchool = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(classId, actor.schoolId);
+    if (actor.schoolId == null || student.schoolId !== actor.schoolId || !classBelongsToSchool) return false;
+    if (actor.role !== 'teacher') return true;
+
+    if (!actor.id) return false;
+    const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
+    if (teacherRows.length === 0) return false;
+    const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+      .from(classTeachers)
+      .innerJoin(classes, eq(classTeachers.classId, classes.id))
+      .where(eq(classTeachers.teacherId, teacherRows[0].id));
+    const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+    const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor, { classIds: teacherClassIds });
+    return authorizedStudentIds.includes(studentId);
+  };
+
+  app.get('/api/late-arrivals', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      let query = db
+        .select({
+          id: lateArrivals.id,
+          studentId: lateArrivals.studentId,
+          studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
+          classId: lateArrivals.classId,
+          className: classes.name,
+          date: lateArrivals.date,
+          period: lateArrivals.period,
+          expectedStartTime: lateArrivals.expectedStartTime,
+          arrivalTime: lateArrivals.arrivalTime,
+          lateMinutes: lateArrivals.lateMinutes,
+          reason: lateArrivals.reason,
+          createdBy: lateArrivals.createdBy,
+          createdAt: lateArrivals.createdAt,
+          updatedAt: lateArrivals.updatedAt,
+          schoolId: students.schoolId,
+        })
+        .from(lateArrivals)
+        .innerJoin(students, eq(lateArrivals.studentId, students.id))
+        .innerJoin(classes, eq(lateArrivals.classId, classes.id));
+
+      if (actor.role !== 'super_admin') {
+        if (actor.role === 'parent') {
+          const childStudentIds = await getParentChildStudentIds(actor.id);
+          if (childStudentIds.length === 0) return res.json([]);
+          query = query.where(inArray(lateArrivals.studentId, childStudentIds)) as any;
+        } else if (actor.role === 'teacher') {
+          if (!actor.id || actor.schoolId == null) return res.json([]);
+          const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
+          if (teacherRows.length === 0) return res.json([]);
+          const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId }).from(classTeachers).innerJoin(classes, eq(classTeachers.classId, classes.id)).where(eq(classTeachers.teacherId, teacherRows[0].id));
+          const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+          if (teacherClassIds.length === 0) return res.json([]);
+          const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
+          if (authorizedStudentIds.length === 0) return res.json([]);
+          query = query.where(inArray(lateArrivals.studentId, authorizedStudentIds)) as any;
+        } else {
+          if (actor.schoolId) {
+            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+          } else {
+            return res.json([]);
+          }
+        }
+      }
+
+      const rows = await query.orderBy(desc(lateArrivals.createdAt));
+      return res.json(rows);
+    } catch (error: any) {
+      console.error('❌ GET /api/late-arrivals ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/late-arrivals', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const { studentId, classId, date, period, expectedStartTime, arrivalTime, reason } = req.body;
+      const parsedStudentId = Number(studentId);
+      const parsedClassId = Number(classId);
+      const parsedDate = typeof date === 'string' ? date.trim() : '';
+      const normalizedExpectedStartTime = typeof expectedStartTime === 'string' ? expectedStartTime.trim() : '';
+      const normalizedArrivalTime = typeof arrivalTime === 'string' ? arrivalTime.trim() : '';
+      const normalizedPeriod = typeof period === 'string' ? period.trim() : '';
+      const lateMinutes = calculateLateMinutes(normalizedExpectedStartTime, normalizedArrivalTime);
+
+      if (!Number.isInteger(parsedStudentId) || parsedStudentId <= 0 || !Number.isInteger(parsedClassId) || parsedClassId <= 0 || !isValidLateArrivalDate(parsedDate) || !['morning', 'afternoon', 'all_day'].includes(normalizedPeriod) || parseLateArrivalTime(normalizedExpectedStartTime) == null || parseLateArrivalTime(normalizedArrivalTime) == null) {
+        return res.status(400).json({ error: 'Missing mandatory late-arrival parameters' });
+      }
+
+      if (actor.role === 'parent') {
+        return res.status(403).json({ error: 'Parents are not allowed to record late arrivals' });
+      }
+
+      const [student] = await db.select().from(students).where(eq(students.id, parsedStudentId));
+      if (!student) return res.status(404).json({ error: 'Student not found' });
+
+      const [classRecord] = await db.select().from(classes).where(eq(classes.id, parsedClassId));
+      if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+      if (student.classId !== parsedClassId) return res.status(400).json({ error: 'Student does not belong to the selected class' });
+
+      const classBelongsToSchool = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(parsedClassId, actor.schoolId);
+      if (actor.role !== 'super_admin' && (actor.schoolId == null || student.schoolId !== actor.schoolId || !classBelongsToSchool)) {
+        return res.status(403).json({ error: 'Cannot record a late arrival outside the actor school scope' });
+      }
+
+      if (actor.role === 'teacher') {
+        if (!actor.id || actor.schoolId == null) return res.status(403).json({ error: 'Teacher context is missing' });
+        const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
+        if (teacherRows.length === 0) return res.status(403).json({ error: 'Teacher profile not found' });
+        const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId }).from(classTeachers).innerJoin(classes, eq(classTeachers.classId, classes.id)).where(eq(classTeachers.teacherId, teacherRows[0].id));
+        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
+        if (!authorizedStudentIds.includes(student.id)) {
+          return res.status(403).json({ error: 'Cannot record a late arrival for a student outside your assigned classes' });
+        }
+      }
+
+      const existingDuplicate = await db.select().from(lateArrivals).where(and(
+        eq(lateArrivals.studentId, parsedStudentId),
+        eq(lateArrivals.classId, parsedClassId),
+        eq(lateArrivals.date, parsedDate),
+        eq(lateArrivals.period, normalizedPeriod),
+      ));
+      if (existingDuplicate.length > 0) {
+        return res.status(409).json({ error: 'A late arrival already exists for this student/class/date/period' });
+      }
+
+      const [inserted] = await db.insert(lateArrivals).values({
+        studentId: parsedStudentId,
+        classId: parsedClassId,
+        date: parsedDate,
+        period: normalizedPeriod,
+        expectedStartTime: normalizedExpectedStartTime,
+        arrivalTime: normalizedArrivalTime,
+        lateMinutes,
+        reason: typeof reason === 'string' && reason.trim() ? reason.trim() : null,
+        createdBy: actor.id ?? null,
+      }).returning();
+
+      return res.status(201).json(inserted);
+    } catch (error: any) {
+      console.error('❌ POST /api/late-arrivals ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.put('/api/late-arrivals/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid late-arrival id' });
+
+      const [existing] = await db.select().from(lateArrivals).where(eq(lateArrivals.id, id));
+      if (!existing) return res.status(404).json({ error: 'Late arrival not found' });
+
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin' && actor.role !== 'teacher' && actor.role !== 'surveillant') {
+        return res.status(403).json({ error: 'Not authorized to update late arrivals' });
+      }
+      if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
+        return res.status(403).json({ error: 'Cannot update a late arrival outside the actor scope' });
+      }
+
+      const { expectedStartTime, arrivalTime, reason } = req.body ?? {};
+      const nextExpectedStartTime = typeof expectedStartTime === 'string' ? expectedStartTime.trim() : existing.expectedStartTime;
+      const nextArrivalTime = typeof arrivalTime === 'string' ? arrivalTime.trim() : existing.arrivalTime;
+      const nextReason = typeof reason === 'string' ? (reason.trim() || null) : existing.reason;
+      const nextLateMinutes = calculateLateMinutes(nextExpectedStartTime, nextArrivalTime);
+
+      if (parseLateArrivalTime(nextExpectedStartTime) == null || parseLateArrivalTime(nextArrivalTime) == null) {
+        return res.status(400).json({ error: 'Expected start time and arrival time must use HH:mm format' });
+      }
+
+      const [updated] = await db.update(lateArrivals).set({
+        expectedStartTime: nextExpectedStartTime,
+        arrivalTime: nextArrivalTime,
+        lateMinutes: nextLateMinutes,
+        reason: nextReason,
+        updatedAt: new Date(),
+      }).where(eq(lateArrivals.id, id)).returning();
+
+      return res.json(updated);
+    } catch (error: any) {
+      console.error('❌ PUT /api/late-arrivals/:id ERROR:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.delete('/api/late-arrivals/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'parent') return res.status(403).json({ error: 'Parents are not allowed to delete late arrivals' });
+
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid late-arrival id' });
+
+      const [existing] = await db.select().from(lateArrivals).where(eq(lateArrivals.id, id));
+      if (!existing) return res.status(404).json({ error: 'Late arrival not found' });
+      if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
+        return res.status(403).json({ error: 'Cannot delete a late arrival outside the actor scope' });
+      }
+
+      await db.delete(lateArrivals).where(eq(lateArrivals.id, id));
+      return res.status(204).send();
+    } catch (error: any) {
+      console.error('❌ DELETE /api/late-arrivals/:id ERROR:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

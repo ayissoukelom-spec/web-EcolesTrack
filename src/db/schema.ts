@@ -338,6 +338,28 @@ export const absences = pgTable('absences', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const lateArrivals = pgTable('late_arrivals', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  date: text('date').notNull(),
+  period: text('period').notNull(),
+  expectedStartTime: text('expected_start_time').notNull(),
+  arrivalTime: text('arrival_time').notNull(),
+  lateMinutes: integer('late_minutes'),
+  reason: text('reason'),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  lateArrivalStudentClassDatePeriodIdx: uniqueIndex('late_arrivals_student_class_date_period_idx').on(
+    table.studentId,
+    table.classId,
+    table.date,
+    table.period,
+  ),
+}));
+
 // 11b. Absence Justifications
 export const absenceJustifications = pgTable('absence_justifications', {
   id: serial('id').primaryKey(),
@@ -593,6 +615,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
   students: many(students),
   evaluations: many(evaluations),
   absences: many(absences),
+  lateArrivals: many(lateArrivals),
   schoolClasses: many(schoolClasses),
 }));
 
@@ -622,6 +645,7 @@ export const studentsRelations = relations(students, ({ one, many }) => ({
   }),
   grades: many(grades),
   absences: many(absences),
+  lateArrivals: many(lateArrivals),
   bulletins: many(bulletins),
   academicYearStatuses: many(studentAcademicYearStatuses),
 }));
@@ -699,6 +723,21 @@ export const absencesRelations = relations(absences, ({ one }) => ({
   class: one(classes, {
     fields: [absences.classId],
     references: [classes.id],
+  }),
+}));
+
+export const lateArrivalsRelations = relations(lateArrivals, ({ one }) => ({
+  student: one(students, {
+    fields: [lateArrivals.studentId],
+    references: [students.id],
+  }),
+  class: one(classes, {
+    fields: [lateArrivals.classId],
+    references: [classes.id],
+  }),
+  creator: one(users, {
+    fields: [lateArrivals.createdBy],
+    references: [users.id],
   }),
 }));
 

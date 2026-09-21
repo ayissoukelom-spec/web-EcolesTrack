@@ -24,6 +24,7 @@ import {
 } from './lib/api.ts';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
+import { useLateArrivals } from './hooks/useLateArrivals.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
@@ -59,6 +60,7 @@ import {
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
   const { justifyAbsence, recordAbsenceControl } = useAbsences();
+  const { lateArrivals: lateArrivalsList, setLateArrivals, addLateArrival } = useLateArrivals();
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
@@ -231,6 +233,7 @@ export default function App() {
         '/api/students',
         '/api/parents',
         '/api/absences',
+        '/api/late-arrivals',
         '/api/absence-controls',
         '/api/evaluations',
         '/api/grades',
@@ -268,6 +271,7 @@ export default function App() {
 
       if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
       if (Array.isArray(map['/api/absences'])) setAbsencesList(map['/api/absences']);
+      if (Array.isArray(map['/api/late-arrivals'])) setLateArrivals(map['/api/late-arrivals']);
       if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
       if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
       if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
@@ -687,6 +691,11 @@ export default function App() {
     } catch (err: any) {
       setErrorMsg(err.message);
     }
+  };
+
+  const handleAddLateArrival = async (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => {
+    await addLateArrival(data);
+    await fetchAllData(false);
   };
 
   const handleJustifyAbsence = async (id: number, reason: string, files?: File[] | File | null) => {
@@ -1224,6 +1233,7 @@ export default function App() {
                 <AbsenceView
                   userRole={currentRole}
                   absencesList={absencesList}
+                  lateArrivalsList={lateArrivalsList}
                   studentsList={studentsList}
                   classesList={classesList}
                   schoolsList={schoolsList}
@@ -1232,6 +1242,7 @@ export default function App() {
                   teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                   teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
                   onAddAbsence={handleAddAbsence}
+                  onAddLateArrival={handleAddLateArrival}
                   onJustifyAbsence={handleJustifyAbsence}
                   onRecordAbsenceControl={recordAbsenceControl}
                 />

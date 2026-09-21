@@ -226,6 +226,23 @@ export interface Absence {
   justificationFileName?: string;
 }
 
+export interface LateArrival {
+  id: number;
+  studentId: number;
+  studentName?: string;
+  classId: number;
+  className?: string;
+  date: string;
+  period: 'morning' | 'afternoon' | 'all_day';
+  expectedStartTime: string;
+  arrivalTime: string;
+  lateMinutes?: number | null;
+  reason?: string | null;
+  createdBy?: number | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface AbsenceJustification {
   id: number;
   absenceId: number;

@@ -7,9 +7,36 @@ import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 
+interface LateArrivalEntry {
+  id: number;
+  studentId: number;
+  studentName?: string;
+  classId: number;
+  className?: string;
+  date: string;
+  period: 'morning' | 'afternoon' | 'all_day';
+  expectedStartTime: string;
+  arrivalTime: string;
+  lateMinutes?: number | null;
+  reason?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+type PresenceEvent =
+  | (Absence & { kind: 'absence' })
+  | (LateArrivalEntry & {
+      kind: 'late';
+      studentName: string;
+      className: string;
+      subjectName: string;
+      isJustified: false;
+    });
+
 interface AbsenceViewProps {
   userRole: UserRole;
   absencesList: Absence[];
+  lateArrivalsList?: LateArrivalEntry[];
   studentsList: Student[];
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
@@ -18,6 +45,7 @@ interface AbsenceViewProps {
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
+  onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
   onRecordAbsenceControl?: (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => Promise<void>;
 }
@@ -25,6 +53,7 @@ interface AbsenceViewProps {
 export default function AbsenceView({
   userRole,
   absencesList,
+  lateArrivalsList = [],
   studentsList,
   classesList,
   schoolsList,
@@ -33,6 +62,7 @@ export default function AbsenceView({
   teacherClassIds,
   teacherSpecializations,
   onAddAbsence,
+  onAddLateArrival,
   onJustifyAbsence,
   onRecordAbsenceControl,
 }: AbsenceViewProps) {
@@ -61,6 +91,11 @@ export default function AbsenceView({
   const [selectedJustificationFiles, setSelectedJustificationFiles] = useState<File[]>([]);
   const [justificationUploadError, setJustificationUploadError] = useState<string | null>(null);
   const [absenceControlError, setAbsenceControlError] = useState<string | null>(null);
+  const [attendanceStatus, setAttendanceStatus] = useState<'present' | 'late' | 'absent'>('absent');
+  const [lateArrivalError, setLateArrivalError] = useState<string | null>(null);
+  const [lateReason, setLateReason] = useState('');
+  const [lateExpectedStartTime, setLateExpectedStartTime] = useState('');
+  const [lateArrivalTime, setLateArrivalTime] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const MAX_JUSTIFICATION_FILES = 5;
   const MAX_JUSTIFICATION_FILE_SIZE = 5 * 1024 * 1024;
@@ -143,6 +178,22 @@ export default function AbsenceView({
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [isMultipleSaveInProgress, setIsMultipleSaveInProgress] = useState(false);
 
+  const calculateLateMinutes = (expectedStartTime: string, arrivalTime: string) => {
+    const expected = /^([01]\d|2[0-3]):[0-5]\d$/.test(expectedStartTime) ? expectedStartTime.split(':').map(Number) : null;
+    const arrival = /^([01]\d|2[0-3]):[0-5]\d$/.test(arrivalTime) ? arrivalTime.split(':').map(Number) : null;
+    if (!expected || !arrival) return null;
+    return Math.max(0, (arrival[0] * 60 + arrival[1]) - (expected[0] * 60 + expected[1]));
+  };
+
+  const formatLateDuration = (minutes: number | null) => {
+    if (minutes == null) return '—';
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours > 0 && remainingMinutes > 0) return `${hours} h ${remainingMinutes}`;
+    if (hours > 0) return `${hours} h`;
+    return `${minutes} min`;
+  };
+
   const studentsInSelectedClass = newAbsenceForm.classId
     ? sortedStudents.filter((st) => String(st.classId) === newAbsenceForm.classId)
     : [];
@@ -205,12 +256,75 @@ export default function AbsenceView({
       return effectiveTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
     });
 
-  const handleCreateAbsence = (e: React.FormEvent) => {
+  const handleCreateAbsence = async (e: React.FormEvent) => {
     e.preventDefault();
     const student = studentsList.find((s) => s.id === parseInt(newAbsenceForm.studentId));
     if (!student) return;
 
-    onAddAbsence({
+    if (attendanceStatus === 'present') {
+      setIsFormOpen(false);
+      setLateArrivalError(null);
+      setNewAbsenceForm({
+        studentId: '',
+        classId: '',
+        lastName: '',
+        firstName: '',
+        date: new Date().toISOString().split('T')[0],
+        subjectId: '',
+        startTime: '08:00',
+        endTime: '09:30',
+      });
+      setLateReason('');
+      return;
+    }
+
+    if (attendanceStatus === 'late') {
+      if (!onAddLateArrival) {
+        setLateArrivalError('Le module de retard n’est pas disponible.');
+        return;
+      }
+
+      const parsedArrivalTime = lateArrivalTime;
+      const parsedExpectedStartTime = lateExpectedStartTime;
+      const period = (() => {
+        const [hour] = parsedArrivalTime.split(':').map(Number);
+        if (Number.isFinite(hour) && hour >= 12) return 'afternoon';
+        return 'morning';
+      })() as 'morning' | 'afternoon';
+
+      try {
+        await onAddLateArrival({
+          studentId: student.id,
+          classId: student.classId,
+          date: newAbsenceForm.date,
+          period,
+          expectedStartTime: parsedExpectedStartTime,
+          arrivalTime: parsedArrivalTime,
+          reason: lateReason.trim() || null,
+        });
+        setLateArrivalError(null);
+        setIsFormOpen(false);
+        setNewAbsenceForm({
+          studentId: '',
+          classId: '',
+          lastName: '',
+          firstName: '',
+          date: new Date().toISOString().split('T')[0],
+          subjectId: '',
+          startTime: '08:00',
+          endTime: '09:30',
+        });
+        setLateReason('');
+        setLateExpectedStartTime('');
+        setLateArrivalTime('');
+      } catch (error: any) {
+        const message = error?.message || 'Impossible d’enregistrer le retard.';
+        setLateArrivalError(message);
+      }
+      return;
+    }
+
+    await onAddAbsence({
       studentId: student.id,
       classId: student.classId,
       date: newAbsenceForm.date,
@@ -221,6 +335,7 @@ export default function AbsenceView({
     });
 
     setIsFormOpen(false);
+    setLateArrivalError(null);
     setNewAbsenceForm({
       studentId: '',
       classId: '',
@@ -231,6 +346,9 @@ export default function AbsenceView({
       startTime: '08:00',
       endTime: '09:30',
     });
+      setLateReason('');
+      setLateExpectedStartTime('');
+      setLateArrivalTime('');
   };
 
   const handleCreateMultipleAbsences = async () => {
@@ -271,6 +389,58 @@ export default function AbsenceView({
     }
   };
 
+  const handleCreateMultipleLateArrivals = async () => {
+    if (selectedAbsentStudentIds.length === 0 || !newAbsenceForm.classId || isMultipleSaveInProgress) return;
+    if (!onAddLateArrival) {
+      setLateArrivalError('Le module de retard n’est pas disponible.');
+      return;
+    }
+
+    setIsMultipleSaveInProgress(true);
+    let savedCount = 0;
+    let duplicateCount = 0;
+    let failedCount = 0;
+    const [hour] = lateArrivalTime.split(':').map(Number);
+    const period = (Number.isFinite(hour) && hour >= 12 ? 'afternoon' : 'morning') as 'morning' | 'afternoon';
+
+    try {
+      const studentIdsToCreate = selectedAbsentStudentIds.map((id) => parseInt(id, 10));
+      for (const studentId of studentIdsToCreate) {
+        const student = studentsList.find((s) => s.id === studentId);
+        if (!student) {
+          failedCount += 1;
+          continue;
+        }
+
+        try {
+          await onAddLateArrival({
+            studentId: student.id,
+            classId: student.classId,
+            date: newAbsenceForm.date,
+            period,
+            expectedStartTime: lateExpectedStartTime,
+            arrivalTime: lateArrivalTime,
+            reason: lateReason.trim() || null,
+          });
+          savedCount += 1;
+        } catch (error) {
+          const status = typeof error === 'object' && error !== null && 'status' in error
+            ? (error as { status?: number }).status
+            : undefined;
+          if (status === 409) {
+            duplicateCount += 1;
+          } else {
+            failedCount += 1;
+          }
+        }
+      }
+
+      setLateArrivalError(`${savedCount} retard(s) enregistré(s), ${duplicateCount} déjà enregistré(s), ${failedCount} échec(s).`);
+    } finally {
+      setIsMultipleSaveInProgress(false);
+    }
+  };
+
   const handleJustifySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!showJustifyModal) return;
@@ -297,39 +467,68 @@ export default function AbsenceView({
     new Set(absencesList.map((abs) => abs.date || '').filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
 
-  const filteredAbsences = absencesList.filter((abs) => {
+  const mergedPresenceEvents: PresenceEvent[] = [
+    ...absencesList.map((abs) => ({ ...abs, kind: 'absence' as const })),
+    ...lateArrivalsList.map((late) => ({
+      ...late,
+      kind: 'late' as const,
+      studentName: late.studentName || `${late.studentId}`,
+      className: late.className || classesList.find((klass) => klass.id === late.classId)?.name || 'Classe',
+      subjectName: 'Retard',
+      isJustified: false as const,
+    })),
+  ];
+
+  const filteredAbsences = mergedPresenceEvents.filter((event) => {
+    if (event.kind === 'late') {
+      if (filterSchool) {
+        const cls = classesList.find((c) => c.id === event.classId);
+        if (!cls || !isClassInSelectedSchool(cls, filterSchool)) return false;
+      }
+      if (filterClass && String(event.classId) !== filterClass) return false;
+
+      if (searchQuery.trim()) {
+        const query = searchQuery.trim().toLowerCase();
+        const studentName = String(event.studentName || '').toLowerCase();
+        const className = String(event.className || '').toLowerCase();
+        if (!studentName.includes(query) && !className.includes(query)) return false;
+      }
+
+      if (filterSubject && String(event.subjectName || '') !== filterSubject) return false;
+      if (filterDate && String(event.date || '') !== filterDate) return false;
+      if (filterJustification) return false;
+      return true;
+    }
+
     if (filterSchool) {
-      const cls = classesList.find((c) => c.id === abs.classId);
+      const cls = classesList.find((c) => c.id === event.classId);
       if (!cls || !isClassInSelectedSchool(cls, filterSchool)) return false;
     }
-    if (filterClass && String(abs.classId) !== filterClass) return false;
+    if (filterClass && String(event.classId) !== filterClass) return false;
 
     if (searchQuery.trim()) {
       const query = searchQuery.trim().toLowerCase();
-      const studentName = String(abs.studentName || '').toLowerCase();
-      const className = String(abs.className || '').toLowerCase();
+      const studentName = String(event.studentName || '').toLowerCase();
+      const className = String(event.className || '').toLowerCase();
 
-      if (
-        !studentName.includes(query) &&
-        !className.includes(query)
-      ) {
+      if (!studentName.includes(query) && !className.includes(query)) {
         return false;
       }
     }
 
-    if (filterSubject && String(abs.subjectName || '') !== filterSubject) {
+    if (filterSubject && String(event.subjectName || '') !== filterSubject) {
       return false;
     }
 
-    if (filterDate && String(abs.date || '') !== filterDate) {
+    if (filterDate && String(event.date || '') !== filterDate) {
       return false;
     }
 
-    if (filterJustification === 'justified' && !abs.isJustified) {
+    if (filterJustification === 'justified' && !event.isJustified) {
       return false;
     }
 
-    if (filterJustification === 'unjustified' && abs.isJustified) {
+    if (filterJustification === 'unjustified' && event.isJustified) {
       return false;
     }
 
@@ -545,30 +744,106 @@ export default function AbsenceView({
                 )}
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Heure de début" required />
+            <div className="md:col-span-4">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Type de présence
               </label>
-              <input
-                required
-                type="time"
-                value={newAbsenceForm.startTime}
-                onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, startTime: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
-              />
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: 'present', label: 'Présent' },
+                  { value: 'late', label: 'Retard' },
+                  { value: 'absent', label: 'Absent' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      setAttendanceStatus(option.value as 'present' | 'late' | 'absent');
+                      setLateArrivalError(null);
+                    }}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${attendanceStatus === option.value ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Heure de fin" required />
-              </label>
-              <input
-                required
-                type="time"
-                value={newAbsenceForm.endTime}
-                onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, endTime: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
-              />
-            </div>
+            {attendanceStatus === 'absent' && (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Heure de début" required />
+                  </label>
+                  <input
+                    required
+                    type="time"
+                    value={newAbsenceForm.startTime}
+                    onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, startTime: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Heure de fin" required />
+                  </label>
+                  <input
+                    required
+                    type="time"
+                    value={newAbsenceForm.endTime}
+                    onChange={(e) => setNewAbsenceForm({ ...newAbsenceForm, endTime: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+                  />
+                </div>
+              </>
+            )}
+            {attendanceStatus === 'late' && (
+              <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="late-expected-start-time" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Heure prévue" required />
+                  </label>
+                  <input
+                    id="late-expected-start-time"
+                    required
+                    type="time"
+                    value={lateExpectedStartTime}
+                    onChange={(e) => setLateExpectedStartTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="late-arrival-time" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <RequiredLabel label="Heure d'arrivée" required />
+                  </label>
+                  <input
+                    id="late-arrival-time"
+                    required
+                    type="time"
+                    value={lateArrivalTime}
+                    onChange={(e) => setLateArrivalTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Retard calculé</label>
+                  <div className="px-3 py-2 bg-slate-100 border border-slate-200 text-sm font-semibold text-slate-700 rounded-xl">
+                    {formatLateDuration(calculateLateMinutes(lateExpectedStartTime, lateArrivalTime))}
+                  </div>
+                </div>
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Motif (facultatif)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={lateReason}
+                    onChange={(e) => setLateReason(e.target.value)}
+                    placeholder="Ex. : rendez-vous médical, trafic, etc."
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex gap-2 flex-col sm:flex-row">
               <button
                 type="submit"
@@ -627,15 +902,28 @@ export default function AbsenceView({
               >
                 Néant
               </button>
-              <button
-                type="button"
-                onClick={handleCreateMultipleAbsences}
-                disabled={selectedAbsentStudentIds.length === 0 || isMultipleSaveInProgress}
-                className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                id="btn-absence-submit-multiple"
-              >
-                {isMultipleSaveInProgress ? 'Enregistrement en cours…' : 'Enregistrer les absences sélectionnées'}
-              </button>
+              {attendanceStatus === 'absent' && (
+                <button
+                  type="button"
+                  onClick={handleCreateMultipleAbsences}
+                  disabled={selectedAbsentStudentIds.length === 0 || isMultipleSaveInProgress}
+                  className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  id="btn-absence-submit-multiple"
+                >
+                  {isMultipleSaveInProgress ? 'Enregistrement en cours…' : 'Enregistrer les absences sélectionnées'}
+                </button>
+              )}
+              {attendanceStatus === 'late' && (
+                <button
+                  type="button"
+                  onClick={handleCreateMultipleLateArrivals}
+                  disabled={selectedAbsentStudentIds.length === 0 || isMultipleSaveInProgress}
+                  className="flex-1 px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  id="btn-late-submit-multiple"
+                >
+                  {isMultipleSaveInProgress ? 'Enregistrement en cours…' : 'Enregistrer les retards sélectionnés'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsFormOpen(false)}
@@ -644,9 +932,9 @@ export default function AbsenceView({
                 Annuler
               </button>
             </div>
-            {absenceControlError && (
+            {(absenceControlError || lateArrivalError) && (
               <p className="md:col-span-4 text-xs font-semibold text-rose-600" role="alert">
-                {absenceControlError}
+                {absenceControlError || lateArrivalError}
               </p>
             )}
           </form>
@@ -749,13 +1037,25 @@ export default function AbsenceView({
                     )
                   </td>
                   <td className="px-6 py-4 text-slate-600 font-mono text-xs">
-                    {abs.startTime && abs.endTime ? `${abs.startTime} - ${abs.endTime}` : '—'}
+                    {abs.kind === 'late' ? (
+                      <div className="space-y-1">
+                        <div>Prévu : {abs.expectedStartTime}</div>
+                        <div>Arrivée : {abs.arrivalTime}</div>
+                        <div>Durée : {formatLateDuration(abs.lateMinutes ?? null)}</div>
+                      </div>
+                    ) : abs.startTime && abs.endTime
+                      ? `${abs.startTime} - ${abs.endTime}`
+                      : '—'}
                   </td>
                   <td className="px-6 py-4 text-slate-600 font-medium">
-                    {abs.subjectName || 'Non précisée'}
+                    {abs.kind === 'late' ? 'Retard' : abs.subjectName || 'Non précisée'}
                   </td>
                   <td className="px-6 py-4">
-                    {abs.isJustified ? (
+                    {abs.kind === 'late' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
+                        Retard
+                      </span>
+                    ) : abs.isJustified ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-100">
                         Justifiée
                       </span>
@@ -766,18 +1066,24 @@ export default function AbsenceView({
                     )}
                   </td>
                   <td className="px-6 py-4 text-slate-700 text-sm max-w-xs whitespace-normal break-words space-y-1">
-                    <div className="font-bold">
-  {abs.justificationReason || '— En attente de motif de l\'enfant...'}
-</div>
-                    {abs.justificationFileName ? (
-                      <div className="text-[10px] text-slate-400 whitespace-normal break-words">
-                        Fichier justificatif : <span className="font-semibold text-slate-700">{abs.justificationFileName}</span>
-                      </div>
-                    ) : null}
+                    {abs.kind === 'late' ? (
+                      <div className="font-bold">{abs.reason || '— Aucun motif renseigné'}</div>
+                    ) : (
+                      <>
+                        <div className="font-bold">
+                          {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                        </div>
+                        {abs.justificationFileName ? (
+                          <div className="text-[10px] text-slate-400 whitespace-normal break-words">
+                            Fichier justificatif : <span className="font-semibold text-slate-700">{abs.justificationFileName}</span>
+                          </div>
+                        ) : null}
+                      </>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-right">
                     {/* Only specific roles or Parent themselves can justify absences */}
-                    {abs.justificationFileName ? (
+                    {abs.kind === 'absence' && abs.justificationFileName ? (
                     <button
                       onClick={async () => {
                         try {
@@ -798,7 +1104,7 @@ export default function AbsenceView({
                       Télécharger
                     </button>
                   ) : null}
-                  {!abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
+                  {abs.kind === 'absence' && !abs.isJustified && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
                     <button
                       onClick={() => {
                         setShowJustifyModal(abs);

@@ -20,6 +20,7 @@ import { useAdminDashboard } from '../hooks/useAdminDashboard.ts';
 import { useStudents } from '../hooks/useStudents.ts';
 import { useClasses } from '../hooks/useClasses.ts';
 import { useAbsences } from '../hooks/useAbsences.ts';
+import { useLateArrivals } from '../hooks/useLateArrivals.ts';
 
 export default function AppShell() {
   const { user, role, activeSchoolId: currentSchoolId } = useAuth();
@@ -53,6 +54,7 @@ export default function AppShell() {
   const { classes: classesList, refresh: refreshClasses, addClass: addClassApi, deleteClass: deleteClassApi } = useClasses();
   const { students: studentsList, refresh: refreshStudents, addStudent: addStudentApi, updateStudent: updateStudentApi, batchCreateStudents } = useStudents();
   const { absences: absencesList, refresh: refreshAbsences, addAbsence: addAbsenceApi, justifyAbsence, recordAbsenceControl: recordAbsenceControlApi } = useAbsences();
+  const { lateArrivals: lateArrivalsList, refresh: refreshLateArrivals, addLateArrival: addLateArrivalApi } = useLateArrivals();
 
   const simulatedUser = user;
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
@@ -89,7 +91,7 @@ export default function AppShell() {
     setErrorMsg(null);
     try {
       await apiFetch('/api/auth/register-or-login', { method: 'POST' });
-      await Promise.all([refreshDashboard(), refreshClasses(), refreshStudents(), refreshAbsences()]);
+      await Promise.all([refreshDashboard(), refreshClasses(), refreshStudents(), refreshAbsences(), refreshLateArrivals()]);
 
       const endpoints = [
         '/api/schools',
@@ -297,6 +299,11 @@ export default function AppShell() {
     await fetchAllData();
   };
 
+  const handleAddLateArrival = async (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => {
+    await addLateArrivalApi(data);
+    await fetchAllData();
+  };
+
   const handleRecordAbsenceControl = async (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => {
     try {
       await recordAbsenceControlApi(data);
@@ -429,6 +436,7 @@ export default function AppShell() {
       return <AbsenceView
         userRole={currentRole}
         absencesList={absencesList}
+        lateArrivalsList={lateArrivalsList}
         studentsList={studentsList}
         classesList={classesList}
         schoolsList={schoolsList}
@@ -437,6 +445,7 @@ export default function AppShell() {
         teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
         teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
         onAddAbsence={handleAddAbsence}
+        onAddLateArrival={handleAddLateArrival}
         onJustifyAbsence={handleJustifyAbsence}
         onRecordAbsenceControl={handleRecordAbsenceControl}
       />;
