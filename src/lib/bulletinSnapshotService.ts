@@ -129,6 +129,7 @@ export interface BulletinSnapshotContext {
   getSubjectTypes(schoolId: number): Promise<Map<string, SubjectTypeMetadata>>;
   getSubjectIdsByName(schoolId: number, subjectNames: string[]): Promise<Map<string, number>>;
   getSubjectMetadataByName(schoolId: number, subjectNames: string[]): Promise<Map<string, { id: number; name: string }>>;
+  getSubjectMetadataByIds(subjectIds: number[]): Promise<Map<number, { id: number; name: string }>>;
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
@@ -544,9 +545,14 @@ const computeSubjectLines = (
   }
 
   return Array.from(bySubject.entries()).map(([legacySubjectName, agg]) => {
-    const subjectMetadata = subjectMetadataByName.get(legacySubjectName);
-    const subjectName = subjectMetadata?.name ?? legacySubjectName;
-    const subjectId = subjectMetadata?.id ?? subjectIdsByName.get(legacySubjectName) ?? null;
+    const subjectIdFromEvaluation = evaluations
+      .filter((evaluation) => evaluation.subject === legacySubjectName && evaluation.subjectId != null)
+      .map((evaluation) => evaluation.subjectId as number)
+      .find((subjectId) => subjectId != null) ?? null;
+    const subjectMetadataFromId = subjectIdFromEvaluation != null ? subjectMetadataById.get(subjectIdFromEvaluation) ?? null : null;
+    const subjectMetadata = subjectMetadataFromId ?? subjectMetadataByName.get(legacySubjectName) ?? null;
+    const subjectName = subjectMetadataFromId?.name ?? subjectMetadata?.name ?? legacySubjectName;
+    const subjectId = subjectIdFromEvaluation ?? subjectMetadata?.id ?? subjectIdsByName.get(legacySubjectName) ?? null;
 
     const interrogationAvg = calculateTypeWeightedAverage(
       agg.byType.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })),
@@ -820,6 +826,15 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
         async getSubjectMetadataByName(schoolId, subjectNames) {
           return resolveCurrentSubjectMetadataByName(tx, schoolId, subjectNames);
         },
+        async getSubjectMetadataByIds(subjectIds) {
+          if (subjectIds.length === 0) return new Map();
+          const rows = await tx.select({ id: subjects.id, name: subjects.name }).from(subjects).where(inArray(subjects.id, Array.from(new Set(subjectIds))));
+          const result = new Map<number, { id: number; name: string }>();
+          for (const row of rows) {
+            result.set(row.id, { id: row.id, name: row.name });
+          }
+          return result;
+        },
         async insertBulletin(payload) {
           const [inserted] = await tx.insert(bulletins).values({
             studentId: payload.studentId,
@@ -949,6 +964,7 @@ export const registerBulletinGenerateRoute = (
                   classId: evaluations.classId,
                   teacherId: evaluations.teacherId,
                   termId: evaluations.termId,
+                  subjectId: evaluations.subjectId,
                   subject: evaluations.subject,
                   title: evaluations.title,
                   type: evaluations.type,
@@ -1076,6 +1092,8 @@ export const generateBulletinSnapshot = async (
     const subjectTypeNames = await ctx.getSubjectTypes(student.schoolId);
     const subjectMetadataByName = await ctx.getSubjectMetadataByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
     const subjectIdsByName = await ctx.getSubjectIdsByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
+    const subjectIdsToLoad = Array.from(new Set(termEvaluations.map((evaluation) => evaluation.subjectId).filter((subjectId): subjectId is number => subjectId != null)));
+    const subjectMetadataById = await ctx.getSubjectMetadataByIds(subjectIdsToLoad);
 
     const evaluationIds = termEvaluations.map((evaluation) => evaluation.id);
     const classStudentIds = classStudents.map((row) => row.id);
@@ -1108,6 +1126,7 @@ export const generateBulletinSnapshot = async (
       subjectTypeNames,
       subjectIdsByName,
       subjectMetadataByName,
+      subjectMetadataById,
     );
     const subjectGroups = groupBulletinLinesBySubjectType(lines);
     const subjectAverage = calculateWeightedSubjectAverage(lines);

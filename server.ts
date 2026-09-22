@@ -446,26 +446,28 @@ async function isApprovedClassForSchool(classId: number, targetSchoolId: number 
   return !!schoolClass;
 }
 
-async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null) {
+async function resolveApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null): Promise<{ subjectId: number; subjectName: string } | null> {
   const normalizedSubject = String(subjectName || '').trim();
-  console.log('DEBUG isApprovedSubjectForSchool enter', {
+  console.log('DEBUG resolveApprovedSubjectForSchool enter', {
     subjectName,
     normalizedSubject,
     normalizedLength: normalizedSubject.length,
     targetSchoolId,
   });
 
-
   if (!normalizedSubject) {
-    console.log('DEBUG isApprovedSubjectForSchool fail empty subject', { subjectName });
-    return false;
+    console.log('DEBUG resolveApprovedSubjectForSchool fail empty subject', { subjectName });
+    return null;
   }
 
   const normalizedSubjectMatch = sql`LOWER(TRIM(${subjects.name})) = LOWER(TRIM(${normalizedSubject}))`;
 
   if (targetSchoolId != null) {
     const [sameSchoolSubject] = await db
-      .select()
+      .select({
+        subjectId: subjects.id,
+        subjectName: subjects.name,
+      })
       .from(subjects)
       .where(
         and(
@@ -474,15 +476,18 @@ async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: n
         )
       );
 
-    console.log('DEBUG isApprovedSubjectForSchool sameSchoolSubject query', {
+    console.log('DEBUG resolveApprovedSubjectForSchool sameSchoolSubject query', {
       targetSchoolId,
       normalizedSubject,
       sameSchoolSubject,
     });
 
     if (sameSchoolSubject) {
-      console.log('DEBUG isApprovedSubjectForSchool pass sameSchoolSubject', { targetSchoolId, normalizedSubject });
-      return true;
+      console.log('DEBUG resolveApprovedSubjectForSchool pass sameSchoolSubject', { targetSchoolId, normalizedSubject, subjectId: sameSchoolSubject.subjectId });
+      return {
+        subjectId: sameSchoolSubject.subjectId,
+        subjectName: sameSchoolSubject.subjectName,
+      };
     }
 
     const approvedSubjectRows = await db
@@ -505,24 +510,27 @@ async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: n
       )
       .where(normalizedSubjectMatch);
 
-    console.log('DEBUG isApprovedSubjectForSchool approvedSubjectRows', {
+    console.log('DEBUG resolveApprovedSubjectForSchool approvedSubjectRows', {
       targetSchoolId,
       normalizedSubject,
       approvedSubjectRows,
     });
 
-    const result = approvedSubjectRows.length > 0;
-    console.log('DEBUG isApprovedSubjectForSchool result', {
+    const result = approvedSubjectRows[0] ?? null;
+    console.log('DEBUG resolveApprovedSubjectForSchool result', {
       targetSchoolId,
       normalizedSubject,
       result,
       reason: result ? 'approvedSubjectRows match' : 'no approved subject match',
     });
-    return result;
+    return result ? { subjectId: result.subjectId, subjectName: result.subjectName } : null;
   }
 
   const globalSubjectRows = await db
-    .select()
+    .select({
+      subjectId: subjects.id,
+      subjectName: subjects.name,
+    })
     .from(subjects)
     .where(
       and(
@@ -531,18 +539,23 @@ async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: n
       )
     );
 
-  console.log('DEBUG isApprovedSubjectForSchool globalSubjectRows', {
+  console.log('DEBUG resolveApprovedSubjectForSchool globalSubjectRows', {
     normalizedSubject,
     globalSubjectRows,
   });
 
-  const result = globalSubjectRows.length > 0;
-  console.log('DEBUG isApprovedSubjectForSchool result', {
+  const result = globalSubjectRows[0] ?? null;
+  console.log('DEBUG resolveApprovedSubjectForSchool result', {
     normalizedSubject,
     result,
     reason: result ? 'globalSubjectRows match' : 'no global subject match',
   });
-  return result;
+  return result ? { subjectId: result.subjectId, subjectName: result.subjectName } : null;
+}
+
+async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null) {
+  const approvedSubject = await resolveApprovedSubjectForSchool(subjectName, targetSchoolId);
+  return !!approvedSubject;
 }
 
 function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: string; role: string; schoolId?: any; phone?: string; specialization?: any }) {
@@ -8330,11 +8343,13 @@ export async function createApp() {
         approvalSource,
       });
 
-      const approvedSubject = await isApprovedSubjectForSchool(normalizedSubject, approvalSchoolId);
+      const approvedSubject = await resolveApprovedSubjectForSchool(normalizedSubject, approvalSchoolId);
 
       if (!approvedSubject) {
         return res.status(400).json({ error: 'La matière n’est pas approuvée pour cette école' });
       }
+
+      const resolvedSubjectId = approvedSubject.subjectId;
 
       // Generate sequence number for this (termId, classId) combination
       // Using a transaction to avoid race conditions
@@ -8374,6 +8389,7 @@ export async function createApp() {
         classId: parseInt(classId),
         teacherId: resolvedTeacherId,
         termId: resolvedTermId,
+        subjectId: resolvedSubjectId,
         subject: normalizedSubject,
         title: generatedName,
         type: normalizedType,

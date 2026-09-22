@@ -330,6 +330,7 @@ export const evaluations = pgTable('evaluations', {
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
   subject: text('subject').notNull(), // e.g. "Mathématiques"
   title: text('title').notNull(), // e.g. "Devoir surveillé 1"
   type: text('type'), // 'interrogation', 'devoir', or 'composition'

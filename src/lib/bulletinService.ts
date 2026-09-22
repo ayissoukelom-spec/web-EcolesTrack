@@ -27,6 +27,7 @@ export interface BulletinEvaluationLike {
   classId: number;
   teacherId?: number | null;
   termId?: number | null;
+  subjectId?: number | null;
   subject: string;
   title: string;
   type?: string | null;

@@ -22,7 +22,8 @@ const FIXTURES = {
     { id: 500, classId: 300, schoolId: 10, status: 'approved' },
   ],
   schoolTerms: [
-    { id: 1, academicYearId: 1, startDate: '2026-01-01', endDate: '2026-12-31', orderIndex: 1, isActive: true },
+    { id: 1, academicYearId: 1, schoolId: 10, startDate: '2026-01-01', endDate: '2026-12-31', orderIndex: 1, isActive: true },
+    { id: 2, academicYearId: 1, schoolId: 20, startDate: '2026-01-01', endDate: '2026-12-31', orderIndex: 1, isActive: true },
   ],
   subjects: [
     { id: 1, name: 'Global', schoolId: 20 },
@@ -61,6 +62,7 @@ function parseQueryChunks(sqlObj: any, conditions: Cond) {
         else if (lastField.includes('classid')) conditions.classId = value === null ? null : Number(value);
         else if (lastField.includes('teacherid')) conditions.teacherId = value === null ? null : Number(value);
         else if (lastField.includes('subjectid')) conditions.subjectId = value === null ? null : Number(value);
+        else if (lastField === 'name') conditions.name = value;
         else if (lastField === 'id') conditions.id = value === null ? null : Number(value);
       }
       lastField = null;
@@ -136,18 +138,32 @@ function extractConditions(cond: any): Cond {
   return conditions;
 }
 
+function collectParamValues(value: any, values: any[] = [], visited = new WeakSet<object>()) {
+  if (typeof value === 'string') {
+    values.push(value);
+    return values;
+  }
+  if (value == null || typeof value !== 'object' || visited.has(value)) return values;
+  visited.add(value);
+  if (value.constructor?.name === 'Param') values.push(getValue(value));
+  else if (typeof value.value === 'string') values.push(value.value);
+  if (Array.isArray(value)) value.forEach((item) => collectParamValues(item, values, visited));
+  else Object.values(value).forEach((child) => collectParamValues(child, values, visited));
+  return values;
+}
+
 function resolveTableName(table: any) {
   if (typeof table === 'string') {
     const lower = table.toLowerCase();
     const normalized = lower.replace(/_/g, '');
     if (normalized.includes('users')) return 'users';
+    if (normalized.includes('schoolclasses')) return 'schoolClasses';
     if (normalized.includes('classes')) return 'classes';
     if (normalized.includes('teachers')) return 'teachers';
     if (normalized.includes('classteachers')) return 'classTeachers';
-    if (normalized.includes('schoolclasses')) return 'schoolClasses';
     if (normalized.includes('schoolterms')) return 'schoolTerms';
-    if (normalized.includes('subjects')) return 'subjects';
     if (normalized.includes('schoolsubjects')) return 'schoolSubjects';
+    if (normalized.includes('subjects')) return 'subjects';
     if (normalized.includes('evaluations')) return 'evaluations';
     if (normalized.includes('parents')) return 'parents';
     if (normalized.includes('students')) return 'students';
@@ -187,6 +203,7 @@ function filterRows(rows: any[], conditions: Cond) {
     if (conditions.classId !== undefined && !matches(row.classId, conditions.classId)) return false;
     if (conditions.teacherId !== undefined && !matches(row.teacherId, conditions.teacherId)) return false;
     if (conditions.subjectId !== undefined && !matches(row.subjectId, conditions.subjectId)) return false;
+    if (conditions.name !== undefined && !matches(String(row.name).trim().toLowerCase(), String(conditions.name).trim().toLowerCase())) return false;
     if (conditions.status !== undefined && !matches(row.status, conditions.status)) return false;
     if (conditions.isActive !== undefined && !matches(row.isActive, conditions.isActive)) return false;
     return true;
@@ -195,10 +212,11 @@ function filterRows(rows: any[], conditions: Cond) {
 
 function createMockDb() {
   const db = {
-    select() {
+    select(selection: any = {}) {
       const builder: any = {
         _rows: [] as any[],
         _table: '',
+        _selection: selection,
         from(table: any) {
           this._table = resolveTableName(table);
           this._rows = (this._table === 'users' ? FIXTURES.users
@@ -222,17 +240,29 @@ function createMockDb() {
           if (!conds.length) return this;
           const combined: Cond = {};
           conds.forEach((cond) => Object.assign(combined, extractConditions(cond)));
+          if (this._table === 'subjects' && combined.name === undefined) {
+            const subjectName = collectParamValues(conds).find((value) => this._rows.some((row: any) => String(row.name).trim().toLowerCase() === String(value).trim().toLowerCase()));
+            if (subjectName) combined.name = subjectName;
+          }
           this._rows = filterRows(this._rows, combined);
           return this;
         },
         orderBy() { return this; },
         limit(n: number) { this._rows = this._rows.slice(0, n); return this; },
-        then(resolve: (value: any) => any) { return Promise.resolve(this._rows).then(resolve); },
+        then(resolve: (value: any) => any) {
+          const rows = Object.keys(this._selection).length === 0
+            ? this._rows
+            : this._rows.map((row: any) => Object.fromEntries(
+              Object.entries(this._selection).map(([key, column]: [string, any]) => [key, row[column?.name] ?? row[key]])
+            ));
+          return Promise.resolve(rows).then(resolve);
+        },
         catch(reject: (reason?: any) => any) { return Promise.resolve(this._rows).catch(reject); },
         finally(cb: () => any) { return Promise.resolve(this._rows).finally(cb); },
       };
       return builder;
     },
+    transaction(callback: (tx: any) => Promise<any>) { return callback(db); },
     insert() {
       return {
         values: (obj: any) => ({
@@ -353,6 +383,29 @@ describe('POST /api/evaluations security', () => {
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('id');
     expect(res.body).toMatchObject({ classId: 100, subject: 'Science', title: 'Teacher Assigned', coefficient: 2, maxScore: 20 });
+  });
+
+  it('stores resolved subjectId when creating an evaluation for an approved subject', async () => {
+    FIXTURES.subjects.push({ id: 5, name: 'Sciences Physique', schoolId: 10 });
+    FIXTURES.schoolSubjects.push({ id: 3, subjectId: 5, schoolId: 10, status: 'approved' });
+
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-sim')
+      .set('x-simulated-user-id', '4')
+      .set('x-simulated-school-id', '10')
+      .send({ classId: '100', subject: 'Sciences Physique', title: 'Devoir scientifique', type: 'devoir', date: '2026-09-02', coefficient: 1, maxScore: 20 });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty('id');
+
+    const insertion = FIXTURES.evaluations.at(-1);
+    expect(insertion).toMatchObject({
+      classId: 100,
+      subject: 'Sciences Physique',
+      subjectId: 5,
+    });
   });
 
   it('does not notify parent of other-school student with same classId for teacher evaluation', async () => {

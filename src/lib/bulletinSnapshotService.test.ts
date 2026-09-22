@@ -289,6 +289,67 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.map((line) => line.subjectName).sort()).toEqual(['Français', 'Math']);
   });
 
+  it('priorise subjectId de l évaluation quand il est disponible, même si le libellé historique est ancien', async () => {
+    const customPersistence: BulletinSnapshotPersistence = {
+      transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {
+        const students = [
+          { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        ];
+        const classes = [{ id: 10, academicYearId: 100 }];
+        const terms = [{ id: 7, academicYearId: 100 }];
+        const evaluations: BulletinEvaluationLike[] = [
+          { id: 500, classId: 10, teacherId: 1, termId: 7, subject: 'Physique et Chimie', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, subjectId: 5 },
+        ];
+        const grades: BulletinGradeLike[] = [
+          { id: 500, evaluationId: 500, studentId: 1, score: '16' },
+        ];
+        const subjectMetadata = new Map<string, { id: number; name: string }>([['Physique et Chimie', { id: 5, name: 'Sciences Physique' }]]);
+        const bulletinLines: BulletinLineSnapshotInput[] = [];
+
+        const ctx: BulletinSnapshotContext = {
+          async getStudentById(studentId) { return students.find((row) => row.id === studentId) ?? null; },
+          async getClassById(classId) { return classes.find((row) => row.id === classId) ?? null; },
+          async getTermById(termId) { return terms.find((row) => row.id === termId) ?? null; },
+          async getClassStudents(classId) { return students.filter((row) => row.classId === classId); },
+          async getClassTermEvaluations(classId, termId) { return evaluations.filter((row) => row.classId === classId && row.termId === termId); },
+          async getGradesForStudents(studentIds, evaluationIds) { return grades.filter((row) => studentIds.includes(row.studentId) && evaluationIds.includes(row.evaluationId)); },
+          async getTeacherNames() { return new Map(); },
+          async getSubjectTypes() { return new Map(); },
+          async getSubjectIdsByName() { return new Map(); },
+          async getSubjectMetadataByName() { return subjectMetadata; },
+          async insertBulletin(payload) { return { id: 1 }; },
+          async insertBulletinLines(_bulletinId, lines) { lines.forEach((line) => bulletinLines.push(line)); },
+        };
+
+        const result = await run(ctx);
+        expect(bulletinLines[0]?.subjectId).toBe(5);
+        expect(bulletinLines[0]?.subjectName).toBe('Sciences Physique');
+        return result;
+      },
+    };
+
+    await expect(generateBulletinSnapshot(1, 7, customPersistence)).resolves.toBeTruthy();
+  });
+
+  it('conserve le comportement historique quand subjectId est absent', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      evaluations: [
+        { id: 999, classId: 10, teacherId: 1, termId: 7, subject: 'Ancien libellé', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 999, evaluationId: 999, studentId: 1, score: '12' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+    const subjectLine = state.bulletinLines[0];
+
+    expect(result.linesCount).toBe(1);
+    expect(subjectLine?.subjectId).toBeNull();
+    expect(subjectLine?.subjectName).toBe('Ancien libellé');
+  });
+
   it('utilise le nom courant de la matière quand une évaluation garde un ancien libellé', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,
