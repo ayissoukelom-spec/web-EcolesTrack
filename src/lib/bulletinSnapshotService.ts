@@ -767,6 +767,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             classId: evaluations.classId,
             teacherId: evaluations.teacherId,
             termId: evaluations.termId,
+            subjectId: evaluations.subjectId,
             subject: evaluations.subject,
             title: evaluations.title,
             type: evaluations.type,
@@ -1018,6 +1019,15 @@ export const registerBulletinGenerateRoute = (
               },
               async getSubjectMetadataByName(schoolId, subjectNames) {
                 return resolveCurrentSubjectMetadataByName(tx, schoolId, subjectNames);
+              },
+              async getSubjectMetadataByIds(subjectIds) {
+                if (subjectIds.length === 0) return new Map();
+                const rows = await tx.select({ id: subjects.id, name: subjects.name }).from(subjects).where(inArray(subjects.id, Array.from(new Set(subjectIds))));
+                const result = new Map<number, { id: number; name: string }>();
+                for (const row of rows) {
+                  result.set(row.id, { id: row.id, name: row.name });
+                }
+                return result;
               },
               async insertBulletin(payload) {
                 const [inserted] = await tx.insert(bulletins).values({
