@@ -85,6 +85,7 @@ import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermF
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
 import { isExamResultStatus, isExamType } from './src/lib/examDecision.ts';
+import { normalizeFirstName } from './src/lib/studentImport.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -3209,7 +3210,7 @@ export async function createApp() {
 
       for (let i = 0; i < payload.length; i++) {
         const s = payload[i];
-        const firstName = s.firstName?.trim();
+        const firstName = normalizeFirstName(s.firstName);
         const lastName = s.lastName?.trim();
         const birthDate = s.birthDate?.trim() || '';
         const rawAcademicYearId = s.academicYearId !== undefined && s.academicYearId !== null && String(s.academicYearId).trim() !== ''
@@ -5690,6 +5691,7 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { firstName, lastName, birthDate, schoolId, classId, parentId, schoolAdminId, gender, enrolledAt, academicYearId, studentStatus } = req.body;
+      const normalizedFirstName = normalizeFirstName(firstName);
       const parsedSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId).trim() !== '' ? parseInt(String(schoolId)) : null;
       const parsedClassId = classId !== undefined && classId !== null && String(classId).trim() !== '' ? parseInt(String(classId)) : null;
       const parsedParentId = parentId !== undefined && parentId !== null && String(parentId).trim() !== '' ? parseInt(String(parentId)) : null;
@@ -5708,7 +5710,7 @@ export async function createApp() {
 
       const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
 
-      if (!firstName || !lastName || !effectiveSchoolId || !parsedClassId) {
+      if (!normalizedFirstName || !lastName || !effectiveSchoolId || !parsedClassId) {
         return res.status(400).json({ error: `Missing compulsory student parameters. Received firstName=${firstName}, lastName=${lastName}, schoolId=${schoolId}, classId=${classId}` });
       }
 
@@ -5815,7 +5817,7 @@ export async function createApp() {
       })();
 
       const result = await db.insert(students).values({
-        firstName,
+        firstName: normalizedFirstName,
         lastName,
         birthDate,
         gender: normalizedGender,
@@ -5846,8 +5848,9 @@ export async function createApp() {
 
       const studentId = parseInt(req.params.id, 10);
       const { firstName, lastName, birthDate, schoolId, classId, parentId, academicYearId, teacherId, schoolAdminId, gender, studentStatus } = req.body;
+      const normalizedFirstName = normalizeFirstName(firstName);
 
-      if (!studentId || !firstName || !lastName || classId == null || parentId == null) {
+      if (!studentId || !normalizedFirstName || !lastName || classId == null || parentId == null) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
@@ -5957,7 +5960,7 @@ export async function createApp() {
       }
 
       const changes: string[] = [];
-      if (existingStudent.firstName !== firstName) changes.push(`firstName: "${existingStudent.firstName}" → "${firstName}"`);
+      if (existingStudent.firstName !== normalizedFirstName) changes.push(`firstName: "${existingStudent.firstName}" → "${normalizedFirstName}"`);
       if (existingStudent.lastName !== lastName) changes.push(`lastName: "${existingStudent.lastName}" → "${lastName}"`);
       if (existingStudent.birthDate !== birthDate) changes.push(`birthDate: "${existingStudent.birthDate}" → "${birthDate}"`);
       if (existingStudent.gender !== newGender) changes.push(`gender: "${existingStudent.gender ?? ''}" → "${newGender ?? ''}"`);
@@ -5973,7 +5976,7 @@ export async function createApp() {
 
       const result = await db
         .update(students)
-        .set({ firstName, lastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
+        .set({ firstName: normalizedFirstName, lastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
         .where(eq(students.id, studentId))
         .returning();
 

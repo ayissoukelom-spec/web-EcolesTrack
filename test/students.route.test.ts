@@ -27,6 +27,10 @@ const createBuilder = (rows: any[]) => {
         builder._rows = mockState.classAssignments;
       } else if (table === parents) {
         builder._rows = mockState.parentRows;
+      } else if (table === schools) {
+        builder._rows = [{ id: 10, studentsCreationLocked: false }];
+      } else if (table === classes) {
+        builder._rows = [{ id: 5, schoolId: 10, academicYearId: 2 }];
       } else if (table === students) {
         // Simulate basic role-aware filtering for students queries to make tests
         // assert real expected results instead of only checking array presence.
@@ -43,7 +47,6 @@ const createBuilder = (rows: any[]) => {
             rows = rows.filter((s: any) => s.schoolId === mockState.actorSchoolId);
           }
         }
-        // no-op debug
         builder._rows = rows;
       }
       return builder;
@@ -185,7 +188,7 @@ describe('GET /api/students (scope)', () => {
     // Import the app factory after shim is applied
     const serverModule = await import('../server.ts');
     app = await serverModule.createApp();
-  });
+  }, 30000);
 
   beforeEach(async () => {
     mockState.actorRole = 'super_admin';
@@ -392,6 +395,113 @@ describe('GET /api/students (scope)', () => {
       .send([row]);
     return { res, insertedRows };
   };
+
+  it('normalizes firstName on student creation without altering the lastName', async () => {
+    const insertedRows: any[] = [];
+    mockState.students = [];
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
+    mockDb.insert = (table: any) => ({
+      values: (values: any) => {
+        insertedRows.push({ table, values });
+        return {
+          returning: async () => table === students ? [{ id: 123, ...values }] : [{ id: 1, ...values }],
+        };
+      },
+    });
+
+    const res = await request(app)
+      .post('/api/students')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send({
+        firstName: 'JEAN PIERRE',
+        lastName: 'DUPONT',
+        birthDate: '2015-04-12',
+        schoolId: 10,
+        classId: 5,
+        parentId: 7,
+        academicYearId: 2,
+        schoolAdminId: 2,
+        gender: 'M',
+      });
+
+    expect(res.status).toBe(201);
+    expect(insertedRows[0].values.firstName).toBe('Jean Pierre');
+    expect(insertedRows[0].values.lastName).toBe('DUPONT');
+  });
+
+  it('normalizes firstName on student update without altering the lastName', async () => {
+    const insertedRows: any[] = [];
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
+    mockState.students = [{
+      id: 123,
+      firstName: 'Jean Pierre',
+      lastName: 'DUPONT',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      parentId: 7,
+      schoolAdminId: 2,
+      gender: 'M',
+      enrolledAt: new Date('2015-04-12'),
+    }];
+    mockDb.update = () => ({
+      set: (values: any) => ({
+        where: () => ({
+          returning: async () => {
+            insertedRows.push(values);
+            return [{ id: 123, ...values }];
+          },
+        }),
+      }),
+    });
+    mockDb.insert = (table: any) => ({
+      values: (values: any) => ({
+        onConflictDoUpdate: (config: any) => ({
+          set: async () => {
+            insertedRows.push({ table, values, config });
+            return [{ id: 123, ...values }];
+          },
+        }),
+      }),
+    });
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send({
+        firstName: 'jEAN pIeRrE',
+        lastName: 'DUPONT',
+        birthDate: '2015-04-12',
+        schoolId: 10,
+        classId: 5,
+        parentId: 7,
+        academicYearId: 2,
+        schoolAdminId: 2,
+        gender: 'M',
+        studentStatus: 'Nouveau',
+      });
+
+    expect(res.status).toBe(200);
+    expect(insertedRows[0].firstName).toBe('Jean Pierre');
+    expect(insertedRows[0].lastName).toBe('DUPONT');
+  });
+
+  it('normalizes firstName in batch imports and keeps the surname unchanged', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ firstName: 'jEaN pIeRrE', lastName: 'DUPONT' }));
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(1);
+    expect(insertedRows).toContainEqual(expect.objectContaining({
+      values: expect.objectContaining({ firstName: 'Jean Pierre', lastName: 'DUPONT' }),
+    }));
+  });
 
   it('creates Nouveau status for the class academic year', async () => {
     const { res, insertedRows } = await importBatchRow(batchRow({ studentStatus: 'Nouveau' }));

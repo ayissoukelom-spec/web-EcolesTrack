@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isValidStudentGender, normalizeStudentGender } from './studentImport.ts';
+import { isValidStudentGender, normalizeFirstName, normalizeStudentGender } from './studentImport.ts';
 
 describe('student gender validation', () => {
   it('rejects missing or empty gender values', () => {
@@ -22,5 +22,24 @@ describe('student gender validation', () => {
     expect(normalizeStudentGender('M')).toBe('M');
     expect(normalizeStudentGender('  Féminin  ')).toBe('Féminin');
     expect(normalizeStudentGender('')).toBeNull();
+  });
+});
+
+describe('normalizeFirstName', () => {
+  it('normalizes single and multi-part first names according to the business rule', () => {
+    expect(normalizeFirstName('jean')).toBe('Jean');
+    expect(normalizeFirstName('JEAN')).toBe('Jean');
+    expect(normalizeFirstName('jEAN')).toBe('Jean');
+    expect(normalizeFirstName('jean pierre')).toBe('Jean Pierre');
+    expect(normalizeFirstName('JEAN PIERRE')).toBe('Jean Pierre');
+    expect(normalizeFirstName('jean pierre paul')).toBe('Jean Pierre Paul');
+    expect(normalizeFirstName('jean-pierre')).toBe('Jean-Pierre');
+    expect(normalizeFirstName('JEAN-PIERRE')).toBe('Jean-Pierre');
+  });
+
+  it('trims spaces and normalizes hyphenated names without changing the surname field', () => {
+    expect(normalizeFirstName('  jEaN   pIeRrE  ')).toBe('Jean Pierre');
+    expect(normalizeFirstName('  jEaN-pIeRrE  ')).toBe('Jean-Pierre');
+    expect(normalizeFirstName('')).toBe('');
   });
 });
