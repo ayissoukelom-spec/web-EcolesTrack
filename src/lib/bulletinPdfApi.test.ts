@@ -22,6 +22,7 @@ import {
   resolvePromotionDecision,
   formatPromotionDecisionForPdf,
   getSubjectDisplayName,
+  resolvePdfSubjectDisplayInfo,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -110,6 +111,104 @@ const countPdfImages = (pdfBytes: Uint8Array): number => {
   const raw = Buffer.from(pdfBytes).toString('latin1');
   return raw.includes('/Subtype /Image') ? 1 : 0;
 };
+
+describe('résolution du nom de matière pour le PDF', () => {
+  it('priorise le subject.name actuel quand subject_id est valide, même si le snapshot contient un ancien nom', () => {
+    const line = {
+      ...snapshotData.lines[0],
+      id: 11,
+      subjectId: 42,
+      subjectName: 'Physique et Chimie',
+      subjectCode: 'PC',
+    };
+
+    const result = resolvePdfSubjectDisplayInfo(
+      line,
+      new Map([[42, { name: 'Physique', code: 'PHY' }]]),
+    );
+
+    expect(result.subjectName).toBe('Physique');
+    expect(result.subjectCode).toBe('PHY');
+  });
+
+  it('conserve le fallback historique si subject_id est absent ou invalide et aucune relation fiable n’existe', () => {
+    const historicalLine = {
+      ...snapshotData.lines[0],
+      id: 12,
+      subjectId: null,
+      subjectName: 'Physique et Chimie',
+      subjectCode: 'PC',
+    };
+
+    const invalidLine = {
+      ...snapshotData.lines[0],
+      id: 13,
+      subjectId: 999999,
+      subjectName: 'Physique et Chimie',
+      subjectCode: 'PC',
+    };
+
+    expect(resolvePdfSubjectDisplayInfo(historicalLine, new Map())).toMatchObject({ subjectName: 'Physique et Chimie' });
+    expect(resolvePdfSubjectDisplayInfo(invalidLine, new Map())).toMatchObject({ subjectName: 'Physique et Chimie' });
+  });
+
+  it('affiche le nom actuel quand il tient dans la colonne', () => {
+    const font = { widthOfTextAtSize: (text: string) => text.length * 12 } as any;
+
+    expect(getSubjectDisplayName('Physique', 'PHY', 200, font, 7.5)).toBe('Physique');
+    expect(getSubjectDisplayName('Mathématiques', 'MATH', 200, font, 7.5)).toBe('Mathématiques');
+  });
+
+  it('utilise le code actuel uniquement quand le nom actuel est trop long pour la colonne', () => {
+    const font = { widthOfTextAtSize: (text: string) => text.length * 12 } as any;
+    const longName = 'Sciences de la Vie et de la Terre';
+
+    expect(getSubjectDisplayName(longName, 'SVT', 70, font, 7.5)).toBe('SVT');
+    expect(getSubjectDisplayName('Éducation Physique et Sportive', 'EPS', 70, font, 7.5)).toBe('EPS');
+    expect(getSubjectDisplayName(longName, null, 70, font, 7.5)).toBe(longName);
+  });
+
+  it('n’utilise jamais un ancien nom de snapshot quand subject_id valide existe', () => {
+    const line = {
+      ...snapshotData.lines[0],
+      id: 14,
+      subjectId: 42,
+      subjectName: 'Physique et Chimie',
+      subjectCode: 'PC',
+    };
+
+    const map = new Map<number, { name: string | null; code: string | null }>([[42, { name: 'Physique', code: 'PHY' }]]);
+
+    expect(resolvePdfSubjectDisplayInfo(line, map).subjectName).not.toBe('Physique et Chimie');
+    expect(resolvePdfSubjectDisplayInfo(line, map).subjectName).toBe('Physique');
+  });
+
+  it('utilise le texte actuel dans le PDF et n’affiche pas l’ancien snapshot quand subject_id valide', async () => {
+    const data: BulletinPdfData = {
+      ...snapshotData,
+      lines: [{
+        ...snapshotData.lines[0],
+        id: 7,
+        subjectId: 42,
+        subjectName: 'Physique et Chimie',
+        subjectCode: 'PC',
+      }],
+    };
+
+    const pdfBytes = await createBulletinPdfDocument({
+      ...data,
+      lines: [{
+        ...data.lines[0],
+        subjectName: 'Physique',
+        subjectCode: 'PHY',
+      }],
+    });
+
+    const text = normalizePdfTextForAssertion(extractPdfText(pdfBytes));
+    expect(text).toContain('Physique');
+    expect(text).not.toContain('Physique et Chimie');
+  });
+});
 
 describe('résolution des périodes historiques', () => {
   it('détermine les périodes précédentes selon la vraie configuration trimestrielle et semestrielle', () => {

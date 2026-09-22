@@ -111,6 +111,34 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
         async getSubjectTypes() {
           return new Map(draft.subjectTypeNames);
         },
+        async getSubjectIdsByName(schoolId, subjectNames) {
+          const legacyNames = Array.from(new Set(subjectNames.map((name) => String(name ?? '').trim()).filter(Boolean)));
+          const metadata = await this.getSubjectMetadataByName(schoolId, legacyNames);
+          return new Map(Array.from(metadata.entries()).map(([legacyName, subject]) => [legacyName, subject.id]));
+        },
+        async getSubjectMetadataByName(schoolId, subjectNames) {
+          const uniqueNames = Array.from(new Set(subjectNames.map((name) => String(name ?? '').trim()).filter(Boolean)));
+          const result = new Map<string, { id: number; name: string }>();
+
+          for (const legacyName of uniqueNames) {
+            const normalizedLegacy = legacyName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+            const matches = [
+              { id: 6, name: 'Phylosophiees' },
+              { id: 7, name: 'Math' },
+              { id: 8, name: 'Français' },
+              { id: 9, name: 'Histoire' },
+            ].filter((subject) => {
+              const normalizedCurrent = subject.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+              return normalizedCurrent === normalizedLegacy || normalizedCurrent.startsWith(normalizedLegacy) || normalizedLegacy.startsWith(normalizedCurrent) || normalizedCurrent.includes(normalizedLegacy) || normalizedLegacy.includes(normalizedCurrent);
+            });
+
+            if (matches[0]) {
+              result.set(legacyName, matches[0]);
+            }
+          }
+
+          return result;
+        },
         async insertBulletin(payload) {
           const id = draft.bulletins.length + 1;
           draft.bulletins.push({ ...payload, id });
@@ -138,6 +166,48 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
 
   return { persistence, state };
 };
+
+describe('resolveCurrentSubjectMetadataByName', () => {
+  const createApprovedSubjectResolverTx = (approvedRows: Array<{ id: number; name: string; schoolId: number | null }>) => ({
+    select: () => ({
+      from: () => ({
+        innerJoin: () => ({
+          where: (predicate: unknown) => {
+            void predicate;
+            return approvedRows;
+          },
+        }),
+      }),
+    }),
+  }) as any;
+
+  it('n utilise que les matières approuvées pour l école et rejette les matières proches non approuvées', async () => {
+    const approvedRows = [
+      { id: 77, name: 'Mathématiques', schoolId: 14 },
+      { id: 88, name: 'Français', schoolId: 14 },
+    ];
+    const tx = createApprovedSubjectResolverTx(approvedRows);
+
+    const result = await (await import('./bulletinSnapshotService')).resolveCurrentSubjectMetadataByName(tx, 14, ['Mathématiques', 'Mathématique Fine']);
+
+    expect(result.get('Mathématiques')).toEqual({ id: 77, name: 'Mathématiques' });
+    expect(result.has('Mathématique Fine')).toBe(false);
+  });
+
+  it('ne choisit pas une matière non approuvée même si son nom est proche de l ancien libellé', async () => {
+    const approvedRows = [
+      { id: 77, name: 'Mathématiques', schoolId: 14 },
+      { id: 88, name: 'Français', schoolId: 14 },
+    ];
+    const tx = createApprovedSubjectResolverTx(approvedRows);
+
+    const result = await (await import('./bulletinSnapshotService')).resolveCurrentSubjectMetadataByName(tx, 14, ['Mathématique', 'Mathématique Fine']);
+
+    expect(result.get('Mathématique')).toEqual({ id: 77, name: 'Mathématiques' });
+    expect(result.has('Mathématique Fine')).toBe(false);
+    expect(Array.from(result.values())).not.toContainEqual({ id: 91, name: 'Mathématique Fine' });
+  });
+});
 
 describe('generateBulletinSnapshot', () => {
   const baseState: FakeState = {
@@ -217,6 +287,45 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.length).toBeGreaterThan(0);
     expect(state.bulletinLines.every((line) => line.bulletinId === 1)).toBe(true);
     expect(state.bulletinLines.map((line) => line.subjectName).sort()).toEqual(['Français', 'Math']);
+  });
+
+  it('utilise le nom courant de la matière quand une évaluation garde un ancien libellé', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      evaluations: [
+        { id: 101, classId: 10, teacherId: 1, termId: 7, subject: 'Phylosophie', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 101, evaluationId: 101, studentId: 1, score: '15' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+    const subjectLine = state.bulletinLines.find((line) => line.subjectId === 6) ?? state.bulletinLines[0];
+
+    expect(result.linesCount).toBe(1);
+    expect(subjectLine?.subjectName).toBe('Phylosophiees');
+    expect(subjectLine?.subjectId).toBe(6);
+  });
+
+  it('conserve le coefficient publié même si l évaluation garde un ancien libellé de matière', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      evaluations: [
+        { id: 201, classId: 10, teacherId: 1, termId: 7, subject: 'Phylosophie', title: 'Composition finale', type: 'composition', coefficient: 2, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 201, evaluationId: 201, studentId: 1, score: '15' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+    const subjectLine = state.bulletinLines.find((line) => line.subjectId === 6) ?? state.bulletinLines[0];
+
+    expect(result.linesCount).toBe(1);
+    expect(subjectLine?.subjectName).toBe('Phylosophiees');
+    expect(subjectLine?.subjectId).toBe(6);
+    expect(subjectLine?.coefficient).toBe(2);
   });
 
   it('ne prend en compte que les évaluations validées et ignore les notes absentes', async () => {

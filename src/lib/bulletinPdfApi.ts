@@ -107,6 +107,40 @@ export const getSubjectDisplayName = (
   return normalizedCode || normalizedName;
 };
 
+export const resolvePdfSubjectDisplayInfo = (
+  line: Pick<BulletinPdfLine, 'subjectId' | 'subjectName' | 'subjectCode'>,
+  subjectRecordsById: Map<number, { name: string | null; code: string | null }> = new Map(),
+  subjectRecordsByName: Map<string, { id: number; name: string | null; code: string | null; schoolId: number | null }> = new Map(),
+): { subjectName: string; subjectCode: string | null } => {
+  const fallbackName = String(line.subjectName ?? '').trim() || '-';
+  const fallbackCode = line.subjectCode ?? null;
+  const subjectId = Number(line.subjectId);
+
+  if (Number.isInteger(subjectId) && subjectId > 0) {
+    const currentSubject = subjectRecordsById.get(subjectId);
+    if (currentSubject) {
+      const currentName = String(currentSubject.name ?? '').trim();
+      const currentCode = String(currentSubject.code ?? '').trim() || fallbackCode;
+      return {
+        subjectName: currentName || fallbackName,
+        subjectCode: currentCode || null,
+      };
+    }
+  }
+
+  const exactCurrentMatch = fallbackName ? subjectRecordsByName.get(fallbackName) : undefined;
+  if (exactCurrentMatch) {
+    const currentName = String(exactCurrentMatch.name ?? '').trim();
+    const currentCode = String(exactCurrentMatch.code ?? '').trim() || fallbackCode;
+    return {
+      subjectName: currentName || fallbackName,
+      subjectCode: currentCode || null,
+    };
+  }
+
+  return { subjectName: fallbackName, subjectCode: fallbackCode };
+};
+
 export interface PreviousPeriodSummary {
   termId: number;
   label: string;
@@ -812,10 +846,32 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .orderBy(bulletinLines.id);
 
     const subjectIds = lines.map((line) => line.subjectId).filter((id): id is number => id != null);
-    const subjectCodesById = subjectIds.length > 0
-      ? new Map((await db.select({ id: subjects.id, code: subjects.code }).from(subjects).where(inArray(subjects.id, subjectIds)))
-        .map((row) => [row.id, row.code] as const))
-      : new Map<number, string | null>();
+    const subjectRecordsById = subjectIds.length > 0
+      ? new Map((await db.select({ id: subjects.id, name: subjects.name, code: subjects.code }).from(subjects).where(inArray(subjects.id, subjectIds)))
+        .map((row) => [row.id, { name: row.name, code: row.code }] as const))
+      : new Map<number, { name: string | null; code: string | null }>();
+
+    const subjectNames = Array.from(new Set(lines.map((line) => String(line.subjectName ?? '').trim()).filter(Boolean)));
+    const subjectRecordsByName = subjectNames.length > 0
+      ? new Map<string, { id: number; name: string | null; code: string | null; schoolId: number | null }>(
+        (await db.select({
+          id: subjects.id,
+          name: subjects.name,
+          code: subjects.code,
+          schoolId: subjects.schoolId,
+        })
+          .from(subjects)
+          .where(and(
+            inArray(subjects.name, subjectNames),
+            header.studentSchoolId == null
+              ? sql`${subjects.schoolId} IS NULL`
+              : or(sql`${subjects.schoolId} IS NULL`, eq(subjects.schoolId, header.studentSchoolId)),
+          )))
+          .filter((row) => !!row.name)
+          .sort((a, b) => Number(a.schoolId === header.studentSchoolId) - Number(b.schoolId === header.studentSchoolId))
+          .map((row) => [String(row.name ?? '').trim(), { id: row.id, name: row.name, code: row.code, schoolId: row.schoolId }] as const),
+      )
+      : new Map<string, { id: number; name: string | null; code: string | null; schoolId: number | null }>();
 
     const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
 
@@ -823,21 +879,24 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       ? new Map<string, SubjectTypeMetadata>()
       : await loadSubjectTypeNames(db, header.studentSchoolId);
 
-    let resolvedLines = lines.map((line) => ({
-      id: line.id,
-      bulletinId: line.bulletinId,
-      subjectId: line.subjectId,
-      subjectName: line.subjectName,
-      subjectCode: line.subjectId == null ? null : subjectCodesById.get(line.subjectId) ?? null,
-      subjectTypeId: subjectTypeNames.get(line.subjectName)?.subjectTypeId ?? null,
-      subjectTypeName: subjectTypeNames.get(line.subjectName)?.subjectTypeName ?? null,
-      sortOrder: subjectTypeNames.get(line.subjectName)?.sortOrder ?? null,
-      coefficient: line.coefficient,
-      average: parseNumber(line.average),
-      teacherName: subjectTeacherMap.get(line.subjectName) ?? null,
-      teacherComment: line.teacherComment,
-      rank: line.rank,
-    }));
+    let resolvedLines = lines.map((line) => {
+      const resolvedSubject = resolvePdfSubjectDisplayInfo(line, subjectRecordsById, subjectRecordsByName);
+      return {
+        id: line.id,
+        bulletinId: line.bulletinId,
+        subjectId: line.subjectId,
+        subjectName: resolvedSubject.subjectName,
+        subjectCode: resolvedSubject.subjectCode,
+        subjectTypeId: subjectTypeNames.get(resolvedSubject.subjectName)?.subjectTypeId ?? null,
+        subjectTypeName: subjectTypeNames.get(resolvedSubject.subjectName)?.subjectTypeName ?? null,
+        sortOrder: subjectTypeNames.get(resolvedSubject.subjectName)?.sortOrder ?? null,
+        coefficient: line.coefficient,
+        average: parseNumber(line.average),
+        teacherName: subjectTeacherMap.get(resolvedSubject.subjectName) ?? subjectTeacherMap.get(line.subjectName) ?? null,
+        teacherComment: line.teacherComment,
+        rank: line.rank,
+      };
+    });
 
     const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.termStartDate ?? null, header.termEndDate ?? null);
     resolvedLines = resolvedLines.map((line) => {

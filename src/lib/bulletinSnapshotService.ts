@@ -9,6 +9,7 @@ import {
   classes,
   evaluations,
   grades,
+  schoolSubjects,
   schoolTerms,
   students,
   subjects,
@@ -126,6 +127,8 @@ export interface BulletinSnapshotContext {
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
   getTeacherNames(teacherIds: number[]): Promise<Map<number, string>>;
   getSubjectTypes(schoolId: number): Promise<Map<string, SubjectTypeMetadata>>;
+  getSubjectIdsByName(schoolId: number, subjectNames: string[]): Promise<Map<string, number>>;
+  getSubjectMetadataByName(schoolId: number, subjectNames: string[]): Promise<Map<string, { id: number; name: string }>>;
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
@@ -138,12 +141,12 @@ export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<M
       COALESCE(st_school.name, st_local.name) AS "subjectTypeName",
       COALESCE(st_school.sort_order, st_local.sort_order, 0) AS "sortOrder"
     FROM subjects s
-    LEFT JOIN school_subjects ss
+    INNER JOIN school_subjects ss
       ON ss.subject_id = s.id
-      AND ss.school_id = ${schoolId}
+     AND ss.school_id = ${schoolId}
+     AND ss.status = 'approved'
     LEFT JOIN subject_types st_school ON st_school.id = ss.subject_type_id
     LEFT JOIN subject_types st_local ON st_local.id = s.subject_type_id
-    WHERE s.school_id = ${schoolId} OR s.school_id IS NULL
     ORDER BY s.id
   `);
   const rows = (result?.rows ?? result) as Array<{ subjectName: string; subjectTypeId?: number | null; subjectTypeName?: string | null; sortOrder?: number | null }>;
@@ -155,6 +158,100 @@ export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<M
       subjectTypeName: row.subjectTypeName as string,
       sortOrder: Number(row.sortOrder ?? 0),
     }]));
+};
+
+const normalizeSubjectResolutionKey = (value: string | null | undefined): string => String(value ?? '')
+  .trim()
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const buildSubjectResolutionKeys = (value: string | null | undefined): string[] => {
+  const normalized = normalizeSubjectResolutionKey(value);
+  if (!normalized) return [];
+
+  const keys = new Set<string>([normalized]);
+  const words = normalized.split(' ');
+  const lastWord = words.at(-1);
+  if (!lastWord) return [...keys];
+
+  const singularWithoutS = lastWord.replace(/s$/, '');
+  const singularWithoutEs = lastWord.replace(/es$/, '');
+
+  if (singularWithoutS && singularWithoutS !== lastWord) {
+    keys.add([...words.slice(0, -1), singularWithoutS].join(' '));
+  }
+  if (singularWithoutEs && singularWithoutEs !== lastWord) {
+    keys.add([...words.slice(0, -1), singularWithoutEs].join(' '));
+  }
+
+  return [...keys];
+};
+
+export const resolveCurrentSubjectMetadataByName = async (
+  tx: any,
+  schoolId: number,
+  subjectNames: string[],
+): Promise<Map<string, { id: number; name: string }>> => {
+  const uniqueNames = Array.from(new Set(subjectNames
+    .map((name) => String(name ?? '').trim())
+    .filter(Boolean)));
+  if (uniqueNames.length === 0) return new Map();
+
+  const approvedRows = await tx.select({
+    id: subjects.id,
+    name: subjects.name,
+    schoolId: subjects.schoolId,
+  })
+    .from(subjects)
+    .innerJoin(schoolSubjects, eq(schoolSubjects.subjectId, subjects.id))
+    .where(and(
+      eq(schoolSubjects.schoolId, schoolId),
+      eq(schoolSubjects.status, 'approved'),
+    ));
+
+  const approvedByKey = new Map<string, { id: number; name: string }[]>();
+  for (const row of approvedRows) {
+    const currentName = String(row.name ?? '').trim();
+    if (!currentName) continue;
+    for (const key of buildSubjectResolutionKeys(currentName)) {
+      const existing = approvedByKey.get(key) ?? [];
+      existing.push({ id: row.id, name: currentName });
+      approvedByKey.set(key, existing);
+    }
+  }
+
+  const result = new Map<string, { id: number; name: string }>();
+
+  for (const legacyName of uniqueNames) {
+    if (result.has(legacyName)) continue;
+
+    const candidateMatches = Array.from(new Set(
+      buildSubjectResolutionKeys(legacyName)
+        .flatMap((key) => approvedByKey.get(key) ?? [])
+        .map((match) => `${match.id}:${match.name}`),
+    )).map((key) => {
+      const [id, ...nameParts] = key.split(':');
+      return { id: Number(id), name: nameParts.join(':') };
+    });
+
+    if (candidateMatches.length !== 1) continue;
+    result.set(legacyName, candidateMatches[0]);
+  }
+
+  return result;
+};
+
+export const resolveCurrentSubjectIdsByName = async (
+  tx: any,
+  schoolId: number,
+  subjectNames: string[],
+): Promise<Map<string, number>> => {
+  const metadata = await resolveCurrentSubjectMetadataByName(tx, schoolId, subjectNames);
+  return new Map(Array.from(metadata.entries()).map(([legacyName, subject]) => [legacyName, subject.id]));
 };
 
 export interface BulletinSnapshotPersistence {
@@ -402,6 +499,8 @@ const computeSubjectLines = (
   termEvaluations: BulletinEvaluationLike[],
   teacherNameMap: Map<number, string> = new Map(),
   subjectTypeNames: Map<string, SubjectTypeMetadata> = new Map(),
+  subjectIdsByName: Map<string, number> = new Map(),
+  subjectMetadataByName: Map<string, { id: number; name: string }> = new Map(),
 ): BulletinLineSnapshotInput[] => {
   const bySubject = new Map<string, {
     coefficient: number;
@@ -444,7 +543,11 @@ const computeSubjectLines = (
     bySubject.set(snapshot.subject, current);
   }
 
-  return Array.from(bySubject.entries()).map(([subjectName, agg]) => {
+  return Array.from(bySubject.entries()).map(([legacySubjectName, agg]) => {
+    const subjectMetadata = subjectMetadataByName.get(legacySubjectName);
+    const subjectName = subjectMetadata?.name ?? legacySubjectName;
+    const subjectId = subjectMetadata?.id ?? subjectIdsByName.get(legacySubjectName) ?? null;
+
     const interrogationAvg = calculateTypeWeightedAverage(
       agg.byType.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })),
     );
@@ -458,7 +561,7 @@ const computeSubjectLines = (
     const subjectAverage = calculateFinalSubjectAverage(classAverage, compositionAvg);
     const subjectCoefficient = resolveSubjectCoefficientFromPublishedComposition(
       termEvaluations,
-      subjectName,
+      legacySubjectName,
       classId,
       termId,
     );
@@ -469,10 +572,10 @@ const computeSubjectLines = (
     const teacherName = resolveSubjectTeacherName(agg.teacherIds, teacherNameMap);
 
     // Calculate subject rank
-    const rank = computeSubjectRank(subjectName, targetStudentId, classStudents, termEvaluations, allGrades);
+    const rank = computeSubjectRank(legacySubjectName, targetStudentId, classStudents, termEvaluations, allGrades);
 
     return {
-      subjectId: null,
+      subjectId: subjectId,
       subjectName,
       coefficient: subjectCoefficient,
       average: subjectAverage,
@@ -711,6 +814,12 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
         async getSubjectTypes(schoolId) {
           return loadSubjectTypeNames(tx, schoolId);
         },
+        async getSubjectIdsByName(schoolId, subjectNames) {
+          return resolveCurrentSubjectIdsByName(tx, schoolId, subjectNames);
+        },
+        async getSubjectMetadataByName(schoolId, subjectNames) {
+          return resolveCurrentSubjectMetadataByName(tx, schoolId, subjectNames);
+        },
         async insertBulletin(payload) {
           const [inserted] = await tx.insert(bulletins).values({
             studentId: payload.studentId,
@@ -888,6 +997,12 @@ export const registerBulletinGenerateRoute = (
               async getSubjectTypes(schoolId) {
                 return loadSubjectTypeNames(tx, schoolId);
               },
+              async getSubjectIdsByName(schoolId, subjectNames) {
+                return resolveCurrentSubjectIdsByName(tx, schoolId, subjectNames);
+              },
+              async getSubjectMetadataByName(schoolId, subjectNames) {
+                return resolveCurrentSubjectMetadataByName(tx, schoolId, subjectNames);
+              },
               async insertBulletin(payload) {
                 const [inserted] = await tx.insert(bulletins).values({
                   studentId: payload.studentId,
@@ -959,6 +1074,8 @@ export const generateBulletinSnapshot = async (
     const classStudents = await ctx.getClassStudents(student.classId);
     const termEvaluations = await ctx.getClassTermEvaluations(student.classId, termId);
     const subjectTypeNames = await ctx.getSubjectTypes(student.schoolId);
+    const subjectMetadataByName = await ctx.getSubjectMetadataByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
+    const subjectIdsByName = await ctx.getSubjectIdsByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
 
     const evaluationIds = termEvaluations.map((evaluation) => evaluation.id);
     const classStudentIds = classStudents.map((row) => row.id);
@@ -989,6 +1106,8 @@ export const generateBulletinSnapshot = async (
       termEvaluations,
       teacherNameMap,
       subjectTypeNames,
+      subjectIdsByName,
+      subjectMetadataByName,
     );
     const subjectGroups = groupBulletinLinesBySubjectType(lines);
     const subjectAverage = calculateWeightedSubjectAverage(lines);
