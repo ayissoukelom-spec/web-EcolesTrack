@@ -771,9 +771,14 @@ export async function seedDatabaseIfEmpty() {
     }).returning();
 
     // 8. Create Evaluations
+    const [mathSubject] = await db.select({ id: subjects.id })
+      .from(subjects)
+      .where(eq(subjects.name, 'Mathématiques'))
+      .limit(1);
     const evalMath1 = await db.insert(evaluations).values({
       classId: terminaleS1.id,
       teacherId: mathTeacher.id,
+      subjectId: mathSubject?.id,
       subject: 'Mathématiques',
       title: 'Algèbre - Fonctions et Limites',
       coefficient: 2,
@@ -784,6 +789,7 @@ export async function seedDatabaseIfEmpty() {
     const evalMath2 = await db.insert(evaluations).values({
       classId: terminaleS1.id,
       teacherId: mathTeacher.id,
+      subjectId: mathSubject?.id,
       subject: 'Mathématiques',
       title: 'Géométrie analytique - Vecteurs de l\'espace',
       coefficient: 1,

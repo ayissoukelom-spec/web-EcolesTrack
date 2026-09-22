@@ -625,7 +625,7 @@ export default function App() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => {
     try {
       const created = await apiFetch('/api/admin/users', {
         method: 'POST',
@@ -715,7 +715,7 @@ export default function App() {
     }
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; subject: string; subjectId?: number; type: string; coefficient: number; maxScore: number; date: string }) => {
     try {
       console.debug('Creating evaluation', data);
       await apiFetch('/api/evaluations', {

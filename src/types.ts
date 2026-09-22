@@ -198,6 +198,7 @@ export interface Evaluation {
   teacherName?: string;
   termId?: number | null;
   termName?: string;
+  subjectId?: number | null;
   subject: string;
   title: string;
   type?: string; // 'interrogation', 'devoir', 'composition'

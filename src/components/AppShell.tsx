@@ -273,7 +273,7 @@ export default function AppShell() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => {
     const created = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
     return created;
@@ -328,7 +328,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddEvaluation = async (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => {
+  const handleAddEvaluation = async (data: { classId: number; subject: string; subjectId?: number; type: string; coefficient: number; maxScore: number; date: string }) => {
     await apiFetch('/api/evaluations', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
   };

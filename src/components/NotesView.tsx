@@ -42,7 +42,7 @@ interface NotesViewProps {
   teacherSpecializations?: string[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
-  onAddEvaluation: (data: { classId: number; subject: string; type: string; coefficient: number; maxScore: number; date: string }) => void;
+  onAddEvaluation: (data: { classId: number; subject: string; subjectId?: number; type: string; coefficient: number; maxScore: number; date: string }) => void;
   onAddGrade: (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => void;
   onUpdateGrade?: (data: { gradeId: number; evaluationId: number; studentId: number; score: string; remarks: string }) => void | Promise<void>;
   onAddClass?: (data: { name: string; schoolId?: number | null }) => void;
@@ -119,6 +119,7 @@ export default function NotesView({
 
   const [newEvalClassId, setNewEvalClassId] = useState('');
   const [newEvalSubject, setNewEvalSubject] = useState('');
+  const [newEvalSubjectId, setNewEvalSubjectId] = useState<number | null>(null);
   const [newEvalType, setNewEvalType] = useState(''); // 'interrogation', 'devoir', 'composition'
   const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
@@ -177,6 +178,7 @@ export default function NotesView({
     onAddEvaluation({
       classId: parseInt(newEvalClassId),
       subject: newEvalSubject,
+      ...(newEvalSubjectId != null ? { subjectId: newEvalSubjectId } : {}),
       type: newEvalType,
       coefficient: Number(newEvalCoefficient),
       maxScore: Number(newEvalMaxScore),
@@ -185,6 +187,7 @@ export default function NotesView({
     setIsNewEvalFormOpen(false);
     setNewEvalClassId('');
     setNewEvalSubject('');
+    setNewEvalSubjectId(null);
     setNewEvalType('');
     setNewEvalCoefficient(1);
     setNewEvalMaxScore(20);
@@ -648,6 +651,7 @@ export default function NotesView({
                 setNewEvalClassId(String(initialClasses[0].id));
               }
               setNewEvalSubject('');
+              setNewEvalSubjectId(null);
               setNewEvalType('');
               setNewEvalCoefficient(1);
               setNewEvalMaxScore(20);
@@ -766,7 +770,9 @@ export default function NotesView({
                 value={newEvalSubject}
                 onChange={(e) => {
                   console.debug('NotesView: subject changed to', e.target.value);
+                  const selectedSubject = approvedSubjectsList.find((subject) => subject.name === e.target.value);
                   setNewEvalSubject(e.target.value);
+                  setNewEvalSubjectId(selectedSubject?.id ?? null);
                 }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
               >

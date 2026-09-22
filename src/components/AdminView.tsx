@@ -387,7 +387,7 @@ interface AdminViewProps {
   onBatchCreateStudents?: (records: any[]) => void;
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
-  onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
+  onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
   onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => Promise<any>;
   onSetPassword?: (userId: number, password: string) => Promise<any>;
   onDeleteUser?: (id: number) => Promise<void>;
@@ -4000,6 +4000,11 @@ export default function AdminView({
                           : (newUserForm.role === 'teacher' || newUserForm.role === 'surveillant') && userRole === 'school_admin'
                             ? (currentSchoolId ?? getSimulatedSchoolId() ?? undefined)
                             : undefined;
+                        const resolvedSubjectIds = newUserForm.role === 'teacher' && Array.isArray(newUserForm.specialization)
+                          ? approvedTeacherSpecializations
+                              .filter((subject) => newUserForm.specialization.includes(subject.id))
+                              .map((subject) => Number(subject.id))
+                          : [];
                         const resolvedSpecialization = newUserForm.role === 'teacher'
                           ? approvedTeacherSpecializations
                               .filter((subject) => Array.isArray(newUserForm.specialization) && newUserForm.specialization.includes(subject.id))
@@ -4015,6 +4020,7 @@ export default function AdminView({
                           academicYearId: newUserForm.role === 'school_admin' ? parseInt(newUserForm.academicYearId) : undefined,
                           phone: newUserForm.role !== 'parent' ? `+228${phoneDigits}` : newUserForm.phone,
                           specialization: resolvedSpecialization,
+                          subjectIds: resolvedSubjectIds,
                           gender: newUserForm.gender || undefined,
                           password: newUserPassword,
                           classIds: newUserForm.role === 'teacher' ? newUserAssignedClassIds : undefined,

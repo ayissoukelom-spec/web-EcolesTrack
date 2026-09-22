@@ -395,7 +395,7 @@ describe('POST /api/evaluations security', () => {
       .set('x-simulated-uid', 'teacher-sim')
       .set('x-simulated-user-id', '4')
       .set('x-simulated-school-id', '10')
-      .send({ classId: '100', subject: 'Sciences Physique', title: 'Devoir scientifique', type: 'devoir', date: '2026-09-02', coefficient: 1, maxScore: 20 });
+      .send({ classId: '100', subjectId: 5, subject: 'Sciences Physique', title: 'Devoir scientifique', type: 'devoir', date: '2026-09-02', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('id');

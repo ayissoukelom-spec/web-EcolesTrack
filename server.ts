@@ -45,6 +45,7 @@ import {
   localAuths,
   tokenBlacklist,
   teachers,
+  teacherSubjects,
   parents,
   classes,
   classTeachers,
@@ -428,6 +429,38 @@ function normalizeSpecialization(value: any) {
     return value.trim();
   }
   return '';
+}
+
+async function syncTeacherSubjectAssignments(teacherId: number, schoolId: number, subjectIds: unknown) {
+  if (!Array.isArray(subjectIds)) return null;
+  const requestedIds = Array.from(new Set(subjectIds
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0)));
+  const approvedSubjects = requestedIds.length === 0
+    ? []
+    : await db.select({ id: subjects.id, name: subjects.name })
+      .from(subjects)
+      .leftJoin(schoolSubjects, and(
+        eq(schoolSubjects.subjectId, subjects.id),
+        eq(schoolSubjects.schoolId, schoolId),
+        eq(schoolSubjects.status, 'approved'),
+      ))
+      .where(and(
+        inArray(subjects.id, requestedIds),
+        or(
+          eq(subjects.schoolId, schoolId),
+          eq(schoolSubjects.subjectId, subjects.id),
+        ),
+      ));
+
+  await db.delete(teacherSubjects).where(eq(teacherSubjects.teacherId, teacherId));
+  if (approvedSubjects.length > 0) {
+    await db.insert(teacherSubjects).values(approvedSubjects.map((subject) => ({
+      teacherId,
+      subjectId: subject.id,
+    })));
+  }
+  return approvedSubjects;
 }
 
 async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
@@ -1291,7 +1324,7 @@ export async function createApp() {
       });
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
-      const { uid, email, name, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, gender, password, classIds, studentId } = req.body;
+      const { uid, email, name, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, password, classIds, studentId } = req.body;
       if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
       const normalizedEmail = normalizeEmail(email);
       if (!normalizedEmail || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
@@ -1449,6 +1482,10 @@ export async function createApp() {
           .returning();
         teacherProfile = teacherResult[0];
 
+        if (Array.isArray(subjectIds) && resolvedSchoolId != null) {
+          await syncTeacherSubjectAssignments(teacherProfile.id, resolvedSchoolId, subjectIds);
+        }
+
         if (resolvedSchoolId != null) {
           await db.insert(userSchools).values({
             userId: createdUser.id,
@@ -1564,7 +1601,7 @@ export async function createApp() {
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const id = parseInt(req.params.id);
-      const { email, name, role, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, gender, classIds, studentId } = req.body;
+      const { email, name, role, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, studentId } = req.body;
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
       if (!email || !name || !role) return res.status(400).json({ error: 'Missing required fields: email, name, role' });
@@ -1711,6 +1748,13 @@ export async function createApp() {
             } catch (e: any) {
               console.warn('DIAG: failed to sync users.schoolId when inserting teacher profile', { userId: id, parsedSchoolId, err: e?.message || e });
             }
+          }
+        }
+
+        if (teacherProfileId != null && Array.isArray(subjectIds)) {
+          const assignmentSchoolId = parsedSchoolId ?? targetUser.schoolId;
+          if (assignmentSchoolId != null) {
+            await syncTeacherSubjectAssignments(teacherProfileId, assignmentSchoolId, subjectIds);
           }
         }
 
@@ -4939,6 +4983,19 @@ export async function createApp() {
       const teachersList = Array.from(teacherById.values());
       const teacherIds = teachersList.map((teacher) => teacher.id).filter(Boolean);
 
+      const subjectAssignments = teacherIds.length > 0
+        ? await db.select({ teacherId: teacherSubjects.teacherId, subjectId: teacherSubjects.subjectId, subjectName: subjects.name })
+          .from(teacherSubjects)
+          .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+          .where(inArray(teacherSubjects.teacherId, teacherIds))
+        : [];
+      const subjectAssignmentMap = new Map<number, Array<{ id: number; name: string }>>();
+      for (const assignment of subjectAssignments) {
+        const existing = subjectAssignmentMap.get(assignment.teacherId) ?? [];
+        existing.push({ id: assignment.subjectId, name: assignment.subjectName });
+        subjectAssignmentMap.set(assignment.teacherId, existing);
+      }
+
       let assignments: Array<{ teacherId: number; classId: number }> = [];
       if (teacherIds.length > 0) {
         assignments = await db
@@ -4957,6 +5014,11 @@ export async function createApp() {
       const list = teachersList.map((teacher) => ({
         ...teacher,
         teacherId: teacher.id,
+        subjectIds: (subjectAssignmentMap.get(teacher.id) ?? []).map((subject) => subject.id),
+        assignedSubjects: subjectAssignmentMap.get(teacher.id) ?? [],
+        ...(subjectAssignmentMap.has(teacher.id)
+          ? { specialization: (subjectAssignmentMap.get(teacher.id) ?? []).map((subject) => subject.name).join(', ') }
+          : {}),
         classIds: assignmentMap.get(teacher.id) || [],
       }));
       if (actor.role === 'teacher') {
@@ -4971,7 +5033,7 @@ export async function createApp() {
   app.post('/api/teachers', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const { name, email, phone, specialization, schoolId, classIds, gender } = req.body;
+      const { name, email, phone, specialization, subjectIds, schoolId, classIds, gender } = req.body;
       const requestedClassIds = Array.isArray(classIds) ? classIds : [];
       const normalizedEmail = normalizeEmail(email);
       if (!name || !normalizedEmail || !schoolId) return res.status(400).json({ error: `Missing compulsory details. Received name=${name}, email=${email}, schoolId=${schoolId}` });
@@ -5020,6 +5082,9 @@ export async function createApp() {
       }).returning();
 
       const createdTeacher = teacherResult[0];
+      if (Array.isArray(subjectIds)) {
+        await syncTeacherSubjectAssignments(createdTeacher.id, parsedSchoolId, subjectIds);
+      }
       if (parsedSchoolId != null) {
         try {
           await db.insert(userSchools).values({
@@ -8180,7 +8245,7 @@ export async function createApp() {
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, termId, subject, type, coefficient, maxScore, date } = req.body;
+      const { classId, teacherId, termId, subject, subjectId, type, coefficient, maxScore, date } = req.body;
       if (!classId || !subject || !type || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
@@ -8279,6 +8344,10 @@ export async function createApp() {
       }
 
       const normalizedSubject = String(subject).trim();
+      const requestedSubjectId = subjectId == null || subjectId === '' ? null : Number(subjectId);
+      if (requestedSubjectId != null && (!Number.isInteger(requestedSubjectId) || requestedSubjectId <= 0)) {
+        return res.status(400).json({ error: 'Invalid subjectId' });
+      }
       let approvalSchoolId = classRecord.schoolId;
       let resolvedSchoolClassId: number | null = null;
       let resolvedSchoolClassSchoolId: number | null = null;
@@ -8343,13 +8412,27 @@ export async function createApp() {
         approvalSource,
       });
 
-      const approvedSubject = await resolveApprovedSubjectForSchool(normalizedSubject, approvalSchoolId);
+      let approvedSubject: { subjectId: number; subjectName: string } | null = null;
+      if (requestedSubjectId != null) {
+        const [subjectRecord] = await db.select({ id: subjects.id, name: subjects.name })
+          .from(subjects)
+          .where(eq(subjects.id, requestedSubjectId));
+        if (subjectRecord) {
+          const resolvedById = await resolveApprovedSubjectForSchool(subjectRecord.name, approvalSchoolId);
+          if (resolvedById?.subjectId === requestedSubjectId) {
+            approvedSubject = resolvedById;
+          }
+        }
+      } else {
+        approvedSubject = await resolveApprovedSubjectForSchool(normalizedSubject, approvalSchoolId);
+      }
 
       if (!approvedSubject) {
         return res.status(400).json({ error: 'La matière n’est pas approuvée pour cette école' });
       }
 
       const resolvedSubjectId = approvedSubject.subjectId;
+      const resolvedSubjectName = approvedSubject.subjectName;
 
       // Generate sequence number for this (termId, classId) combination
       // Using a transaction to avoid race conditions
@@ -8390,7 +8473,7 @@ export async function createApp() {
         teacherId: resolvedTeacherId,
         termId: resolvedTermId,
         subjectId: resolvedSubjectId,
-        subject: normalizedSubject,
+        subject: resolvedSubjectName,
         title: generatedName,
         type: normalizedType,
         sequenceNumber,

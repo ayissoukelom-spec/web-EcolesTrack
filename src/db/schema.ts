@@ -163,6 +163,15 @@ export const teachers = pgTable('teachers', {
   specialization: text('specialization'),
 });
 
+export const teacherSubjects = pgTable('teacher_subjects', {
+  id: serial('id').primaryKey(),
+  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  teacherSubjectUniqueIdx: uniqueIndex('teacher_subjects_teacher_id_subject_id_idx').on(table.teacherId, table.subjectId),
+}));
+
 // 5. Parents
 export const parents = pgTable('parents', {
   id: serial('id').primaryKey(),
@@ -587,6 +596,12 @@ export const subjectsRelations = relations(subjects, ({ one, many }) => ({
     references: [subjectTypes.id],
   }),
   schoolSubjects: many(schoolSubjects),
+  teacherSubjects: many(teacherSubjects),
+}));
+
+export const teacherSubjectsRelations = relations(teacherSubjects, ({ one }) => ({
+  teacher: one(teachers, { fields: [teacherSubjects.teacherId], references: [teachers.id] }),
+  subject: one(subjects, { fields: [teacherSubjects.subjectId], references: [subjects.id] }),
 }));
 
 export const schoolSubjectsRelations = relations(schoolSubjects, ({ one }) => ({
