@@ -21,6 +21,7 @@ import {
   normalizeStudentGender,
   resolvePromotionDecision,
   formatPromotionDecisionForPdf,
+  getSubjectDisplayName,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -360,6 +361,19 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout.lines.every((line) => font.widthOfTextAtSize(line, 7.5) <= 70)).toBe(true);
     expect(layout.lines.some((line) => line.length > 0)).toBe(true);
     expect(layout.lines.join(' ')).toContain('Sciences');
+  });
+
+  it('choisit le nom ou le code matière selon la largeur disponible', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const shortName = 'Mathématiques';
+    const shortWidth = font.widthOfTextAtSize(shortName, 7.5);
+    expect(getSubjectDisplayName(shortName, 'MATH', shortWidth, font, 7.5)).toBe(shortName);
+    expect(getSubjectDisplayName(shortName, 'MATH', shortWidth - 0.1, font, 7.5)).toBe('MATH');
+    expect(getSubjectDisplayName('Sciences de la Vie et de la Terre', 'SVT', 70, font, 7.5)).toBe('SVT');
+    expect(getSubjectDisplayName('Education Physique et Sportive', 'EPS', 70, font, 7.5)).toBe('EPS');
+    expect(getSubjectDisplayName('Histoire-Geographie', 'HG', 50, font, 7.5)).toBe('HG');
+    expect(getSubjectDisplayName('Sciences de la Vie et de la Terre', null, 70, font, 7.5)).toBe('Sciences de la Vie et de la Terre');
   });
 
   it('conserve le texte complet d une matière longue quand il tient sur deux lignes avec une taille réduite', async () => {

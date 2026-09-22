@@ -1,5 +1,5 @@
 import type express from 'express';
-import { and, desc, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -22,6 +22,7 @@ import {
   schoolClasses,
   schools,
   schoolTerms,
+  subjects,
   students,
   lateArrivals,
   studentAcademicYearStatuses,
@@ -78,6 +79,7 @@ export interface BulletinPdfLine {
   bulletinId: number;
   subjectId: number | null;
   subjectName: string;
+  subjectCode?: string | null;
   subjectTypeId?: number | null;
   subjectTypeName?: string | null;
   sortOrder?: number | null;
@@ -91,6 +93,19 @@ export interface BulletinPdfLine {
   teacherComment: string | null;
   rank: number | null;
 }
+
+export const getSubjectDisplayName = (
+  subjectName: string,
+  subjectCode: string | null | undefined,
+  availableWidth: number,
+  font: any,
+  size: number,
+): string => {
+  const normalizedName = subjectName.trim() || '-';
+  if (font.widthOfTextAtSize(normalizedName, size) <= availableWidth) return normalizedName;
+  const normalizedCode = subjectCode?.trim();
+  return normalizedCode || normalizedName;
+};
 
 export interface PreviousPeriodSummary {
   termId: number;
@@ -796,6 +811,12 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .where(eq(bulletinLines.bulletinId, bulletinId))
       .orderBy(bulletinLines.id);
 
+    const subjectIds = lines.map((line) => line.subjectId).filter((id): id is number => id != null);
+    const subjectCodesById = subjectIds.length > 0
+      ? new Map((await db.select({ id: subjects.id, code: subjects.code }).from(subjects).where(inArray(subjects.id, subjectIds)))
+        .map((row) => [row.id, row.code] as const))
+      : new Map<number, string | null>();
+
     const subjectTeacherMap = await buildSubjectTeacherNameMap(header.classId, header.termId);
 
     const subjectTypeNames = header.studentSchoolId == null
@@ -807,6 +828,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletinId: line.bulletinId,
       subjectId: line.subjectId,
       subjectName: line.subjectName,
+      subjectCode: line.subjectId == null ? null : subjectCodesById.get(line.subjectId) ?? null,
       subjectTypeId: subjectTypeNames.get(line.subjectName)?.subjectTypeId ?? null,
       subjectTypeName: subjectTypeNames.get(line.subjectName)?.subjectTypeName ?? null,
       sortOrder: subjectTypeNames.get(line.subjectName)?.sortOrder ?? null,
@@ -866,9 +888,33 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       resolvedLines = buildFallbackLinesFromGrades(gradeRows).map((line) => ({
         ...line,
         bulletinId: bulletinId,
+        subjectCode: null,
         subjectTypeId: subjectTypeNames.get(line.subjectName)?.subjectTypeId ?? null,
         subjectTypeName: subjectTypeNames.get(line.subjectName)?.subjectTypeName ?? null,
         sortOrder: subjectTypeNames.get(line.subjectName)?.sortOrder ?? null,
+      }));
+    }
+
+    const subjectNamesWithoutCode = resolvedLines
+      .filter((line) => !line.subjectCode)
+      .map((line) => line.subjectName);
+    if (subjectNamesWithoutCode.length > 0) {
+      const subjectCodeRows = await db
+        .select({ name: subjects.name, code: subjects.code })
+        .from(subjects)
+        .where(and(
+          inArray(subjects.name, Array.from(new Set(subjectNamesWithoutCode))),
+          header.studentSchoolId == null
+            ? sql`${subjects.schoolId} IS NULL`
+            : or(sql`${subjects.schoolId} IS NULL`, eq(subjects.schoolId, header.studentSchoolId)),
+        ));
+      const subjectCodesByName = new Map<string, string | null>();
+      for (const row of subjectCodeRows) {
+        if (!subjectCodesByName.has(row.name) || row.code) subjectCodesByName.set(row.name, row.code);
+      }
+      resolvedLines = resolvedLines.map((line) => ({
+        ...line,
+        subjectCode: line.subjectCode ?? subjectCodesByName.get(line.subjectName) ?? null,
       }));
     }
 
@@ -2028,7 +2074,8 @@ export const createBulletinPdfDocument = async (
     if (entry.groupTitle || entry.subtotal) return height + totalRowHeight;
     const line = entry.line;
     if (!line) return height;
-    const subjectLines = wrapText(line.subjectName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
+    const subjectDisplayName = getSubjectDisplayName(line.subjectName, line.subjectCode, columns[0].width - 14, fontRegular, 7.5);
+    const subjectLines = wrapText(subjectDisplayName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
     return height + rowHeight;
@@ -2081,7 +2128,8 @@ export const createBulletinPdfDocument = async (
 
     const line = entry.line;
     if (!line) continue;
-    const subjectLayout = fitSubjectCellLayout(line.subjectName, columns[0].width - 14, 7.5, 5.5, fontBold);
+    const subjectDisplayName = getSubjectDisplayName(line.subjectName, line.subjectCode, columns[0].width - 14, fontBold, 7.5);
+    const subjectLayout = fitSubjectCellLayout(subjectDisplayName, columns[0].width - 14, 7.5, 5.5, fontBold);
     const subjectLines = subjectLayout.lines;
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontBold, 7.5).slice(0, 2);
     const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
@@ -2102,7 +2150,7 @@ export const createBulletinPdfDocument = async (
       const subjectCellWidth = columns[0].width;
       const subjectCellLeft = x;
       const subjectTextMaxWidth = subjectCellWidth - 14;
-      const subjectLayout = fitSubjectCellLayout(line.subjectName, subjectTextMaxWidth, 7.5, 5.5, fontBold);
+      const subjectLayout = fitSubjectCellLayout(subjectDisplayName, subjectTextMaxWidth, 7.5, 5.5, fontBold);
       const subjectTextLines = subjectLayout.lines;
       const subjectFontSize = subjectLayout.size + 2;
       const lineHeight = Math.max(8.5, subjectFontSize + 1.2);
