@@ -181,4 +181,61 @@ describe('SubjectsView', () => {
       });
     });
   });
+
+  it.each([
+    'SVT',
+    'SCIENCES_EXPERIMENTALES',
+    'CODE_MATIERE_TRES_LONGUE_123456789',
+  ])('transmet le code matière complet sans limite artificielle: %s', async (code) => {
+    const onAddSubject = vi.fn();
+
+    render(
+      <SubjectsView
+        subjectsList={[]}
+        userRole="super_admin"
+        onAddSubject={onAddSubject}
+        onUpdateSubject={vi.fn()}
+        onDeleteSubject={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: /ajouter une matière/i })[0]);
+    fireEvent.change(screen.getByLabelText(/nom de la matière/i), { target: { value: 'Sciences expérimentales' } });
+    fireEvent.change(screen.getByLabelText(/code/i), { target: { value: code } });
+    fireEvent.click(screen.getByRole('button', { name: /créer/i }));
+
+    await waitFor(() => {
+      expect(onAddSubject).toHaveBeenCalledWith({
+        name: 'Sciences expérimentales',
+        code,
+        schoolId: undefined,
+      });
+    });
+  });
+
+  it('transmet un code vide selon le comportement métier actuel', async () => {
+    const onAddSubject = vi.fn();
+
+    render(
+      <SubjectsView
+        subjectsList={[]}
+        userRole="super_admin"
+        onAddSubject={onAddSubject}
+        onUpdateSubject={vi.fn()}
+        onDeleteSubject={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: /ajouter une matière/i })[0]);
+    fireEvent.change(screen.getByLabelText(/nom de la matière/i), { target: { value: 'Mathématiques' } });
+    fireEvent.click(screen.getByRole('button', { name: /créer/i }));
+
+    await waitFor(() => {
+      expect(onAddSubject).toHaveBeenCalledWith({
+        name: 'Mathématiques',
+        code: undefined,
+        schoolId: undefined,
+      });
+    });
+  });
 });
