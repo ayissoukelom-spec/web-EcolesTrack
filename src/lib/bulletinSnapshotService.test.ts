@@ -80,6 +80,12 @@ const cloneState = (state: FakeState): FakeState => ({
 
 const createFakePersistence = (initial: FakeState, failOnInsertLines = false): { persistence: BulletinSnapshotPersistence; state: FakeState } => {
   const state = cloneState(initial);
+  const subjectCatalog = [
+    { id: 6, name: 'Phylosophiees' },
+    { id: 7, name: 'Math' },
+    { id: 8, name: 'Français' },
+    { id: 9, name: 'Histoire' },
+  ];
 
   const persistence: BulletinSnapshotPersistence = {
     transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {
@@ -122,12 +128,7 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
 
           for (const legacyName of uniqueNames) {
             const normalizedLegacy = legacyName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
-            const matches = [
-              { id: 6, name: 'Phylosophiees' },
-              { id: 7, name: 'Math' },
-              { id: 8, name: 'Français' },
-              { id: 9, name: 'Histoire' },
-            ].filter((subject) => {
+            const matches = subjectCatalog.filter((subject) => {
               const normalizedCurrent = subject.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
               return normalizedCurrent === normalizedLegacy || normalizedCurrent.startsWith(normalizedLegacy) || normalizedLegacy.startsWith(normalizedCurrent) || normalizedCurrent.includes(normalizedLegacy) || normalizedLegacy.includes(normalizedCurrent);
             });
@@ -138,6 +139,14 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
           }
 
           return result;
+        },
+        async getSubjectMetadataByIds(subjectIds) {
+          const uniqueIds = Array.from(new Set(subjectIds.filter((subjectId): subjectId is number => Number.isInteger(subjectId) && subjectId > 0)));
+          if (uniqueIds.length === 0) return new Map();
+
+          return new Map(subjectCatalog
+            .filter((subject) => uniqueIds.includes(subject.id))
+            .map((subject) => [subject.id, { id: subject.id, name: subject.name }]));
         },
         async insertBulletin(payload) {
           const id = draft.bulletins.length + 1;
@@ -317,6 +326,14 @@ describe('generateBulletinSnapshot', () => {
           async getSubjectTypes() { return new Map(); },
           async getSubjectIdsByName() { return new Map(); },
           async getSubjectMetadataByName() { return subjectMetadata; },
+          async getSubjectMetadataByIds(subjectIds) {
+            const ids = Array.from(new Set(subjectIds.filter((subjectId): subjectId is number => Number.isInteger(subjectId) && subjectId > 0)));
+            if (ids.length === 0) return new Map();
+
+            return new Map(Array.from(subjectMetadata.values())
+              .filter((subject) => ids.includes(subject.id))
+              .map((subject) => [subject.id, { id: subject.id, name: subject.name }]));
+          },
           async insertBulletin(payload) { return { id: 1 }; },
           async insertBulletinLines(_bulletinId, lines) { lines.forEach((line) => bulletinLines.push(line)); },
         };

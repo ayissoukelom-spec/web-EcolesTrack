@@ -502,6 +502,7 @@ const computeSubjectLines = (
   subjectTypeNames: Map<string, SubjectTypeMetadata> = new Map(),
   subjectIdsByName: Map<string, number> = new Map(),
   subjectMetadataByName: Map<string, { id: number; name: string }> = new Map(),
+  subjectMetadataById: Map<number, { id: number; name: string }> = new Map(),
 ): BulletinLineSnapshotInput[] => {
   const bySubject = new Map<string, {
     coefficient: number;
