@@ -1102,8 +1102,7 @@ export default function AdminView({
   });
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId) : undefined;
-  const defaultSchoolId = currentSchoolId || schoolsList[0]?.id || 1;
-  const defaultAcademicYearId = yearsList.find((y) => y.isActive)?.id || yearsList[0]?.id || 1;
+  const defaultAcademicYearId = yearsList.find((y) => y.isActive)?.id || yearsList[0]?.id;
   const getYearsForSchool = (schoolId?: string | number | undefined) => {
     const sid = schoolId !== undefined && schoolId !== '' ? Number(schoolId) : (userRole === 'school_admin' ? currentSchoolId : undefined);
     return yearsList.filter((y) => y.schoolId == null || (sid !== undefined && sid !== null && y.schoolId === sid));
