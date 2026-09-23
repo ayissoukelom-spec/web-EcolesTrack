@@ -29,6 +29,7 @@ import {
 import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import { getTeacherAvailableSubjects, isSubjectAssignedToTeacher } from '../lib/subjectMatching';
+import { sortStudentsAlphabetically } from '../lib/studentOrdering';
 
 interface NotesViewProps {
   evaluationsList: Evaluation[];
@@ -370,10 +371,10 @@ export default function NotesView({
   };
 
   // Check if a student is eligible for an evaluation (was enrolled before or at the evaluation timestamp)
-  const currentClassStudents = studentsList.filter((st) => {
+  const currentClassStudents = sortStudentsAlphabetically(studentsList.filter((st) => {
     if (!selectedClassId) return true;
     return String(st.classId) === selectedClassId;
-  });
+  }));
 
   // Get eligible students for currently selected evaluation
   const getEligibleStudentsForEvaluation = (evaluation: Evaluation | null): Student[] =>

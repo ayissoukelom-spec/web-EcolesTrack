@@ -202,6 +202,31 @@ test('teacher subject picker excludes approved subjects that are not assigned by
   expect(screen.queryByRole('option', { name: 'Science' })).toBeNull();
 });
 
+test('sorts students in the grade-entry table by family name and first name', () => {
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      studentsList={[
+        { id: 203, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Koffi', lastName: 'Zoumana' },
+        { id: 204, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Paul', lastName: 'Bernard' },
+        { id: 205, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Aïcha', lastName: 'Amani' },
+      ]}
+      teacherClassIds={[85]}
+      teacherSpecializations={['Math']}
+      initialSelectedEvalId={1}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const rows = Array.from(document.querySelectorAll('#grades-table-container tbody tr'));
+  expect(rows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining('Amani Aïcha'),
+    expect.stringContaining('Bernard Paul'),
+    expect.stringContaining('Zoumana Koffi'),
+  ]);
+});
+
 test('teacher sees an approved global class evaluation but not an unapproved global class evaluation', () => {
   const evaluations = [
     { id: 5, classId: 85, teacherId: 99, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
