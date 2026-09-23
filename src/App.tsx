@@ -1286,6 +1286,7 @@ export default function App() {
                     onSchoolFilterChange={setSuperAdminSchoolFilterId}
                     teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
                     teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
+                    teacherSubjectIds={currentRole === 'teacher' ? (currentTeacherProfile?.subjectIds || []) : []}
                     approvedSubjectsList={approvedSubjectsList}
                     teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
                     onAddEvaluation={handleAddEvaluation}

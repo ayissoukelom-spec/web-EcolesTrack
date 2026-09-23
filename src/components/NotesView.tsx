@@ -40,6 +40,7 @@ interface NotesViewProps {
   onSchoolFilterChange?: (schoolId: number | null) => void;
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
+  teacherSubjectIds?: number[];
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
   onAddEvaluation: (data: { classId: number; subject: string; subjectId?: number; type: string; coefficient: number; maxScore: number; date: string }) => void;
@@ -62,6 +63,7 @@ export default function NotesView({
   onSchoolFilterChange,
   teacherClassIds = [],
   teacherSpecializations = [],
+  teacherSubjectIds = [],
   approvedSubjectsList = [],
   teacherId,
   onAddEvaluation,
@@ -94,7 +96,9 @@ export default function NotesView({
     return teacherClassIds.includes(Number(evaluation.classId))
       && evaluationClass != null
       && isClassVisibleToSchool(evaluationClass, currentSchoolId)
-      && isSubjectAssignedToTeacher(evaluation.subject, teacherSpecializations);
+      && (evaluation.subjectId != null
+        ? teacherSubjectIds.includes(evaluation.subjectId)
+        : isSubjectAssignedToTeacher(evaluation.subject, teacherSpecializations));
   };
 
   const approvedEvaluations = userRole === 'teacher'

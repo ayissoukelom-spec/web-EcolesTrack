@@ -463,6 +463,14 @@ async function syncTeacherSubjectAssignments(teacherId: number, schoolId: number
   return approvedSubjects;
 }
 
+async function getTeacherSubjectIdSet(teacherId: number): Promise<Set<number>> {
+  const rows = await db
+    .select({ subjectId: teacherSubjects.subjectId })
+    .from(teacherSubjects)
+    .where(eq(teacherSubjects.teacherId, teacherId));
+  return new Set(rows.map((row) => row.subjectId));
+}
+
 async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
   if (targetSchoolId == null) return false;
   const [cls] = await db.select().from(classes).where(eq(classes.id, classId));
@@ -8098,7 +8106,8 @@ export async function createApp() {
           teacherId: evaluations.teacherId,
           teacherName: users.name,
           termId: evaluations.termId,
-          subject: evaluations.subject,
+          subjectId: evaluations.subjectId,
+          subject: sql<string>`COALESCE(${subjects.name}, ${evaluations.subject})`,
           type: evaluations.type,
           title: evaluations.title,
           coefficient: evaluations.coefficient,
@@ -8111,7 +8120,8 @@ export async function createApp() {
         .from(evaluations)
         .innerJoin(classes, eq(evaluations.classId, classes.id))
         .innerJoin(teachers, eq(evaluations.teacherId, teachers.id))
-        .innerJoin(users, eq(teachers.userId, users.id));
+        .innerJoin(users, eq(teachers.userId, users.id))
+        .leftJoin(subjects, eq(evaluations.subjectId, subjects.id));
 
       if (actor.role !== 'super_admin') {
         // School admin, teacher, and others see only their school's evaluations.
@@ -8168,10 +8178,13 @@ export async function createApp() {
             ? getTeacherClassIdSet(assignmentRows, actor.schoolId)
             : [],
         );
+        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfile.id);
 
         list = list.filter((evaluation) =>
           teacherClassIds.has(evaluation.classId)
-          && isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization)
+          && (evaluation.subjectId != null
+            ? teacherSubjectIds.has(evaluation.subjectId)
+            : isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization))
         );
       }
       res.json(list);
@@ -8527,7 +8540,7 @@ export async function createApp() {
   hour: "2-digit",
   minute: "2-digit",
 });
-const evaluationMessage = `Un nouveau devoir en ${subject} a été programmé pour la classe de ${classRecord.name} sur le ${formattedDate}. Encouragez votre enfant à se préparer !`;
+const evaluationMessage = `Un nouveau devoir en ${resolvedSubjectName} a été programmé pour la classe de ${classRecord.name} sur le ${formattedDate}. Encouragez votre enfant à se préparer !`;
 console.log("📌 MESSAGE DEVOIR GENERE :", evaluationMessage);
 
 if (uniqueParentIds.length > 0) {
@@ -8556,7 +8569,7 @@ if (uniqueParentIds.length > 0) {
       metadata: {
         target: "homework",
         evaluationId: createdEvaluation.id,
-        subject,
+        subject: resolvedSubjectName,
         title: generatedName,
         classId,
       },
@@ -8650,7 +8663,8 @@ if (uniqueParentIds.length > 0) {
           evaluationId: grades.evaluationId,
           evaluationTitle: evaluations.title,
           evaluationDate: evaluations.date,
-          subject: evaluations.subject,
+          subjectId: evaluations.subjectId,
+          subject: sql<string>`COALESCE(${subjects.name}, ${evaluations.subject})`,
           studentId: grades.studentId,
           studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           score: grades.score,
@@ -8663,7 +8677,8 @@ if (uniqueParentIds.length > 0) {
         })
         .from(grades)
         .innerJoin(students, eq(grades.studentId, students.id))
-        .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id));
+        .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
+        .leftJoin(subjects, eq(evaluations.subjectId, subjects.id));
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
@@ -8808,7 +8823,11 @@ if (uniqueParentIds.length > 0) {
           assignment.schoolId === actor.schoolId
           || (assignment.schoolId == null && await isApprovedClassForSchool(evaluation.classId, actor.schoolId))
         );
-        if (!sameSchoolClass || !isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization)) {
+        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfile.id);
+        const subjectAssigned = evaluation.subjectId != null
+          ? teacherSubjectIds.has(evaluation.subjectId)
+          : isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization);
+        if (!sameSchoolClass || !subjectAssigned) {
           return res.status(403).json({ error: 'Vous n’êtes pas autorisé à noter cette évaluation' });
         }
         if (student.classId !== evaluation.classId) {

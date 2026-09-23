@@ -472,6 +472,7 @@ export default function AppShell() {
           onSchoolFilterChange={setSuperAdminSchoolFilterId}
           teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
           teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
+          teacherSubjectIds={currentRole === 'teacher' ? (currentTeacherProfile?.subjectIds || []) : []}
           teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
           onAddEvaluation={handleAddEvaluation}
           onAddGrade={handleAddGrade}

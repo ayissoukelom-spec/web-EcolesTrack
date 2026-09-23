@@ -159,6 +159,30 @@ test('teacher sees a same-class same-subject evaluation even when teacherId diff
   expect(within(evalSelect).queryByText(/Other subject/)).toBeNull();
 });
 
+test('teacher filters evaluations by subjectId when the stored subject name is stale', () => {
+  const evaluations = [
+    { id: 7, classId: 85, teacherId: 99, subjectId: 10, subject: 'Ancien libellé', title: 'Current subject by ID', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 8, classId: 85, teacherId: 99, subjectId: 11, subject: 'Math', title: 'Other subject by ID', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+  ];
+
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      evaluationsList={evaluations}
+      teacherId={10}
+      teacherClassIds={[85]}
+      teacherSpecializations={['Math']}
+      teacherSubjectIds={[10]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const evalSelect = findEvaluationSelect();
+  within(evalSelect).getByText(/Current subject by ID/);
+  expect(within(evalSelect).queryByText(/Other subject by ID/)).toBeNull();
+});
+
 test('teacher sees an approved global class evaluation but not an unapproved global class evaluation', () => {
   const evaluations = [
     { id: 5, classId: 85, teacherId: 99, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
