@@ -6,6 +6,7 @@ import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import PortalCustomDropdown from './CustomDropdown';
 import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
+import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
 
 export default function AdminModal(props: any) {
   const {
@@ -114,11 +115,11 @@ export default function AdminModal(props: any) {
   const filteredStudentClasses = studentClassesSource.filter((c: any) => !currentStudentSchoolId || isClassVisibleToSchool(c, currentStudentSchoolId));
   // Get all teachers assigned to the selected class (via classIds, not just teacherId)
   const teachersInSelectedClass = selectedStudentClass
-    ? teachersList.filter((t: any) => (t.classIds || []).includes(selectedStudentClass.id))
+    ? sortTeachersAlphabetically(teachersList.filter((t: any) => (t.classIds || []).includes(selectedStudentClass.id)))
     : [];
   const filteredTeachers = selectedStudentClassId && teachersInSelectedClass.length > 0
     ? teachersInSelectedClass
-    : teachersList.filter((t: any) => !currentStudentSchoolId || t.schoolId === currentStudentSchoolId);
+    : sortTeachersAlphabetically(teachersList.filter((t: any) => !currentStudentSchoolId || t.schoolId === currentStudentSchoolId));
   const disableStudentSchoolSelection = userRole === 'school_admin' && currentSchoolId != null;
   const selectedStudentParentId = studentForm.parentId ? parseInt(studentForm.parentId, 10) : undefined;
   const [localParents, setLocalParents] = useState<Parent[] | null>(null);
@@ -1199,7 +1200,7 @@ export default function AdminModal(props: any) {
                         const selectedClassId = e.target.value;
                         const selectedClass = studentClassesSource.find((c: any) => String(c.id) === selectedClassId);
                         const classTeachers = selectedClass
-                          ? teachersList.filter((t: any) => (t.classIds || []).includes(selectedClass.id))
+                          ? sortTeachersAlphabetically(teachersList.filter((t: any) => (t.classIds || []).includes(selectedClass.id)))
                           : [];
                         const autoSelectedTeacherIds = classTeachers.map((t: any) => t.id);
                         const previousClassId = studentForm.classId;

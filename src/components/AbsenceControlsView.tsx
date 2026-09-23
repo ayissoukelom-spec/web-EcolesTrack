@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { getTeacherDisplayName, type Class, type Teacher } from '../types.ts';
+import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
 
 interface AbsenceControlsViewProps {
   absenceControlsList: any[];
@@ -40,6 +41,7 @@ export default function AbsenceControlsView({
       && (!filterTeacherId || String(control['teacher' + 'Id'] || '') === filterTeacherId)
       && (!filterClassId || String(control.classId || '') === filterClassId)
     ));
+  const sortedTeachers = sortTeachersAlphabetically(teachersList);
 
   const resetFilters = () => {
     setFilterDate('');
@@ -86,7 +88,7 @@ export default function AbsenceControlsView({
             className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs font-normal text-slate-700"
           >
             <option value="">Tous les enseignants</option>
-            {teachersList.map((teacher) => (
+            {sortedTeachers.map((teacher) => (
               <option key={teacher.id} value={String(teacher.id)}>{getTeacherDisplayName(teacher)}</option>
             ))}
           </select>

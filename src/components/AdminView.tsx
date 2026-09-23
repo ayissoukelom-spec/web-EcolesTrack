@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 
 import { sortClasses } from '../lib/classOrdering';
+import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
 import { getClassGroupsVisibleToSchool, isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { normalizeClassProgressionCode } from '../lib/classProgression.ts';
 import { STUDENT_ACADEMIC_YEAR_STATUSES, isStudentAcademicYearStatus } from '../lib/studentAcademicYearStatus.ts';
@@ -981,12 +982,12 @@ export default function AdminView({
     return parent.schoolId === schoolId;
   };
 
-  const filteredTeachersList = teachersList.filter((t) => {
+  const filteredTeachersList = sortTeachersAlphabetically(teachersList.filter((t) => {
     const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || teacherBelongsToSchool(t, superAdminSchoolFilterId);
     const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
     const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && (t.classIds || []).some((classId) => currentTeacherClassIds.includes(classId)));
     return matchesSchool && matchesClassFilter && matchesTeacherScope && filterBySearch(t.name);
-  });
+  }));
 
   const currentParent = (() => {
     if (userRole !== 'parent') return undefined;
@@ -2878,10 +2879,10 @@ export default function AdminView({
                     {(() => {
                       const selectedClassId = editStudentForm.classId ? parseInt(editStudentForm.classId) : null;
                       if (!selectedClassId) return <p className="text-xs text-slate-500 italic">Veuillez d'abord sélectionner une classe</p>;
-                      const classTeachers = teachersList.filter((t) => 
+                      const classTeachers = sortTeachersAlphabetically(teachersList.filter((t) =>
                         (!editStudentForm.schoolId || t.schoolId === parseInt(editStudentForm.schoolId)) &&
                         (t.classIds || []).includes(selectedClassId)
-                      );
+                      ));
                       if (classTeachers.length === 0) return <p className="text-xs text-slate-500 italic">Aucun enseignant assigné à cette classe</p>;
                       return (
                         <>
@@ -5266,8 +5267,8 @@ export default function AdminView({
                                     className="px-3 py-1 border border-emerald-200 rounded bg-white text-xs sm:text-sm"
                                   >
                                     <option value="">—Aucun—</option>
-                                    {teachersList
-                                      .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter))
+                                    {sortTeachersAlphabetically(teachersList
+                                      .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter)))
                                       .map((teacher) => (
                                         <option key={teacher.id} value={String(teacher.id)}>
                                           {getTeacherDisplayName(teacher)}
