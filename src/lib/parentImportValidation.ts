@@ -1,5 +1,6 @@
 export const PARENT_IMPORT_HEADERS = [
-  'name',
+  'Nom',
+  'Prénoms',
   'email',
   'phonePrefix',
   'phone',
@@ -25,8 +26,12 @@ export function validateParentImportRow(
   row: Record<string, unknown>,
   options: ParentImportValidationOptions = {},
 ): ParentImportValidationResult {
+  const source = { ...row };
+  if (source.Nom !== undefined && source.lastName === undefined) source.lastName = source.Nom;
+  if (source['Prénoms'] !== undefined && source.firstName === undefined) source.firstName = source['Prénoms'];
+
   const normalized = Object.fromEntries(
-    Object.entries(row).map(([key, value]) => [key, String(value ?? '').trim()]),
+    Object.entries(source).map(([key, value]) => [key, String(value ?? '').trim()]),
   );
   const errors: string[] = [];
   const email = normalized.email?.toLowerCase() || '';
@@ -41,7 +46,12 @@ export function validateParentImportRow(
   normalized.parentType = parentType;
   normalized.gender = parentType === 'pere' ? 'M' : parentType === 'mere' ? 'F' : gender;
 
-  if (!normalized.name) errors.push('name est obligatoire');
+  if (normalized.lastName && normalized.firstName) {
+    normalized.name = `${normalized.lastName} ${normalized.firstName}`.trim();
+  } else if (!normalized.name) {
+    errors.push('name est obligatoire');
+    errors.push('Nom et Prénoms sont obligatoires');
+  }
   if (!email) errors.push('email est obligatoire');
   else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('email doit être valide');
   if (!phone) errors.push('phone est obligatoire');

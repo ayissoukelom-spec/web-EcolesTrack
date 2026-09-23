@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Evaluation, Grade, Student, Class, UserRole } from '../types.ts';
+import { Evaluation, Grade, Student, Class, UserRole, getTeacherDisplayName } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { BookOpen } from 'lucide-react';
@@ -90,7 +90,7 @@ export default function ArchiveView({
         ['École', school?.name ?? ''],
         ['Classe', evaluationClass?.name ?? ''],
         ['Matière', ev.subject],
-        ['Enseignant', ev.teacherName ?? ''],
+        ['Enseignant', getTeacherDisplayName({ name: ev.teacherName })],
         ['Intitulé du devoir', ev.title],
         ['Date', normalizeDateOnly(ev.date || ev.createdAt) ?? ''],
       ],

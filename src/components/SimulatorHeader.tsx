@@ -1094,7 +1094,7 @@ export default function SimulatorHeader({
                     return;
                   }
                   setIsCreating(true);
-                  const name = `${createFirstName} ${createLastName}`.trim() || `${createRole} Test`;
+                  const name = `${createLastName} ${createFirstName}`.trim() || `${createRole} Test`;
                   const subjectIds = createRole === 'teacher'
                     ? Array.from(new Set(
                         approvedSubjectsList
@@ -1110,6 +1110,12 @@ export default function SimulatorHeader({
                     phone: `${createPhonePrefix}${createPhone}`,
                     specialization: createRole === 'teacher' ? createSpecializations : undefined,
                     subjectIds: createRole === 'teacher' ? subjectIds : undefined,
+                    ...(createRole === 'teacher'
+                      ? {
+                          lastName: createLastName.trim(),
+                          firstNames: createFirstName.trim(),
+                        }
+                      : {}),
                   };
                   if (createRole === 'school_admin') {
                     payload.schoolId = parseInt(createSchoolId);

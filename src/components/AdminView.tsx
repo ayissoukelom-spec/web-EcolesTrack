@@ -3,7 +3,7 @@ import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult,
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType, EducationLevel } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType, EducationLevel, getTeacherDisplayName } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -616,7 +616,7 @@ export default function AdminView({
   const [examInitialResultStatuses, setExamInitialResultStatuses] = useState<Record<number, ExamResultStatus | ''>>({});
   const [examNotice, setExamNotice] = useState<string | null>(null);
   const [examSaving, setExamSaving] = useState(false);
-  const [teacherForm, setTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
+  const [teacherForm, setTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
   const [studentError, setStudentError] = useState<string | null>(null);
@@ -624,7 +624,7 @@ export default function AdminView({
   const [newParentMode, setNewParentMode] = useState(false);
   const [newParentForm, setNewParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
   const [newTeacherMode, setNewTeacherMode] = useState(false);
-  const [newTeacherForm, setNewTeacherForm] = useState({ name: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
+  const [newTeacherForm, setNewTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
   const [editTeacherClasses, setEditTeacherClasses] = useState<Class[] | null>(null);
   const [editTeacherClassesLoading, setEditTeacherClassesLoading] = useState(false);
@@ -1328,8 +1328,10 @@ export default function AdminView({
       ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
       : parseInt(newTeacherForm.schoolId);
 
-    if (!newTeacherForm.name.trim() || !newTeacherForm.email.trim() || !newTeacherForm.phone.trim()) {
-      setStudentError('L’enseignant doit contenir un nom, un email et un téléphone.');
+    const trimmedLastName = String(newTeacherForm.lastName ?? '').trim();
+    const trimmedFirstNames = String(newTeacherForm.firstNames ?? '').trim();
+    if (!trimmedLastName || !trimmedFirstNames || !newTeacherForm.email.trim() || !newTeacherForm.phone.trim()) {
+      setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
       return;
     }
     if (userRole !== 'school_admin' && !newTeacherForm.schoolId) {
@@ -1355,7 +1357,9 @@ export default function AdminView({
     try {
       const subjectIds = getSubjectIdsByNames(newTeacherForm.specializations, subjectsList);
       const createdTeacher = await onAddTeacher({
-        name: newTeacherForm.name,
+        lastName: trimmedLastName,
+        firstNames: trimmedFirstNames,
+        name: `${trimmedLastName} ${trimmedFirstNames}`.trim(),
         email: newTeacherForm.email,
         phone: `+228 ${phoneDigits}`,
         specialization: newTeacherForm.specializations,
@@ -1372,7 +1376,7 @@ export default function AdminView({
 
       setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
       setNewTeacherMode(false);
-      setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
     } catch (err: any) {
       setStudentError(err?.message || 'Erreur lors de la création de l’enseignant.');
       console.error('Failed to save new teacher:', err);
@@ -1541,8 +1545,10 @@ export default function AdminView({
       const teacherSchoolId = userRole === 'school_admin'
         ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
         : parseInt(teacherForm.schoolId);
-      if (!teacherForm.name.trim() || !teacherForm.email.trim() || !teacherForm.phone.trim()) {
-        setStudentError('L’enseignant doit contenir un nom, un email et un téléphone.');
+      const trimmedLastName = String(teacherForm.lastName ?? '').trim();
+      const trimmedFirstNames = String(teacherForm.firstNames ?? '').trim();
+      if (!trimmedLastName || !trimmedFirstNames || !teacherForm.email.trim() || !teacherForm.phone.trim()) {
+        setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
         return;
       }
       if (userRole !== 'school_admin' && !teacherForm.schoolId) {
@@ -1563,7 +1569,9 @@ export default function AdminView({
         return;
       }
       await onAddTeacher({
-        name: teacherForm.name,
+        lastName: trimmedLastName,
+        firstNames: trimmedFirstNames,
+        name: `${trimmedLastName} ${trimmedFirstNames}`.trim(),
         email: teacherForm.email,
         phone: `+228 ${phoneDigits}`,
         specialization: teacherForm.specializations,
@@ -1571,7 +1579,7 @@ export default function AdminView({
         classIds: teacherForm.assignedClassIds,
         gender: teacherForm.gender,
       });
-      setTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
+      setTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
     } else if (activeTab === 'parents') {
       if (!parentForm.parentType) {
         setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
@@ -1653,12 +1661,16 @@ export default function AdminView({
       }
 
       if (newTeacherMode) {
-        if (!newTeacherForm.name.trim() || !newTeacherForm.email.trim() || !newTeacherForm.phone.trim()) {
-          setStudentError('L’enseignant doit contenir un nom, un email et un téléphone.');
+        const trimmedLastName = String(newTeacherForm.lastName ?? '').trim();
+        const trimmedFirstNames = String(newTeacherForm.firstNames ?? '').trim();
+        if (!trimmedLastName || !trimmedFirstNames || !newTeacherForm.email.trim() || !newTeacherForm.phone.trim()) {
+          setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
           return;
         }
         const createdTeacher = await onAddTeacher({
-          name: newTeacherForm.name,
+          lastName: trimmedLastName,
+          firstNames: trimmedFirstNames,
+          name: `${trimmedLastName} ${trimmedFirstNames}`.trim(),
           email: newTeacherForm.email,
           phone: newTeacherForm.phone,
           specialization: newTeacherForm.specializations,
@@ -1673,7 +1685,7 @@ export default function AdminView({
         }
         setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
         setNewTeacherMode(false);
-        setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+        setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
         setStudentError(null);
         return;
       }
@@ -1708,7 +1720,7 @@ export default function AdminView({
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
       setNewTeacherMode(false);
-      setNewTeacherForm({ name: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
     }
     setIsModalOpen(false);
   };
@@ -4973,7 +4985,7 @@ export default function AdminView({
                   .map((cls) => (
                     <tr key={cls.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{cls.name}</td>
-                      <td className="px-3 sm:px-6 py-4 text-indigo-600 font-semibold">{cls.teacherName || 'Non assigné'}</td>
+                      <td className="px-3 sm:px-6 py-4 text-indigo-600 font-semibold">{cls.teacherName ? getTeacherDisplayName({ name: cls.teacherName }) : 'Non assigné'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{cls.yearName || 'N/A'}</td>
                       <td className="px-3 sm:px-6 py-4">
                         {cls.status ? (
@@ -5105,7 +5117,7 @@ export default function AdminView({
                   <tbody className="divide-y divide-slate-100">
                     {filteredTeachersList.map((tc) => (
                       <tr key={tc.id} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{tc.name}</td>
+                        <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{getTeacherDisplayName(tc)}</td>
                         <td className="px-3 sm:px-6 py-4 text-slate-500 font-mono text-xs">{tc.email}</td>
                         <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
                         <td className="px-3 sm:px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
@@ -5254,7 +5266,7 @@ export default function AdminView({
                                       .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter))
                                       .map((teacher) => (
                                         <option key={teacher.id} value={String(teacher.id)}>
-                                          {teacher.name}
+                                          {getTeacherDisplayName(teacher)}
                                         </option>
                                       ))}
                                   </select>

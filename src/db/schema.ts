@@ -100,6 +100,8 @@ export const users = pgTable('users', {
   uid: text('uid').notNull().unique(), // Firebase UID
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
+  lastName: text('last_name'),
+  firstNames: text('first_name'),
   role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'teacher' | 'parent'
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'set null' }),

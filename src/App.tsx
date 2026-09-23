@@ -557,11 +557,21 @@ export default function App() {
     }
   };
 
-  const handleAddTeacher = async (data: { name: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => {
+  const handleAddTeacher = async (data: { name?: string; lastName?: string; firstNames?: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => {
     try {
+      const payload = {
+        ...data,
+        ...(data.lastName || data.firstNames
+          ? {
+              lastName: String(data.lastName ?? '').trim(),
+              firstNames: String(data.firstNames ?? '').trim(),
+              name: `${String(data.lastName ?? '').trim()} ${String(data.firstNames ?? '').trim()}`.trim() || data.name || '',
+            }
+          : {}),
+      };
       const created = await apiFetch('/api/teachers', {
         method: 'POST',
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       await fetchAllData(false);
       return created;
@@ -625,11 +635,21 @@ export default function App() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => {
     try {
+      const payload = {
+        ...data,
+        ...(data.lastName || data.firstNames
+          ? {
+              lastName: String(data.lastName ?? '').trim(),
+              firstNames: String(data.firstNames ?? '').trim(),
+              name: `${String(data.lastName ?? '').trim()} ${String(data.firstNames ?? '').trim()}`.trim() || data.name || '',
+            }
+          : {}),
+      };
       const created = await apiFetch('/api/admin/users', {
         method: 'POST',
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
 
       fetchAllData();
@@ -643,11 +663,21 @@ export default function App() {
     }
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => {
     try {
+      const payload = {
+        ...data,
+        ...(data.lastName || data.firstNames
+          ? {
+              lastName: String(data.lastName ?? '').trim(),
+              firstNames: String(data.firstNames ?? '').trim(),
+              name: `${String(data.lastName ?? '').trim()} ${String(data.firstNames ?? '').trim()}`.trim() || data.name || '',
+            }
+          : {}),
+      };
       await apiFetch(`/api/admin/users/${id}`, {
         method: 'PUT',
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       fetchAllData();
     } catch (err: any) {

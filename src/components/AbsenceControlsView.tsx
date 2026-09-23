@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { Class, Teacher } from '../types.ts';
+import { getTeacherDisplayName, type Class, type Teacher } from '../types.ts';
 
 interface AbsenceControlsViewProps {
   absenceControlsList: any[];
@@ -87,7 +87,7 @@ export default function AbsenceControlsView({
           >
             <option value="">Tous les enseignants</option>
             {teachersList.map((teacher) => (
-              <option key={teacher.id} value={String(teacher.id)}>{teacher.name}</option>
+              <option key={teacher.id} value={String(teacher.id)}>{getTeacherDisplayName(teacher)}</option>
             ))}
           </select>
         </label>
@@ -137,7 +137,7 @@ export default function AbsenceControlsView({
                 <tr key={control.id} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-6 py-4 font-mono text-xs">{formatControlDate(control.date)}</td>
                   <td className="px-6 py-4 font-semibold text-slate-700">{klass?.name || `Classe ${control.classId}`}</td>
-                  <td className="px-6 py-4 font-semibold text-slate-700">{teacher?.name || `Enseignant ${teacherId}`}</td>
+                  <td className="px-6 py-4 font-semibold text-slate-700">{teacher ? getTeacherDisplayName(teacher) : `Enseignant ${teacherId}`}</td>
                   <td className="px-6 py-4">{subject?.name || 'Non précisée'}</td>
                   <td className="px-6 py-4">{formatPeriod(control.period)}</td>
                   <td className="px-6 py-4 font-mono text-xs">

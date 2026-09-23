@@ -86,6 +86,8 @@ export interface User {
   uid: string;
   email: string;
   name: string;
+  lastName?: string | null;
+  firstNames?: string | null;
   role: UserRole;
   schoolId?: number;
   schoolIds?: number[];
@@ -106,6 +108,8 @@ export interface Teacher {
   userId: number;
   uid?: string;
   name: string;
+  lastName?: string | null;
+  firstNames?: string | null;
   email: string;
   phone?: string;
   specialization?: string | string[];
@@ -113,6 +117,17 @@ export interface Teacher {
   schoolIds?: number[];
   classIds?: number[];
   gender?: string;
+}
+
+export function getTeacherDisplayName(value: {
+  name?: string | null;
+  lastName?: string | null;
+  firstNames?: string | null;
+}): string {
+  const lastName = String(value.lastName ?? '').trim();
+  const firstNames = String(value.firstNames ?? '').trim();
+  if (lastName && firstNames) return `${lastName} ${firstNames}`;
+  return String(value.name ?? '').trim();
 }
 
 export interface Parent {

@@ -436,7 +436,7 @@ export const resolveSubjectTeacherName = (
 export const buildSubjectTeacherNameMap = async (
   classId: number,
   termId: number,
-): Promise<Map<string, string>> => {
+): Promise<Map<string, { name: string; lastName: string | null; firstNames: string | null }>> => {
   const rows = await db
     .select({
       subject: evaluations.subject,
@@ -462,14 +462,20 @@ export const buildSubjectTeacherNameMap = async (
     .select({
       teacherId: teachers.id,
       name: users.name,
+      lastName: users.lastName,
+      firstNames: users.firstNames,
     })
     .from(teachers)
     .innerJoin(users, eq(teachers.userId, users.id))
     .where(inArray(teachers.id, teacherIds));
 
-  const teacherNameMap = new Map<number, string>();
+  const teacherNameMap = new Map<number, { name: string; lastName: string | null; firstNames: string | null }>();
   for (const row of teacherRows) {
-    teacherNameMap.set(row.teacherId, row.name || `Teacher ${row.teacherId}`);
+    teacherNameMap.set(row.teacherId, {
+      name: row.name || `Teacher ${row.teacherId}`,
+      lastName: row.lastName,
+      firstNames: row.firstNames,
+    });
   }
 
   const bySubject = new Map<string, number[]>();
@@ -480,7 +486,7 @@ export const buildSubjectTeacherNameMap = async (
     bySubject.set(row.subject, current);
   }
 
-  const result = new Map<string, string>();
+  const result = new Map<string, { name: string; lastName: string | null; firstNames: string | null }>();
   for (const [subject, teacherIdsForSubject] of bySubject.entries()) {
     const teacherName = resolveSubjectTeacherName(teacherIdsForSubject, teacherNameMap);
     if (teacherName) result.set(subject, teacherName);

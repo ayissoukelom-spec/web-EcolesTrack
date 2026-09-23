@@ -1,7 +1,7 @@
 import React from 'react';
 import { calculateFinalSubjectAverage } from '../../lib/bulletinService';
 import { Download, Eye } from 'lucide-react';
-import type { BulletinDetail as BulletinDetailType } from '../../types.ts';
+import { getTeacherDisplayName, type BulletinDetail as BulletinDetailType } from '../../types.ts';
 import { getGradeBadgeClass, getGradeBand } from '../../lib/gradeColor';
 
 interface BulletinDetailProps {
@@ -187,7 +187,7 @@ export default function BulletinDetail({
                       <td className="px-2 py-2 text-center">{line.coefficient}</td>
                       <td className="px-2 py-2 text-center font-semibold">{noteCoef}</td>
                       <td className="px-2 py-2 text-center">{line.rank ?? '-'}</td>
-                      <td className="px-2 py-2 text-center text-slate-500">{line.teacherName || '—'}</td>
+                      <td className="px-2 py-2 text-center text-slate-500">{line.teacherName ? getTeacherDisplayName({ name: line.teacherName }) : '—'}</td>
                       <td className="px-2 py-2 max-w-xs truncate">{line.teacherComment || '-'}</td>
                       <td className="px-2 py-2 text-center">—</td>
                     </tr>
@@ -205,7 +205,7 @@ export default function BulletinDetail({
             <div className="min-w-[220px] rounded-xl border-2 border-black p-3 text-center text-xs text-slate-700">
               <p className="font-semibold">Signature du titulaire de la classe</p>
               <div className="h-16" aria-hidden="true" />
-              <p className="font-semibold underline">{classTeacherName || 'Aucun'}</p>
+              <p className="font-semibold underline">{classTeacherName ? getTeacherDisplayName({ name: classTeacherName }) : 'Aucun'}</p>
             </div>
           </div>
         </div>

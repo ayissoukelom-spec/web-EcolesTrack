@@ -45,6 +45,7 @@ import {
   resolveSubjectCoefficientFromPublishedComposition,
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
+import { getTeacherDisplayName } from '../types.ts';
 import { inferPeriodTypeFromLegacyName } from './educationStructure';
 import studentAccess from './studentAccess';
 import { normalizeClassProgressionCode } from './classProgression';
@@ -86,6 +87,8 @@ export interface BulletinPdfLine {
   coefficient: number | null;
   average: number | null;
   teacherName?: string | null;
+  teacherLastName?: string | null;
+  teacherFirstNames?: string | null;
   interrogation?: number | null;
   devoir?: number | null;
   composition?: number | null;
@@ -158,6 +161,8 @@ export interface BulletinPdfData {
   classId: number;
   className: string;
   classTeacherName?: string | null;
+  classTeacherLastName?: string | null;
+  classTeacherFirstNames?: string | null;
   classStudentCount: number;
   schoolName: string;
   principalName?: string | null;
@@ -758,6 +763,8 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       studentSchoolId: students.schoolId,
       parentUserId: parents.userId,
       classTeacherName: users.name,
+      classTeacherLastName: users.lastName,
+      classTeacherFirstNames: users.firstNames,
     })
     .from(bulletins)
     .innerJoin(students, eq(bulletins.studentId, students.id))
@@ -892,7 +899,9 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         sortOrder: subjectTypeNames.get(resolvedSubject.subjectName)?.sortOrder ?? null,
         coefficient: line.coefficient,
         average: parseNumber(line.average),
-        teacherName: subjectTeacherMap.get(resolvedSubject.subjectName) ?? subjectTeacherMap.get(line.subjectName) ?? null,
+        teacherName: (subjectTeacherMap.get(resolvedSubject.subjectName) ?? subjectTeacherMap.get(line.subjectName))?.name ?? null,
+        teacherLastName: (subjectTeacherMap.get(resolvedSubject.subjectName) ?? subjectTeacherMap.get(line.subjectName))?.lastName ?? null,
+        teacherFirstNames: (subjectTeacherMap.get(resolvedSubject.subjectName) ?? subjectTeacherMap.get(line.subjectName))?.firstNames ?? null,
         teacherComment: line.teacherComment,
         rank: line.rank,
       };
@@ -1179,6 +1188,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       classId: header.classId,
       className: header.className,
       classTeacherName: header.classTeacherName,
+      classTeacherLastName: header.classTeacherLastName,
+      classTeacherFirstNames: header.classTeacherFirstNames,
       classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
       principalName: header.principalName,
@@ -2260,27 +2271,25 @@ export const createBulletinPdfDocument = async (
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
-    const teacherName = sanitizePdfText(line.teacherName || '-');
+    const teacherName = sanitizePdfText(getTeacherDisplayName({
+      name: line.teacherName,
+      lastName: line.teacherLastName,
+      firstNames: line.teacherFirstNames,
+    }) || '-');
     const teacherNameSize = 9.2;
     const teacherColumnWidth = columns[9].width;
     const teacherTextMaxWidth = teacherColumnWidth - 14;
     const teacherColumnCenterX = x + teacherColumnWidth / 2;
-    const nameParts = teacherName.split(/\s+/).filter(Boolean);
-    const familyName = nameParts[0] || '-';
-    const givenName = nameParts.slice(1).join(' ');
-    const familyNameWidth = fontBold.widthOfTextAtSize(familyName, teacherNameSize);
-    const fullTeacherName = givenName ? `${familyName} ${givenName}` : familyName;
-    const fullTeacherNameWidth = fontBold.widthOfTextAtSize(fullTeacherName, teacherNameSize);
-    let renderedTeacherName = fullTeacherName;
-    if (fullTeacherNameWidth > teacherTextMaxWidth && givenName) {
-      const availableGivenNameWidth = teacherTextMaxWidth - familyNameWidth - fontBold.widthOfTextAtSize(' ', teacherNameSize);
-      let truncatedGivenName = '';
-      for (const character of givenName) {
-        const candidate = `${truncatedGivenName}${character}`;
-        if (fontBold.widthOfTextAtSize(candidate, teacherNameSize) > availableGivenNameWidth) break;
-        truncatedGivenName = candidate;
+    let renderedTeacherName = teacherName;
+    if (fontBold.widthOfTextAtSize(renderedTeacherName, teacherNameSize) > teacherTextMaxWidth) {
+      const ellipsis = '...';
+      renderedTeacherName = '';
+      for (const character of teacherName) {
+        const candidate = `${renderedTeacherName}${character}${ellipsis}`;
+        if (fontBold.widthOfTextAtSize(candidate, teacherNameSize) > teacherTextMaxWidth) break;
+        renderedTeacherName += character;
       }
-      renderedTeacherName = truncatedGivenName ? `${familyName} ${truncatedGivenName}` : familyName;
+      renderedTeacherName = `${renderedTeacherName.trimEnd()}${ellipsis}`;
     }
     const renderedTeacherNameWidth = fontBold.widthOfTextAtSize(renderedTeacherName, teacherNameSize);
     drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, cursorY - 13, teacherNameSize, text, fontBold);
@@ -2621,7 +2630,11 @@ export const createBulletinPdfDocument = async (
     const signatureLabel = 'Signature du titulaire de la classe';
     const signatureLabelWidth = fontBold.widthOfTextAtSize(signatureLabel, 9);
     drawText(page, signatureLabel, signatureCenterX - signatureLabelWidth / 2, signatureLabelY, 9, text, fontBold);
-    const classTeacherName = sanitizePdfText(data.classTeacherName || 'Aucun');
+    const classTeacherName = sanitizePdfText(getTeacherDisplayName({
+      name: data.classTeacherName,
+      lastName: data.classTeacherLastName,
+      firstNames: data.classTeacherFirstNames,
+    }) || 'Aucun');
     const classTeacherNameWidth = fontBold.widthOfTextAtSize(classTeacherName, 9);
     const classTeacherNameX = signatureCenterX - classTeacherNameWidth / 2;
     const signatureBoxWidth = Math.max(signatureLabelWidth, classTeacherNameWidth) + 20;
