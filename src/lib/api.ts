@@ -4,7 +4,7 @@ import type { ExamResultStatus, ExamType } from './examDecision.ts';
 export interface ClassExamConfiguration {
   id: number;
   classId: number;
-  schoolId: number;
+  schoolId: number | null;
   academicYearId: number;
   examType: ExamType;
   isActive: boolean;
@@ -519,7 +519,7 @@ export async function fetchClassExamConfigurations(filters: { schoolId?: number;
   return apiFetch(`/api/class-exam-configurations${suffix}`);
 }
 
-export async function saveClassExamConfiguration(payload: { classId: number; schoolId: number; academicYearId: number; examType: ExamType }): Promise<ClassExamConfiguration> {
+export async function saveClassExamConfiguration(payload: { classId: number; schoolId?: number | null; academicYearId: number; examType: ExamType }): Promise<ClassExamConfiguration> {
   return apiFetch('/api/class-exam-configurations', { method: 'POST', body: JSON.stringify(payload) });
 }
 
@@ -527,8 +527,9 @@ export async function deleteClassExamConfiguration(id: number): Promise<{ succes
   return apiFetch(`/api/class-exam-configurations/${id}`, { method: 'DELETE' });
 }
 
-export async function fetchExamResults(filters: { classId: number; academicYearId: number; examType: ExamType }): Promise<ExamResultStudentRow[]> {
+export async function fetchExamResults(filters: { classId: number; academicYearId: number; examType: ExamType; schoolId?: number }): Promise<ExamResultStudentRow[]> {
   const params = new URLSearchParams({ classId: String(filters.classId), academicYearId: String(filters.academicYearId), examType: filters.examType });
+  if (filters.schoolId != null) params.set('schoolId', String(filters.schoolId));
   return apiFetch(`/api/exam-results?${params.toString()}`);
 }
 
@@ -536,7 +537,7 @@ export async function deleteExamResult(id: number): Promise<{ success: boolean }
   return apiFetch(`/api/exam-results/${id}`, { method: 'DELETE' });
 }
 
-export async function saveExamResultsBatch(payload: { classId: number; academicYearId: number; examType: ExamType; results: Array<{ studentId: number; resultStatus: ExamResultStatus; examSession?: string | null }> }): Promise<ExamResultRow[]> {
+export async function saveExamResultsBatch(payload: { classId: number; schoolId?: number | null; academicYearId: number; examType: ExamType; results: Array<{ studentId: number; resultStatus: ExamResultStatus; examSession?: string | null }> }): Promise<ExamResultRow[]> {
   return apiFetch('/api/exam-results/batch', { method: 'PUT', body: JSON.stringify(payload) });
 }
 

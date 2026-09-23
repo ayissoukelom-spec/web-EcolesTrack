@@ -50,6 +50,7 @@ import { inferPeriodTypeFromLegacyName } from './educationStructure';
 import studentAccess from './studentAccess';
 import { normalizeClassProgressionCode } from './classProgression';
 import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type ExamResultStatus } from './examDecision';
+import { selectPreferredClassExamConfiguration } from './classExamConfiguration';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -1049,16 +1050,17 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     const [sourceClass] = await db.select({ name: classes.name, progressionCode: classes.progressionCode, levelId: classes.levelId })
       .from(classes)
       .where(eq(classes.id, header.classId));
-    const [examConfiguration] = header.studentSchoolId != null
-      ? await db.select({ examType: classExamConfigurations.examType })
-        .from(classExamConfigurations)
-        .where(and(
-          eq(classExamConfigurations.classId, header.classId),
-          eq(classExamConfigurations.schoolId, header.studentSchoolId),
-          eq(classExamConfigurations.academicYearId, header.schoolYearId),
-          eq(classExamConfigurations.isActive, true),
-        ))
-      : [];
+    const examConfigurations = await db.select({ examType: classExamConfigurations.examType, schoolId: classExamConfigurations.schoolId })
+      .from(classExamConfigurations)
+      .where(and(
+        eq(classExamConfigurations.classId, header.classId),
+        header.studentSchoolId == null
+          ? sql`${classExamConfigurations.schoolId} IS NULL`
+          : or(eq(classExamConfigurations.schoolId, header.studentSchoolId), sql`${classExamConfigurations.schoolId} IS NULL`),
+        eq(classExamConfigurations.academicYearId, header.schoolYearId),
+        eq(classExamConfigurations.isActive, true),
+      ))
+    const examConfiguration = selectPreferredClassExamConfiguration(examConfigurations, header.studentSchoolId)[0];
     const examType = examConfiguration && isExamType(examConfiguration.examType)
       ? examConfiguration.examType
       : null;

@@ -311,14 +311,19 @@ export const classProgressions = pgTable('class_progressions', {
 export const classExamConfigurations = pgTable('class_exam_configurations', {
   id: serial('id').primaryKey(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
-  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   examType: text('exam_type').notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  classExamConfigurationContextUniqueIdx: uniqueIndex('class_exam_configurations_context_idx').on(table.classId, table.schoolId, table.academicYearId),
+  classExamConfigurationSpecificUniqueIdx: uniqueIndex('class_exam_configurations_school_context_unique')
+    .on(table.classId, table.schoolId, table.academicYearId, table.examType)
+    .where(sql`${table.schoolId} IS NOT NULL`),
+  classExamConfigurationGlobalUniqueIdx: uniqueIndex('class_exam_configurations_global_context_unique')
+    .on(table.classId, table.academicYearId, table.examType)
+    .where(sql`${table.schoolId} IS NULL`),
 }));
 
 export const examResults = pgTable('exam_results', {

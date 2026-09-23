@@ -263,14 +263,19 @@ export async function ensureSchoolsTableSchema() {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS class_exam_configurations (
       id SERIAL PRIMARY KEY,
       class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-      school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      school_id INTEGER REFERENCES schools(id) ON DELETE CASCADE,
       academic_year_id INTEGER NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
       exam_type TEXT NOT NULL CHECK (exam_type IN ('CEPD', 'BEPC', 'BAC_I', 'BAC_II')),
       is_active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMP NOT NULL DEFAULT now(),
-      updated_at TIMESTAMP NOT NULL DEFAULT now(),
-      CONSTRAINT class_exam_configurations_context_unique UNIQUE (class_id, school_id, academic_year_id)
+      updated_at TIMESTAMP NOT NULL DEFAULT now()
     );`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS class_exam_configurations_school_context_unique
+      ON class_exam_configurations (class_id, school_id, academic_year_id, exam_type)
+      WHERE school_id IS NOT NULL;`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS class_exam_configurations_global_context_unique
+      ON class_exam_configurations (class_id, academic_year_id, exam_type)
+      WHERE school_id IS NULL;`);
     await db.execute(sql`CREATE TABLE IF NOT EXISTS exam_results (
       id SERIAL PRIMARY KEY,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,

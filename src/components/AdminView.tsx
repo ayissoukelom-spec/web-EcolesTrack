@@ -693,14 +693,14 @@ export default function AdminView({
 
   useEffect(() => {
     const yearId = Number(examAcademicYearId);
-    if (!Number.isInteger(yearId) || yearId <= 0 || examSchoolId == null) {
+    if (!Number.isInteger(yearId) || yearId <= 0 || (userRole === 'school_admin' && examSchoolId == null)) {
       setExamConfigurations([]);
       setExamStudents([]);
       setExamResultStatuses({});
       setExamInitialResultStatuses({});
       return;
     }
-    fetchClassExamConfigurations({ schoolId: examSchoolId, academicYearId: yearId })
+    fetchClassExamConfigurations({ schoolId: examSchoolId ?? undefined, academicYearId: yearId })
       .then((rows) => {
         const configurations = Array.isArray(rows) ? rows : [];
         setExamConfigurations(configurations);
@@ -722,7 +722,7 @@ export default function AdminView({
       setExamInitialResultStatuses({});
       return;
     }
-    fetchExamResults({ classId, academicYearId: yearId, examType })
+    fetchExamResults({ classId, academicYearId: yearId, examType, schoolId: examSchoolId ?? undefined })
       .then((rows) => {
         setExamStudents(Array.isArray(rows) ? rows : []);
         const statuses = Object.fromEntries((Array.isArray(rows) ? rows : []).map((row: any) => [row.id, row.result?.resultStatus ?? '']));
@@ -734,10 +734,11 @@ export default function AdminView({
         setExamResultStatuses({});
         setExamNotice(error?.message || 'Impossible de charger les élèves et leurs résultats.');
       });
-  }, [examClassId, examAcademicYearId, examType]);
+  }, [examClassId, examAcademicYearId, examType, examSchoolId, userRole]);
 
-  const examClasses = userRole === 'super_admin' && superAdminSchoolFilterId != null
-    ? (studentFilterClasses ?? []).filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId))
+  const examClasses = userRole === 'super_admin'
+    ? (superAdminSchoolFilterId == null ? classesList.filter((klass: any) => klass.schoolId == null) : (studentFilterClasses ?? []))
+      .filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId))
     : classesList.filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId));
 
   const handleSaveExamResults = async () => {
@@ -756,13 +757,14 @@ export default function AdminView({
       if (pendingResults.length > 0) {
         await saveExamResultsBatch({
           classId: Number(examClassId),
+          schoolId: examSchoolId ?? undefined,
           academicYearId: Number(examAcademicYearId),
           examType,
           results: pendingResults,
         });
       }
       await Promise.all(resultsToDelete.map((student) => deleteExamResult(student.result.id)));
-      const refreshedRows = await fetchExamResults({ classId: Number(examClassId), academicYearId: Number(examAcademicYearId), examType });
+      const refreshedRows = await fetchExamResults({ classId: Number(examClassId), schoolId: examSchoolId ?? undefined, academicYearId: Number(examAcademicYearId), examType });
       setExamStudents(refreshedRows);
       const refreshedStatuses = Object.fromEntries(refreshedRows.map((row: any) => [row.id, row.result?.resultStatus ?? '']));
       setExamResultStatuses(refreshedStatuses);
@@ -4824,10 +4826,10 @@ export default function AdminView({
                     <option value="BAC_I">BAC I</option>
                     <option value="BAC_II">BAC II</option>
                   </select>
-                  <button type="button" disabled={!examAcademicYearId || !examClassId || examSchoolId == null} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={async () => {
+                  <button type="button" disabled={!examAcademicYearId || !examClassId || (userRole === 'school_admin' && examSchoolId == null)} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={async () => {
                     try {
-                      await saveClassExamConfiguration({ classId: Number(examClassId), schoolId: Number(examSchoolId), academicYearId: Number(examAcademicYearId), examType });
-                      setExamConfigurations(await fetchClassExamConfigurations({ schoolId: Number(examSchoolId), academicYearId: Number(examAcademicYearId) }));
+                      await saveClassExamConfiguration({ classId: Number(examClassId), schoolId: examSchoolId, academicYearId: Number(examAcademicYearId), examType });
+                      setExamConfigurations(await fetchClassExamConfigurations({ schoolId: examSchoolId ?? undefined, academicYearId: Number(examAcademicYearId) }));
                       setExamNotice('Configuration d examen enregistrée.');
                     } catch (error: any) {
                       setExamNotice(error?.message || 'Impossible d enregistrer la configuration.');
@@ -4837,10 +4839,12 @@ export default function AdminView({
                 {examConfigurations.length > 0 && <div className="mt-3 space-y-2">
                   {examConfigurations.map((configuration: any) => <div key={configuration.id} className="flex items-center justify-between rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm">
                     <span>{classesList.find((klass: any) => klass.id === configuration.classId)?.name || `Classe #${configuration.classId}`} → {configuration.examType}</span>
-                    <button type="button" className="text-xs font-semibold text-rose-600" onClick={async () => {
-                      await deleteClassExamConfiguration(configuration.id);
-                      setExamConfigurations((previous) => previous.filter((item) => item.id !== configuration.id));
-                    }}>Désactiver</button>
+                    {(userRole === 'super_admin' || configuration.schoolId != null) && (
+                      <button type="button" className="text-xs font-semibold text-rose-600" onClick={async () => {
+                        await deleteClassExamConfiguration(configuration.id);
+                        setExamConfigurations((previous) => previous.filter((item) => item.id !== configuration.id));
+                      }}>Désactiver</button>
+                    )}
                   </div>)}
                 </div>}
                 {examClassId && <div className="mt-4 rounded-lg border border-amber-100 bg-white p-3">
