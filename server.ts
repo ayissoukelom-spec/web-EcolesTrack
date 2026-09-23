@@ -4269,9 +4269,6 @@ export async function createApp() {
 
       const [classRow] = await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
       if (!classRow || classRow.academicYearId !== academicYearId) return res.status(400).json({ error: 'Class and academic year do not match' });
-      if (schoolId == null && classRow.schoolId != null) {
-        return res.status(400).json({ error: 'Global exam configurations require a global class' });
-      }
       if (schoolId != null && classRow.schoolId !== schoolId) {
         const [approved] = await db.select({ id: schoolClasses.id }).from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId), eq(schoolClasses.status, 'approved')));
         if (!approved) return res.status(403).json({ error: 'Class is not approved for this school' });

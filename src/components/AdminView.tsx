@@ -737,7 +737,7 @@ export default function AdminView({
   }, [examClassId, examAcademicYearId, examType, examSchoolId, userRole]);
 
   const examClasses = userRole === 'super_admin'
-    ? (superAdminSchoolFilterId == null ? classesList.filter((klass: any) => klass.schoolId == null) : (studentFilterClasses ?? []))
+    ? (superAdminSchoolFilterId == null ? classesList : (studentFilterClasses ?? []))
       .filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId))
     : classesList.filter((klass: any) => Number(klass.academicYearId) === Number(examAcademicYearId));
 
