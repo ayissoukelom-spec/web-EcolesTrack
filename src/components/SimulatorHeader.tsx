@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Shield, Settings, Users, Bell, Smartphone, RefreshCw } from 'lucide-react';
 import logoImage from '../assets/logo.png';
 import { setSimulatedRole, setSimulatedUser, clearSimulatedRole, clearSimulatedUser, apiFetch, findTeacherProfileFromSimulatedUser } from '../lib/api';
+import { normalizeFirstName } from '../lib/studentImport.ts';
 import { School, AcademicYear, Class, Teacher, Student, Parent, User, UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import CustomDropdown from './CustomDropdown';
@@ -1094,7 +1095,9 @@ export default function SimulatorHeader({
                     return;
                   }
                   setIsCreating(true);
-                  const name = `${createLastName} ${createFirstName}`.trim() || `${createRole} Test`;
+                  const normalizedLastName = createRole === 'teacher' ? createLastName.trim().toUpperCase() : createLastName.trim();
+                  const normalizedFirstNames = createRole === 'teacher' ? normalizeFirstName(createFirstName) : createFirstName.trim();
+                  const name = `${normalizedLastName} ${normalizedFirstNames}`.trim() || `${createRole} Test`;
                   const subjectIds = createRole === 'teacher'
                     ? Array.from(new Set(
                         approvedSubjectsList
@@ -1112,8 +1115,8 @@ export default function SimulatorHeader({
                     subjectIds: createRole === 'teacher' ? subjectIds : undefined,
                     ...(createRole === 'teacher'
                       ? {
-                          lastName: createLastName.trim(),
-                          firstNames: createFirstName.trim(),
+                          lastName: normalizedLastName,
+                          firstNames: normalizedFirstNames,
                         }
                       : {}),
                   };
