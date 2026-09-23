@@ -2323,7 +2323,7 @@ export const createBulletinPdfDocument = async (
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawCenteredFittedCellText(page, line.teacherComment || '-', x, columns[10].width, cursorY, cursorY - rowHeight, 9.2, text, fontBold);
+    drawCenteredFittedCellText(page, line.teacherComment || '-', x, columns[10].width, cursorY, cursorY - rowHeight, 8.2, text, fontBold);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
@@ -2554,6 +2554,9 @@ export const createBulletinPdfDocument = async (
   const sanctionsX = decisionProfessorX + decisionProfessorTextWidth - sanctionsWidth;
   drawText(page, distinctionsText, decisionProfessorX, distinctionsY, distinctionFontSize, text, fontBold);
   page.drawLine({ start: { x: decisionProfessorX, y: distinctionsY - 1.5 }, end: { x: decisionProfessorX + distinctionsWidth, y: distinctionsY - 1.5 }, color: text, thickness: 1 });
+  drawText(page, "Tableau d'honneur", decisionProfessorX, distinctionsY - 14, distinctionFontSize, text, fontBold);
+  drawText(page, 'Encouragements', decisionProfessorX, distinctionsY - 28, distinctionFontSize, text, fontBold);
+  drawText(page, 'Félicitations', decisionProfessorX, distinctionsY - 42, distinctionFontSize, text, fontBold);
   drawText(page, sanctionsText, sanctionsX, distinctionsY, distinctionFontSize, text, fontBold);
   page.drawLine({ start: { x: sanctionsX, y: distinctionsY - 1.5 }, end: { x: sanctionsX + sanctionsWidth, y: distinctionsY - 1.5 }, color: text, thickness: 1 });
 
