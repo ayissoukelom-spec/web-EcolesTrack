@@ -1095,12 +1095,21 @@ export default function SimulatorHeader({
                   }
                   setIsCreating(true);
                   const name = `${createFirstName} ${createLastName}`.trim() || `${createRole} Test`;
+                  const subjectIds = createRole === 'teacher'
+                    ? Array.from(new Set(
+                        approvedSubjectsList
+                          .filter((subject) => createSpecializations.includes(String(subject.name || '').trim()))
+                          .map((subject) => Number(subject.id))
+                          .filter((id) => Number.isInteger(id) && id > 0)
+                      ))
+                    : [];
                   const payload: any = {
                     email: createEmail,
                     name,
                     role: createRole,
                     phone: `${createPhonePrefix}${createPhone}`,
                     specialization: createRole === 'teacher' ? createSpecializations : undefined,
+                    subjectIds: createRole === 'teacher' ? subjectIds : undefined,
                   };
                   if (createRole === 'school_admin') {
                     payload.schoolId = parseInt(createSchoolId);

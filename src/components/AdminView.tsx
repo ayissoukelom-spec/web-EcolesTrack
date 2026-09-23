@@ -379,7 +379,7 @@ interface AdminViewProps {
   onDeleteYear?: (id: number) => Promise<any>;
   onAddClass: (data: { name: string; levelId?: number | null; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   educationLevels?: EducationLevel[];
-  onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
+  onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
   onRejectClass?: (id: number) => Promise<any>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
@@ -388,7 +388,7 @@ interface AdminViewProps {
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
   onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
-  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => Promise<any>;
+  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => Promise<any>;
   onSetPassword?: (userId: number, password: string) => Promise<any>;
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
@@ -458,6 +458,12 @@ export default function AdminView({
   const approvedTeacherSpecializations = (approvedSubjectsList || [])
     .map((subject: any) => ({ id: String(subject.id), name: String(subject.name || '').trim() }))
     .filter((subject) => subject.name);
+  const getSubjectIdsByNames = (selectedNames: string[], subjectCatalog: any[]) => Array.from(new Set(
+    subjectCatalog
+      .filter((subject) => selectedNames.includes(String(subject.name || '').trim()))
+      .map((subject) => Number(subject.id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
 
   const getDefaultTab = () => {
     if (typeof window === 'undefined') return userRole === 'super_admin' ? 'schools' : 'years';
@@ -1347,11 +1353,13 @@ export default function AdminView({
     }
 
     try {
+      const subjectIds = getSubjectIdsByNames(newTeacherForm.specializations, subjectsList);
       const createdTeacher = await onAddTeacher({
         name: newTeacherForm.name,
         email: newTeacherForm.email,
         phone: `+228 ${phoneDigits}`,
         specialization: newTeacherForm.specializations,
+        subjectIds,
         schoolId: targetSchoolId,
         classIds: newTeacherForm.assignedClassIds,
         gender: newTeacherForm.gender,
@@ -3251,6 +3259,9 @@ export default function AdminView({
                         return;
                       }
                       const updatedRole = userToEdit.role === 'teacher' ? 'teacher' : userForm.role;
+                      const selectedSpecializations = Array.isArray(userForm.specialization)
+                        ? userForm.specialization
+                        : String(userForm.specialization || '').split(',').map((value) => value.trim()).filter(Boolean);
                       await onUpdateUser(userToEdit.id, {
                         email: userForm.email.trim(),
                         name: userForm.name.trim(),
@@ -3259,6 +3270,7 @@ export default function AdminView({
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
                         phone: userForm.phone ? (updatedRole !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
                         specialization: userForm.specialization,
+                        subjectIds: updatedRole === 'teacher' ? getSubjectIdsByNames(selectedSpecializations, approvedSubjectsList) : undefined,
                         address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
                         studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
                         classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
