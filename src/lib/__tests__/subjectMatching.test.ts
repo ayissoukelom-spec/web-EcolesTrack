@@ -41,6 +41,16 @@ describe('subjectMatching helpers', () => {
     expect(available).toEqual([]);
   });
 
+  test('getTeacherAvailableSubjects uses teacher subject IDs when provided', () => {
+    const approvedSubjects = [
+      { id: 1, name: 'Mathématique' },
+      { id: 2, name: 'Anglais' },
+    ];
+
+    expect(getTeacherAvailableSubjects(approvedSubjects, ['Mathématique', 'Anglais'], [2])).toEqual(['Anglais']);
+    expect(getTeacherAvailableSubjects(approvedSubjects, ['Mathématique'], [])).toEqual([]);
+  });
+
   test('getTeacherAvailableSubjects returns only the approved intersection for one subject', () => {
     const approvedSubjects = [
       { id: 1, name: 'Mathématique' },

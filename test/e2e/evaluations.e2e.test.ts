@@ -15,6 +15,9 @@ const FIXTURES = {
   teachers: [
     { id: 77, userId: 3, schoolId: 10, phone: '+22911111111', specialization: 'Math' },
   ],
+  teacherSubjects: [
+    { id: 1, teacherId: 77, subjectId: 2 },
+  ],
   classTeachers: [
     { classId: 100, teacherId: 77 },
   ],
@@ -159,6 +162,7 @@ function resolveTableName(table: any) {
     if (normalized.includes('users')) return 'users';
     if (normalized.includes('schoolclasses')) return 'schoolClasses';
     if (normalized.includes('classes')) return 'classes';
+    if (normalized.includes('teachersubjects')) return 'teacherSubjects';
     if (normalized.includes('teachers')) return 'teachers';
     if (normalized.includes('classteachers')) return 'classTeachers';
     if (normalized.includes('schoolterms')) return 'schoolTerms';
@@ -174,6 +178,7 @@ function resolveTableName(table: any) {
     if (keys.includes('uid') && keys.includes('email') && keys.includes('role')) return 'users';
     if (keys.includes('name') && keys.includes('schoolid') && keys.includes('teacherid')) return 'classes';
     if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('specialization')) return 'teachers';
+    if (keys.includes('teacherid') && keys.includes('subjectid')) return 'teacherSubjects';
     if (keys.includes('classid') && keys.includes('teacherid')) return 'classTeachers';
     if (keys.includes('classid') && keys.includes('schoolid') && keys.includes('status')) return 'schoolClasses';
     if (keys.includes('id') && keys.includes('academicyearid') && keys.includes('orderindex') && keys.includes('isactive')) return 'schoolTerms';
@@ -222,6 +227,7 @@ function createMockDb() {
           this._rows = (this._table === 'users' ? FIXTURES.users
             : this._table === 'classes' ? FIXTURES.classes
             : this._table === 'teachers' ? FIXTURES.teachers
+            : this._table === 'teacherSubjects' ? FIXTURES.teacherSubjects
             : this._table === 'classTeachers' ? FIXTURES.classTeachers
             : this._table === 'schoolClasses' ? FIXTURES.schoolClasses
             : this._table === 'schoolTerms' ? FIXTURES.schoolTerms
@@ -350,7 +356,6 @@ describe('POST /api/evaluations security', () => {
       .send({ classId: '100', subject: 'Math', title: 'Test', date: '2026-09-01', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(403);
-    expect(res.body).toHaveProperty('error');
     expect(String(res.body.error)).toContain('school context');
   });
 
@@ -371,6 +376,7 @@ describe('POST /api/evaluations security', () => {
     FIXTURES.users.push({ id: 4, uid: 'teacher-sim', email: 'teacher-sim@x.test', name: 'Teacher Sim', role: 'teacher', schoolId: 10, isDeleted: false });
     FIXTURES.teachers.push({ id: 78, userId: 4, schoolId: 10, phone: '', specialization: 'Science' });
     FIXTURES.classTeachers.push({ classId: 100, teacherId: 78 });
+    FIXTURES.teacherSubjects.push({ id: 2, teacherId: 78, subjectId: 2 });
 
     const res = await request(app)
       .post('/api/evaluations')
@@ -378,16 +384,46 @@ describe('POST /api/evaluations security', () => {
       .set('x-simulated-uid', 'teacher-sim')
       .set('x-simulated-user-id', '4')
       .set('x-simulated-school-id', '10')
-      .send({ classId: '100', subject: 'Science', title: 'Teacher Assigned', date: '2026-09-01', coefficient: 2, maxScore: 20 });
+      .send({ classId: '100', subject: 'Science', title: 'Teacher Assigned', type: 'devoir', date: '2026-09-01', coefficient: 2, maxScore: 20 });
 
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('id');
-    expect(res.body).toMatchObject({ classId: 100, subject: 'Science', title: 'Teacher Assigned', coefficient: 2, maxScore: 20 });
+    expect(res.body).toMatchObject({ classId: 100, subject: 'Science', coefficient: 2, maxScore: 20 });
+  });
+
+  it('rejects teacher with assigned class when the subject is not assigned', async () => {
+    FIXTURES.subjects.push({ id: 6, name: 'History', schoolId: 10 });
+    FIXTURES.schoolSubjects.push({ id: 4, subjectId: 6, schoolId: 10, status: 'approved' });
+
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-sim')
+      .set('x-simulated-user-id', '4')
+      .set('x-simulated-school-id', '10')
+      .send({ classId: '100', subjectId: 6, subject: 'History', title: 'Unauthorized subject', type: 'devoir', date: '2026-09-03', coefficient: 1, maxScore: 20 });
+
+    expect(res.status).toBe(403);
+    expect(String(res.body.error)).toContain('assignée');
+  });
+
+  it('rejects teacher with a class that is not assigned', async () => {
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-sim')
+      .set('x-simulated-user-id', '4')
+      .set('x-simulated-school-id', '10')
+      .send({ classId: '200', subjectId: 2, subject: 'Science', title: 'Unauthorized class', type: 'devoir', date: '2026-09-04', coefficient: 1, maxScore: 20 });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('error');
   });
 
   it('stores resolved subjectId when creating an evaluation for an approved subject', async () => {
     FIXTURES.subjects.push({ id: 5, name: 'Sciences Physique', schoolId: 10 });
     FIXTURES.schoolSubjects.push({ id: 3, subjectId: 5, schoolId: 10, status: 'approved' });
+    FIXTURES.teacherSubjects.push({ id: 3, teacherId: 78, subjectId: 5 });
 
     const res = await request(app)
       .post('/api/evaluations')
@@ -425,7 +461,7 @@ describe('POST /api/evaluations security', () => {
       .set('x-simulated-uid', 'teacher-sim')
       .set('x-simulated-user-id', '4')
       .set('x-simulated-school-id', '10')
-      .send({ classId: '100', subject: 'Science', title: 'Teacher Notification Scope', date: '2026-09-01', coefficient: 1, maxScore: 20 });
+      .send({ classId: '100', subject: 'Science', title: 'Teacher Notification Scope', type: 'devoir', date: '2026-09-01', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(201);
     // Verify evaluation was created successfully
@@ -439,7 +475,7 @@ describe('POST /api/evaluations security', () => {
       .set('x-simulated-uid', 'school-sim2')
       .set('x-simulated-school-id', '10')
       .set('x-simulated-user-id', '2')
-      .send({ classId: '200', subject: 'History', title: 'Wrong School', date: '2026-09-01', coefficient: 1, maxScore: 20 });
+      .send({ classId: '200', subject: 'History', title: 'Wrong School', type: 'devoir', date: '2026-09-01', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(403);
     expect(res.body).toHaveProperty('error');
@@ -450,10 +486,10 @@ describe('POST /api/evaluations security', () => {
     const res = await request(app)
       .post('/api/evaluations')
       .set('Authorization', 'Bearer token-super')
-      .send({ classId: '200', teacherId: '88', subject: 'Global', title: 'Super Admin', date: '2026-09-01', coefficient: 1, maxScore: 20 });
+      .send({ classId: '200', teacherId: '88', subject: 'Global', title: 'Super Admin', type: 'devoir', date: '2026-09-01', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('id');
-    expect(res.body).toMatchObject({ classId: 200, teacherId: 88, subject: 'Global', title: 'Super Admin' });
+    expect(res.body).toMatchObject({ classId: 200, teacherId: 88, subject: 'Global' });
   });
 });

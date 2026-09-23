@@ -25,7 +25,20 @@ export function isSubjectAssignedToTeacher(
 export function getTeacherAvailableSubjects(
   approvedSubjectsList: { id: number; name: string }[] = [],
   teacherSpecializations: string[] = [],
+  teacherSubjectIds?: number[],
 ) {
+  if (teacherSubjectIds !== undefined) {
+    const assignedIds = new Set(
+      teacherSubjectIds
+        .map((subjectId) => Number(subjectId))
+        .filter((subjectId) => Number.isInteger(subjectId) && subjectId > 0),
+    );
+    return approvedSubjectsList
+      .filter((subject) => assignedIds.has(Number(subject.id)))
+      .map((subject) => String(subject.name || '').trim())
+      .filter(Boolean);
+  }
+
   const approvedSubjectNames = Array.isArray(approvedSubjectsList)
     ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
     : [];

@@ -8389,6 +8389,7 @@ export async function createApp() {
 
       // Automatically determine teacher Id if not explicitly provided
       let resolvedTeacherId = teacherId ? parseInt(teacherId) : null;
+      let teacherProfileId: number | null = null;
       const dbUser = actor.id ? actor : null;
       if (!dbUser && actor.role === 'teacher') {
         return res.status(404).json({ error: 'User not found' });
@@ -8399,6 +8400,7 @@ export async function createApp() {
         if (!teacherProfile) {
           return res.status(403).json({ error: 'Teacher profile not found for the current user' });
         }
+        teacherProfileId = teacherProfile.id;
 
         const [assignment] = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, parseInt(classId)), eq(classTeachers.teacherId, teacherProfile.id)));
         if (!assignment) {
@@ -8547,6 +8549,13 @@ export async function createApp() {
 
       const resolvedSubjectId = approvedSubject.subjectId;
       const resolvedSubjectName = approvedSubject.subjectName;
+
+      if (actor.role === 'teacher' && teacherProfileId != null) {
+        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfileId);
+        if (!teacherSubjectIds.has(resolvedSubjectId)) {
+          return res.status(403).json({ error: 'Cette matière n’est pas assignée à cet enseignant' });
+        }
+      }
 
       // Generate sequence number for this (termId, classId) combination
       // Using a transaction to avoid race conditions

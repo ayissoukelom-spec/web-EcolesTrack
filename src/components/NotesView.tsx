@@ -140,7 +140,7 @@ export default function NotesView({
     : [];
 
   const availableSubjects = userRole === 'teacher'
-    ? getTeacherAvailableSubjects(approvedSubjectsList, teacherSpecializations)
+    ? getTeacherAvailableSubjects(approvedSubjectsList, teacherSpecializations, teacherSubjectIds)
     : approvedSubjectNames;
 
   const currentEvaluation = approvedEvaluations.find((ev) => String(ev.id) === selectedEvalId) || null;

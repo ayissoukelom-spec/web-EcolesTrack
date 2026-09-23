@@ -183,6 +183,25 @@ test('teacher filters evaluations by subjectId when the stored subject name is s
   expect(within(evalSelect).queryByText(/Other subject by ID/)).toBeNull();
 });
 
+test('teacher subject picker excludes approved subjects that are not assigned by ID', () => {
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      approvedSubjectsList={[{ id: 10, name: 'Math' }, { id: 11, name: 'Science' }]}
+      teacherSpecializations={['Math', 'Science']}
+      teacherSubjectIds={[10]}
+      teacherClassIds={[85]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
+
+  expect(screen.getByRole('option', { name: 'Math' })).toBeDefined();
+  expect(screen.queryByRole('option', { name: 'Science' })).toBeNull();
+});
+
 test('teacher sees an approved global class evaluation but not an unapproved global class evaluation', () => {
   const evaluations = [
     { id: 5, classId: 85, teacherId: 99, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
