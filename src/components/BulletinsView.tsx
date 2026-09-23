@@ -561,16 +561,13 @@ export default function BulletinsView({
       return;
     }
 
-    const classStudentIds = generateStudents
-      .filter((student) => student.classId === classId)
-      .map((student) => student.id);
-
-    if (classStudentIds.length === 0) {
+    const classStudentCount = generateStudents.filter((student) => student.classId === classId).length;
+    if (classStudentCount === 0) {
       generateHook.setError('Aucun eleve trouve dans cette classe.');
       return;
     }
 
-    const createdList = await generateHook.runMany(classStudentIds, termId);
+    const generation = await generateHook.runClass(classId, termId);
 
     setFilters((prev) => ({
       ...prev,
@@ -581,20 +578,18 @@ export default function BulletinsView({
     setPage(1);
     setSelectedBatchIds([]);
 
-    const createdIds = createdList
-      .map((entry) => entry.id)
-      .filter((id): id is number => Number.isInteger(id) && Number(id) > 0);
+    if (!generation) return;
 
     const className = classesList.find((klass) => klass.id === classId)?.name || `Classe ${classId}`;
     const termName = termOptions.find((term) => term.id === termId)?.name || `Période ${termId}`;
-    const summary = createdList
+    const summary = generation.bulletins
       .map((entry) => {
         const id = Number(entry.id);
         if (!Number.isInteger(id) || id <= 0) return null;
-        const student = studentsList.find((s) => s.id === entry.studentId);
+        const bulletinStudent = studentsList.find((student) => student.id === entry.studentId);
         return {
           id,
-          studentName: student ? `${student.lastName} ${student.firstName}`.trim() : `Eleve ${entry.studentId}`,
+          studentName: bulletinStudent ? `${bulletinStudent.lastName} ${bulletinStudent.firstName}`.trim() : 'Bulletin genere',
           className,
           termName,
         };

@@ -1241,6 +1241,7 @@ describe('bulletin PDF API', () => {
     expect(source).toContain('eq(bulletins.schoolYearId, header.schoolYearId)');
     expect(source).toContain('eq(bulletins.termId, header.termId)');
     expect(source).toContain('sql`${bulletins.average} is not null`');
+    expect(source).toContain('classAverage: bulletins.classAverage');
   });
 
   it('rend les tableaux de moyennes entre retard/absences et la signature', async () => {

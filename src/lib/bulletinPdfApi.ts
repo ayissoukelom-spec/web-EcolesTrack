@@ -9,6 +9,7 @@ import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import {
   absences,
   academicYears,
+  bulletinGenerations,
   bulletinLines,
   bulletins,
   classes,
@@ -748,6 +749,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       schoolYearId: bulletins.schoolYearId,
       schoolYearName: academicYears.name,
       termId: bulletins.termId,
+      generationId: bulletins.generationId,
       termName: schoolTerms.name,
       termStartDate: schoolTerms.startDate,
       termEndDate: schoolTerms.endDate,
@@ -755,6 +757,9 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       termOrderIndex: schoolTerms.orderIndex,
       termCycleId: schoolTerms.cycleId,
       average: bulletins.average,
+      classHighestAverage: bulletins.classHighestAverage,
+      classLowestAverage: bulletins.classLowestAverage,
+      classAverage: bulletins.classAverage,
       totalPoints: bulletins.totalPoints,
       totalCoefficients: bulletins.totalCoefficients,
       rank: bulletins.rank,
@@ -1137,16 +1142,36 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletins: historicalBulletins,
     });
 
-    const classBulletinRows = await db
-      .select({ average: bulletins.average })
-      .from(bulletins)
-      .where(and(
-        eq(bulletins.classId, header.classId),
-        eq(bulletins.schoolYearId, header.schoolYearId),
-        eq(bulletins.termId, header.termId),
-        sql`${bulletins.average} is not null`,
-      ));
-    const classAverageSummary = calculateClassAverageSummary(classBulletinRows.map((row) => row.average));
+    let classAverageSummary: ClassAverageSummary = { highest: null, lowest: null, average: null };
+    if (header.generationId != null) {
+      const [generation] = await db
+        .select({ generationType: bulletinGenerations.generationType, status: bulletinGenerations.status })
+        .from(bulletinGenerations)
+        .where(eq(bulletinGenerations.id, header.generationId));
+
+      if (generation?.generationType === 'class' && generation.status === 'completed') {
+        const classBulletinRows = await db
+          .select({ average: bulletins.average })
+          .from(bulletins)
+          .innerJoin(bulletinGenerations, eq(bulletins.generationId, bulletinGenerations.id))
+          .where(and(
+            eq(bulletins.classId, header.classId),
+            eq(bulletins.schoolYearId, header.schoolYearId),
+            eq(bulletins.termId, header.termId),
+            eq(bulletins.generationId, header.generationId),
+            eq(bulletinGenerations.generationType, 'class'),
+            eq(bulletinGenerations.status, 'completed'),
+            sql`${bulletins.average} is not null`,
+          ));
+        classAverageSummary = calculateClassAverageSummary(classBulletinRows.map((row) => row.average));
+      } else if (generation?.generationType === 'individual') {
+        classAverageSummary = {
+          highest: parseNumber(header.classHighestAverage),
+          lowest: parseNumber(header.classLowestAverage),
+          average: parseNumber(header.classAverage),
+        };
+      }
+    }
 
     let absencesCount = 0;
     let lateMinutesTotal = 0;

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { generateBulletin } from '../lib/api.ts';
+import { generateBulletin, generateBulletinClass } from '../lib/api.ts';
 
 export function useGenerateBulletin() {
   const [loading, setLoading] = useState(false);
@@ -57,6 +57,28 @@ export function useGenerateBulletin() {
     }
   };
 
+  const runClass = async (classId: number, termId: number) => {
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = await generateBulletinClass(classId, termId);
+      if (result.status === 'completed') {
+        setSuccess(`${result.completedCount} bulletin(s) generes avec succes.`);
+      } else if (result.status === 'incomplete') {
+        setError(`Generation incomplete : ${result.completedCount}/${result.expectedCount} bulletin(s) genere(s).`);
+      } else {
+        setError('Generation de classe impossible.');
+      }
+      return result;
+    } catch (err: any) {
+      setError(err?.message || 'Generation de classe impossible.');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     loading,
     error,
@@ -65,5 +87,6 @@ export function useGenerateBulletin() {
     setSuccess,
     run,
     runMany,
+    runClass,
   };
 }

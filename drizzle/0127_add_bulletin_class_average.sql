@@ -1,0 +1,1 @@
+ALTER TABLE "bulletins" ADD COLUMN IF NOT EXISTS "class_average" text;

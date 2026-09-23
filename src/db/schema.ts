@@ -488,14 +488,32 @@ export const notificationAttachments = pgTable('notification_attachments', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 13. Bulletins (persisted snapshots)
+// 13. Bulletin generations
+export const bulletinGenerations = pgTable('bulletin_generations', {
+  id: serial('id').primaryKey(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  schoolYearId: integer('school_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
+  termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'cascade' }).notNull(),
+  generationType: text('generation_type').notNull(),
+  expectedCount: integer('expected_count').notNull(),
+  completedCount: integer('completed_count').notNull().default(0),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  completedAt: timestamp('completed_at'),
+});
+
+// 14. Bulletins (persisted snapshots)
 export const bulletins = pgTable('bulletins', {
   id: serial('id').primaryKey(),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   schoolYearId: integer('school_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }).notNull(),
+  generationId: integer('generation_id').references(() => bulletinGenerations.id, { onDelete: 'set null' }),
   average: text('average'),
+  classHighestAverage: text('class_highest_average'),
+  classLowestAverage: text('class_lowest_average'),
+  classAverage: text('class_average'),
   totalPoints: text('total_points').notNull(),
   totalCoefficients: text('total_coefficients').notNull(),
   rank: integer('rank'),
@@ -506,7 +524,7 @@ export const bulletins = pgTable('bulletins', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// 14. Bulletin lines (one line per subject)
+// 15. Bulletin lines (one line per subject)
 export const bulletinLines = pgTable('bulletin_lines', {
   id: serial('id').primaryKey(),
   bulletinId: integer('bulletin_id').references(() => bulletins.id, { onDelete: 'cascade' }).notNull(),
@@ -519,7 +537,7 @@ export const bulletinLines = pgTable('bulletin_lines', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// 15. Audit Events / Journal d'événements
+// 16. Audit Events / Journal d'événements
 export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
   actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -743,6 +761,10 @@ export const studentAcademicYearStatusesRelations = relations(studentAcademicYea
 }));
 
 export const bulletinsRelations = relations(bulletins, ({ one, many }) => ({
+  generation: one(bulletinGenerations, {
+    fields: [bulletins.generationId],
+    references: [bulletinGenerations.id],
+  }),
   student: one(students, {
     fields: [bulletins.studentId],
     references: [students.id],
@@ -760,6 +782,22 @@ export const bulletinsRelations = relations(bulletins, ({ one, many }) => ({
     references: [schoolTerms.id],
   }),
   lines: many(bulletinLines),
+}));
+
+export const bulletinGenerationsRelations = relations(bulletinGenerations, ({ one, many }) => ({
+  class: one(classes, {
+    fields: [bulletinGenerations.classId],
+    references: [classes.id],
+  }),
+  schoolYear: one(academicYears, {
+    fields: [bulletinGenerations.schoolYearId],
+    references: [academicYears.id],
+  }),
+  term: one(schoolTerms, {
+    fields: [bulletinGenerations.termId],
+    references: [schoolTerms.id],
+  }),
+  bulletins: many(bulletins),
 }));
 
 export const bulletinLinesRelations = relations(bulletinLines, ({ one }) => ({

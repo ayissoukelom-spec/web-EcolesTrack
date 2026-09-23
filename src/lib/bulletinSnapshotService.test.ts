@@ -298,6 +298,112 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.map((line) => line.subjectName).sort()).toEqual(['Français', 'Math']);
   });
 
+  it('persiste les MIN/MAX officiels de la classe pour une generation individuelle', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      evaluations: [
+        { id: 10, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 11, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Exclue', type: 'composition', coefficient: 10, maxScore: 20, countInBulletin: false },
+      ],
+      grades: [
+        { id: 10, evaluationId: 10, studentId: 1, score: '14' },
+        { id: 11, evaluationId: 10, studentId: 2, score: '11.5' },
+        { id: 12, evaluationId: 10, studentId: 3, score: '8.75' },
+        { id: 13, evaluationId: 11, studentId: 3, score: '20' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(2, 7, 901, persistence);
+    const bulletin = state.bulletins[0];
+
+    expect(result.average).toBe(11.5);
+    expect(result.rank).toBe(2);
+    expect(bulletin?.generationId).toBe(901);
+    expect(bulletin?.classHighestAverage).toBe(14);
+    expect(bulletin?.classLowestAverage).toBe(8.75);
+    expect(bulletin?.classAverage).toBeCloseTo((14 + 11.5 + 8.75) / 3, 10);
+  });
+
+  it('exclut les moyennes nulles des MIN/MAX et conserve le snapshot apres modification des notes', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      evaluations: [
+        { id: 20, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 20, evaluationId: 20, studentId: 1, score: '14' },
+        { id: 21, evaluationId: 20, studentId: 2, score: '11.5' },
+        { id: 22, evaluationId: 20, studentId: 3, score: 'invalid' },
+      ],
+    });
+
+    await generateBulletinSnapshot(2, 7, 902, persistence);
+    const bulletin = state.bulletins[0];
+    const highestBeforeChange = bulletin?.classHighestAverage;
+    const lowestBeforeChange = bulletin?.classLowestAverage;
+
+    const changedGrade = state.grades.find((grade) => grade.studentId === 3);
+    if (changedGrade) changedGrade.score = '20';
+
+    expect(highestBeforeChange).toBe(14);
+    expect(lowestBeforeChange).toBe(11.5);
+    expect(bulletin?.classAverage).toBeCloseTo((14 + 11.5) / 2, 10);
+    expect(bulletin?.classHighestAverage).toBe(14);
+    expect(bulletin?.classLowestAverage).toBe(11.5);
+  });
+
+  it('isole les MIN/MAX entre deux generations completes partagees par la classe', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+        { id: 3, classId: 10, schoolId: 1, firstName: 'Charlie', lastName: 'Durand' },
+      ],
+      evaluations: [
+        { id: 30, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [
+        { id: 30, evaluationId: 30, studentId: 1, score: '14' },
+        { id: 31, evaluationId: 30, studentId: 2, score: '11.5' },
+        { id: 32, evaluationId: 30, studentId: 3, score: '8.75' },
+      ],
+    });
+
+    for (const studentId of [1, 2, 3]) {
+      await generateBulletinSnapshot(studentId, 7, 1001, persistence);
+    }
+    expect(state.bulletins.map((bulletin) => [bulletin.generationId, bulletin.classHighestAverage, bulletin.classLowestAverage, bulletin.classAverage])).toEqual([
+      [1001, 14, 8.75, (14 + 11.5 + 8.75) / 3],
+      [1001, 14, 8.75, (14 + 11.5 + 8.75) / 3],
+      [1001, 14, 8.75, (14 + 11.5 + 8.75) / 3],
+    ]);
+
+    state.grades.find((grade) => grade.studentId === 1)!.score = '16';
+    state.grades.find((grade) => grade.studentId === 2)!.score = '14';
+    state.grades.find((grade) => grade.studentId === 3)!.score = '11';
+    for (const studentId of [1, 2, 3]) {
+      await generateBulletinSnapshot(studentId, 7, 1002, persistence);
+    }
+
+    expect(state.bulletins.slice(3).map((bulletin) => [bulletin.generationId, bulletin.classHighestAverage, bulletin.classLowestAverage, bulletin.classAverage])).toEqual([
+      [1002, 16, 11, (16 + 14 + 11) / 3],
+      [1002, 16, 11, (16 + 14 + 11) / 3],
+      [1002, 16, 11, (16 + 14 + 11) / 3],
+    ]);
+    expect(state.bulletins.slice(0, 3).every((bulletin) => bulletin.classHighestAverage === 14 && bulletin.classLowestAverage === 8.75)).toBe(true);
+  });
+
   it('priorise subjectId de l évaluation quand il est disponible, même si le libellé historique est ancien', async () => {
     const customPersistence: BulletinSnapshotPersistence = {
       transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {

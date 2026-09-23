@@ -47,6 +47,7 @@ vi.mock('../hooks/useGenerateBulletin.ts', () => ({
     setSuccess: vi.fn(),
     run: vi.fn(),
     runMany: vi.fn(),
+    runClass: vi.fn(),
   }),
 }));
 

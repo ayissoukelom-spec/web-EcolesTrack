@@ -499,6 +499,20 @@ export async function generateBulletin(studentId: number, termId: number): Promi
   });
 }
 
+export async function generateBulletinClass(classId: number, termId: number): Promise<{
+  generationId: number;
+  status: 'completed' | 'incomplete' | 'failed';
+  expectedCount: number;
+  completedCount: number;
+  bulletinIds: number[];
+  bulletins: Array<{ id: number; studentId: number }>;
+}> {
+  return apiFetch('/api/bulletins/generate-class', {
+    method: 'POST',
+    body: JSON.stringify({ classId, termId }),
+  });
+}
+
 export async function downloadBulletinPdf(id: number): Promise<Blob> {
   return apiFetchBlob(`/api/bulletins/${id}/pdf`);
 }

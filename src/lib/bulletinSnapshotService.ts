@@ -3,6 +3,7 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { requireRole, verifyToken } from '../middleware/auth.ts';
 import studentAccess from './studentAccess';
+import { bulletinGenerations } from '../db/schema.ts';
 import {
   bulletinLines,
   bulletins,
@@ -95,7 +96,11 @@ export interface CreateBulletinInput {
   classId: number;
   schoolYearId: number;
   termId: number;
+  generationId?: number | null;
   average: number | null;
+  classHighestAverage?: number | null;
+  classLowestAverage?: number | null;
+  classAverage?: number | null;
   totalPoints: number;
   totalCoefficients: number;
   rank: number | null;
@@ -849,7 +854,11 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             classId: payload.classId,
             schoolYearId: payload.schoolYearId,
             termId: payload.termId,
+            generationId: payload.generationId ?? null,
             average: toStoredNumber(payload.average),
+            classHighestAverage: toStoredNumber(payload.classHighestAverage),
+            classLowestAverage: toStoredNumber(payload.classLowestAverage),
+            classAverage: toStoredNumber(payload.classAverage),
             totalPoints: toStoredStrictNumber(payload.totalPoints),
             totalCoefficients: toStoredStrictNumber(payload.totalCoefficients),
             rank: payload.rank,
@@ -882,7 +891,7 @@ interface RegisterBulletinGenerateRouteOptions {
   resolveActor: (req: any) => Promise<{ role?: string; schoolId?: number | null } | null>;
   verifyMiddleware?: express.RequestHandler;
   accessMiddleware?: express.RequestHandler;
-  generateHandler?: (studentId: number, termId: number, persistence?: BulletinSnapshotPersistence) => Promise<BulletinSnapshotResult>;
+  generateHandler?: (studentId: number, termId: number, persistence?: BulletinSnapshotPersistence, generationId?: number | null) => Promise<BulletinSnapshotResult>;
 }
 
 class StudentAuthorizationError extends Error {
@@ -899,6 +908,36 @@ const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) 
   return next();
 };
 
+const createBulletinGeneration = async (payload: {
+  classId: number;
+  schoolYearId: number;
+  termId: number;
+  generationType: 'class' | 'individual';
+  expectedCount: number;
+}) => {
+  const [generation] = await db.insert(bulletinGenerations).values({
+    classId: payload.classId,
+    schoolYearId: payload.schoolYearId,
+    termId: payload.termId,
+    generationType: payload.generationType,
+    expectedCount: payload.expectedCount,
+    completedCount: 0,
+    status: 'running',
+  }).returning();
+  return generation;
+};
+
+const updateBulletinGeneration = async (generationId: number, values: {
+  completedCount: number;
+  status: 'completed' | 'incomplete' | 'failed';
+}) => {
+  await db.update(bulletinGenerations).set({
+    completedCount: values.completedCount,
+    status: values.status,
+    completedAt: values.status === 'completed' ? new Date() : null,
+  }).where(eq(bulletinGenerations.id, generationId));
+};
+
 export const registerBulletinGenerateRoute = (
   app: express.Express,
   options: RegisterBulletinGenerateRouteOptions,
@@ -907,10 +946,11 @@ export const registerBulletinGenerateRoute = (
     resolveActor,
     verifyMiddleware = verifyToken as any,
     accessMiddleware = requireBulletinSuperAdmin as any,
-    generateHandler = async (studentId, termId, persistence) => generateBulletinSnapshot(studentId, termId, persistence),
+    generateHandler = async (studentId, termId, persistence, generationId) => generateBulletinSnapshot(studentId, termId, generationId, persistence),
   } = options;
 
   app.post('/api/bulletins/generate', verifyMiddleware, accessMiddleware, async (req: any, res) => {
+    let generationId: number | null = null;
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
@@ -919,6 +959,22 @@ export const registerBulletinGenerateRoute = (
       const termId = Number(req.body?.termId);
       if (!Number.isInteger(studentId) || studentId <= 0 || !Number.isInteger(termId) || termId <= 0) {
         return res.status(400).json({ error: 'studentId and termId are required' });
+      }
+
+      const [studentRecord] = await db.select({ classId: students.classId }).from(students).where(eq(students.id, studentId));
+      if (studentRecord) {
+        const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, studentRecord.classId));
+        const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+        if (classRecord && termRecord && classRecord.academicYearId === termRecord.academicYearId) {
+          const generation = await createBulletinGeneration({
+            classId: classRecord.id,
+            schoolYearId: classRecord.academicYearId,
+            termId,
+            generationType: 'individual',
+            expectedCount: 1,
+          });
+          generationId = generation.id;
+        }
       }
 
       // Build a persistence that uses studentAccess.getAuthorizedStudents when an actor is present
@@ -1042,7 +1098,11 @@ export const registerBulletinGenerateRoute = (
                   classId: payload.classId,
                   schoolYearId: payload.schoolYearId,
                   termId: payload.termId,
+                  generationId: payload.generationId ?? null,
                   average: toStoredNumber(payload.average),
+                  classHighestAverage: toStoredNumber(payload.classHighestAverage),
+                  classLowestAverage: toStoredNumber(payload.classLowestAverage),
+                  classAverage: toStoredNumber(payload.classAverage),
                   totalPoints: toStoredStrictNumber(payload.totalPoints),
                   totalCoefficients: toStoredStrictNumber(payload.totalCoefficients),
                   rank: payload.rank,
@@ -1063,18 +1123,30 @@ export const registerBulletinGenerateRoute = (
         },
       };
 
-      const result = await generateHandler(studentId, termId, persistence);
+      const result = await generateHandler(studentId, termId, persistence, generationId);
+      if (generationId != null) {
+        await updateBulletinGeneration(generationId, { completedCount: 1, status: 'completed' });
+      }
       const createdId = (result as BulletinSnapshotResult & { id?: number }).id ?? result.bulletinId;
       return res.status(201).json({
         id: createdId,
         studentId: result.studentId,
         termId: result.termId,
+        ...(generationId != null ? {
+          generationId,
+          status: 'completed',
+          expectedCount: 1,
+          completedCount: 1,
+        } : {}),
         average: result.average,
         rank: result.rank,
         mention: result.mention,
         appreciation: result.appreciation,
       });
     } catch (err: any) {
+      if (generationId != null) {
+        await updateBulletinGeneration(generationId, { completedCount: 0, status: 'failed' }).catch(() => undefined);
+      }
       if (err instanceof StudentAuthorizationError) {
         console.error('Bulletin generation authorization error:', err.message);
         return res.status(403).json({ error: 'Unauthorized to generate bulletin for this class' });
@@ -1083,14 +1155,93 @@ export const registerBulletinGenerateRoute = (
       return res.status(500).json({ error: 'Failed to generate bulletin' });
     }
   });
+
+  app.post('/api/bulletins/generate-class', verifyMiddleware, accessMiddleware, async (req: any, res) => {
+    let generationId: number | null = null;
+    let completedCount = 0;
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+
+      const classId = Number(req.body?.classId);
+      const termId = Number(req.body?.termId);
+      if (!Number.isInteger(classId) || classId <= 0 || !Number.isInteger(termId) || termId <= 0) {
+        return res.status(400).json({ error: 'classId and termId are required' });
+      }
+
+      const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
+      const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+      if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+      if (!termRecord || classRecord.academicYearId !== termRecord.academicYearId) {
+        return res.status(400).json({ error: 'Term does not belong to class academic year' });
+      }
+
+      const classStudents = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
+      const studentIds = classStudents.map((student: any) => Number(student.id)).filter((id) => Number.isInteger(id) && id > 0);
+      if (studentIds.length === 0) return res.status(400).json({ error: 'No authorized students found in class' });
+
+      const generation = await createBulletinGeneration({
+        classId,
+        schoolYearId: classRecord.academicYearId,
+        termId,
+        generationType: 'class',
+        expectedCount: studentIds.length,
+      });
+      generationId = generation.id;
+
+      const persistence = createDbBulletinSnapshotPersistence();
+      const bulletinIds: number[] = [];
+      const generatedBulletins: Array<{ id: number; studentId: number }> = [];
+      for (const studentId of studentIds) {
+        try {
+          const result = await generateBulletinSnapshot(studentId, termId, generationId, persistence);
+          bulletinIds.push(result.bulletinId);
+          generatedBulletins.push({ id: result.bulletinId, studentId });
+        } catch (error: any) {
+          console.warn('Failed to generate bulletin for class generation', { studentId, classId, termId, error: error?.message || error });
+        }
+      }
+
+      completedCount = bulletinIds.length;
+      const status = completedCount === studentIds.length
+        ? 'completed'
+        : completedCount === 0
+          ? 'failed'
+          : 'incomplete';
+      await updateBulletinGeneration(generationId, { completedCount, status });
+
+      return res.status(status === 'failed' ? 500 : 201).json({
+        generationId,
+        status,
+        expectedCount: studentIds.length,
+        completedCount,
+        bulletinIds,
+        bulletins: generatedBulletins,
+      });
+    } catch (err: any) {
+      if (generationId != null) {
+        await updateBulletinGeneration(generationId, { completedCount, status: 'failed' }).catch(() => undefined);
+      }
+      console.error('Failed to generate class bulletins:', err);
+      return res.status(500).json({ error: 'Failed to generate class bulletins' });
+    }
+  });
 };
 
 export const generateBulletinSnapshot = async (
   studentId: number,
   termId: number,
+  generationIdOrPersistence: number | null | BulletinSnapshotPersistence = null,
   persistence: BulletinSnapshotPersistence = createDbBulletinSnapshotPersistence(),
 ): Promise<BulletinSnapshotResult> => {
-  return persistence.transaction(async (ctx) => {
+  const generationId = typeof generationIdOrPersistence === 'object'
+    ? null
+    : generationIdOrPersistence;
+  const resolvedPersistence = typeof generationIdOrPersistence === 'object'
+    ? generationIdOrPersistence
+    : persistence;
+
+  return resolvedPersistence.transaction(async (ctx) => {
     const student = await ctx.getStudentById(studentId);
     if (!student) throw new Error('Student not found');
 
@@ -1148,13 +1299,50 @@ export const generateBulletinSnapshot = async (
     const subjectGroups = groupBulletinLinesBySubjectType(lines);
     const subjectAverage = calculateWeightedSubjectAverage(lines);
     const finalAverage = subjectAverage.average;
+    const classAverages = classStudents
+      .map((classStudent) => {
+        if (classStudent.id === student.id) return finalAverage;
+
+        const classStudentCalculation = calculateStudentTermAverage({
+          term: { id: term.id },
+          student: classStudent,
+          evaluations: termEvaluations,
+          grades: allGrades.filter((grade) => grade.studentId === classStudent.id),
+        });
+        const classStudentLines = computeSubjectLines(
+          classStudentCalculation.selectedEvaluations,
+          classStudentCalculation.snapshots,
+          classStudents,
+          allGrades,
+          classStudent.id,
+          student.classId,
+          term.id,
+          termEvaluations,
+          teacherNameMap,
+          subjectTypeNames,
+          subjectIdsByName,
+          subjectMetadataByName,
+          subjectMetadataById,
+        );
+        return calculateWeightedSubjectAverage(classStudentLines).average;
+      })
+      .filter((average): average is number => average != null && Number.isFinite(average));
+    const classHighestAverage = classAverages.length > 0 ? Math.max(...classAverages) : null;
+    const classLowestAverage = classAverages.length > 0 ? Math.min(...classAverages) : null;
+    const classAverage = classAverages.length > 0
+      ? classAverages.reduce((sum, average) => sum + average, 0) / classAverages.length
+      : null;
 
     const inserted = await ctx.insertBulletin({
       studentId: student.id,
       classId: student.classId,
       schoolYearId: klass.academicYearId,
       termId: term.id,
+      generationId,
       average: finalAverage,
+      classHighestAverage,
+      classLowestAverage,
+      classAverage,
       totalPoints: subjectAverage.totalPoints,
       totalCoefficients: subjectAverage.totalCoefficients,
       rank,
