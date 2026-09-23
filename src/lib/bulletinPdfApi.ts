@@ -2711,8 +2711,7 @@ export const createBulletinPdfDocument = async (
       `M 10,0 H ${principalBoxWidth - 10} Q ${principalBoxWidth},0 ${principalBoxWidth},10 V ${principalBoxHeight - 10} Q ${principalBoxWidth},${principalBoxHeight} ${principalBoxWidth - 10},${principalBoxHeight} H 10 Q 0,${principalBoxHeight} 0,${principalBoxHeight - 10} V 10 Q 0,0 10,0 Z`,
       {
         x: principalBoxLeft,
-        y: principalBoxBottom,
-        color: hexToRgb('#f7f4ee'),
+        y: principalBoxTop,
         borderColor: hexToRgb('#000000'),
         borderWidth: 0.8,
       },
