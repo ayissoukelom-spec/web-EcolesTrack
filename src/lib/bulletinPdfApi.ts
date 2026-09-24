@@ -1946,7 +1946,7 @@ export const createBulletinPdfDocument = async (
 
       page.drawImage(logo, {
         x: logoRender.x,
-        y: logoRender.y,
+        y: height - 34 + fontBold.heightAtSize(8, { descender: false }) - logoRender.drawHeight + 8,
         width: logoRender.drawWidth,
         height: logoRender.drawHeight,
       });
@@ -1978,7 +1978,7 @@ export const createBulletinPdfDocument = async (
     const institutionHeaderWidth = margin + 178 - leftX;
     if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX + 25, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 10, text, fontBold, 1);
-    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter, height - 98, 166, 11, text, fontBold, 2);
+    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter - 6, height - 98, 166, 11, text, fontBold, 2);
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
       school.phone?.trim()
@@ -1995,7 +1995,7 @@ export const createBulletinPdfDocument = async (
         ? nonEmailLines.length > 0 ? [nonEmailLines.join(' '), emailLine] : [emailLine]
         : [postalAndPhone.join(' ')];
       const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
-      const coordinateCenterX = leftX + 25 + firstLineWidth / 2;
+      const coordinateCenterX = leftX + 7 + firstLineWidth / 2;
       coordinateLines.forEach((line, lineIndex) => {
         const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);
         drawCenteredWrappedText(page, line, coordinateCenterX, height - 119 - lineIndex * 9, lineWidth, 7, text, fontBoldItalic, 1);
@@ -2061,7 +2061,7 @@ export const createBulletinPdfDocument = async (
       separatorX += column.width;
       page.drawLine({ start: { x: separatorX, y }, end: { x: separatorX, y: y - headerHeight }, color: tableBorder, thickness: tableBorderWidth });
     });
-    return y - (headerHeight + 4);
+    return y - (headerHeight + 2);
   };
 
   const page = pdf.addPage(pageSize);
@@ -2080,6 +2080,7 @@ export const createBulletinPdfDocument = async (
     },
   );
   let cursorY = drawHeader(page, true);
+  const bulletinHeaderY = cursorY + 10;
 
   const title = `${template.labels.title} DU ${data.termName}`;
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
@@ -2090,13 +2091,13 @@ export const createBulletinPdfDocument = async (
     `M 5,0 H ${titleBoxWidth - 5} Q ${titleBoxWidth},0 ${titleBoxWidth},5 V ${titleBoxHeight - 5} Q ${titleBoxWidth},${titleBoxHeight} ${titleBoxWidth - 5},${titleBoxHeight} H 5 Q 0,${titleBoxHeight} 0,${titleBoxHeight - 5} V 5 Q 0,0 5,0 Z`,
     {
       x: titleBoxX,
-      y: cursorY + 13 + fontBold.heightAtSize(14, { descender: false }) / 2 - studentHeaderOffsetY,
+      y: bulletinHeaderY + 13 + fontBold.heightAtSize(14, { descender: false }) / 2 - studentHeaderOffsetY,
       color: hexToRgb('#d1d5db'),
       borderColor: hexToRgb('#000000'),
       borderWidth: 1.2,
     },
   );
-  drawText(page, title, (page.getWidth() - titleWidth) / 2, cursorY - studentHeaderOffsetY, 14, text, fontBold);
+  drawText(page, title, (page.getWidth() - titleWidth) / 2, bulletinHeaderY - studentHeaderOffsetY, 14, text, fontBold);
   const classLabel = `${template.labels.class}: ${data.className}`;
   const classEffectif = `EFFECTIF : ${data.classStudentCount}`;
   const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabel), 14);
@@ -2104,7 +2105,7 @@ export const createBulletinPdfDocument = async (
   const classLineGap = 12;
   const classLineWidth = classLabelWidth + classLineGap + classEffectifWidth;
   const classLineX = (page.getWidth() - classLineWidth) / 2;
-  const classLineY = cursorY - 25 - studentHeaderOffsetY;
+  const classLineY = bulletinHeaderY - 25 - studentHeaderOffsetY;
   drawText(page, classLabel, classLineX, classLineY, 14, text, fontBold);
   drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
   const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
@@ -2166,7 +2167,7 @@ export const createBulletinPdfDocument = async (
       { subtotal: { label: `TOTAL MATIERES ${group.subjectTypeName.toUpperCase()}`, lines: group.lines } },
     ])
     : data.lines.map((line) => ({ line }));
-  const totalRowHeight = 20;
+  const totalRowHeight = 19;
   const tableContentHeight = renderEntries.reduce((height, entry) => {
     if (entry.groupTitle || entry.subtotal) return height + totalRowHeight;
     const line = entry.line;
@@ -2174,10 +2175,10 @@ export const createBulletinPdfDocument = async (
     const subjectDisplayName = getSubjectDisplayName(line.subjectName, line.subjectCode, columns[0].width - 14, fontRegular, 7.5);
     const subjectLines = wrapText(subjectDisplayName, columns[0].width - 14, fontRegular, 7.5).slice(0, 2);
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontRegular, 7.5).slice(0, 2);
-    const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
+    const rowHeight = Math.max(17, Math.max(subjectLines.length, commentLines.length) * 8 + 4);
     return height + rowHeight;
   }, 0);
-  const tableBottom = tableTop - (28 + 4) - tableContentHeight - totalRowHeight;
+  const tableBottom = tableTop - (28 + 2) - tableContentHeight - totalRowHeight;
   cursorY = drawTableHeader(page, tableTop);
 
   for (const entry of renderEntries) {
@@ -2192,7 +2193,7 @@ export const createBulletinPdfDocument = async (
       const groupTitleOuterOverlap = tableBorderWidth / 2;
       page.drawLine({ start: { x: tableX, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
-      cursorY -= 20;
+      cursorY -= 19;
       continue;
     }
 
@@ -2229,7 +2230,7 @@ export const createBulletinPdfDocument = async (
     const subjectLayout = fitSubjectCellLayout(subjectDisplayName, columns[0].width - 14, 7.5, 5.5, fontBold);
     const subjectLines = subjectLayout.lines;
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontBold, 7.5).slice(0, 2);
-    const rowHeight = Math.max(18, Math.max(subjectLines.length, commentLines.length) * 8 + 6);
+    const rowHeight = Math.max(17, Math.max(subjectLines.length, commentLines.length) * 8 + 4);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
     let x = tableX;
     const subjectBreakdown = {
