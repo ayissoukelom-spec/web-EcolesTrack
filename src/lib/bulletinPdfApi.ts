@@ -2091,7 +2091,7 @@ export const createBulletinPdfDocument = async (
     {
       x: titleBoxX,
       y: cursorY + 13 + fontBold.heightAtSize(14, { descender: false }) / 2 - studentHeaderOffsetY,
-      color: hexToRgb('#f8f8f2'),
+      color: hexToRgb('#d1d5db'),
       borderColor: hexToRgb('#000000'),
       borderWidth: 1.2,
     },
@@ -2349,6 +2349,7 @@ export const createBulletinPdfDocument = async (
     y: cursorY - totalRowHeight,
     width: columns.slice(0, 8).reduce((total, column) => total + column.width, 0),
     height: totalRowHeight,
+    color: hexToRgb('#d1d5db'),
     borderColor: tableBorder,
     borderWidth: tableBorderWidth,
   });
@@ -2441,7 +2442,7 @@ export const createBulletinPdfDocument = async (
       {
         x: boxLeft,
         y: boxTop,
-        color: hexToRgb('#f8f8f2'),
+        color: hexToRgb('#d1d5db'),
         borderColor: hexToRgb('#000000'),
         borderWidth: 1.2,
       },
@@ -2526,7 +2527,7 @@ export const createBulletinPdfDocument = async (
       {
         x: annualBoxLeft,
         y: annualBoxTop,
-        color: hexToRgb('#f8f8f2'),
+        color: hexToRgb('#d1d5db'),
         borderColor: hexToRgb('#000000'),
         borderWidth: 1.2,
       },
@@ -2634,7 +2635,7 @@ export const createBulletinPdfDocument = async (
       y: bottom,
       width: summaryTableWidth,
       height: averageTableHeight,
-      color: hexToRgb('#f7f4ee'),
+      color: hexToRgb('#d1d5db'),
       borderColor: text,
       borderWidth: 0.8,
     });
