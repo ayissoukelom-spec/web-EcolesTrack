@@ -2397,7 +2397,8 @@ export const createBulletinPdfDocument = async (
 
   const summaryLeftX = tableX + 5;
   const summaryRightX = tableX + 150 - 28.35;
-  const summaryY = cursorY - 16;
+  const excludedSummaryY = cursorY - 16;
+  const summaryY = totalGeneralBottomY - 16;
   const summaryBlocks: Array<{ label: string; average: number | null; rank: number | null }> = [];
   const currentSummaryLabel = formatPeriodSummaryLabel(data.termName);
   const currentSummary = {
@@ -2627,7 +2628,7 @@ export const createBulletinPdfDocument = async (
     drawText(page, currentBulletinAppreciation, decisionProfessorX, sentimentTextY, sentimentFontSize, text, fontBold);
   }
 
-  const lastSummaryY = summaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
+  const lastSummaryY = excludedSummaryY - (summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0)) * 16;
   const summaryTableTop = lastSummaryY + 22;
   const summaryRowHeight = 14;
   const summaryTableWidth = 150;
