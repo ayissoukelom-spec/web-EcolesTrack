@@ -2407,20 +2407,33 @@ export const createBulletinPdfDocument = async (
     rank: data.rank,
   };
 
-  const isSecondSemester = /\bsemestre\b.*\b2\b|^2\s*(?:e|è|eme|ème)?\s*semestre\b/i.test(String(data.termName ?? '')) || /\b2(?:e|è|eme|ème)?\s*semestre\b/i.test(String(data.termName ?? ''));
-  const previousSummary = (data.previousPeriodSummaries ?? []).find((entry) => {
-    const entryLabel = formatPeriodSummaryLabel(entry.label);
-    if (!entryLabel) return false;
-    return /\bsemestre\b/i.test(entryLabel) && !/\b2(?:e|è|eme|ème)?\s*semestre\b/i.test(entryLabel);
-  }) ?? null;
+  const currentPeriodMatch = currentSummaryLabel.match(/^(\d+)(?:er|ème)\s+(Semestre|Trimestre)$/i);
+  const currentPeriodNumber = currentPeriodMatch ? Number(currentPeriodMatch[1]) : null;
+  const currentPeriodType = currentPeriodMatch?.[2].toLowerCase() ?? null;
+  const previousSummaries = (data.previousPeriodSummaries ?? [])
+    .map((entry) => {
+      const label = formatPeriodSummaryLabel(entry.label);
+      const match = label.match(/^(\d+)(?:er|ème)\s+(Semestre|Trimestre)$/i);
+      return match
+        ? { entry, label, number: Number(match[1]), type: match[2].toLowerCase() }
+        : null;
+    })
+    .filter((summary): summary is { entry: typeof data.previousPeriodSummaries[number]; label: string; number: number; type: string } => (
+      summary != null
+      && currentPeriodNumber != null
+      && currentPeriodType != null
+      && summary.type === currentPeriodType
+      && summary.number < currentPeriodNumber
+    ))
+    .sort((a, b) => a.number - b.number);
 
-  if (isSecondSemester && previousSummary) {
+  previousSummaries.forEach(({ entry, label }) => {
     summaryBlocks.push({
-      label: formatPeriodSummaryLabel(previousSummary.label),
-      average: previousSummary.average,
-      rank: previousSummary.rank,
+      label,
+      average: entry.average,
+      rank: entry.rank,
     });
-  }
+  });
 
   summaryBlocks.push(currentSummary);
 
