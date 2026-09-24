@@ -2067,7 +2067,7 @@ export const createBulletinPdfDocument = async (
   const page = pdf.addPage(pageSize);
   const studentHeaderOffsetY = 8;
   const outerBoxTop = page.getHeight() - 18 + 8;
-  const outerBoxBottom = page.getHeight() - 148 - 25 - studentHeaderOffsetY - 10;
+  const outerBoxBottom = page.getHeight() - 148 - 25 - studentHeaderOffsetY + 2;
   const outerBoxWidth = tableWidth;
   const outerBoxHeight = outerBoxTop - outerBoxBottom;
   page.drawSvgPath(
@@ -2108,6 +2108,7 @@ export const createBulletinPdfDocument = async (
   const classLineY = bulletinHeaderY - 25 - studentHeaderOffsetY;
   drawText(page, classLabel, classLineX, classLineY, 14, text, fontBold);
   drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
+  const studentBlockY = cursorY + 12;
   const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
   const studentName = sanitizePdfText(data.studentName);
   const studentLabelSize = 8;
@@ -2117,12 +2118,12 @@ export const createBulletinPdfDocument = async (
   const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
   const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
   const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
-  drawText(page, studentLabel, tableX + 12, cursorY - 51 - studentHeaderOffsetY, 13, text, fontBold);
-  drawText(page, studentName, studentNameX, cursorY - 51 - studentHeaderOffsetY, 13, text, fontBold);
+  drawText(page, studentLabel, tableX + 12, studentBlockY - 51 - studentHeaderOffsetY, 13, text, fontBold);
+  drawText(page, studentName, studentNameX, studentBlockY - 51 - studentHeaderOffsetY, 13, text, fontBold);
   if (data.studentMatricule?.trim()) {
     const matriculeText = `N° Mle : ${sanitizePdfTextPreservingAccents(data.studentMatricule)}`;
     const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
-    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, cursorY - 67 - studentHeaderOffsetY, 13, text, fontBold);
+    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, studentBlockY - 67 - studentHeaderOffsetY, 13, text, fontBold);
   }
   const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
   const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
@@ -2142,7 +2143,7 @@ export const createBulletinPdfDocument = async (
       ? fontBold.widthOfTextAtSize(block.value, 13)
       : fontBold.widthOfTextAtSize(block.value, studentNameSize);
     const blockWidth = labelWidth + studentGap + valueWidth;
-    const blockY = cursorY - 51 - index * 16 - (isStatusBlock || isGenderBlock ? studentHeaderOffsetY : 0);
+    const blockY = studentBlockY - 51 - index * 16 - (isStatusBlock || isGenderBlock ? studentHeaderOffsetY : 0);
     const rightAlignedX = rightEdge - blockWidth;
     const minimumX = index === 0 ? studentNameX + studentNameWidth + 12 : rightAlignedX;
     const blockX = Math.max(rightAlignedX, minimumX);
