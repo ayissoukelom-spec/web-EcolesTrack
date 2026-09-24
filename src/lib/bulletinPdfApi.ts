@@ -2180,7 +2180,8 @@ export const createBulletinPdfDocument = async (
     return height + rowHeight;
   }, 0);
   const tableBottom = tableTop - (28 + 2) - tableContentHeight - totalRowHeight;
-  cursorY = drawTableHeader(page, tableTop);
+  const tableRenderOffsetY = 24;
+  cursorY = drawTableHeader(page, tableTop + tableRenderOffsetY);
 
   for (const entry of renderEntries) {
     if (entry.groupTitle) {
@@ -2365,6 +2366,7 @@ export const createBulletinPdfDocument = async (
     page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
   });
   cursorY -= totalRowHeight;
+  cursorY -= tableRenderOffsetY;
 
   const summaryLeftX = tableX + 5;
   const summaryRightX = tableX + 150 - 28.35;
