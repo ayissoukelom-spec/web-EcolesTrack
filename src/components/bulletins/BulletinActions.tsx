@@ -16,6 +16,7 @@ interface BulletinActionsProps {
   generateTermId: string;
   lookupIdInput: string;
   isGenerateLoading: boolean;
+  hasSelectedBulletinEvaluations: boolean;
   generateError: string | null;
   generateSuccess: string | null;
   canGenerateClassBulk: boolean;
@@ -44,6 +45,7 @@ export default function BulletinActions({
   generateTermId,
   lookupIdInput,
   isGenerateLoading,
+  hasSelectedBulletinEvaluations,
   generateError,
   generateSuccess,
   canGenerateClassBulk,
@@ -136,7 +138,7 @@ export default function BulletinActions({
 
             <button
               type="submit"
-              disabled={isGenerateLoading}
+              disabled={isGenerateLoading || !hasSelectedBulletinEvaluations}
               className="rounded-xl px-4 py-2 bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-60"
             >
               {isGenerateLoading ? 'Generation...' : 'Generer le bulletin'}

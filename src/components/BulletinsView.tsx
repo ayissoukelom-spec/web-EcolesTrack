@@ -291,6 +291,9 @@ export default function BulletinsView({
   };
 
   const selectedEvaluationCount = generateEvaluations.filter(isEvaluationValidated).length;
+  const hasSelectedBulletinEvaluations = generateEvaluations.some((evaluation) => (
+    isEvaluationValidated(evaluation) && normalizeEvaluationType(evaluation.type) != null
+  ));
 
   useEffect(() => {
     if (!allEvaluationsCheckboxRef.current) return;
@@ -674,6 +677,7 @@ export default function BulletinsView({
         generateTermId={generateTermId}
         lookupIdInput={lookupIdInput}
         isGenerateLoading={generateHook.loading}
+        hasSelectedBulletinEvaluations={hasSelectedBulletinEvaluations}
         generateError={generateHook.error}
         generateSuccess={generateHook.success}
         canGenerateClassBulk={Boolean(generateClassId) && Boolean(generateTermId) && generateStudents.some((student) => String(student.classId) === generateClassId)}
