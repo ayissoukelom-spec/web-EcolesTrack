@@ -2397,7 +2397,7 @@ export const createBulletinPdfDocument = async (
 
   const summaryLeftX = tableX + 5;
   const summaryRightX = tableX + 150 - 28.35;
-  const excludedSummaryY = cursorY - 16;
+  const excludedSummaryY = cursorY - 16 + 90;
   const summaryY = totalGeneralBottomY - 16;
   const summaryBlocks: Array<{ label: string; average: number | null; rank: number | null }> = [];
   const currentSummaryLabel = formatPeriodSummaryLabel(data.termName);
