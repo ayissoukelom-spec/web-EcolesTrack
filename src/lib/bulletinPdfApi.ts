@@ -1850,13 +1850,29 @@ export const createBulletinPdfDocument = async (
     drawCenteredWrappedText(page, value, centerX, y, maxWidth, minSize, color, font, 2);
   };
 
+  const getVisualFontBounds = (font: any, size: number): { ascent: number; descent: number } => {
+    const ascent = font.heightAtSize(size, { descender: false });
+    const fullHeight = font.heightAtSize(size);
+    return { ascent, descent: Math.max(0, fullHeight - ascent) };
+  };
+
+  const getCenteredBaseline = (cellCenterY: number, font: any, size: number): number => {
+    const { ascent, descent } = getVisualFontBounds(font, size);
+    return cellCenterY - (ascent - descent) / 2;
+  };
+
+  const getCenteredBlockFirstBaseline = (cellCenterY: number, font: any, size: number, lineSpacing: number, lineCount: number): number => {
+    const { ascent, descent } = getVisualFontBounds(font, size);
+    const totalInterline = Math.max(0, lineCount - 1) * lineSpacing;
+    return cellCenterY - (ascent - descent - totalInterline) / 2;
+  };
+
   const drawCenteredCellValue = (page: any, value: string, columnX: number, columnWidth: number, cellTopY: number, cellBottomY: number, size: number, color: any, font: any) => {
     const safeValue = sanitizePdfText(value);
     const textWidth = font.widthOfTextAtSize(safeValue, size);
-    const textHeight = font.heightAtSize(size, { descender: false });
     const textX = columnX + (columnWidth - textWidth) / 2;
     const cellCenterY = (cellTopY + cellBottomY) / 2;
-    const textY = cellCenterY - textHeight / 2;
+    const textY = getCenteredBaseline(cellCenterY, font, size) - 0.5 - 0.4;
     drawText(page, value, textX, textY, size, color, font);
   };
 
@@ -1875,11 +1891,13 @@ export const createBulletinPdfDocument = async (
     const suffixGap = 1;
     const totalWidth = mainWidth + suffixGap + suffixWidth;
     const textX = columnX + (columnWidth - totalWidth) / 2;
-    const mainHeight = font.heightAtSize(size, { descender: false });
-    const suffixHeight = font.heightAtSize(suffixSize, { descender: false });
-    const suffixRise = mainHeight * 0.55;
+    const mainBounds = getVisualFontBounds(font, size);
+    const suffixBounds = getVisualFontBounds(font, suffixSize);
+    const suffixRise = mainBounds.ascent * 0.55;
     const cellCenterY = (cellTopY + cellBottomY) / 2;
-    const mainY = cellCenterY - (suffixRise + suffixHeight) / 2;
+    const visualTop = Math.max(mainBounds.ascent, suffixRise + suffixBounds.ascent);
+    const visualBottom = Math.min(-mainBounds.descent, suffixRise - suffixBounds.descent);
+    const mainY = cellCenterY - (visualTop + visualBottom) / 2 - 0.5 - 0.4;
     drawText(page, mainText, textX, mainY, size, color, font);
     drawText(page, suffix, textX + mainWidth + suffixGap, mainY + suffixRise, suffixSize, color, font);
   };
@@ -1894,15 +1912,13 @@ export const createBulletinPdfDocument = async (
       lines = computeWrappedTextLines(value, maxWidth, font, size, 2).lines;
     }
 
-    const textHeight = font.heightAtSize(size, { descender: false });
     const lineSpacing = size + 2;
-    const textBlockHeight = textHeight + Math.max(0, lines.length - 1) * lineSpacing;
     const cellCenterY = (cellTopY + cellBottomY) / 2;
-    const firstBaselineY = cellCenterY - textHeight / 2 + (textBlockHeight - textHeight) / 2;
+    const firstBaselineY = getCenteredBlockFirstBaseline(cellCenterY, font, size, lineSpacing, lines.length);
     lines.forEach((line, index) => {
       const textWidth = font.widthOfTextAtSize(sanitizePdfText(line), size);
       const textX = columnX + (columnWidth - textWidth) / 2;
-      const textY = firstBaselineY - index * lineSpacing;
+      const textY = firstBaselineY - index * lineSpacing - 0.5 - 0.4;
       drawText(page, line, textX, textY, size, color, font);
     });
   };
@@ -2195,7 +2211,8 @@ export const createBulletinPdfDocument = async (
       const groupTitleFontSize = 11;
       const groupTitleTextWidth = fontBold.widthOfTextAtSize(entry.groupTitle, groupTitleFontSize);
       const groupTitleTextX = groupRowCenterX - groupTitleTextWidth / 2;
-      drawText(page, entry.groupTitle, groupTitleTextX, cursorY - 14, groupTitleFontSize, primary, fontBold);
+      const groupTitleBottomY = cursorY - totalRowHeight;
+      drawText(page, entry.groupTitle, groupTitleTextX, getCenteredBaseline((cursorY + 4 + groupTitleBottomY) / 2, fontBold, groupTitleFontSize) - 0.5 - 0.4, groupTitleFontSize, primary, fontBold);
       const groupTitleOuterOverlap = tableBorderWidth / 2;
       page.drawLine({ start: { x: tableX, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
@@ -2217,11 +2234,13 @@ export const createBulletinPdfDocument = async (
         borderColor: tableBorder,
         borderWidth: tableBorderWidth,
       });
-      drawText(page, entry.subtotal.label, tableX + 7, cursorY - 14, 10, primary, fontBold);
+      const subtotalCellBottomY = cursorY - totalRowHeight + 4;
+      const subtotalLabelY = getCenteredBaseline((cursorY + subtotalCellBottomY) / 2, fontBold, 10) - 0.5 - 0.4;
+      drawText(page, entry.subtotal.label, tableX + 7, subtotalLabelY, 10, primary, fontBold);
       const subtotalCoefficientColumnX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
       const subtotalWeightedPointsColumnX = subtotalCoefficientColumnX + columns[6].width;
-      drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientColumnX, columns[6].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
-      drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsColumnX, columns[7].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
+      drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientColumnX, columns[6].width, cursorY, subtotalCellBottomY, 10, primary, fontBold);
+      drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsColumnX, columns[7].width, cursorY, subtotalCellBottomY, 10, primary, fontBold);
       [6, 7, 8].forEach((columnCount) => {
         const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
         page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight + 4 }, color: tableBorder, thickness: tableBorderWidth });
@@ -2238,6 +2257,8 @@ export const createBulletinPdfDocument = async (
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontBold, 7.5).slice(0, 2);
     const rowHeight = Math.max(17, Math.max(subjectLines.length, commentLines.length) * 8 + 4);
     page.drawRectangle({ x: tableX, y: cursorY - rowHeight + 4, width: tableWidth, height: rowHeight - 4, borderColor: tableBorder, borderWidth: tableBorderWidth });
+    const cellTopY = cursorY;
+    const cellBottomY = cursorY - rowHeight + 4;
     let x = tableX;
     const subjectBreakdown = {
       interrogation: line.interrogation ?? null,
@@ -2261,47 +2282,47 @@ export const createBulletinPdfDocument = async (
       const textHeight = fontBold.heightAtSize(subjectFontSize, { descender: false });
       const lineSpacing = lineHeight + 1;
       const textBlockHeight = textHeight + Math.max(0, subjectTextLines.length - 1) * lineSpacing;
-      const cellCenterY = cursorY - rowHeight / 2;
-      const firstBaselineY = cellCenterY - textHeight / 2 + (textBlockHeight - textHeight) / 2;
+      const cellCenterY = (cellTopY + cellBottomY) / 2;
+      const firstBaselineY = getCenteredBlockFirstBaseline(cellCenterY, fontBold, subjectFontSize, lineHeight + 1, subjectTextLines.length);
       subjectTextLines.forEach((subjectLine, index) => {
         const lineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(subjectLine), subjectFontSize);
         const lineX = subjectCellLeft + (subjectCellWidth - lineWidth) / 2;
-        const lineY = firstBaselineY - index * (lineHeight + 1);
+        const lineY = firstBaselineY - index * (lineHeight + 1) - 0.5 - 0.4;
         drawText(page, subjectLine, lineX, lineY, subjectFontSize, text, fontBold);
       });
     }
     x += columns[0].width;
 
     // Column 2: Inter.
-    drawCenteredCellValue(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.interrogation), x, columns[1].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, subjectBreakdown.interrogation == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.interrogation), x, columns[1].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[1].width;
 
     // Column 3: Dev.
-    drawCenteredCellValue(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.devoir), x, columns[2].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, subjectBreakdown.devoir == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.devoir), x, columns[2].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[2].width;
 
     // Column 4: Moy. Clas
-    drawCenteredCellValue(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.classAverage), x, columns[3].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, subjectBreakdown.classAverage == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.classAverage), x, columns[3].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[3].width;
 
     // Column 5: Compo.
-    drawCenteredCellValue(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.composition), x, columns[4].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, subjectBreakdown.composition == null ? '-' : formatPdfDisplayNumberFixed(subjectBreakdown.composition), x, columns[4].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[4].width;
 
     // Column 6: Moy. Général
-    drawCenteredCellValue(page, line.average == null ? '-' : formatPdfDisplayNumberFixed(line.average), x, columns[5].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, line.average == null ? '-' : formatPdfDisplayNumberFixed(line.average), x, columns[5].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[5].width;
 
     // Column 7: Coef.
-    drawCenteredCellValue(page, line.coefficient == null ? '-' : String(line.coefficient), x, columns[6].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, line.coefficient == null ? '-' : String(line.coefficient), x, columns[6].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[6].width;
 
     // Column 8: Note coef.
-    drawCenteredCellValue(page, String(noteCoef), x, columns[7].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredCellValue(page, String(noteCoef), x, columns[7].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[7].width;
 
     // Column 9: Rang
-    drawCenteredRankValue(page, line.rank == null ? '-' : String(line.rank), x, columns[8].width, cursorY, cursorY - rowHeight, 9.5, text, fontBold);
+    drawCenteredRankValue(page, line.rank == null ? '-' : String(line.rank), x, columns[8].width, cellTopY, cellBottomY, 9.5, text, fontBold);
     x += columns[8].width;
 
     // Column 10: Prof. (Teacher name)
@@ -2326,11 +2347,11 @@ export const createBulletinPdfDocument = async (
       renderedTeacherName = `${renderedTeacherName.trimEnd()}${ellipsis}`;
     }
     const renderedTeacherNameWidth = fontBold.widthOfTextAtSize(renderedTeacherName, teacherNameSize);
-    drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, cursorY - 13, teacherNameSize, text, fontBold);
+    drawText(page, renderedTeacherName, teacherColumnCenterX - renderedTeacherNameWidth / 2, getCenteredBaseline((cellTopY + cellBottomY) / 2, fontBold, teacherNameSize) - 0.5 - 0.4, teacherNameSize, text, fontBold);
     x += columns[9].width;
 
     // Column 11: Appréciation
-    drawCenteredFittedCellText(page, line.teacherComment || '-', x, columns[10].width, cursorY, cursorY - rowHeight, 8.2, text, fontBold);
+    drawCenteredFittedCellText(page, line.teacherComment || '-', x, columns[10].width, cellTopY, cellBottomY, 8.2, text, fontBold);
     x += columns[10].width;
 
     // Column 12: Signature (leave empty for signature)
@@ -2361,11 +2382,11 @@ export const createBulletinPdfDocument = async (
     borderColor: tableBorder,
     borderWidth: tableBorderWidth,
   });
-  drawText(page, 'TOTAL GENERAL', tableX + 7, cursorY - 14, 11, primary, fontBold);
+  drawText(page, 'TOTAL GENERAL', tableX + 7, getCenteredBaseline((cursorY + totalGeneralBottomY) / 2, fontBold, 11) - 0.5 - 0.4, 11, primary, fontBold);
   const totalCoefficientColumnX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
   const totalWeightedPointsColumnX = totalCoefficientColumnX + columns[6].width;
-  drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientColumnX, columns[6].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
-  drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsColumnX, columns[7].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
+  drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalCoefficients), totalCoefficientColumnX, columns[6].width, cursorY, totalGeneralBottomY, 10, primary, fontBold);
+  drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsColumnX, columns[7].width, cursorY, totalGeneralBottomY, 10, primary, fontBold);
   [6, 7, 8].forEach((columnCount) => {
     const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
     page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: totalGeneralBottomY }, color: tableBorder, thickness: tableBorderWidth });
