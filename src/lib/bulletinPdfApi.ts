@@ -2021,10 +2021,11 @@ export const createBulletinPdfDocument = async (
   const drawTableHeader = (page: any, y: number) => {
     // Header height accommodates up to 2 lines of text
     const headerHeight = 28;
+    const headerBottomY = y - headerHeight + 4;
     const headerOuterOverlap = tableBorderWidth / 2;
-    page.drawRectangle({ x: tableX, y: y - headerHeight, width: tableWidth, height: headerHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
-    page.drawLine({ start: { x: tableX, y: y + headerOuterOverlap }, end: { x: tableX, y: y - headerHeight - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
-    page.drawLine({ start: { x: tableX + tableWidth, y: y + headerOuterOverlap }, end: { x: tableX + tableWidth, y: y - headerHeight - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+    page.drawRectangle({ x: tableX, y: headerBottomY, width: tableWidth, height: headerHeight - 4, borderColor: tableBorder, borderWidth: tableBorderWidth });
+    page.drawLine({ start: { x: tableX, y: y + headerOuterOverlap }, end: { x: tableX, y: headerBottomY - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
+    page.drawLine({ start: { x: tableX + tableWidth, y: y + headerOuterOverlap }, end: { x: tableX + tableWidth, y: headerBottomY - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
     let x = tableX;
     columns.forEach((column, index) => {
       const lines = headerLines[index];
@@ -2038,7 +2039,7 @@ export const createBulletinPdfDocument = async (
         const textX = line === 'Signature'
           ? columnX + (tableX + tableWidth - columnX - renderedWidth) / 2
           : columnX + (columnWidth - renderedWidth) / 2;
-        drawText(page, line, textX, y - 18, headerSize, text, fontBold);
+        drawText(page, line, textX, y - 14, headerSize, text, fontBold);
       } else {
         const isNoteOverTwentyHeader = index === 5 && lines.length === 2 && lines[0] === 'Note' && lines[1] === '/20';
         const isNoteCoefHeader = index === 7 && lines.length === 2 && lines[0] === 'Note' && lines[1] === 'coef.';
@@ -2047,10 +2048,10 @@ export const createBulletinPdfDocument = async (
           const lineWidth = fontBold.widthOfTextAtSize(line, 9.5);
           const textX = columnX + (columnWidth - lineWidth) / 2;
           const verticalOffset = isNoteOverTwentyHeader
-            ? 13 + lineIndex * 8
+            ? 9 + lineIndex * 8
             : isNoteCoefHeader || isMoyClasHeader
-              ? 13 + lineIndex * 8
-              : 21 - lineIndex * 8;
+              ? 9 + lineIndex * 8
+              : 17 - lineIndex * 8;
           drawText(page, line, textX, y - verticalOffset, 9.5, text, fontBold);
         });
       }
@@ -2059,9 +2060,9 @@ export const createBulletinPdfDocument = async (
     let separatorX = tableX;
     columns.slice(0, -1).forEach((column) => {
       separatorX += column.width;
-      page.drawLine({ start: { x: separatorX, y }, end: { x: separatorX, y: y - headerHeight }, color: tableBorder, thickness: tableBorderWidth });
+      page.drawLine({ start: { x: separatorX, y }, end: { x: separatorX, y: headerBottomY }, color: tableBorder, thickness: tableBorderWidth });
     });
-    return y - (headerHeight + 2);
+    return headerBottomY;
   };
 
   const page = pdf.addPage(pageSize);
@@ -2181,6 +2182,9 @@ export const createBulletinPdfDocument = async (
   }, 0);
   const tableBottom = tableTop - (28 + 2) - tableContentHeight - totalRowHeight;
   const tableRenderOffsetY = 24;
+  const tableHeaderCompressionY = 6;
+  const tableRowCompressionY = 4;
+  const tableInternalCompressionY = tableHeaderCompressionY + renderEntries.length * tableRowCompressionY;
   cursorY = drawTableHeader(page, tableTop + tableRenderOffsetY);
 
   for (const entry of renderEntries) {
@@ -2195,7 +2199,7 @@ export const createBulletinPdfDocument = async (
       const groupTitleOuterOverlap = tableBorderWidth / 2;
       page.drawLine({ start: { x: tableX, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
       page.drawLine({ start: { x: tableX + tableWidth, y: cursorY + 4 + groupTitleOuterOverlap }, end: { x: tableX + tableWidth, y: cursorY - totalRowHeight - groupTitleOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
-      cursorY -= 19;
+      cursorY -= totalRowHeight - tableRowCompressionY;
       continue;
     }
 
@@ -2207,9 +2211,9 @@ export const createBulletinPdfDocument = async (
       );
       page.drawRectangle({
         x: tableX,
-        y: cursorY - totalRowHeight,
+        y: cursorY - totalRowHeight + 4,
         width: tableWidth,
-        height: totalRowHeight,
+        height: totalRowHeight - 4,
         borderColor: tableBorder,
         borderWidth: tableBorderWidth,
       });
@@ -2220,9 +2224,9 @@ export const createBulletinPdfDocument = async (
       drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsColumnX, columns[7].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
       [6, 7, 8].forEach((columnCount) => {
         const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
-        page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
+        page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight + 4 }, color: tableBorder, thickness: tableBorderWidth });
       });
-      cursorY -= totalRowHeight;
+      cursorY -= totalRowHeight - tableRowCompressionY;
       continue;
     }
 
@@ -2233,7 +2237,7 @@ export const createBulletinPdfDocument = async (
     const subjectLines = subjectLayout.lines;
     const commentLines = wrapText(line.teacherComment || '-', columns[4].width - 14, fontBold, 7.5).slice(0, 2);
     const rowHeight = Math.max(17, Math.max(subjectLines.length, commentLines.length) * 8 + 4);
-    page.drawRectangle({ x: tableX, y: cursorY - rowHeight, width: tableWidth, height: rowHeight, borderColor: tableBorder, borderWidth: tableBorderWidth });
+    page.drawRectangle({ x: tableX, y: cursorY - rowHeight + 4, width: tableWidth, height: rowHeight - 4, borderColor: tableBorder, borderWidth: tableBorderWidth });
     let x = tableX;
     const subjectBreakdown = {
       interrogation: line.interrogation ?? null,
@@ -2335,10 +2339,10 @@ export const createBulletinPdfDocument = async (
     let separatorX = tableX;
     columns.slice(0, -1).forEach((column) => {
       separatorX += column.width;
-      page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - rowHeight }, color: tableBorder, thickness: tableBorderWidth });
+      page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - rowHeight + 4 }, color: tableBorder, thickness: tableBorderWidth });
     });
 
-    cursorY -= rowHeight;
+    cursorY -= rowHeight - tableRowCompressionY;
   }
 
   const renderedLines = renderEntries.flatMap((entry) => entry.line ? [entry.line] : []);
@@ -2347,11 +2351,12 @@ export const createBulletinPdfDocument = async (
     (total, line) => total + (line.average != null && line.coefficient != null ? line.average * line.coefficient : 0),
     0,
   );
+  const totalGeneralBottomY = cursorY - totalRowHeight + 4;
   page.drawRectangle({
     x: tableX,
-    y: cursorY - totalRowHeight,
+    y: totalGeneralBottomY,
     width: columns.slice(0, 8).reduce((total, column) => total + column.width, 0),
-    height: totalRowHeight,
+    height: totalRowHeight - 4,
     color: hexToRgb('#d1d5db'),
     borderColor: tableBorder,
     borderWidth: tableBorderWidth,
@@ -2363,9 +2368,10 @@ export const createBulletinPdfDocument = async (
   drawCenteredCellValue(page, formatPdfDisplayNumberFixed(totalWeightedPoints), totalWeightedPointsColumnX, columns[7].width, cursorY, cursorY - totalRowHeight, 10, primary, fontBold);
   [6, 7, 8].forEach((columnCount) => {
     const separatorX = tableX + columns.slice(0, columnCount).reduce((total, column) => total + column.width, 0);
-    page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: cursorY - totalRowHeight }, color: tableBorder, thickness: tableBorderWidth });
+    page.drawLine({ start: { x: separatorX, y: cursorY }, end: { x: separatorX, y: totalGeneralBottomY }, color: tableBorder, thickness: tableBorderWidth });
   });
   cursorY -= totalRowHeight;
+  cursorY -= tableInternalCompressionY;
   cursorY -= tableRenderOffsetY;
 
   const summaryLeftX = tableX + 5;
