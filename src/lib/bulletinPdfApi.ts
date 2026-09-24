@@ -2397,7 +2397,7 @@ export const createBulletinPdfDocument = async (
 
   const summaryLeftX = tableX + 5;
   const summaryRightX = tableX + 150 - 28.35;
-  const excludedSummaryY = cursorY - 16 + 90;
+  let excludedSummaryY: number;
   const summaryY = totalGeneralBottomY - 16;
   const summaryBlocks: Array<{ label: string; average: number | null; rank: number | null }> = [];
   const currentSummaryLabel = formatPeriodSummaryLabel(data.termName);
@@ -2423,6 +2423,10 @@ export const createBulletinPdfDocument = async (
   }
 
   summaryBlocks.push(currentSummary);
+
+  const excludedSummaryBlockRows = summaryBlocks.length - 1 + (data.annualAverage != null || data.annualRank != null ? 1 : 0);
+  const summaryBlockGapY = 2;
+  excludedSummaryY = totalGeneralBottomY - summaryBlockGapY + excludedSummaryBlockRows * 16 - 22;
 
   const moyennesX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
   const moyennesFontSize = 12;
