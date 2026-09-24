@@ -28,6 +28,43 @@ describe('normalizeDashboardChartData', () => {
 });
 
 describe('DashboardView absence status counts', () => {
+  it('shows login statistics only for super admins', () => {
+    const loginStats = {
+      totalLogins: 12,
+      uniqueUsers: 8,
+      webLogins: 7,
+      androidLogins: 5,
+      loginsByDay: [{ date: '2026-09-24', total: 12, web: 7, android: 5 }],
+      loginsByRole: [{ role: 'parent', total: 12 }],
+    };
+
+    const { rerender } = render(
+      <DashboardView
+        stats={{ totalStudents: 0, totalAbsences: 0, totalClasses: 0, totalTeachers: 0, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="super_admin"
+        loginStats={loginStats}
+      />
+    );
+
+    expect(screen.getAllByText('Connexions').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('12').length).toBeGreaterThan(0);
+    expect(screen.getByText('Utilisateurs uniques')).toBeTruthy();
+
+    rerender(
+      <DashboardView
+        stats={{ totalStudents: 0, totalAbsences: 0, totalClasses: 0, totalTeachers: 0, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="school_admin"
+        loginStats={loginStats}
+      />
+    );
+
+    expect(screen.queryByText('Utilisateurs uniques')).toBeNull();
+  });
+
   it('uses the full authorized absence scope instead of the 5 most recent rows', () => {
     render(
       <DashboardView

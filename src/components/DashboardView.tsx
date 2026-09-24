@@ -1,8 +1,9 @@
 import React from 'react';
 import { Users, AlertTriangle, Percent, GraduationCap, Clock, CheckCircle, XCircle, Award } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, PieChart, Pie, Cell, Legend } from 'recharts';
 
 import { UserRole } from '../types.ts';
+import type { LoginStats } from '../hooks/useAdminDashboard.ts';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 
 export function normalizeDashboardChartData(rawData: unknown): Array<{ name: string; taux: number }> {
@@ -57,6 +58,7 @@ interface DashboardViewProps {
     unjustified: number;
     pending?: number;
   };
+  loginStats?: LoginStats;
 }
 
 export default function DashboardView({
@@ -66,6 +68,7 @@ export default function DashboardView({
   userRole,
   chartData = [],
   absenceStatusCounts,
+  loginStats,
 }: DashboardViewProps) {
   console.log('Statistiques reçues par DashboardView :', stats);
   console.log('Graphique reçu :', chartData);
@@ -266,6 +269,70 @@ export default function DashboardView({
           </div>
         </div>
       </div>
+
+      {userRole === 'super_admin' && loginStats && (
+        <section className="space-y-5" aria-labelledby="login-statistics-title" id="login-statistics">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 id="login-statistics-title" className="text-xl font-black text-slate-800">Connexions</h3>
+              <p className="text-sm text-slate-500">Activité Web et Android sur les 30 derniers jours</p>
+            </div>
+            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-600">Super Admin</span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-3xl border border-indigo-200/80 bg-gradient-to-br from-indigo-600 to-blue-500 p-5 text-white shadow-[0_16px_30px_rgba(79,70,229,0.18)]">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-100">Connexions</p>
+              <p className="mt-2 text-4xl font-black">{loginStats.totalLogins}</p>
+            </div>
+            <div className="rounded-3xl border border-emerald-200/80 bg-gradient-to-br from-emerald-500 to-teal-500 p-5 text-white shadow-[0_16px_30px_rgba(16,185,129,0.16)]">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100">Utilisateurs uniques</p>
+              <p className="mt-2 text-4xl font-black">{loginStats.uniqueUsers}</p>
+            </div>
+            <div className="rounded-3xl border border-sky-200 bg-sky-50 p-5 text-slate-800">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">Web</p>
+              <p className="mt-2 text-4xl font-black text-sky-700">{loginStats.webLogins}</p>
+            </div>
+            <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-slate-800">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Android</p>
+              <p className="mt-2 text-4xl font-black text-amber-700">{loginStats.androidLogins}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
+            <div className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-indigo-50/60 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
+              <h4 className="mb-4 text-lg font-bold text-slate-800">Connexions par jour</h4>
+              <div className="h-72" style={{ minWidth: 0, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={loginStats.loginsByDay} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={(value: string) => value.slice(5)} />
+                    <YAxis allowDecimals={false} tick={{ fill: '#475569', fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="web" name="Web" stackId="login" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="android" name="Android" stackId="login" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
+              <h4 className="mb-4 text-lg font-bold text-slate-800">Connexions par rôle</h4>
+              <div className="space-y-2">
+                {loginStats.loginsByRole.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-400">Aucune connexion enregistrée.</p>
+                ) : loginStats.loginsByRole.map((entry) => (
+                  <div key={entry.role} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                    <span className="font-medium text-slate-600">{entry.role}</span>
+                    <span className="font-black text-slate-800">{entry.total}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Recent activities section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

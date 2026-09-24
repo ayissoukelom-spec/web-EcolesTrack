@@ -25,6 +25,7 @@ import {
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
 import { useLateArrivals } from './hooks/useLateArrivals.ts';
+import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import LoginView from './components/LoginView.tsx';
@@ -112,6 +113,14 @@ export default function App() {
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [summaryRecentGrades, setSummaryRecentGrades] = useState<any[]>([]);
+  const [loginStats, setLoginStats] = useState<LoginStats>({
+    totalLogins: 0,
+    uniqueUsers: 0,
+    webLogins: 0,
+    androidLogins: 0,
+    loginsByDay: [],
+    loginsByRole: [],
+  });
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
@@ -219,6 +228,38 @@ export default function App() {
         } else {
           setChartData([]);
         }
+      }
+
+      if (currentRole === 'super_admin') {
+        try {
+          const loginSummary = await apiFetch('/api/admin/login-stats');
+          setLoginStats({
+            totalLogins: Number(loginSummary?.totalLogins || 0),
+            uniqueUsers: Number(loginSummary?.uniqueUsers || 0),
+            webLogins: Number(loginSummary?.webLogins || 0),
+            androidLogins: Number(loginSummary?.androidLogins || 0),
+            loginsByDay: Array.isArray(loginSummary?.loginsByDay) ? loginSummary.loginsByDay : [],
+            loginsByRole: Array.isArray(loginSummary?.loginsByRole) ? loginSummary.loginsByRole : [],
+          });
+        } catch {
+          setLoginStats({
+            totalLogins: 0,
+            uniqueUsers: 0,
+            webLogins: 0,
+            androidLogins: 0,
+            loginsByDay: [],
+            loginsByRole: [],
+          });
+        }
+      } else {
+        setLoginStats({
+          totalLogins: 0,
+          uniqueUsers: 0,
+          webLogins: 0,
+          androidLogins: 0,
+          loginsByDay: [],
+          loginsByRole: [],
+        });
       }
 
       // 3. Load other lists for CRUD and management tabs
@@ -1209,6 +1250,7 @@ export default function App() {
               {activeTab === 'tableau-de-bord' && (
                 <DashboardView
                   stats={stats}
+                  loginStats={loginStats}
                   recentAbsences={summaryRecentAbsences}
                   recentGrades={summaryRecentGrades}
                   userRole={currentRole}

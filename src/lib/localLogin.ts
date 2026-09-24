@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
-import { users, localAuths } from '../db/schema.ts';
+import { users, localAuths, userLoginEvents } from '../db/schema.ts';
 import { eq, sql } from 'drizzle-orm';
 
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
@@ -86,6 +86,17 @@ export async function handleLocalLogin(req: Request, res: Response) {
       subject: String(userRecord.id),
       jwtid: crypto.randomUUID(),
     });
+
+    try {
+      await db.insert(userLoginEvents).values({
+        userId: userRecord.id,
+        role: userRecord.role,
+        schoolId: userRecord.schoolId ?? null,
+        clientType: 'web',
+      });
+    } catch (eventError: any) {
+      console.error('Failed to record Web login event:', eventError?.message || eventError);
+    }
 
     if (userRecord.role === 'parent') {
       await db.update(users)

@@ -47,6 +47,7 @@ export default function AppShell() {
 
   const {
     stats,
+    loginStats,
     recentAbsences: summaryRecentAbsences,
     recentGrades: summaryRecentGrades,
     refresh: refreshDashboard,
@@ -91,7 +92,7 @@ export default function AppShell() {
     setErrorMsg(null);
     try {
       await apiFetch('/api/auth/register-or-login', { method: 'POST' });
-      await Promise.all([refreshDashboard(), refreshClasses(), refreshStudents(), refreshAbsences(), refreshLateArrivals()]);
+      await Promise.all([refreshDashboard(currentRole), refreshClasses(), refreshStudents(), refreshAbsences(), refreshLateArrivals()]);
 
       const endpoints = [
         '/api/schools',
@@ -402,7 +403,7 @@ export default function AppShell() {
     });
 
     if (activeTab === 'tableau-de-bord') {
-      return <DashboardView stats={stats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
+      return <DashboardView stats={stats} loginStats={loginStats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
     }
 
     if (activeTab === 'administration') {

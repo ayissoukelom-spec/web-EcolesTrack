@@ -5,11 +5,13 @@ import { verifyJwt } from './jwt.ts';
 const mockWhere = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
+const mockInsertValues = vi.fn();
 const mockDb = {
   select: vi.fn(() => ({
     from: vi.fn(() => ({ where: mockWhere })),
   })),
   update: vi.fn(() => ({ set: mockSet })),
+  insert: vi.fn(() => ({ values: mockInsertValues })),
 };
 
 vi.mock('../db/index.ts', () => ({
@@ -19,6 +21,7 @@ vi.mock('../db/index.ts', () => ({
 vi.mock('../db/schema.ts', () => ({
   users: {},
   localAuths: {},
+  userLoginEvents: {},
 }));
 
 const createMockRes = () => {
@@ -31,6 +34,7 @@ const createMockRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockUpdateWhere.mockResolvedValue(undefined);
+  mockInsertValues.mockResolvedValue(undefined);
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.JWT_ISSUER = 'test-issuer';
@@ -71,7 +75,7 @@ describe('handleLocalLogin', () => {
 
     expect(res.status).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledTimes(1);
-    const response = res.json.mock.calls[0][0];
+    const response = (res.json as any).mock.calls[0][0];
 
     expect(response).toMatchObject({
       id: userRecord.id,
@@ -84,6 +88,12 @@ describe('handleLocalLogin', () => {
       tokenType: 'access',
     });
     expect(typeof response.token).toBe('string');
+    expect(mockInsertValues).toHaveBeenCalledWith({
+      userId: userRecord.id,
+      role: userRecord.role,
+      schoolId: userRecord.schoolId,
+      clientType: 'web',
+    });
 
     const decoded = verifyJwt(response.token, 'test-jwt-secret');
     expect(decoded.uid).toBe(userRecord.uid);
@@ -133,6 +143,65 @@ describe('handleLocalLogin', () => {
     expect(mockUpdateWhere).toHaveBeenCalled();
   });
 
+  it('records one event for each successful login', async () => {
+    const password = 'SuperSecret123!';
+    const salt = 'test-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 654,
+      uid: 'user_654',
+      email: 'repeat@example.com',
+      name: 'Repeat User',
+      role: 'teacher',
+      schoolId: 12,
+    };
+    const authRow = { passwordHash, salt, mustReset: false };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([authRow]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([authRow]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const req = { body: { email: userRecord.email, password } } as Request;
+
+    await handleLocalLogin(req, createMockRes() as Response);
+    await handleLocalLogin(req, createMockRes() as Response);
+
+    expect(mockInsertValues).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a successful login when event recording fails', async () => {
+    const password = 'SuperSecret123!';
+    const salt = 'test-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 987,
+      uid: 'user_987',
+      email: 'event-error@example.com',
+      name: 'Event Error User',
+      role: 'teacher',
+      schoolId: 3,
+    };
+    const authRow = { passwordHash, salt, mustReset: false };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([authRow]);
+    mockInsertValues.mockRejectedValueOnce(new Error('event storage unavailable'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledTimes(1);
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({ tokenType: 'access' });
+    errorSpy.mockRestore();
+  });
+
   it('returns 401 when login credentials are invalid', async () => {
     mockWhere.mockResolvedValueOnce([]);
 
@@ -144,6 +213,30 @@ describe('handleLocalLogin', () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
+  });
+
+  it('does not record an event when the password is invalid', async () => {
+    const crypto = await import('node:crypto');
+    const userRecord = {
+      id: 321,
+      uid: 'user_321',
+      email: 'wrong-password@example.com',
+      name: 'Wrong Password User',
+      role: 'teacher',
+      schoolId: 4,
+    };
+    const salt = 'test-salt';
+    const passwordHash = crypto.pbkdf2Sync('correct-password', salt, 310000, 64, 'sha512').toString('hex');
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password: 'wrong-password' } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
   it('returns 500 when JWT secret is missing in production', async () => {

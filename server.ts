@@ -74,6 +74,7 @@ import {
   schoolCycles,
   cyclePeriodTemplates,
   evaluationParticipations,
+  userLoginEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne } from 'drizzle-orm';
 import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
@@ -9155,6 +9156,78 @@ if (uniqueParentIds.length > 0) {
   // ==========================================
   // DASHBOARD API
   // ==========================================
+
+  app.get('/api/admin/login-stats', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+      const actor = await resolveActor(req);
+      if (!actor || actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const [totalsRows, dailyResult, roleRows] = await Promise.all([
+        db.select({
+          totalLogins: sql<number>`count(*)::integer`,
+          uniqueUsers: sql<number>`count(distinct ${userLoginEvents.userId})::integer`,
+          webLogins: sql<number>`count(*) filter (where ${userLoginEvents.clientType} = 'web')::integer`,
+          androidLogins: sql<number>`count(*) filter (where ${userLoginEvents.clientType} = 'android')::integer`,
+        }).from(userLoginEvents).where(sql`${userLoginEvents.loginAt} >= current_date - interval '29 days'`),
+        db.execute(sql`
+          with daily as (
+            select
+              ${userLoginEvents.loginAt}::date as login_date,
+              count(*)::integer as total,
+              count(*) filter (where ${userLoginEvents.clientType} = 'web')::integer as web,
+              count(*) filter (where ${userLoginEvents.clientType} = 'android')::integer as android
+            from ${userLoginEvents}
+            where ${userLoginEvents.loginAt} >= current_date - interval '29 days'
+            group by ${userLoginEvents.loginAt}::date
+          )
+          select
+            to_char(days.day::date, 'YYYY-MM-DD') as date,
+            coalesce(daily.total, 0)::integer as total,
+            coalesce(daily.web, 0)::integer as web,
+            coalesce(daily.android, 0)::integer as android
+          from generate_series(
+            current_date - interval '29 days',
+            current_date,
+            interval '1 day'
+          ) as days(day)
+          left join daily on daily.login_date = days.day::date
+          order by days.day
+        `),
+        db.select({
+          role: userLoginEvents.role,
+          total: sql<number>`count(*)::integer`,
+        }).from(userLoginEvents)
+          .where(sql`${userLoginEvents.loginAt} >= current_date - interval '29 days'`)
+          .groupBy(userLoginEvents.role)
+          .orderBy(userLoginEvents.role),
+      ]);
+
+      const totals = totalsRows[0] ?? { totalLogins: 0, uniqueUsers: 0, webLogins: 0, androidLogins: 0 };
+      res.json({
+        totalLogins: Number(totals.totalLogins ?? 0),
+        uniqueUsers: Number(totals.uniqueUsers ?? 0),
+        webLogins: Number(totals.webLogins ?? 0),
+        androidLogins: Number(totals.androidLogins ?? 0),
+        loginsByDay: dailyResult.rows.map((row: any) => ({
+          date: String(row.date),
+          total: Number(row.total ?? 0),
+          web: Number(row.web ?? 0),
+          android: Number(row.android ?? 0),
+        })),
+        loginsByRole: roleRows.map((row) => ({
+          role: row.role,
+          total: Number(row.total ?? 0),
+        })),
+      });
+    } catch (err: any) {
+      console.error('Failed fetching login statistics:', err?.message || err);
+      res.status(500).json({ error: 'Failed to retrieve login statistics' });
+    }
+  });
 
   // Dashboard summary - Filtered by school
   app.get('/api/dashboard/summary', requireAuth, async (req: AuthRequest, res) => {

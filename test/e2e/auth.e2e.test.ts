@@ -72,6 +72,11 @@ const FIXTURES = {
     { userId: 12, schoolId: 10, role: 'surveillant', isActive: true },
   ],
   auditEvents: [],
+  userLoginEvents: [
+    { id: 1, userId: 6, role: 'parent', schoolId: 10, loginAt: '2026-09-24T09:00:00.000Z', clientType: 'web' },
+    { id: 2, userId: 6, role: 'parent', schoolId: 10, loginAt: '2026-09-24T10:00:00.000Z', clientType: 'android' },
+    { id: 3, userId: 3, role: 'teacher', schoolId: 10, loginAt: '2026-09-24T11:00:00.000Z', clientType: null },
+  ],
 };
 
 const FIXTURES_TEMPLATE = JSON.parse(JSON.stringify(FIXTURES));
@@ -346,6 +351,7 @@ function createMockDb() {
       if (lower.includes('notificationattachments')) return 'notificationAttachments';
       if (lower.includes('notifications')) return 'notifications';
       if (lower.includes('auditevents')) return 'auditEvents';
+      if (lower.includes('userloginevents')) return 'userLoginEvents';
     }
     if (table && typeof table === 'object') {
       const keys = Object.keys(table).map((k) => k.toLowerCase());
@@ -366,6 +372,7 @@ function createMockDb() {
       if (keys.includes('absenceid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'absenceJustifications';
       if (keys.includes('notificationid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'notificationAttachments';
       if (keys.includes('type') && keys.includes('userid') && keys.includes('title')) return 'notifications';
+      if (keys.includes('clienttype') && keys.includes('loginat')) return 'userLoginEvents';
     }
 
     const maybeName = table && typeof table === 'object' ? (table.name || table.tableName || table.alias) : undefined;
@@ -500,6 +507,10 @@ function createMockDb() {
           builder._orderBy = _args;
           return builder;
         },
+        groupBy(..._args: any[]) {
+          builder._groupBy = _args;
+          return builder;
+        },
         limit(n: number) {
           builder._limit = n;
           return builder;
@@ -557,6 +568,26 @@ function createMockDb() {
         let rows = filterTableRows(builder._table, combinedConditions);
         const conditions = combinedConditions;
         const fromName = resolveTableName(builder._table);
+
+        if (builder._selected && typeof builder._selected === 'object') {
+          const selectedKeys = Object.keys(builder._selected);
+          if (selectedKeys.includes('totalLogins')) {
+            const events = FIXTURES.userLoginEvents;
+            return [{
+              totalLogins: events.length,
+              uniqueUsers: new Set(events.map((event) => event.userId)).size,
+              webLogins: events.filter((event) => event.clientType === 'web').length,
+              androidLogins: events.filter((event) => event.clientType === 'android').length,
+            }];
+          }
+          if (selectedKeys.includes('role') && selectedKeys.includes('total') && selectedKeys.length === 2) {
+            const totals = new Map<string, number>();
+            for (const event of FIXTURES.userLoginEvents) {
+              totals.set(event.role, (totals.get(event.role) || 0) + 1);
+            }
+            return Array.from(totals, ([role, total]) => ({ role, total }));
+          }
+        }
 
           if (fromName === 'notificationAttachments' && builder._cond) {
             const queryChunks: any[] = [];
@@ -824,8 +855,28 @@ function createMockDb() {
       };
     },
   });
-  // Ensure basic execute helper used by db helpers is present
-  (db as any).execute = async (_sql: any) => [];
+  // Simulate the daily aggregate query without connecting to PostgreSQL.
+  (db as any).execute = async (_sql: any) => {
+    const today = new Date('2026-09-24T00:00:00.000Z');
+    const eventsByDate = new Map<string, { total: number; web: number; android: number }>();
+    for (const event of FIXTURES.userLoginEvents) {
+      const date = String(event.loginAt).slice(0, 10);
+      const current = eventsByDate.get(date) || { total: 0, web: 0, android: 0 };
+      current.total += 1;
+      if (event.clientType === 'web') current.web += 1;
+      if (event.clientType === 'android') current.android += 1;
+      eventsByDate.set(date, current);
+    }
+
+    const rows = Array.from({ length: 30 }, (_, index) => {
+      const date = new Date(today);
+      date.setUTCDate(today.getUTCDate() - 29 + index);
+      const key = date.toISOString().slice(0, 10);
+      const values = eventsByDate.get(key) || { total: 0, web: 0, android: 0 };
+      return { date: key, ...values };
+    });
+    return { rows };
+  };
   return db;
 }
 
@@ -1294,6 +1345,57 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body).toHaveProperty('stats');
     expect(res.body).toHaveProperty('recentAbsences');
     expect(res.body).toHaveProperty('recentGrades');
+  });
+
+  it('3h5. super_admin can retrieve aggregated login statistics', async () => {
+    const res = await request(app)
+      .get('/api/admin/login-stats')
+      .set('Authorization', 'Bearer token-super');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      totalLogins: 3,
+      uniqueUsers: 2,
+      webLogins: 1,
+      androidLogins: 1,
+    });
+    expect(res.body.loginsByDay).toHaveLength(30);
+    expect(res.body.loginsByRole).toEqual([
+      { role: 'parent', total: 2 },
+      { role: 'teacher', total: 1 },
+    ]);
+    expect(res.body.loginsByDay.find((entry: any) => entry.date === '2026-09-24')).toMatchObject({
+      total: 3,
+      web: 1,
+      android: 1,
+    });
+  });
+
+  it('3h6. non-super_admin roles cannot retrieve login statistics', async () => {
+    const res = await request(app)
+      .get('/api/admin/login-stats')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('3h7. login statistics return zeroes when there are no events', async () => {
+    FIXTURES.userLoginEvents.splice(0);
+
+    const res = await request(app)
+      .get('/api/admin/login-stats')
+      .set('Authorization', 'Bearer token-super');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      totalLogins: 0,
+      uniqueUsers: 0,
+      webLogins: 0,
+      androidLogins: 0,
+    });
+    expect(res.body.loginsByDay).toHaveLength(30);
+    expect(res.body.loginsByDay.every((entry: any) => entry.total === 0 && entry.web === 0 && entry.android === 0)).toBe(true);
+    expect(res.body.loginsByRole).toEqual([]);
   });
 
   it('3i. school_admin can create a teacher in their own school via POST /api/teachers', async () => {

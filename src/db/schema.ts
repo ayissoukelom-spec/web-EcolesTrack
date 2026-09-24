@@ -123,6 +123,20 @@ export const userSchools = pgTable('user_schools', {
   userSchoolUniqueIdx: uniqueIndex('user_schools_user_id_school_id_idx').on(table.userId, table.schoolId),
 }));
 
+export const userLoginEvents = pgTable('user_login_events', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  role: text('role').notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
+  loginAt: timestamp('login_at').defaultNow().notNull(),
+  clientType: text('client_type'),
+}, (table) => ({
+  clientTypeCheck: check(
+    'user_login_events_client_type_check',
+    sql`${table.clientType} IS NULL OR ${table.clientType} IN ('web', 'android')`,
+  ),
+}));
+
 // 3b. Local auth store for username/password (optional, dev-friendly)
 export const localAuths = pgTable('local_auths', {
   id: serial('id').primaryKey(),
