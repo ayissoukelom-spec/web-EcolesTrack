@@ -329,6 +329,39 @@ describe('generateBulletinSnapshot', () => {
     expect(bulletin?.classAverage).toBeCloseTo((14 + 11.5 + 8.75) / 3, 10);
   });
 
+  it('classe les élèves selon la moyenne officielle avec un rang standard pour les ex æquo', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [1, 2, 3, 4].map((id) => ({
+        id,
+        classId: 10,
+        schoolId: 1,
+        firstName: `Student ${id}`,
+        lastName: 'Test',
+      })),
+      evaluations: [
+        { id: 20, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Composition', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true },
+      ],
+      grades: [15, 14, 14, 13].map((score, index) => ({
+        id: index + 20,
+        evaluationId: 20,
+        studentId: index + 1,
+        score: String(score),
+      })),
+    });
+
+    for (const studentId of [1, 2, 3, 4]) {
+      await generateBulletinSnapshot(studentId, 7, persistence);
+    }
+
+    expect(state.bulletins.sort((a, b) => a.studentId - b.studentId).map((bulletin) => [bulletin.average, bulletin.rank])).toEqual([
+      [15, 1],
+      [14, 2],
+      [14, 2],
+      [13, 4],
+    ]);
+  });
+
   it('exclut les moyennes nulles des MIN/MAX et conserve le snapshot apres modification des notes', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,

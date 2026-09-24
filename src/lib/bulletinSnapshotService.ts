@@ -712,27 +712,18 @@ const computeSubjectRank = (
 
 const computeRank = (
   targetStudentId: number,
-  classStudents: BulletinStudentLike[],
-  termEvaluations: BulletinEvaluationLike[],
-  allGrades: BulletinGradeLike[],
-  termId: number,
+  officialAverages: Array<{ studentId: number; average: number | null }>,
 ): number | null => {
-  const averages = classStudents
-    .map((student) => {
-      const studentGrades = allGrades.filter((grade) => grade.studentId === student.id);
-      const result = calculateStudentTermAverage({
-        term: { id: termId },
-        student,
-        evaluations: termEvaluations,
-        grades: studentGrades,
-      });
-      return { studentId: student.id, average: result.average };
-    })
-    .filter((entry) => entry.average != null)
-    .sort((a, b) => (b.average as number) - (a.average as number));
+  const rankedAverages = officialAverages
+    .filter((entry): entry is { studentId: number; average: number } => entry.average != null)
+    .sort((a, b) => b.average - a.average);
+  const targetIndex = rankedAverages.findIndex((entry) => entry.studentId === targetStudentId);
+  if (targetIndex < 0) return null;
 
-  const rank = averages.findIndex((entry) => entry.studentId === targetStudentId);
-  return rank >= 0 ? rank + 1 : null;
+  const previousAverage = rankedAverages[targetIndex - 1]?.average;
+  return targetIndex > 0 && previousAverage === rankedAverages[targetIndex].average
+    ? rankedAverages.findIndex((entry) => entry.average === rankedAverages[targetIndex].average) + 1
+    : targetIndex + 1;
 };
 
 export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersistence => ({
@@ -1275,8 +1266,6 @@ export const generateBulletinSnapshot = async (
       grades: studentGrades,
     });
 
-    const rank = computeRank(student.id, classStudents, termEvaluations, allGrades, term.id);
-
     // Load teacher names for all evaluations
     const teacherIds = Array.from(new Set(termEvaluations.map((e) => e.teacherId).filter((id) => id != null) as number[]));
     const teacherNameMap = await ctx.getTeacherNames(teacherIds);
@@ -1299,9 +1288,9 @@ export const generateBulletinSnapshot = async (
     const subjectGroups = groupBulletinLinesBySubjectType(lines);
     const subjectAverage = calculateWeightedSubjectAverage(lines);
     const finalAverage = subjectAverage.average;
-    const classAverages = classStudents
+    const officialAverages = classStudents
       .map((classStudent) => {
-        if (classStudent.id === student.id) return finalAverage;
+        if (classStudent.id === student.id) return { studentId: classStudent.id, average: finalAverage };
 
         const classStudentCalculation = calculateStudentTermAverage({
           term: { id: term.id },
@@ -1324,9 +1313,11 @@ export const generateBulletinSnapshot = async (
           subjectMetadataByName,
           subjectMetadataById,
         );
-        return calculateWeightedSubjectAverage(classStudentLines).average;
+        return { studentId: classStudent.id, average: calculateWeightedSubjectAverage(classStudentLines).average };
       })
-      .filter((average): average is number => average != null && Number.isFinite(average));
+      .filter((entry): entry is { studentId: number; average: number } => entry.average != null && Number.isFinite(entry.average));
+    const classAverages = officialAverages.map((entry) => entry.average);
+    const rank = computeRank(student.id, officialAverages);
     const classHighestAverage = classAverages.length > 0 ? Math.max(...classAverages) : null;
     const classLowestAverage = classAverages.length > 0 ? Math.min(...classAverages) : null;
     const classAverage = classAverages.length > 0
