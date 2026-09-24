@@ -1,5 +1,6 @@
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '../db/index.ts';
 import { registerBulletinGenerateRoute } from './bulletinSnapshotService.ts';
 
 vi.mock('./studentAccess', () => ({
@@ -157,5 +158,47 @@ describe('registerBulletinGenerateRoute', () => {
 
     expect(response.status).toBe(403);
     expect(studentAccessMock.getAuthorizedStudents).toHaveBeenCalled();
+  });
+
+  it('refuses individual generation for a student outside the school_admin school', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 8, uid: 'school-admin-1', role: 'school_admin', appRole: 'admin', schoolId: 1 };
+      next();
+    };
+    const selectSpy = vi.spyOn(db, 'select').mockReturnValue({
+      from: () => ({
+        where: vi.fn().mockResolvedValue([{ classId: 80, schoolId: 2 }]),
+      }),
+    } as any);
+    const generateHandler = vi.fn();
+
+    try {
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 8, role: 'school_admin', schoolId: 1 }),
+        verifyMiddleware: verifyMiddleware as any,
+        generateHandler,
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const baseUrl = `http://127.0.0.1:${port}`;
+
+      const response = await fetch(`${baseUrl}/api/bulletins/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: 10, termId: 2 }),
+      });
+
+      expect(response.status).toBe(403);
+      expect(generateHandler).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
   });
 });

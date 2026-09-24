@@ -893,7 +893,7 @@ class StudentAuthorizationError extends Error {
 }
 
 const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
-  if (req.user?.role !== 'super_admin') {
+  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();
@@ -952,7 +952,10 @@ export const registerBulletinGenerateRoute = (
         return res.status(400).json({ error: 'studentId and termId are required' });
       }
 
-      const [studentRecord] = await db.select({ classId: students.classId }).from(students).where(eq(students.id, studentId));
+      const [studentRecord] = await db.select({ classId: students.classId, schoolId: students.schoolId }).from(students).where(eq(students.id, studentId));
+      if (actor.role === 'school_admin' && (actor.schoolId == null || studentRecord?.schoolId !== actor.schoolId)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       if (studentRecord) {
         const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, studentRecord.classId));
         const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));

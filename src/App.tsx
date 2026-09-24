@@ -1135,23 +1135,23 @@ export default function App() {
 
               {currentRole !== 'surveillant' && <button
                 type="button"
-                disabled={currentRole !== 'super_admin'}
+                disabled={currentRole !== 'super_admin' && currentRole !== 'school_admin'}
                 onClick={() => {
-                  if (currentRole === 'super_admin') {
+                  if (currentRole === 'super_admin' || currentRole === 'school_admin') {
                     setActiveTab('bulletins');
                   }
                 }}
                 className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  currentRole !== 'super_admin'
+                  currentRole !== 'super_admin' && currentRole !== 'school_admin'
                     ? 'cursor-not-allowed opacity-60 text-slate-400'
                     : 'cursor-pointer text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                 } ${
-                  activeTab === 'bulletins' && currentRole === 'super_admin'
+                  activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin')
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                     : ''
                 }`}
                 id="sidebar-nav-bulletins"
-                aria-disabled={currentRole !== 'super_admin'}
+                aria-disabled={currentRole !== 'super_admin' && currentRole !== 'school_admin'}
               >
                 <div className="flex items-center gap-3">
                   <FileText className="h-4.5 w-4.5" />
@@ -1159,7 +1159,7 @@ export default function App() {
                 </div>
                 {noteOverdueCount > 0 && (
                   <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                    activeTab === 'bulletins' && currentRole === 'super_admin' ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                    activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin') ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
                   }`}>
                     {noteOverdueCount}
                   </span>
@@ -1382,7 +1382,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'bulletins' && currentRole === 'super_admin' && (
+              {activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
                 <BulletinsView
                   schoolsList={schoolsList}
                   classesList={classesList}
@@ -1393,7 +1393,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'bulletins' && currentRole !== 'super_admin' && null}
+              {activeTab === 'bulletins' && currentRole !== 'super_admin' && currentRole !== 'school_admin' && null}
 
               {activeTab === 'audit' && currentRole === 'super_admin' && (
                 <AuditView

@@ -118,9 +118,26 @@ describe('App bulletin navigation', () => {
     });
   });
 
-  it('allows only the super_admin role to access the Bulletin entry and page', async () => {
+  it('allows super_admin to access the Bulletin entry and page', async () => {
     mockGetSimulatedRole.mockReturnValue('super_admin');
     mockGetSimulatedUser.mockReturnValue({ uid: 'sim-super-admin', email: 'superadmin@example.com', name: 'Super Admin', schoolId: null, role: 'super_admin', id: 1 });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const bulletinButton = await screen.findByRole('button', { name: /^Bulletins$/i });
+    expect(bulletinButton).toBeEnabled();
+    fireEvent.click(bulletinButton);
+
+    expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('allows school_admin to access the Bulletin entry and page', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
 
     render(
       <AuthProvider>
@@ -184,8 +201,8 @@ describe('App bulletin navigation', () => {
     expect(screen.getByTestId('mock-grades')).toHaveTextContent('"evaluationMaximumScore":19');
   });
 
-  it('keeps the Bulletin menu visible but disabled for non-super_admin roles and does not navigate on click', async () => {
-    for (const role of ['school_admin', 'teacher', 'parent']) {
+  it('keeps the Bulletin menu visible but disabled for non-administration roles and does not navigate on click', async () => {
+    for (const role of ['teacher', 'parent']) {
       mockGetSimulatedRole.mockReturnValue(role);
       mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: role === 'parent' ? null : 1, role, id: 1 });
 

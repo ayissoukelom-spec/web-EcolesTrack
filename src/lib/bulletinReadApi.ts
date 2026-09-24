@@ -398,7 +398,7 @@ const parseOptionalPositiveInt = (value: unknown): number | undefined => {
 };
 
 const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
-  if (req.user?.role !== 'super_admin') {
+  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();

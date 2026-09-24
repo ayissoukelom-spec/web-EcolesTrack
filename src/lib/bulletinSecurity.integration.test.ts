@@ -300,8 +300,9 @@ const createIntegrationApp = () => {
   };
 
   const dataProvider: BulletinPdfDataProvider = {
-    getById: async (_actor, id) => {
+    getById: async (actor, id) => {
       pdfDataCalls += 1;
+      if (actor.role === 'school_admin' && id === 2) return null;
       return pdfById[id] || null;
     },
   };
@@ -386,6 +387,18 @@ describe('Phase 6.5 bulletin security integration', () => {
     expect(detailResponse.status).toBe(200);
     expect(pdfResponse.status).toBe(200);
     expect(integration.counters.generateCalls).toBe(1);
+  });
+
+  it('school_admin cannot download a batch containing another school bulletin', async () => {
+    const integration = createIntegrationApp();
+    const baseUrl = await withServer(integration.app);
+
+    const response = await fetch(`${baseUrl}/api/bulletins/pdf/batch?ids=2`, {
+      headers: authHeader('adminToken'),
+    });
+
+    expect(response.status).toBe(403);
+    expect(integration.counters.pdfDataCalls).toBe(1);
   });
 
   it('teacher can read but cannot generate', async () => {

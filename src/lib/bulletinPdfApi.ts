@@ -2796,7 +2796,7 @@ interface RegisterBulletinPdfRouteOptions {
 }
 
 const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
-  if (req.user?.role !== 'super_admin') {
+  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();
@@ -2835,7 +2835,12 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
 
       for (const bulletinId of bulletinIds) {
         const bulletin = await dataProvider.getById(actor, bulletinId);
-        if (!bulletin) continue;
+        if (!bulletin) {
+          if (actor.role === 'school_admin') {
+            return res.status(403).json({ error: 'Forbidden' });
+          }
+          continue;
+        }
 
         const pdfBytes = await buildPdf(bulletin);
         const sourcePdf = await PDFDocument.load(pdfBytes);
