@@ -283,6 +283,14 @@ export default function LoginView({ onLogin }: Props) {
         <button type="submit" disabled={loading} className="w-full px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
           {loading ? 'Connexion...' : 'Se connecter'}
         </button>
+        <div className="mt-5 border-t border-slate-800 pt-4 text-center">
+          <a
+            href="/politique-confidentialite"
+            className="text-sm text-slate-400 underline underline-offset-4 transition-colors hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+          >
+            Politique de confidentialité
+          </a>
+        </div>
       </form>
     </div>
     )}

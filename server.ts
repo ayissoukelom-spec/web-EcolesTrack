@@ -1101,6 +1101,7 @@ export async function createApp() {
       req.path === '/' ||
       req.path.startsWith('/api') ||
       req.path === '/login' ||
+      req.path === '/politique-confidentialite' ||
       req.path.startsWith('/assets') ||
       req.path.startsWith('/@') ||
       req.path.startsWith('/node_modules') ||
