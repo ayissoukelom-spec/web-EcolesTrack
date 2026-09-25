@@ -38,13 +38,37 @@ export function isTermCompatibleWithCycle(
   education: { cycleId?: number | null; cycleCode?: EducationCycleCode | string | null },
 ): boolean {
   if (education.cycleId == null || education.cycleCode == null) return true;
-  if (term.cycleId != null) return term.cycleId === education.cycleId;
-
   const expectedPeriodType = getExpectedPeriodTypeForCycle(education.cycleCode);
   if (expectedPeriodType == null) return true;
 
   const termPeriodType = term.periodType ?? inferPeriodTypeFromLegacyName(term.name);
-  return termPeriodType === expectedPeriodType;
+  if (termPeriodType !== expectedPeriodType) return false;
+  return term.cycleId == null || term.cycleId === education.cycleId;
+}
+
+export function normalizeSchoolDate(value: string | null | undefined): string | null {
+  const match = String(value ?? '').trim().match(/^(\d{4}-\d{2}-\d{2})(?:$|T)/);
+  if (!match) return null;
+
+  const parsedDate = new Date(`${match[1]}T00:00:00.000Z`);
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== match[1]) return null;
+  return match[1];
+}
+
+export function resolveSchoolTermByDate<T extends { startDate?: string | null; endDate?: string | null }>(
+  terms: T[],
+  evaluationDate: string,
+): { term: T } | { error: 'No school term matches the evaluation date' | 'Multiple active terms match the class cycle; select a term explicitly' } {
+  const day = normalizeSchoolDate(evaluationDate);
+  const matchingTerms = day == null ? [] : terms.filter((term) =>
+    Boolean(term.startDate && term.endDate && term.startDate <= day && day <= term.endDate)
+  );
+
+  if (matchingTerms.length === 1) return { term: matchingTerms[0] };
+  if (matchingTerms.length > 1) {
+    return { error: 'Multiple active terms match the class cycle; select a term explicitly' };
+  }
+  return { error: 'No school term matches the evaluation date' };
 }
 
 export function getPeriodTypeShortName(periodType: string | null | undefined, orderIndex: number, legacyName?: string | null): string {
@@ -146,12 +170,7 @@ export async function resolveSchoolTermForClass(params: {
     return { term: selected, education };
   }
 
-  const matched = eligibleTerms.find((term) => term.startDate && term.endDate && params.date >= term.startDate && params.date <= term.endDate);
-  if (matched) return { term: matched, education };
-
-  const activeTerms = eligibleTerms.filter((term) => term.isActive);
-  if (activeTerms.length === 1) return { term: activeTerms[0], education };
-  if (activeTerms.length > 1) return { error: 'Multiple active terms match the class cycle; select a term explicitly' as const };
-  if (eligibleTerms.length === 1) return { term: eligibleTerms[0], education };
-  return { error: 'Unable to resolve a term for the class cycle' as const };
+  const resolved = resolveSchoolTermByDate(eligibleTerms, params.date);
+  if ('error' in resolved) return resolved;
+  return { term: resolved.term, education };
 }
