@@ -4,6 +4,8 @@ import {
   calculateClassAverage,
   calculateFinalSubjectAverage,
   calculateWeightedSubjectAverage,
+  findSubjectsMissingValidComposition,
+  formatMissingCompositionMessage,
   resolveSubjectCoefficientFromPublishedComposition,
   selectBulletinEvaluationsForTerm,
   summarizeTypeAveragesBySubject,
@@ -320,6 +322,45 @@ describe('bulletinService', () => {
     expect(result.totalPoints).toBe(64.125);
     expect(result.totalCoefficients).toBe(5);
     expect(result.average).toBe(12.825);
+  });
+
+  it('autorise une matière sélectionnée avec composition publiée même si des devoirs sont exclus', () => {
+    const evaluations = [
+      { id: 1, classId: 10, termId: 7, subject: 'Mathématiques', title: 'Devoir', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: false },
+      { id: 2, classId: 10, termId: 7, subject: 'Mathématiques', title: 'Composition', type: 'composition', coefficient: 3, maxScore: 20, countInBulletin: true },
+    ];
+
+    expect(findSubjectsMissingValidComposition(evaluations, 10, 7)).toEqual([]);
+  });
+
+  it('signale une matière sélectionnée sans composition publiée', () => {
+    const evaluations = [
+      { id: 1, classId: 10, termId: 7, subject: 'Dessin', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true },
+    ];
+
+    expect(findSubjectsMissingValidComposition(evaluations, 10, 7)).toEqual(['Dessin']);
+    expect(formatMissingCompositionMessage(['Dessin'])).toBe(
+      'Impossible de générer le bulletin. Les matières suivantes n’ont pas de composition valide : Dessin. Veuillez créer et valider une composition pour ces matières avant de générer le bulletin.',
+    );
+  });
+
+  it('inclut plusieurs matières sans composition publiée dans le message', () => {
+    const evaluations = [
+      { id: 1, classId: 10, termId: 7, subject: 'Mathématiques', title: 'Devoir', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true },
+      { id: 2, classId: 10, termId: 7, subject: 'Dessin', title: 'Interrogation', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+    ];
+
+    const missing = findSubjectsMissingValidComposition(evaluations, 10, 7);
+    expect(missing).toEqual(['Mathématiques', 'Dessin']);
+    expect(formatMissingCompositionMessage(missing)).toContain('Mathématiques, Dessin');
+  });
+
+  it('ignore une matière sans composition quand ses évaluations sont toutes exclues', () => {
+    const evaluations = [
+      { id: 1, classId: 10, termId: 7, subject: 'Dessin', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: false },
+    ];
+
+    expect(findSubjectsMissingValidComposition(evaluations, 10, 7)).toEqual([]);
   });
 
   it('utilise la somme des coefficients matière pour la moyenne générale du bulletin', () => {

@@ -23,6 +23,8 @@ import {
   calculateFinalSubjectAverage,
   calculateTypeWeightedAverage,
   calculateWeightedSubjectAverage,
+  findSubjectsMissingValidComposition,
+  formatMissingCompositionMessage,
   resolveSubjectCoefficientFromPublishedComposition,
   type BulletinEvaluationLike,
   type BulletinGradeLike,
@@ -960,6 +962,43 @@ export const registerBulletinGenerateRoute = (
         const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, studentRecord.classId));
         const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
         if (classRecord && termRecord && classRecord.academicYearId === termRecord.academicYearId) {
+          const termEvaluations = await db.select({
+            id: evaluations.id,
+            classId: evaluations.classId,
+            termId: evaluations.termId,
+            subject: evaluations.subject,
+            title: evaluations.title,
+            type: evaluations.type,
+            coefficient: evaluations.coefficient,
+            maxScore: evaluations.maxScore,
+            countInBulletin: evaluations.countInBulletin,
+          }).from(evaluations).where(and(
+            eq(evaluations.classId, classRecord.id),
+            or(
+              eq(evaluations.termId, termId),
+              and(
+                sql`${evaluations.termId} IS NULL`,
+                sql`EXISTS (
+                  SELECT 1
+                  FROM school_terms st
+                  WHERE st.id = ${termId}
+                    AND st.start_date IS NOT NULL
+                    AND st.end_date IS NOT NULL
+                    AND ${evaluations.date} >= st.start_date
+                    AND ${evaluations.date} <= st.end_date
+                )`,
+              ),
+            ),
+          ));
+          const missingSubjects = findSubjectsMissingValidComposition(termEvaluations, classRecord.id, termId);
+          if (missingSubjects.length > 0) {
+            return res.status(400).json({
+              error: formatMissingCompositionMessage(missingSubjects),
+              code: 'MISSING_VALID_COMPOSITION',
+              subjects: missingSubjects,
+            });
+          }
+
           const generation = await createBulletinGeneration({
             classId: classRecord.id,
             schoolYearId: classRecord.academicYearId,
@@ -1173,6 +1212,43 @@ export const registerBulletinGenerateRoute = (
       const classStudents = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
       const studentIds = classStudents.map((student: any) => Number(student.id)).filter((id) => Number.isInteger(id) && id > 0);
       if (studentIds.length === 0) return res.status(400).json({ error: 'No authorized students found in class' });
+
+      const termEvaluations = await db.select({
+        id: evaluations.id,
+        classId: evaluations.classId,
+        termId: evaluations.termId,
+        subject: evaluations.subject,
+        title: evaluations.title,
+        type: evaluations.type,
+        coefficient: evaluations.coefficient,
+        maxScore: evaluations.maxScore,
+        countInBulletin: evaluations.countInBulletin,
+      }).from(evaluations).where(and(
+        eq(evaluations.classId, classId),
+        or(
+          eq(evaluations.termId, termId),
+          and(
+            sql`${evaluations.termId} IS NULL`,
+            sql`EXISTS (
+              SELECT 1
+              FROM school_terms st
+              WHERE st.id = ${termId}
+                AND st.start_date IS NOT NULL
+                AND st.end_date IS NOT NULL
+                AND ${evaluations.date} >= st.start_date
+                AND ${evaluations.date} <= st.end_date
+            )`,
+          ),
+        ),
+      ));
+      const missingSubjects = findSubjectsMissingValidComposition(termEvaluations, classId, termId);
+      if (missingSubjects.length > 0) {
+        return res.status(400).json({
+          error: formatMissingCompositionMessage(missingSubjects),
+          code: 'MISSING_VALID_COMPOSITION',
+          subjects: missingSubjects,
+        });
+      }
 
       const generation = await createBulletinGeneration({
         classId,

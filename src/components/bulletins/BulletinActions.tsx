@@ -21,6 +21,7 @@ interface BulletinActionsProps {
   generateSuccess: string | null;
   canGenerateClassBulk: boolean;
   generateClassStudentsCount: number;
+  compositionValidationMessage: string | null;
   onGenerateSchoolChange: (value: string) => void;
   onGenerateClassChange: (value: string) => void;
   onGenerateStudentChange: (value: string) => void;
@@ -50,6 +51,7 @@ export default function BulletinActions({
   generateSuccess,
   canGenerateClassBulk,
   generateClassStudentsCount,
+  compositionValidationMessage,
   onGenerateSchoolChange,
   onGenerateClassChange,
   onGenerateStudentChange,
@@ -138,7 +140,7 @@ export default function BulletinActions({
 
             <button
               type="submit"
-              disabled={isGenerateLoading || !hasSelectedBulletinEvaluations}
+              disabled={isGenerateLoading || !hasSelectedBulletinEvaluations || !!compositionValidationMessage}
               className="rounded-xl px-4 py-2 bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-60"
             >
               {isGenerateLoading ? 'Generation...' : 'Generer le bulletin'}
@@ -146,7 +148,7 @@ export default function BulletinActions({
 
             <button
               type="button"
-              disabled={isGenerateLoading || !canGenerateClassBulk}
+              disabled={isGenerateLoading || !canGenerateClassBulk || !!compositionValidationMessage}
               onClick={onGenerateClassSubmit}
               className="rounded-xl px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 font-semibold text-sm hover:bg-emerald-100 disabled:opacity-60"
             >
@@ -154,6 +156,7 @@ export default function BulletinActions({
             </button>
           </div>
 
+          {compositionValidationMessage && <p role="alert" className="text-xs text-rose-600">{compositionValidationMessage}</p>}
           {generateError && <p className="text-xs text-rose-600">{generateError}</p>}
           {generateSuccess && <p className="text-xs text-emerald-600">{generateSuccess}</p>}
         </form>

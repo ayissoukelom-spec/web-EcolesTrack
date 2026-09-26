@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BulletinsView from './BulletinsView';
 import ParentNotesView from './ParentNotesView';
 
@@ -66,6 +66,8 @@ vi.mock('../lib/api.ts', () => ({
 }));
 
 describe('BulletinsView', () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -89,6 +91,49 @@ describe('BulletinsView', () => {
     const schoolSelect = screen.getAllByRole('combobox')[0];
     expect(schoolSelect).toHaveTextContent('École A');
     expect(schoolSelect).toHaveTextContent('École sans classe');
+  });
+
+  it('shows the missing-composition message and disables both generation actions', async () => {
+    render(
+      <BulletinsView
+        schoolsList={[]}
+        classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }]}
+        studentsList={[{ id: 1, schoolId: 1, classId: 10, className: '2nde CD', firstName: 'Alice', lastName: 'Dupont' }]}
+        evaluationsList={[
+          { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Mathématiques', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+        ]}
+        gradesList={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Mathématiques');
+    expect(screen.getByRole('button', { name: 'Generer le bulletin' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Generer la classe (1)' })).toBeDisabled();
+  });
+
+  it('allows generation with excluded exercises when every selected subject has a composition', async () => {
+    render(
+      <BulletinsView
+        schoolsList={[]}
+        classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }]}
+        studentsList={[{ id: 1, schoolId: 1, classId: 10, className: '2nde CD', firstName: 'Alice', lastName: 'Dupont' }]}
+        evaluationsList={[
+          { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Mathématiques', title: 'Devoir', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: false, date: '2026-06-10' },
+          { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Mathématiques', title: 'Composition', type: 'composition', coefficient: 2, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+        ]}
+        gradesList={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Generer le bulletin' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Generer la classe (1)' })).toBeEnabled();
+    });
   });
 
   it('keeps parent notes limited to attached children while showing per-evaluation bounds', () => {

@@ -201,4 +201,117 @@ describe('registerBulletinGenerateRoute', () => {
       selectSpy.mockRestore();
     }
   });
+
+  it('bloque la génération de classe avant toute création si plusieurs matières sélectionnées manquent de composition', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin' };
+      next();
+    };
+    const queryResults = [
+      [{ id: 80, academicYearId: 2 }],
+      [{ id: 2, academicYearId: 2 }],
+      [
+        { id: 1, classId: 80, termId: 2, subject: 'Mathématiques', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true },
+        { id: 2, classId: 80, termId: 2, subject: 'Dessin', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
+        { id: 3, classId: 80, termId: 2, subject: 'Histoire', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: false },
+      ],
+    ];
+    let queryIndex = 0;
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => ({
+      from: () => ({ where: vi.fn().mockResolvedValue(queryResults[queryIndex++]) }),
+    } as any));
+    const insertSpy = vi.spyOn(db, 'insert');
+    studentAccessMock.getAuthorizedStudents.mockResolvedValue([
+      { id: 101, classId: 80, schoolId: 10, firstName: 'Alice', lastName: 'Smith' },
+    ]);
+
+    try {
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
+        verifyMiddleware: verifyMiddleware as any,
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const response = await fetch(`http://127.0.0.1:${port}/api/bulletins/generate-class`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classId: 80, termId: 2 }),
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual(expect.objectContaining({
+        code: 'MISSING_VALID_COMPOSITION',
+        subjects: ['Mathématiques', 'Dessin'],
+        error: expect.stringContaining('Mathématiques, Dessin'),
+      }));
+      expect(body.error).toContain('Veuillez créer et valider une composition');
+      expect(insertSpy).not.toHaveBeenCalled();
+      expect(studentAccessMock.getAuthorizedStudents).toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+      insertSpy.mockRestore();
+    }
+  });
+
+  it('bloque la génération individuelle avant toute création si une matière sélectionnée manque de composition', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin' };
+      next();
+    };
+    const queryResults = [
+      [{ classId: 80, schoolId: 10 }],
+      [{ id: 80, academicYearId: 2 }],
+      [{ id: 2, academicYearId: 2 }],
+      [{ id: 1, classId: 80, termId: 2, subject: 'Dessin', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true }],
+    ];
+    let queryIndex = 0;
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => ({
+      from: () => ({ where: vi.fn().mockResolvedValue(queryResults[queryIndex++]) }),
+    } as any));
+    const insertSpy = vi.spyOn(db, 'insert');
+    const generateHandler = vi.fn();
+
+    try {
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
+        verifyMiddleware: verifyMiddleware as any,
+        generateHandler,
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const response = await fetch(`http://127.0.0.1:${port}/api/bulletins/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: 101, termId: 2 }),
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual(expect.objectContaining({
+        code: 'MISSING_VALID_COMPOSITION',
+        subjects: ['Dessin'],
+        error: expect.stringContaining('Dessin'),
+      }));
+      expect(insertSpy).not.toHaveBeenCalled();
+      expect(generateHandler).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+      insertSpy.mockRestore();
+    }
+  });
 });

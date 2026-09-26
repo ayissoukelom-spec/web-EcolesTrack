@@ -127,6 +127,35 @@ export const resolveSubjectCoefficientFromPublishedComposition = (
   return rest.every((value) => value === first) ? first : null;
 };
 
+const isEvaluationSelectedForBulletinTerm = (
+  evaluation: BulletinEvaluationLike,
+  classId: number,
+  termId: number,
+): boolean => (
+  evaluation.classId === classId
+  && evaluation.countInBulletin !== false
+  && (evaluation.termId === termId || evaluation.termId == null)
+);
+
+export const findSubjectsMissingValidComposition = (
+  evaluations: BulletinEvaluationLike[],
+  classId: number,
+  termId: number,
+): string[] => {
+  const selectedSubjects = Array.from(new Set(evaluations
+    .filter((evaluation) => isEvaluationSelectedForBulletinTerm(evaluation, classId, termId))
+    .map((evaluation) => String(evaluation.subject ?? '').trim())
+    .filter(Boolean)));
+
+  return selectedSubjects.filter((subjectName) => (
+    resolveSubjectCoefficientFromPublishedComposition(evaluations, subjectName, classId, termId) == null
+  ));
+};
+
+export const formatMissingCompositionMessage = (subjectNames: string[]): string => (
+  `Impossible de générer le bulletin. Les matières suivantes n’ont pas de composition valide : ${subjectNames.join(', ')}. Veuillez créer et valider une composition pour ces matières avant de générer le bulletin.`
+);
+
 export const calculateWeightedSubjectAverage = (
   lines: Array<{ average: number | null; coefficient: number | null }>,
 ): { average: number | null; totalPoints: number; totalCoefficients: number } => {
@@ -261,12 +290,7 @@ const resolveCoefficient = (evaluation: BulletinEvaluationLike): number => {
 };
 
 export const calculateStudentTermAverage = ({ term, student, evaluations, grades }: BulletinAverageInput): BulletinTermAverageResult => {
-  const selectedEvaluations = evaluations.filter((evaluation) => {
-    if (evaluation.classId !== student.classId) return false;
-    if (evaluation.countInBulletin === false) return false;
-    // Term-less evaluations are allowed here because callers may pre-scope by term dates.
-    return evaluation.termId === term.id || evaluation.termId == null;
-  });
+  const selectedEvaluations = evaluations.filter((evaluation) => isEvaluationSelectedForBulletinTerm(evaluation, student.classId, term.id));
 
   const snapshots: BulletinEvaluationSnapshot[] = [];
   let totalWeightedScore = 0;

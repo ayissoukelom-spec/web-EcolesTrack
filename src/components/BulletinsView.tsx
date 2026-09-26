@@ -24,6 +24,8 @@ import BulletinActions from './bulletins/BulletinActions.tsx';
 import {
   calculateClassAverage,
   calculateTypeWeightedAverage,
+  findSubjectsMissingValidComposition,
+  formatMissingCompositionMessage,
   normalizeEvaluationType,
 } from '../lib/bulletinService.ts';
 
@@ -294,6 +296,34 @@ export default function BulletinsView({
   const hasSelectedBulletinEvaluations = generateEvaluations.some((evaluation) => (
     isEvaluationValidated(evaluation) && normalizeEvaluationType(evaluation.type) != null
   ));
+  const targetStudent = studentsList.find((student) => String(student.id) === generateStudentId);
+  const compositionValidationClassId = generateClassId ? Number(generateClassId) : targetStudent?.classId ?? null;
+  const compositionValidationEvaluations = useMemo(() => {
+    const classId = compositionValidationClassId;
+    const termId = generateTermId ? Number(generateTermId) : null;
+    if (classId == null || !Number.isInteger(classId) || termId == null || !Number.isInteger(termId)) return [];
+
+    const selectedTerm = termsFromApi.find((term) => term.id === termId);
+    return evaluationsList.filter((evaluation) => {
+      if (evaluation.classId !== classId) return false;
+      if (evaluation.termId != null) return evaluation.termId === termId;
+      if (!selectedTerm?.startDate || !selectedTerm.endDate) return false;
+      const date = String(evaluation.date || '').slice(0, 10);
+      return date >= selectedTerm.startDate && date <= selectedTerm.endDate;
+    });
+  }, [compositionValidationClassId, evaluationsList, generateTermId, termsFromApi]);
+  const compositionValidationMessage = useMemo(() => {
+    const classId = compositionValidationClassId;
+    const termId = generateTermId ? Number(generateTermId) : null;
+    if (classId == null || termId == null || !Number.isInteger(classId) || !Number.isInteger(termId)) return null;
+
+    const evaluationsWithCurrentSelection = compositionValidationEvaluations.map((evaluation) => ({
+      ...evaluation,
+      countInBulletin: evaluationValidationOverrides[evaluation.id] ?? evaluation.countInBulletin !== false,
+    }));
+    const missingSubjects = findSubjectsMissingValidComposition(evaluationsWithCurrentSelection, classId, termId);
+    return missingSubjects.length > 0 ? formatMissingCompositionMessage(missingSubjects) : null;
+  }, [compositionValidationClassId, compositionValidationEvaluations, evaluationValidationOverrides, generateTermId]);
 
   useEffect(() => {
     if (!allEvaluationsCheckboxRef.current) return;
@@ -682,6 +712,7 @@ export default function BulletinsView({
         generateSuccess={generateHook.success}
         canGenerateClassBulk={Boolean(generateClassId) && Boolean(generateTermId) && generateStudents.some((student) => String(student.classId) === generateClassId)}
         generateClassStudentsCount={generateStudents.filter((student) => String(student.classId) === generateClassId).length}
+        compositionValidationMessage={compositionValidationMessage}
         onGenerateSchoolChange={(value) => {
           setGenerateSchoolId(value);
           setGenerateClassId('');
