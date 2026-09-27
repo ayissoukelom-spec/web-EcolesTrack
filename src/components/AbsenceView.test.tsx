@@ -220,6 +220,40 @@ describe('AbsenceView surveillant', () => {
     await waitFor(() => expect(onReviewAbsence).toHaveBeenCalledWith(30, 'REJECTED', 'Document illisible'));
   });
 
+  it('in validation mode, displays only absences with an exact PENDING status', () => {
+    render(
+      <AbsenceView
+        userRole="school_admin"
+        pendingReviewOnly
+        absencesList={[
+          { id: 30, studentId: 30, studentName: 'Élève En Attente', classId: 10, className: '6e A', date: '2026-09-02', period: 'morning', isJustified: false, justificationStatus: 'PENDING' },
+          { id: 31, studentId: 31, studentName: 'Élève Acceptée', classId: 10, className: '6e A', date: '2026-09-03', period: 'morning', isJustified: true, justificationStatus: 'APPROVED' },
+          { id: 32, studentId: 32, studentName: 'Élève Rejetée', classId: 10, className: '6e A', date: '2026-09-04', period: 'morning', isJustified: false, justificationStatus: 'REJECTED' },
+          { id: 33, studentId: 33, studentName: 'Ancien Statut', classId: 10, className: '6e A', date: '2026-09-05', period: 'morning', isJustified: false },
+        ] as any}
+        lateArrivalsList={[
+          { id: 34, studentId: 34, studentName: 'Élève en Retard', classId: 10, className: '6e A', date: '2026-09-06', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:15' },
+        ]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onReviewAbsence={vi.fn().mockResolvedValue(undefined)}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Élève En Attente')).toBeInTheDocument();
+    expect(screen.queryByText('Élève Acceptée')).toBeNull();
+    expect(screen.queryByText('Élève Rejetée')).toBeNull();
+    expect(screen.queryByText('Ancien Statut')).toBeNull();
+    expect(screen.queryByText('Élève en Retard')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Accepter' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rejeter' })).toBeInTheDocument();
+  });
+
   it('ne permet pas au parent de resoumettre une justification rejetée', () => {
     render(
       <AbsenceView

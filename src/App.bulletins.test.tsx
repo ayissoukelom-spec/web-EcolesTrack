@@ -70,7 +70,22 @@ vi.mock('./components/LoginView.tsx', () => ({ default: () => <div>LoginView</di
 vi.mock('./components/DashboardView.tsx', () => ({ default: () => <div>DashboardView</div> }));
 vi.mock('./components/AdminView.tsx', () => ({ default: () => <div>AdminView</div> }));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('./components/AbsenceView.tsx', () => ({ default: () => <div>AbsenceView</div> }));
+vi.mock('./components/AbsenceView.tsx', () => ({
+  default: ({ pendingReviewOnly, onReviewAbsence }: {
+    pendingReviewOnly?: boolean;
+    onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+  }) => (
+    <>
+      <div>{pendingReviewOnly ? 'PendingReviewView' : 'AbsenceView'}</div>
+      {pendingReviewOnly && (
+        <>
+          <button onClick={() => onReviewAbsence?.(30, 'APPROVED')}>Mock approve pending</button>
+          <button onClick={() => onReviewAbsence?.(30, 'REJECTED', 'Motif de test')}>Mock reject pending</button>
+        </>
+      )}
+    </>
+  ),
+}));
 vi.mock('./components/NotesView.tsx', () => ({
   default: ({ onAddGrade, gradesList }: { onAddGrade?: (data: any) => Promise<void>; gradesList?: any[] }) => (
     <>
@@ -227,7 +242,7 @@ describe('App bulletin navigation', () => {
     render(<AuthProvider><App /></AuthProvider>);
 
     expect(await screen.findByRole('button', { name: /Tableau de Bord/i })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: /Absences/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /^Absences$/i })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /Contrôles Néant/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Notes & Bulletins/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
@@ -275,10 +290,10 @@ describe('App bulletin navigation', () => {
     }
   });
 
-  const setupAbsencesResponse = (absences: any[]) => {
+  const setupAbsencesResponse = (absences: any[], pendingCount = 0) => {
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
-      if (url === '/api/dashboard/summary') return Promise.resolve({});
+      if (url === '/api/dashboard/summary') return Promise.resolve({ absenceStatusCounts: { justified: 0, unjustified: 0, pending: pendingCount } });
       if (url === '/api/absences') return Promise.resolve(absences);
       if (url === '/api/schools') return Promise.resolve([]);
       if (url === '/api/academic-years') return Promise.resolve([]);
@@ -292,10 +307,10 @@ describe('App bulletin navigation', () => {
     });
   };
 
-  const renderWithRole = async (role: string, absences: any[]) => {
+  const renderWithRole = async (role: string, absences: any[], pendingCount = 0) => {
     mockGetSimulatedRole.mockReturnValue(role);
     mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: 1, role, id: 1 });
-    setupAbsencesResponse(absences);
+    setupAbsencesResponse(absences, pendingCount);
     render(
       <AuthProvider>
         <App />
@@ -398,5 +413,86 @@ describe('App bulletin navigation', () => {
     const absencesButtons = await screen.findAllByTestId('sidebar-nav-absences');
     const absencesButton = absencesButtons[0];
     expect(await within(absencesButton).findByText('1')).toBeTruthy();
+  });
+
+  it.each(['school_admin', 'super_admin', 'surveillant', 'teacher'])('%s sees the absence validations menu and backend count', async (role) => {
+    await renderWithRole(role, [
+      { id: 1, justificationStatus: 'PENDING' },
+      { id: 2, justificationStatus: 'PENDING' },
+      { id: 3, justificationStatus: 'APPROVED' },
+      { id: 4, justificationStatus: 'REJECTED' },
+    ], 2);
+
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
+    expect(within(menuButton).getByText('2')).toBeInTheDocument();
+  });
+
+  it('uses the backend pending total instead of the recent absences list', async () => {
+    await renderWithRole('school_admin', [{ id: 1, justificationStatus: 'PENDING' }], 5);
+
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
+    expect(within(menuButton).getByText('5')).toBeInTheDocument();
+  });
+
+  it('never shows the absence validations menu to parents', async () => {
+    await renderWithRole('parent', [], 4);
+
+    expect(screen.queryByTestId('sidebar-nav-absence-validations')).toBeNull();
+  });
+
+  it('displays a zero pending count and opens the dedicated validation view', async () => {
+    await renderWithRole('school_admin', [], 0);
+
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
+    expect(within(menuButton).getByText('0')).toBeInTheDocument();
+    fireEvent.click(menuButton);
+
+    expect(await screen.findByText('PendingReviewView')).toBeInTheDocument();
+  });
+
+  it('refreshes the dashboard summary when the window regains focus', async () => {
+    await renderWithRole('school_admin', [], 0);
+
+    await waitFor(() => expect(mockApiFetch.mock.calls.some(([url]) => url === '/api/dashboard/summary')).toBe(true));
+    const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/dashboard/summary').length;
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/dashboard/summary').length;
+      expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
+    });
+  });
+
+  it.each([
+    ['APPROVED', 'Mock approve pending'],
+    ['REJECTED', 'Mock reject pending'],
+  ] as const)('refreshes the backend badge after %s review', async (status, buttonName) => {
+    let reviewCompleted = false;
+    let summaryRequests = 0;
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/dashboard/summary') {
+        summaryRequests += 1;
+        return Promise.resolve({ absenceStatusCounts: { justified: 0, unjustified: 0, pending: reviewCompleted ? 1 : 2 } });
+      }
+      if (url === '/api/absences/30/justification/review') {
+        reviewCompleted = true;
+        return Promise.resolve({ justificationStatus: status });
+      }
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers' || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades' || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
+    expect(within(menuButton).getByText('2')).toBeInTheDocument();
+    fireEvent.click(menuButton);
+    fireEvent.click(await screen.findByRole('button', { name: buttonName }));
+
+    await waitFor(() => expect(within(menuButton).getByText('1')).toBeInTheDocument());
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/absences/30/justification/review', expect.objectContaining({ method: 'PUT' }));
+    expect(summaryRequests).toBeGreaterThan(1);
   });
 });

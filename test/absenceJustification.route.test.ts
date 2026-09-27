@@ -230,6 +230,26 @@ describe('absence justification routes', () => {
     expect(response.body.justificationFilesCount).toBe(1);
   });
 
+  it('returns an explicit zero pending count when a parent has no students', async () => {
+    mockState.parents = [];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-test-role', 'parent')
+      .expect(200);
+
+    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0 });
+  });
+
+  it('returns an explicit zero pending count when a teacher has no classes', async () => {
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-test-role', 'teacher')
+      .expect(200);
+
+    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0 });
+  });
+
   it('keeps administrator approval and rejection available', async () => {
     const approved = await request(app)
       .put('/api/absences/30/justification/review')

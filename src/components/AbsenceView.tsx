@@ -44,6 +44,7 @@ interface AbsenceViewProps {
   approvedSubjectsList: { id: number; name: string }[];
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
+  pendingReviewOnly?: boolean;
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
@@ -62,6 +63,7 @@ export default function AbsenceView({
   approvedSubjectsList,
   teacherClassIds,
   teacherSpecializations,
+  pendingReviewOnly = false,
   onAddAbsence,
   onAddLateArrival,
   onReviewAbsence,
@@ -517,6 +519,7 @@ export default function AbsenceView({
   ];
 
   const filteredAbsences = mergedPresenceEvents.filter((event) => {
+    if (pendingReviewOnly && (event.kind !== 'absence' || event.justificationStatus !== 'PENDING')) return false;
     if (filterStatus === 'late' && event.kind !== 'late') return false;
     if (filterStatus === 'absent' && event.kind !== 'absence') return false;
 

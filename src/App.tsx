@@ -53,6 +53,7 @@ import {
   Info,
   BookOpen,
   FileText,
+  ClipboardCheck,
   LogOut,
   RefreshCw,
   AlertCircle
@@ -81,6 +82,7 @@ export default function App() {
     absenceStatusCounts: {
       justified: 0,
       unjustified: 0,
+      pending: 0,
     },
   });
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
@@ -110,6 +112,7 @@ export default function App() {
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
   const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified).length;
+  const pendingAbsenceValidationsCount = Math.max(0, Number(stats.absenceStatusCounts.pending) || 0);
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [summaryRecentGrades, setSummaryRecentGrades] = useState<any[]>([]);
@@ -400,6 +403,16 @@ export default function App() {
       fetchAuditEvents();
     }
   }, [activeTab, currentRole]);
+
+  useEffect(() => {
+    if (!['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole)) return;
+
+    const refreshDashboardOnFocus = () => {
+      void fetchAllData(false);
+    };
+    window.addEventListener('focus', refreshDashboardOnFocus);
+    return () => window.removeEventListener('focus', refreshDashboardOnFocus);
+  }, [currentRole]);
 
   const handleRoleChange = (newRole: string) => {
     if (!newRole) {
@@ -1063,6 +1076,29 @@ export default function App() {
                 )}
               </button>
 
+              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                <button
+                  onClick={() => setActiveTab('absence-validations')}
+                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'absence-validations'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-absence-validations"
+                  data-testid="sidebar-nav-absence-validations"
+                >
+                  <div className="flex items-center gap-3">
+                    <ClipboardCheck className="h-4.5 w-4.5" />
+                    <span>Validations des absences</span>
+                  </div>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    activeTab === 'absence-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
+                  }`}>
+                    {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
+                  </span>
+                </button>
+              )}
+
               {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
                 <button
                   onClick={() => setActiveTab('absence-controls')}
@@ -1309,9 +1345,10 @@ export default function App() {
                 </ErrorBoundary>
               )}
 
-              {activeTab === 'absences' && (
+              {(activeTab === 'absences' || activeTab === 'absence-validations') && (
                 <AbsenceView
                   userRole={currentRole}
+                  pendingReviewOnly={activeTab === 'absence-validations'}
                   absencesList={absencesList}
                   lateArrivalsList={lateArrivalsList}
                   studentsList={studentsList}
