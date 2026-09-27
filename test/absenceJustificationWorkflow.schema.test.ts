@@ -29,4 +29,20 @@ describe('absence justification workflow contract', () => {
     expect(serverText).toContain("dedupeKey: `absence-justification-review-");
     expect(serverText).toContain("isAlreadyFinalAndEquivalent");
   });
+
+  it('keeps text-only mobile submissions pending and the attachment path separate', () => {
+    const mobileRoot = path.resolve('..', 'Nouveau dossier (2)');
+    const mobileServerText = fs.readFileSync(path.join(mobileRoot, 'server.ts'), 'utf8');
+    const mobileStoreText = fs.readFileSync(path.join(mobileRoot, 'backend/store.ts'), 'utf8');
+    const mobileJustificationText = fs.readFileSync(path.join(mobileRoot, 'backend/absenceJustification.ts'), 'utf8');
+    const parentPortalText = fs.readFileSync(path.join(mobileRoot, 'src/components/ParentPortal.tsx'), 'utf8');
+
+    expect(mobileServerText).toContain('store.justifyAbsence(absenceId, parentId, justificationReason.trim())');
+    expect(mobileStoreText).toContain('submitAbsenceJustificationForReview(dbQuery, absenceId, parentId, justificationReason)');
+    expect(mobileJustificationText).toContain("justification_status = 'PENDING'");
+    expect(mobileJustificationText).toContain('is_justified = false');
+    expect(parentPortalText).toContain('const hasAttachments = justificationAttachments.length > 0');
+    expect(parentPortalText).toContain('hasAttachments ? "/justifications" : "/justify"');
+    expect(mobileServerText).toContain('forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile)');
+  });
 });

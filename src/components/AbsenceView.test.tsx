@@ -139,12 +139,12 @@ describe('AbsenceView surveillant', () => {
     expect(screen.queryAllByRole('row').some((row) => row.textContent?.includes('Élève Absence Justifiée'))).toBe(false);
   });
 
-  it('affiche les actions de review pour une justification en attente', () => {
+  it('affiche et déclenche les actions accepter/rejeter pour une justification en attente', async () => {
     const onReviewAbsence = vi.fn().mockResolvedValue(undefined);
 
     render(
       <AbsenceView
-        userRole="surveillant"
+        userRole="school_admin"
         absencesList={[{
           id: 30,
           studentId: 30,
@@ -172,6 +172,16 @@ describe('AbsenceView surveillant', () => {
     expect(screen.getByText('En attente de validation')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Accepter' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Rejeter' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accepter' }));
+    await waitFor(() => expect(onReviewAbsence).toHaveBeenCalledWith(30, 'APPROVED'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rejeter' }));
+    fireEvent.change(screen.getByPlaceholderText('Motif obligatoire du rejet'), {
+      target: { value: 'Document illisible' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer le rejet' }));
+    await waitFor(() => expect(onReviewAbsence).toHaveBeenCalledWith(30, 'REJECTED', 'Document illisible'));
   });
 
   it('enregistre un retard avec son motif sans créer une absence', async () => {

@@ -1319,6 +1319,55 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.status).toBe(403);
   });
 
+  it('school_admin approves a pending absence justification', async () => {
+    const absence = FIXTURES.absences[0] as any;
+    Object.assign(absence, {
+      justificationStatus: 'PENDING',
+      justificationReason: 'Maladie',
+      rejectionReason: null,
+      isJustified: false,
+    });
+    FIXTURES.students.find((student) => student.id === absence.studentId)!.parentId = null;
+
+    const res = await request(app)
+      .put('/api/absences/1/justification/review')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid')
+      .set('x-simulated-email', 'admin@school.test')
+      .set('x-simulated-school-id', '10')
+      .send({ status: 'APPROVED' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.justificationStatus).toBe('APPROVED');
+    expect(res.body.isJustified).toBe(true);
+    expect(FIXTURES.absences[0]).toMatchObject({ justificationStatus: 'APPROVED', isJustified: true });
+  });
+
+  it('school_admin rejects a pending absence justification with its reason', async () => {
+    const absence = FIXTURES.absences[0] as any;
+    Object.assign(absence, {
+      justificationStatus: 'PENDING',
+      justificationReason: 'Maladie',
+      rejectionReason: null,
+      isJustified: false,
+    });
+    FIXTURES.students.find((student) => student.id === absence.studentId)!.parentId = null;
+
+    const res = await request(app)
+      .put('/api/absences/1/justification/review')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid')
+      .set('x-simulated-email', 'admin@school.test')
+      .set('x-simulated-school-id', '10')
+      .send({ status: 'REJECTED', rejectionReason: 'Document illisible' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.justificationStatus).toBe('REJECTED');
+    expect(res.body.isJustified).toBe(false);
+    expect(res.body.rejectionReason).toBe('Document illisible');
+    expect(FIXTURES.absences[0]).toMatchObject({ justificationStatus: 'REJECTED', isJustified: false, rejectionReason: 'Document illisible' });
+  });
+
   it('3h3. parent sees only their child absences', async () => {
     const res = await request(app)
       .get('/api/absences')
