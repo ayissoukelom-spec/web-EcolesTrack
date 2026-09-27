@@ -1122,6 +1122,11 @@ export default function AbsenceView({
                         Injustifiée
                       </span>
                     )}
+                    {abs.kind === 'absence' && userRole === 'parent' && getJustificationStatus(abs) === 'REJECTED' && (
+                      <p className="mt-2 max-w-xs text-xs font-medium text-rose-700">
+                        Veuillez vous présenter à l’établissement avec les justificatifs nécessaires.
+                      </p>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-slate-700 text-sm max-w-xs whitespace-normal break-words space-y-1">
                     {abs.kind === 'late' ? (

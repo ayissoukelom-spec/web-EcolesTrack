@@ -43,6 +43,23 @@ describe('absence justification workflow contract', () => {
     expect(mobileJustificationText).toContain('is_justified = false');
     expect(parentPortalText).toContain('const hasAttachments = justificationAttachments.length > 0');
     expect(parentPortalText).toContain('hasAttachments ? "/justifications" : "/justify"');
+    expect(parentPortalText).toContain('{!justificationStatus && (');
+    expect(parentPortalText).not.toContain('{(!justificationStatus || isRejected) && (');
+    expect(parentPortalText).toContain('Veuillez vous présenter à l’établissement avec les justificatifs nécessaires.');
     expect(mobileServerText).toContain('forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile)');
+    expect(mobileServerText).toContain('err instanceof AbsenceJustificationAlreadyRejectedError');
+    expect(mobileServerText).toContain('res.status(409).json({ error: err.message, code: err.code })');
+    expect(mobileServerText).toContain('finally {');
+    expect(mobileServerText).toContain('removeTemporaryAbsenceJustificationFiles(uploadedFiles)');
+  });
+
+  it('guards the web text, direct-file and internal-file submission endpoints', () => {
+    const serverText = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+    expect(serverText).toContain("justificationStatus === 'REJECTED'");
+    expect(serverText).toContain("sql\`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'\`");
+    expect(serverText).toContain("code: 'JUSTIFICATION_ALREADY_REJECTED'");
+    expect(serverText).toContain('cleanupUploadedJustificationFiles(fileList)');
+    expect(serverText).toContain("app.post('/api/internal/absence-justification'");
+    expect(serverText).toContain("app.post('/api/absences/:id/justifications'");
   });
 });

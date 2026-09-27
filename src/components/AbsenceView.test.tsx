@@ -184,6 +184,39 @@ describe('AbsenceView surveillant', () => {
     await waitFor(() => expect(onReviewAbsence).toHaveBeenCalledWith(30, 'REJECTED', 'Document illisible'));
   });
 
+  it('ne permet pas au parent de resoumettre une justification rejetée', () => {
+    render(
+      <AbsenceView
+        userRole="parent"
+        absencesList={[{
+          id: 31,
+          studentId: 30,
+          studentName: 'Élève Rejetée',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+          justificationReason: 'Maladie',
+          justificationStatus: 'REJECTED',
+          rejectionReason: 'Document illisible',
+        }] as any}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onJustifyAbsence={vi.fn()}
+        onRecordAbsenceControl={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Justification refusée')).toBeTruthy();
+    expect(screen.getByText('Veuillez vous présenter à l’établissement avec les justificatifs nécessaires.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Justifier' })).toBeNull();
+  });
+
   it('enregistre un retard avec son motif sans créer une absence', async () => {
     const onAddAbsence = vi.fn();
     const onAddLateArrival = vi.fn().mockResolvedValue(undefined);

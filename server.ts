@@ -6994,6 +6994,19 @@ export async function createApp() {
     }
   });
 
+  const rejectedJustificationMessage = 'Cette justification a déjà été rejetée. Veuillez vous rapprocher de l’établissement avec les justificatifs nécessaires.';
+  const respondJustificationAlreadyRejected = (res: any) => res.status(409).json({
+    error: rejectedJustificationMessage,
+    code: 'JUSTIFICATION_ALREADY_REJECTED',
+  });
+  const cleanupUploadedJustificationFiles = async (files: Array<{ path?: string }>) => {
+    await Promise.all(files.map((file) => file.path
+      ? fsPromises.unlink(file.path).catch((error: any) => {
+        if (error?.code !== 'ENOENT') console.error('Failed to remove rejected justification upload:', error?.message || error);
+      })
+      : Promise.resolve()));
+  };
+
   // Justify a pending absence
   app.put('/api/absences/:id/justify', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -7059,6 +7072,10 @@ export async function createApp() {
         }
       }
 
+      if (absence.justificationStatus === 'REJECTED') {
+        return respondJustificationAlreadyRejected(res);
+      }
+
       const updated = await db.update(absences)
         .set({
           isJustified: false,
@@ -7068,8 +7085,21 @@ export async function createApp() {
           reviewedBy: null,
           reviewedAt: null,
         })
-        .where(eq(absences.id, id))
+        .where(and(
+          eq(absences.id, id),
+          sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
+        ))
         .returning();
+
+      if (!updated[0]) {
+        const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
+          .from(absences)
+          .where(eq(absences.id, id));
+        if (latestAbsence?.justificationStatus === 'REJECTED') {
+          return respondJustificationAlreadyRejected(res);
+        }
+        return res.status(404).json({ error: 'Absence not found' });
+      }
 
       res.json(updated[0]);
     } catch (err: any) {
@@ -7262,6 +7292,10 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
 
+      if (absence.justificationStatus === 'REJECTED') {
+        return respondJustificationAlreadyRejected(res);
+      }
+
       const safeName = uploadedFile.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
       const storedFileName = `${Date.now()}-${crypto.randomBytes(16).toString('hex')}-${safeName}`;
       const storedFilePath = path.join(uploadStorageDir, storedFileName);
@@ -7271,8 +7305,22 @@ export async function createApp() {
       try {
         const updated = await db.update(absences)
           .set({ isJustified: false, justificationReason, justificationStatus: 'PENDING', rejectionReason: null, reviewedBy: null, reviewedAt: null })
-          .where(eq(absences.id, absenceId))
+          .where(and(
+            eq(absences.id, absenceId),
+            sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
+          ))
           .returning();
+
+        if (!updated[0]) {
+          const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
+            .from(absences)
+            .where(eq(absences.id, absenceId));
+          await fsPromises.unlink(storedFilePath).catch(() => undefined);
+          if (latestAbsence?.justificationStatus === 'REJECTED') {
+            return respondJustificationAlreadyRejected(res);
+          }
+          return res.status(404).json({ error: 'Absence not found' });
+        }
 
         const inserted = await db.insert(absenceJustifications).values({
           absenceId,
@@ -7391,6 +7439,11 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot justify absence in another school' });
       }
 
+      if (absence.justificationStatus === 'REJECTED') {
+        await cleanupUploadedJustificationFiles(fileList);
+        return respondJustificationAlreadyRejected(res);
+      }
+
       const updated = await db.update(absences)
         .set({
           isJustified: false,
@@ -7400,8 +7453,22 @@ export async function createApp() {
           reviewedBy: null,
           reviewedAt: null,
         })
-        .where(eq(absences.id, id))
+        .where(and(
+          eq(absences.id, id),
+          sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
+        ))
         .returning();
+
+      if (!updated[0]) {
+        const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
+          .from(absences)
+          .where(eq(absences.id, id));
+        await cleanupUploadedJustificationFiles(fileList);
+        if (latestAbsence?.justificationStatus === 'REJECTED') {
+          return respondJustificationAlreadyRejected(res);
+        }
+        return res.status(404).json({ error: 'Absence not found' });
+      }
 
       const inserted = await db.insert(absenceJustifications).values(
         fileList.map((file: any) => ({

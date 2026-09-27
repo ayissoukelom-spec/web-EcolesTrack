@@ -1319,6 +1319,117 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.status).toBe(403);
   });
 
+  it('parent text justification remains pending before any rejection', async () => {
+    const res = await request(app)
+      .put('/api/absences/1/justify')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .send({ justificationReason: 'Maladie' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.justificationStatus).toBe('PENDING');
+    expect(res.body.isJustified).toBe(false);
+  });
+
+  it('parent text resubmission is rejected after the absence has been rejected', async () => {
+    Object.assign(FIXTURES.absences[0], {
+      isJustified: false,
+      justificationReason: 'Maladie',
+      justificationStatus: 'REJECTED',
+      rejectionReason: 'Document illisible',
+    });
+
+    const res = await request(app)
+      .put('/api/absences/1/justify')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .send({ justificationReason: 'Nouvelle tentative' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('JUSTIFICATION_ALREADY_REJECTED');
+    expect(res.body.error).toContain('Veuillez vous rapprocher de l’établissement');
+    expect(FIXTURES.absences[0]).toMatchObject({ justificationStatus: 'REJECTED', isJustified: false, rejectionReason: 'Document illisible' });
+  });
+
+  it('parent direct-file resubmission is rejected and its temporary upload is removed', async () => {
+    Object.assign(FIXTURES.absences[0], {
+      isJustified: false,
+      justificationReason: 'Maladie',
+      justificationStatus: 'REJECTED',
+      rejectionReason: 'Document illisible',
+    });
+    const uploadDir = path.resolve(process.cwd(), 'uploads', 'absence-justifications');
+    const filesBefore = new Set(fs.existsSync(uploadDir) ? fs.readdirSync(uploadDir) : []);
+
+    const res = await request(app)
+      .post('/api/absences/1/justifications')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .field('justificationReason', 'Nouvelle tentative avec fichier')
+      .attach('files', Buffer.from('test image payload'), { filename: 'proof.png', contentType: 'image/png' });
+
+    const filesAfter = new Set(fs.existsSync(uploadDir) ? fs.readdirSync(uploadDir) : []);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('JUSTIFICATION_ALREADY_REJECTED');
+    expect(filesAfter).toEqual(filesBefore);
+    expect(FIXTURES.absences[0]).toMatchObject({ justificationStatus: 'REJECTED', isJustified: false });
+  });
+
+  it('internal signed upload rejects an absence already rejected', async () => {
+    Object.assign(FIXTURES.absences[0], {
+      isJustified: false,
+      justificationReason: 'Maladie',
+      justificationStatus: 'REJECTED',
+      rejectionReason: 'Document illisible',
+    });
+    const previousSecret = process.env.INTERNAL_SECRET;
+    const internalSecret = 'absence-rejection-test-secret';
+    process.env.INTERNAL_SECRET = internalSecret;
+    const fileBuffer = Buffer.from('%PDF-1.4 test document');
+    const payload = {
+      absenceId: '1',
+      parentId: '6',
+      justificationReason: 'Nouvelle tentative par transfert interne',
+      fileName: 'proof.pdf',
+      fileMimeType: 'application/pdf',
+      fileSize: String(fileBuffer.length),
+      fileSha256: crypto.createHash('sha256').update(fileBuffer).digest('hex'),
+    };
+    const timestamp = Date.now().toString();
+    const signature = crypto.createHmac('sha256', internalSecret)
+      .update(`${JSON.stringify(payload)}${timestamp}`)
+      .digest('hex');
+
+    try {
+      const res = await request(app)
+        .post('/api/internal/absence-justification')
+        .set('X-Internal-Signature', signature)
+        .set('X-Internal-Timestamp', timestamp)
+        .field('absenceId', payload.absenceId)
+        .field('parentId', payload.parentId)
+        .field('justificationReason', payload.justificationReason)
+        .field('fileName', payload.fileName)
+        .field('fileMimeType', payload.fileMimeType)
+        .field('fileSize', payload.fileSize)
+        .field('fileSha256', payload.fileSha256)
+        .attach('file', fileBuffer, { filename: payload.fileName, contentType: payload.fileMimeType });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('JUSTIFICATION_ALREADY_REJECTED');
+      expect(FIXTURES.absences[0]).toMatchObject({ justificationStatus: 'REJECTED', isJustified: false });
+      expect(FIXTURES.absenceJustifications).toHaveLength(0);
+    } finally {
+      if (previousSecret === undefined) delete process.env.INTERNAL_SECRET;
+      else process.env.INTERNAL_SECRET = previousSecret;
+    }
+  });
+
   it('school_admin approves a pending absence justification', async () => {
     const absence = FIXTURES.absences[0] as any;
     Object.assign(absence, {
