@@ -6999,6 +6999,26 @@ export async function createApp() {
     error: rejectedJustificationMessage,
     code: 'JUSTIFICATION_ALREADY_REJECTED',
   });
+  const requireParentJustificationActor = async (req: AuthRequest, res: any, next: any) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'parent') {
+        return res.status(403).json({
+          error: 'Only parents may create absence justifications',
+          code: 'JUSTIFICATION_PARENT_ONLY',
+        });
+      }
+
+      (req as any).absenceJustificationActor = actor;
+      return next();
+    } catch (error: any) {
+      console.error('Failed to authorize absence justification:', error?.message || error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  };
   const cleanupUploadedJustificationFiles = async (files: Array<{ path?: string }>) => {
     await Promise.all(files.map((file) => file.path
       ? fsPromises.unlink(file.path).catch((error: any) => {
@@ -7008,7 +7028,7 @@ export async function createApp() {
   };
 
   // Justify a pending absence
-  app.put('/api/absences/:id/justify', requireAuth, async (req: AuthRequest, res) => {
+  app.put('/api/absences/:id/justify', requireAuth, requireParentJustificationActor, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id);
@@ -7017,9 +7037,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Please specify a reasons for justification' });
       }
 
-      // Load user and validate school permission
-      const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const actor = (req as any).absenceJustificationActor;
 
       // Load the absence to check its student and school
       const [absence] = await db
@@ -7036,40 +7054,9 @@ export async function createApp() {
 
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
 
-      if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) {
-          return res.status(403).json({ error: 'Cannot justify absence for this student' });
-        }
-
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (teacherRows.length === 0) {
-          return res.status(403).json({ error: 'Cannot justify absence for this student' });
-        }
-
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
-        if (!authorizedStudentIds.includes(absenceStudent.id)) {
-          return res.status(403).json({ error: 'Cannot justify absence for student outside your assigned classes' });
-        }
-      } else if (actor.role === 'parent') {
-        const childStudentIds = await getParentChildStudentIds(actor.id);
-        if (!childStudentIds.includes(absenceStudent.id)) {
-          return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
-        }
-      } else if (actor.role !== 'super_admin') {
-        if (actor.schoolId && absenceStudent.schoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Cannot justify absence in another school' });
-        }
+      const childStudentIds = await getParentChildStudentIds(actor.id);
+      if (!childStudentIds.includes(absenceStudent.id)) {
+        return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
 
       if (absence.justificationStatus === 'REJECTED') {
@@ -7272,8 +7259,14 @@ export async function createApp() {
       const [parent] = await db
         .select()
         .from(users)
-        .where(and(eq(users.id, parentId), eq(users.role, 'parent'), eq(users.isDeleted, false)));
+        .where(and(eq(users.id, parentId), eq(users.isDeleted, false)));
       if (!parent) return res.status(403).json({ error: 'Invalid parent identity' });
+      if (parent.role !== 'parent') {
+        return res.status(403).json({
+          error: 'Only parents may create absence justifications',
+          code: 'JUSTIFICATION_PARENT_ONLY',
+        });
+      }
 
       const [absence] = await db
         .select()
@@ -7365,7 +7358,7 @@ export async function createApp() {
     }
   });
 
-  app.post('/api/absences/:id/justifications', requireAuth, handleJustificationUpload, async (req: AuthRequest, res) => {
+  app.post('/api/absences/:id/justifications', requireAuth, requireParentJustificationActor, handleJustificationUpload, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id, 10);
@@ -7388,8 +7381,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Please upload at least one justification file' });
       }
 
-      const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const actor = (req as any).absenceJustificationActor;
 
       const [absence] = await db
         .select()

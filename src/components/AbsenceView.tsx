@@ -1189,7 +1189,7 @@ export default function AbsenceView({
                       </button>
                     </>
                   )}
-                  {abs.kind === 'absence' && !getJustificationStatus(abs) && (userRole === 'parent' || userRole === 'super_admin' || userRole === 'school_admin') && (
+                  {abs.kind === 'absence' && !getJustificationStatus(abs) && userRole === 'parent' && (
                     <button
                       onClick={() => {
                         setShowJustifyModal(abs);

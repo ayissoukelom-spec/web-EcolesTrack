@@ -5,6 +5,42 @@ import AbsenceView from './AbsenceView';
 
 afterEach(() => cleanup());
 
+describe('visibilite du bouton Justifier', () => {
+  it.each([
+    ['parent', true],
+    ['school_admin', false],
+    ['super_admin', false],
+    ['teacher', false],
+    ['surveillant', false],
+    ['student', false],
+  ])('%s: bouton visible = %s', (role, expectedVisible) => {
+    render(
+      <AbsenceView
+        userRole={role as any}
+        absencesList={[{
+          id: 44,
+          studentId: 12,
+          studentName: 'Awa Exemple',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+        }] as any}
+        studentsList={[]}
+        classesList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onJustifyAbsence={vi.fn()}
+      />
+    );
+
+    expect(Boolean(screen.queryByRole('button', { name: 'Justifier' }))).toBe(expectedVisible);
+  });
+});
+
 describe('AbsenceView surveillant', () => {
   it('affiche le bouton de signalement pour un surveillant', () => {
     render(
