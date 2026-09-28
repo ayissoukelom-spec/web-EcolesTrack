@@ -269,12 +269,13 @@ export default function App() {
       const classesEndpoint = currentRole !== 'super_admin' && currentSchoolId != null
         ? `/api/classes?schoolId=${currentSchoolId}`
         : '/api/classes';
+      const studentsEndpoint = '/api/students?includeFormer=true';
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
         classesEndpoint,
         '/api/teachers',
-        '/api/students',
+        studentsEndpoint,
         '/api/parents',
         '/api/absences',
         '/api/late-arrivals',
@@ -309,7 +310,7 @@ export default function App() {
         );
       }
 
-      const rawStudentsPayload = map['/api/students'];
+      const rawStudentsPayload = map[studentsEndpoint];
       const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
       setStudentsList(normalizedStudents);
 
@@ -607,6 +608,19 @@ export default function App() {
       fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message || 'Impossible de mettre à jour l\'élève');
+      throw err;
+    }
+  };
+
+  const handleRemoveStudentFromClass = async (id: number) => {
+    try {
+      await apiFetch(`/api/students/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ classId: null }),
+      });
+      await fetchAllData();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de retirer l’élève de sa classe');
       throw err;
     }
   };
@@ -1314,6 +1328,7 @@ export default function App() {
                   onUpdateSchool={handleUpdateSchool}
                   onUploadSchoolLogo={handleUploadSchoolLogo}
                   onUpdateStudent={handleUpdateStudent}
+                  onRemoveStudentFromClass={handleRemoveStudentFromClass}
                   onAddYear={handleAddYear}
                   onSetActiveYear={handleSetActiveYear}
                   onDeleteYear={handleDeleteYear}

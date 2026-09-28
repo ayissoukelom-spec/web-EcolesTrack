@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { students, teachers, classes, classTeachers, parents, users, schools } from '../src/db/schema.ts';
 
 const mockState = {
@@ -14,7 +15,7 @@ const mockState = {
   users: [] as Array<any>,  // Separate mock data for users table
 };
 
-const createBuilder = (rows: any[]) => {
+const createBuilder = (rows: any[], projection?: any) => {
   const builder: any = {
     _rows: rows,
     from(table: any) {
@@ -34,7 +35,7 @@ const createBuilder = (rows: any[]) => {
       } else if (table === students) {
         // Simulate basic role-aware filtering for students queries to make tests
         // assert real expected results instead of only checking array presence.
-        let rows = mockState.students || [];
+        let rows = (mockState.students || []).map((student: any) => ({ isActive: true, ...student }));
         const role = mockState.actorRole;
         if (role === 'teacher') {
           const assignedClassIds = (mockState.classAssignments || []).map((a) => a.classId);
@@ -47,13 +48,43 @@ const createBuilder = (rows: any[]) => {
             rows = rows.filter((s: any) => s.schoolId === mockState.actorSchoolId);
           }
         }
-        builder._rows = rows;
+        builder._rows = Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
+          ? [{ count: rows.length }]
+          : rows;
       }
       return builder;
     },
-    innerJoin() { return builder; },
+    innerJoin(joinedTable?: any) {
+      if (builder.table === students && joinedTable === classes) {
+        builder._rows = builder._rows.filter((student: any) => student.classId != null);
+      }
+      return builder;
+    },
     leftJoin() { return builder; },
-    where() { return builder; },
+    where(condition?: any) {
+      if (builder.table === students && condition) {
+        const query = new PgDialect().sqlToQuery(condition);
+        if (query.sql.includes('"students"."id" in')) {
+          const allowedIds = (query.params as any[])
+            .flat(Infinity)
+            .filter((value): value is number => typeof value === 'number');
+          builder._rows = builder._rows.filter((student: any) => allowedIds.includes(student.id));
+        }
+        if (!Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
+          && query.sql.includes('"students"."is_active"')
+          && query.params.includes(true)) {
+          builder._rows = builder._rows.filter((student: any) => student.isActive === true);
+        }
+        if (Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
+          && query.sql.includes('"students"."is_active"')
+          && query.params.includes(true)) {
+          builder._rows = [{ count: mockState.students.filter((student) => student.isActive === true).length }];
+        }
+      }
+      return builder;
+    },
+    orderBy() { return builder; },
+    limit() { return builder; },
     then(resolve: (value: any) => void) {
         return Promise.resolve(builder._rows).then(resolve);
     },
@@ -69,7 +100,7 @@ const createBuilder = (rows: any[]) => {
 };
 
 const mockDb = {
-  select: () => createBuilder(mockState.students),
+  select: (projection?: any) => createBuilder(mockState.students, projection),
   insert: () => ({ values: () => ({ returning: async () => [] }) }),
   transaction: async (callback: (tx: any) => Promise<any>) => callback(mockDb),
   update: () => ({ set: () => ({ where: async () => [] }) }),
@@ -242,6 +273,31 @@ describe('GET /api/students (scope)', () => {
     expect(res.body[0]).toMatchObject({ id: 101, schoolId: 10, classId: 1 });
   });
 
+  it('does not let includeFormer expand teacher access or return inactive students', async () => {
+    mockState.actorRole = 'teacher';
+    mockState.actorSchoolId = 10;
+    mockState.actorId = 7;
+    mockState.users = [{ id: 7, uid: 'sim_teacher', schoolId: 10 }];
+    mockState.teacherRows = [{ id: 42 }];
+    mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 1, isActive: true },
+      { id: 102, schoolId: 10, classId: 1, isActive: false },
+      { id: 103, schoolId: 10, classId: 2, isActive: true },
+    ];
+
+    const res = await request(app)
+      .get('/api/students?includeFormer=true')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'sim_teacher')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '7')
+      .expect(200);
+
+    expect(res.body.map((student: any) => student.id)).toEqual([101]);
+    expect(res.body.every((student: any) => student.isActive === true)).toBe(true);
+  });
+
   it('returns [] when teacher has no id', async () => {
     mockState.users = [];  // No user found - actor.id will be null
     mockState.teacherRows = [{ id: 42 }];
@@ -304,6 +360,49 @@ describe('GET /api/students (scope)', () => {
 
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.map((s: any) => s.id)).toEqual([101]);
+  });
+
+  it('keeps includeFormer school_admin results within their school', async () => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 1, isActive: true },
+      { id: 102, schoolId: 10, classId: null, isActive: false },
+      { id: 201, schoolId: 20, classId: null, isActive: false },
+    ];
+
+    const res = await request(app)
+      .get('/api/students?includeFormer=true')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .expect(200);
+
+    expect(res.body.map((student: any) => student.id).sort()).toEqual([101, 102]);
+    expect(res.body.find((student: any) => student.id === 102).isActive).toBe(false);
+  });
+
+  it('keeps includeFormer parent results limited to their own children', async () => {
+    mockState.actorRole = 'parent';
+    mockState.actorSchoolId = null;
+    mockState.users = [{ id: 9, uid: 'sim_parent', schoolId: null }];
+    mockState.parentRows = [{ id: 1, studentId: 101 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: null, parentId: 1, isActive: false },
+      { id: 202, schoolId: 20, classId: null, parentId: 2, isActive: false },
+    ];
+
+    const res = await request(app)
+      .get('/api/students?includeFormer=true')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim_parent')
+      .set('x-simulated-user-id', '9')
+      .expect(200);
+
+    expect(res.body.map((student: any) => student.id)).toEqual([101]);
+    expect(res.body[0]).toMatchObject({ isActive: false, parentId: 1 });
   });
 
   it('allows super_admin global access without a schoolId', async () => {
@@ -492,6 +591,253 @@ describe('GET /api/students (scope)', () => {
     expect(res.status).toBe(200);
     expect(insertedRows[0].firstName).toBe('Jean Pierre');
     expect(insertedRows[0].lastName).toBe('DUPONT');
+  });
+
+  it('allows a student to be detached from their current class without deleting their record', async () => {
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, studentId: 123 }];
+    mockState.students = [{
+      id: 123,
+      firstName: 'Marie',
+      lastName: 'DUPONT',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      isActive: true,
+      withdrawnAt: null,
+      parentId: 7,
+      schoolAdminId: 2,
+      gender: 'F',
+      enrolledAt: new Date('2015-04-12'),
+    }];
+
+    const deleteSpy = vi.spyOn(mockDb, 'delete');
+    let updatedValues: any;
+    const updatedTables: any[] = [];
+    mockDb.update = ((table: any) => {
+      updatedTables.push(table);
+      return {
+        set: (values: any) => {
+        updatedValues = values;
+        return {
+          where: () => ({
+            returning: async () => {
+              mockState.students[0] = { ...mockState.students[0], ...values };
+              return [mockState.students[0]];
+            },
+          }),
+        };
+        },
+      };
+    }) as any;
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send({ classId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 123, firstName: 'Marie', schoolId: 10, parentId: 7, classId: null, isActive: false });
+    expect(new Date(res.body.withdrawnAt).getTime()).not.toBeNaN();
+    expect(mockState.students).toHaveLength(1);
+    expect(mockState.students[0]).toMatchObject({ id: 123, schoolId: 10, parentId: 7, classId: null, isActive: false });
+    expect(mockState.students[0].withdrawnAt).toBeInstanceOf(Date);
+    expect(updatedTables).toEqual([students]);
+    expect(updatedValues).toMatchObject({ classId: null, isActive: false, withdrawnAt: expect.any(Date) });
+    expect(deleteSpy).not.toHaveBeenCalled();
+    deleteSpy.mockRestore();
+  });
+
+  it('counts only active students in the dashboard summary', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [
+      { id: 123, schoolId: 10, classId: null, parentId: 7, isActive: false, withdrawnAt: new Date() },
+      { id: 124, schoolId: 10, classId: 5, parentId: 8, isActive: true, withdrawnAt: null },
+    ];
+
+    const res = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(res.body.stats.totalStudents).toBe(1);
+  });
+
+  it('does not update a student already detached from a class', async () => {
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    mockState.students = [{ id: 123, schoolId: 10, classId: null, parentId: 7 }];
+    const updateSpy = vi.spyOn(mockDb, 'update');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send({ classId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 123, classId: null, parentId: 7 });
+    expect(updateSpy).not.toHaveBeenCalled();
+    updateSpy.mockRestore();
+  });
+
+  it('rejects class removal by a teacher', async () => {
+    mockState.users = [{ id: 7, uid: 'sim_teacher', role: 'teacher', schoolId: 10 }];
+    mockState.students = [{ id: 123, schoolId: 10, classId: 5, parentId: 7 }];
+    const deleteSpy = vi.spyOn(mockDb, 'delete');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'sim_teacher')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '7')
+      .send({ classId: null });
+
+    expect(res.status).toBe(403);
+    expect(deleteSpy).not.toHaveBeenCalled();
+    deleteSpy.mockRestore();
+  });
+
+  it('excludes former students from the default list', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [
+      { id: 123, schoolId: 10, classId: null, isActive: false, withdrawnAt: new Date('2026-09-01T10:00:00.000Z'), parentId: 7, firstName: 'Marie', lastName: 'DUPONT' },
+      { id: 124, schoolId: 10, classId: 5, isActive: true, withdrawnAt: null, parentId: 8, firstName: 'Jean', lastName: 'MARTIN' },
+    ];
+
+    const res = await request(app)
+      .get('/api/students')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(res.body.map((student: any) => student.id)).toEqual([124]);
+    expect(res.body.some((student: any) => student.isActive === false)).toBe(false);
+  });
+
+  it('includes former students only when explicitly requested and preserves their status', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [
+      { id: 123, schoolId: 10, classId: null, isActive: false, withdrawnAt: new Date('2026-09-01T10:00:00.000Z'), parentId: 7, firstName: 'Marie', lastName: 'DUPONT' },
+      { id: 124, schoolId: 10, classId: 5, isActive: true, withdrawnAt: null, parentId: 8, firstName: 'Jean', lastName: 'MARTIN' },
+    ];
+
+    const res = await request(app)
+      .get('/api/students?includeFormer=true')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(res.body.map((student: any) => student.id).sort()).toEqual([123, 124]);
+    const formerStudent = res.body.find((student: any) => student.id === 123);
+    expect(formerStudent).toMatchObject({ classId: null, isActive: false, parentId: 7 });
+    expect(new Date(formerStudent.withdrawnAt).getTime()).not.toBeNaN();
+  });
+
+  it('does not assign a withdrawn student to a class without a re-enrollment workflow', async () => {
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    mockState.students = [{ id: 123, firstName: 'Marie', lastName: 'DUPONT', schoolId: 10, classId: null, isActive: false, withdrawnAt: new Date(), parentId: 7 }];
+    const updateSpy = vi.spyOn(mockDb, 'update');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send({ firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: 5, parentId: 7, academicYearId: 2 });
+
+    expect(res.status).toBe(409);
+    expect(updateSpy).not.toHaveBeenCalled();
+    updateSpy.mockRestore();
+  });
+
+  it('preserves school and parent links when editing a former student profile', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.parentRows = [{ id: 7, userId: 99, studentId: 123, schoolId: 10 } as any];
+    mockState.students = [{ id: 123, firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: null, isActive: false, withdrawnAt: new Date(), parentId: 7, schoolAdminId: null, enrolledAt: new Date('2015-04-12') }];
+    mockDb.update = ((table: any) => ({
+      set: (values: any) => ({
+        where: () => ({
+          returning: async () => {
+            if (table === students) mockState.students[0] = { ...mockState.students[0], ...values };
+            return [mockState.students[0]];
+          },
+        }),
+      }),
+    })) as any;
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .send({ firstName: 'Marie Claire', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: null, parentId: 7, academicYearId: 2 });
+
+    expect(res.status).toBe(200);
+    expect(mockState.students[0]).toMatchObject({ schoolId: 10, parentId: 7, classId: null, isActive: false });
+  });
+
+  it('does not move former student school or parent links through general edit', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [{ id: 123, firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: null, isActive: false, withdrawnAt: new Date(), parentId: 7 }];
+    const updateSpy = vi.spyOn(mockDb, 'update');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .send({ firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 20, classId: null, parentId: 8, academicYearId: 2 });
+
+    expect(res.status).toBe(409);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(mockState.students[0]).toMatchObject({ schoolId: 10, parentId: 7, isActive: false, classId: null });
+    updateSpy.mockRestore();
+  });
+
+  it('requires the dedicated withdrawal action to clear an active student class', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [{ id: 123, firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: 5, isActive: true, withdrawnAt: null, parentId: 7 }];
+    const updateSpy = vi.spyOn(mockDb, 'update');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .send({ firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: null, parentId: 7, academicYearId: 2 });
+
+    expect(res.status).toBe(409);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(mockState.students[0]).toMatchObject({ schoolId: 10, parentId: 7, classId: 5, isActive: true, withdrawnAt: null });
+    updateSpy.mockRestore();
+  });
+
+  it('does not clear an active student class through the general edit route', async () => {
+    mockState.users = [{ id: 1, uid: 'sim_admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [{ id: 123, firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: 5, isActive: true, withdrawnAt: null, parentId: 7 }];
+    const updateSpy = vi.spyOn(mockDb, 'update');
+
+    const res = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'sim_admin')
+      .set('x-simulated-user-id', '1')
+      .send({ firstName: 'Marie', lastName: 'DUPONT', birthDate: '2015-04-12', schoolId: 10, classId: null, parentId: 7, academicYearId: 2 });
+
+    expect(res.status).toBe(409);
+    expect(updateSpy).not.toHaveBeenCalled();
+    updateSpy.mockRestore();
   });
 
   it('normalizes firstName in batch imports and keeps the surname unchanged', async () => {

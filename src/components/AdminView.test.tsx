@@ -346,6 +346,7 @@ describe('AdminView create-user teacher form', () => {
     const students: Student[] = [
       { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearName: '2024-2025', parentName: 'Parent Tano' },
       { id: 2, firstName: 'Awa', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearName: '2024-2025', parentName: 'Parent Amani' },
+      { id: 3, firstName: 'Kossi', lastName: 'Ancien', schoolId: 1, classId: null, className: '', parentName: 'Parent Ancien', isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z' },
     ];
     const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
     const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
@@ -386,11 +387,35 @@ describe('AdminView create-user teacher form', () => {
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets['Élèves']);
 
       expect(click).toHaveBeenCalled();
-      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
+      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves-actifs.xlsx');
       expect(rows).toEqual([
         { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Tuteur: 'Parent Amani' },
         { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Tuteur: 'Parent Tano' },
       ]);
+
+      fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'former' } });
+      expect(screen.getByText(/Ancien élève/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+      const formerBlob = createObjectURL.mock.calls[1][0] as Blob;
+      const formerWorkbook = XLSX.read(await formerBlob.arrayBuffer(), { type: 'array' });
+      expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('liste-anciens-eleves.xlsx');
+      expect(XLSX.utils.sheet_to_json(formerWorkbook.Sheets['Élèves'])).toEqual([
+        { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Tuteur: 'Parent Ancien' },
+      ]);
+
+      fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'all' } });
+      expect(screen.getByText(/Ancien élève/)).toBeTruthy();
+      const allStudentRows = Array.from(document.querySelectorAll('tbody tr'))
+        .filter((row) => !row.querySelector('td[colspan]'));
+      expect(allStudentRows).toHaveLength(3);
+      expect(allStudentRows.some((row) => row.textContent?.includes('Awa'))).toBe(true);
+      expect(allStudentRows.some((row) => row.textContent?.includes('Kossi'))).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+      const allBlob = createObjectURL.mock.calls[2][0] as Blob;
+      const allWorkbook = XLSX.read(await allBlob.arrayBuffer(), { type: 'array' });
+      expect((click.mock.instances[2] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
+      const allRows = XLSX.utils.sheet_to_json(allWorkbook.Sheets['Élèves']) as Array<{ Nom: string }>;
+      expect(allRows.map((row) => row.Nom)).toEqual(expect.arrayContaining(['Amani', 'Ancien', 'Tano']));
     } finally {
       if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
@@ -581,6 +606,7 @@ describe('AdminView create-user teacher form', () => {
       { id: 1, firstName: 'Koffi', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
       { id: 2, firstName: 'Awa', lastName: 'Kouassi', schoolId: 1, classId: 10, className: 'CM1', yearId: 1, yearName: '2024-2025' },
       { id: 3, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearId: 1, yearName: '2024-2025' },
+      { id: 4, firstName: 'Sana', lastName: 'Sansclasse', schoolId: 1, classId: null, className: '', yearId: 1, yearName: '2024-2025' },
     ];
 
     renderWithAuth(
@@ -605,8 +631,11 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+  expect(screen.getByTestId('students-total-count').textContent).toContain('4');
+  expect(screen.getByText(/Sansclasse\s+Sana/i)).toBeTruthy();
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
     expect(screen.getByTestId('students-total-count').textContent).toContain('2');
+  expect(screen.queryByText(/Sansclasse\s+Sana/i)).toBeNull();
 
     fireEvent.change(screen.getByPlaceholderText(/Rechercher parmi les étudiants/i), { target: { value: 'KOFFI' } });
     expect(screen.getByTestId('students-total-count').textContent).toContain('2');
