@@ -372,6 +372,7 @@ export default function NotesView({
 
   // Check if a student is eligible for an evaluation (was enrolled before or at the evaluation timestamp)
   const currentClassStudents = sortStudentsAlphabetically(studentsList.filter((st) => {
+    if (st.isActive === false) return false;
     if (!selectedClassId) return true;
     return String(st.classId) === selectedClassId;
   }));

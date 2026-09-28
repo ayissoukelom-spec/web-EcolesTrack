@@ -298,6 +298,15 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines.map((line) => line.subjectName).sort()).toEqual(['Français', 'Math']);
   });
 
+  it('rejette la génération quand l élève n a plus de classe active', async () => {
+    const { persistence } = createFakePersistence({
+      ...baseState,
+      students: [{ id: 1, classId: null as any, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' }],
+    });
+
+    await expect(generateBulletinSnapshot(1, 7, persistence)).rejects.toThrow('Student does not have a current class');
+  });
+
   it('persiste les MIN/MAX officiels de la classe pour une generation individuelle', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,

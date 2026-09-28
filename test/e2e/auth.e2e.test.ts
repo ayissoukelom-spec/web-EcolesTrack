@@ -62,6 +62,10 @@ const FIXTURES = {
   absences: [
     { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
   ],
+  lateArrivals: [],
+  grades: [],
+  examResults: [],
+  classExamConfigurations: [],
   absenceJustifications: [],
   notificationAttachments: [],
   notifications: [],
@@ -85,6 +89,21 @@ function resetFixtures() {
     // @ts-ignore
     FIXTURES[key] = JSON.parse(JSON.stringify(FIXTURES_TEMPLATE[key]));
   });
+}
+
+function setCurrentAndFormerNotificationRecipients() {
+  (FIXTURES.parents as any[]).splice(0, FIXTURES.parents.length,
+    { id: 1, userId: 6, studentId: 11, schoolId: 10 },
+    { id: 2, userId: 7, studentId: 16, schoolId: 10 },
+    { id: 3, userId: 8, studentId: 17, schoolId: 10 },
+  );
+  const currentStudent = (FIXTURES.students as any[]).find((student) => student.id === 11);
+  if (currentStudent) currentStudent.parentId = 1;
+  (FIXTURES.students as any[]).push(
+    { id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Sibling', parentId: 1 },
+    { id: 16, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Only', parentId: 2 },
+    { id: 17, schoolId: 10, classId: 1, isActive: true, withdrawnAt: null, firstName: 'Current', lastName: 'Sibling', parentId: 3 },
+  );
 }
 
 function createMockDb() {
@@ -120,12 +139,12 @@ function createMockDb() {
         if (chunk == null) continue;
         const ctor = chunk.constructor?.name;
 
-        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger') && typeof chunk.name === 'string') {
+        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger' || ctor === 'PgBoolean') && typeof chunk.name === 'string') {
           lastColumn = chunk.name.toLowerCase();
           continue;
         }
 
-        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger') && typeof (chunk as any).text === 'string') {
+        if ((ctor === 'PgText' || ctor === 'PgSerial' || ctor === 'PgInteger' || ctor === 'PgBoolean') && typeof (chunk as any).text === 'string') {
           const text = (chunk as any).text.toLowerCase();
           if (text.includes('lower(') && text.includes('email')) {
             lastColumn = 'email';
@@ -188,7 +207,8 @@ function createMockDb() {
           if (lastColumn) {
             const normalizedLast = lastColumn.replace(/_/g, '').replace(/\./g, '');
             const value = (chunk as any).value;
-            if (normalizedLast.includes('uid')) result.uid = value;
+            if (/is_?active/.test(normalizedLast)) result.isActive = value;
+            else if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
             else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
             else if (/user.*id/.test(normalizedLast)) result.userId = value === null ? null : Number(value);
@@ -269,6 +289,8 @@ function createMockDb() {
         const leftStr = String(left).toLowerCase().replace(/\./g, '');
         const rawRight = right && typeof right === 'object' && 'value' in right ? (right as any).value : right;
         const rightIsPrimitive = rawRight === null || ['string', 'number', 'boolean'].includes(typeof rawRight);
+        if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
+        if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
         if (leftStr.includes('uid') && rightIsPrimitive) result.uid = rawRight;
         if (leftStr.includes('email') && rightIsPrimitive) result.email = rawRight;
         if (/school.*id/.test(leftStr) && rightIsPrimitive) result.schoolId = rawRight === null ? null : Number(rawRight);
@@ -347,6 +369,10 @@ function createMockDb() {
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
+      if (lower.includes('latearrivals') || lower.includes('late_arrivals')) return 'lateArrivals';
+      if (lower.includes('grades')) return 'grades';
+      if (lower.includes('examresults')) return 'examResults';
+      if (lower.includes('classexamconfigurations')) return 'classExamConfigurations';
       if (lower.includes('absencejustifications')) return 'absenceJustifications';
       if (lower.includes('notificationattachments')) return 'notificationAttachments';
       if (lower.includes('notifications')) return 'notifications';
@@ -363,12 +389,17 @@ function createMockDb() {
       if (keys.includes('name') && keys.includes('address')) return 'schools';
       if (keys.includes('userid') && keys.includes('studentid') && keys.includes('address')) return 'parents';
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('parentid')) return 'students';
+      if (keys.includes('studentid') && keys.includes('academicyearid') && keys.includes('examtype')) return 'examResults';
+      if (keys.includes('classid') && keys.includes('academicyearid') && keys.includes('examtype') && keys.includes('isactive')) return 'classExamConfigurations';
+      if (keys.includes('studentid') && keys.includes('expectedstarttime') && keys.includes('arrivaltime')) return 'lateArrivals';
+      if (keys.includes('studentid') && keys.includes('evaluationid') && keys.includes('score')) return 'grades';
       if (keys.includes('name') && keys.includes('schoolid') && keys.includes('teacherid')) return 'classes';
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('id')) return 'teachers';
       if (keys.includes('schoolid') && keys.includes('teacherid') && keys.includes('userid')) return 'teachers';
       if (keys.includes('classid') && keys.includes('teacherid')) return 'classTeachers';
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('status')) return 'schoolClasses';
       if (keys.includes('studentid') && keys.includes('date') && keys.includes('period') && keys.includes('isjustified')) return 'absences';
+      if (keys.includes('studentid') && keys.includes('expectedstarttime') && keys.includes('arrivaltime')) return 'lateArrivals';
       if (keys.includes('absenceid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'absenceJustifications';
       if (keys.includes('notificationid') && keys.includes('filepath') && keys.includes('mimetype') && keys.includes('uploadedby')) return 'notificationAttachments';
       if (keys.includes('type') && keys.includes('userid') && keys.includes('title')) return 'notifications';
@@ -378,6 +409,7 @@ function createMockDb() {
     const maybeName = table && typeof table === 'object' ? (table.name || table.tableName || table.alias) : undefined;
     if (typeof maybeName === 'string') {
       const lower = maybeName.toLowerCase();
+      const normalizedName = lower.replace(/_/g, '');
       if (lower.includes('users')) return 'users';
       if (lower.includes('schools')) return 'schools';
       if (lower.includes('academicyears')) return 'academicYears';
@@ -388,9 +420,13 @@ function createMockDb() {
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
-      if (lower.includes('absencejustifications')) return 'absenceJustifications';
-      if (lower.includes('notificationattachments')) return 'notificationAttachments';
-      if (lower.includes('notifications')) return 'notifications';
+      if (normalizedName.includes('latearrivals')) return 'lateArrivals';
+      if (normalizedName.includes('examresults')) return 'examResults';
+      if (normalizedName.includes('classexamconfigurations')) return 'classExamConfigurations';
+      if (normalizedName.includes('grades')) return 'grades';
+      if (normalizedName.includes('absencejustifications')) return 'absenceJustifications';
+      if (normalizedName.includes('notificationattachments')) return 'notificationAttachments';
+      if (normalizedName.includes('notifications')) return 'notifications';
     }
 
     return '';
@@ -404,12 +440,16 @@ function createMockDb() {
       : tableName === 'localAuths' ? FIXTURES.localAuths
       : tableName === 'userSchools' ? FIXTURES.userSchools
       : tableName === 'parents' ? FIXTURES.parents
-      : tableName === 'students' ? FIXTURES.students
+      : tableName === 'students' ? FIXTURES.students.map((student: any) => ({ isActive: true, withdrawnAt: null, ...student }))
       : tableName === 'classes' ? FIXTURES.classes
       : tableName === 'teachers' ? FIXTURES.teachers
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'absences' ? FIXTURES.absences
+      : tableName === 'lateArrivals' ? FIXTURES.lateArrivals
+      : tableName === 'grades' ? FIXTURES.grades
+      : tableName === 'examResults' ? FIXTURES.examResults
+      : tableName === 'classExamConfigurations' ? FIXTURES.classExamConfigurations
       : tableName === 'absenceJustifications' ? FIXTURES.absenceJustifications
       : tableName === 'notifications' ? FIXTURES.notifications
       : tableName === 'notificationAttachments' ? FIXTURES.notificationAttachments
@@ -472,6 +512,7 @@ function createMockDb() {
         if (!Array.isArray(conditions.teacherIds) || !conditions.teacherIds.includes(Number(row.teacherId))) return false;
       }
       if (conditions.status !== undefined && row.status !== conditions.status) return false;
+      if (conditions.isActive !== undefined && row.isActive !== conditions.isActive) return false;
       return true;
     });
   };
@@ -486,6 +527,7 @@ function createMockDb() {
         _cond: undefined as any,
         _limit: undefined as number | undefined,
         _orderBy: undefined as any,
+        _distinct: false,
         from(table: any) {
           builder._table = table;
           return builder;
@@ -565,9 +607,19 @@ function createMockDb() {
           orderBy: builder._orderBy,
         });
 
-        let rows = filterTableRows(builder._table, combinedConditions);
         const conditions = combinedConditions;
         const fromName = resolveTableName(builder._table);
+        const hasStudentParentJoin = fromName === 'students'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
+        const baseConditions = { ...conditions };
+        if (hasStudentParentJoin) delete baseConditions.userId;
+        let rows = filterTableRows(builder._table, baseConditions);
+
+        if (hasStudentParentJoin) {
+          rows = rows.flatMap((student: any) => FIXTURES.parents
+            .filter((parent: any) => parent.id === student.parentId || parent.studentId === student.id)
+            .map((parent: any) => ({ ...student, userId: parent.userId })));
+        }
 
         if (builder._selected && typeof builder._selected === 'object') {
           const selectedKeys = Object.keys(builder._selected);
@@ -650,18 +702,26 @@ function createMockDb() {
         }
 
         if (builder._selected && typeof builder._selected === 'object' && !Array.isArray(builder._selected)) {
-          return rows.map((row: any) => {
+          const mappedRows = rows.map((row: any) => {
             const mapped: Record<string, any> = {};
             for (const [alias, expr] of Object.entries(builder._selected)) {
               mapped[alias] = resolveSelectedValue(expr, row);
             }
             return mapped;
           });
+          return builder._distinct
+            ? Array.from(new Map(mappedRows.map((row: any) => [JSON.stringify(row), row])).values())
+            : mappedRows;
         }
 
         return rows;
       };
 
+      return builder;
+    },
+    selectDistinct(selectSpec?: any) {
+      const builder = (db as any).select(selectSpec);
+      builder._distinct = true;
       return builder;
     },
     insert() {
@@ -739,11 +799,21 @@ function createMockDb() {
               FIXTURES.notifications.push(row as any);
               return [row];
             }
+            if (obj.studentId !== undefined && obj.academicYearId !== undefined && obj.examType !== undefined) {
+              const existing = FIXTURES.examResults.find((row: any) => row.studentId === obj.studentId && row.academicYearId === obj.academicYearId && row.examType === obj.examType);
+              if (existing) Object.assign(existing, obj);
+              else {
+                const nextId = FIXTURES.examResults.reduce((max: number, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+                FIXTURES.examResults.push({ id: nextId, ...obj });
+              }
+              return [existing || FIXTURES.examResults[FIXTURES.examResults.length - 1]];
+            }
             return [obj];
           };
 
           return {
             returning: async () => executeInsert(),
+            onConflictDoUpdate: () => ({ returning: async () => executeInsert() }),
             then: async (onfulfilled?: any, onrejected?: any) => {
               try {
                 const result = await executeInsert();
@@ -989,9 +1059,12 @@ vi.mock('src/lib/bulletinService', () => ({
 // resolver handles bare-module imports (import 'src/...') correctly.
 let serverModule: any = null;
 let app: any = null;
+let originalFetch: typeof fetch;
 
 describe('E2E security: auth & privilege checks', () => {
   beforeAll(async () => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 200 })) as typeof fetch;
     process.env.NODE_ENV = 'test';
     process.env.INTERNAL_SECRET = 'test-internal-secret';
     // Ensure TextEncoder/TextDecoder exist for esbuild used by Vite
@@ -1025,7 +1098,7 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   afterAll(async () => {
-    // nothing to close - server started in module init
+    globalThis.fetch = originalFetch;
   });
 
   beforeEach(() => {
@@ -1140,6 +1213,108 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ studentId: 11, classId: 1, date: '2026-06-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
 
     expect(res.status).toBe(201);
+  });
+
+  it('does not create an absence for a withdrawn student and keeps their earlier absence readable', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Student', birthDate: '2010-01-01', gender: 'female', parentId: 1, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+    FIXTURES.absences.push({ id: 2, studentId: 15, classId: 1, date: '2026-08-30', period: 'morning', isJustified: false, justificationReason: null });
+
+    const createResponse = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 15, classId: 1, date: '2026-09-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+    expect(createResponse.status).toBe(400);
+    expect(FIXTURES.absences).toHaveLength(2);
+
+    const historyResponse = await request(app).get('/api/absences').set('Authorization', 'Bearer token-super');
+    expect(historyResponse.status).toBe(200);
+    expect(historyResponse.body.map((absence: any) => absence.id)).toContain(2);
+  });
+
+  it('requires an active student to belong to the selected class for an absence', async () => {
+    const response = await request(app)
+      .post('/api/absences')
+      .set('Authorization', 'Bearer token-surveillant')
+      .send({ studentId: 11, classId: 2, date: '2026-09-02', subjectId: 1, startTime: '08:00', endTime: '09:30', isJustified: false });
+
+    expect(response.status).toBe(400);
+    expect(FIXTURES.absences).toHaveLength(1);
+  });
+
+  it('rejects a withdrawn student for new late arrivals but keeps earlier delays readable', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Student', birthDate: '2010-01-01', gender: 'female', parentId: 1, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+    FIXTURES.lateArrivals.push({ id: 2, studentId: 15, classId: 1, date: '2026-08-30', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:15', lateMinutes: 15, reason: null, createdAt: '2026-08-30T08:15:00.000Z', updatedAt: '2026-08-30T08:15:00.000Z' });
+
+    const createResponse = await request(app)
+      .post('/api/late-arrivals')
+      .set('Authorization', 'Bearer token-school')
+      .send({ studentId: 15, classId: 1, date: '2026-09-02', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' });
+    expect(createResponse.status).toBe(400);
+
+    const historyResponse = await request(app).get('/api/late-arrivals').set('Authorization', 'Bearer token-super');
+    expect(historyResponse.status).toBe(200);
+    expect(historyResponse.body.map((lateArrival: any) => lateArrival.id)).toContain(2);
+
+    const updateResponse = await request(app)
+      .put('/api/late-arrivals/2')
+      .set('Authorization', 'Bearer token-school')
+      .send({ arrivalTime: '08:20' });
+    const deleteResponse = await request(app)
+      .delete('/api/late-arrivals/2')
+      .set('Authorization', 'Bearer token-school');
+    expect(updateResponse.status).toBe(403);
+    expect(deleteResponse.status).toBe(403);
+    expect(FIXTURES.lateArrivals).toHaveLength(1);
+  });
+
+  it('allows an active student to receive a new late arrival', async () => {
+    const response = await request(app)
+      .post('/api/late-arrivals')
+      .set('Authorization', 'Bearer token-school')
+      .send({ studentId: 11, classId: 1, date: '2026-09-02', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' });
+
+    expect(response.status).toBe(201);
+  });
+
+  it('limits current exam operations to active class students and preserves former results in history', async () => {
+    FIXTURES.classExamConfigurations.push({ id: 1, classId: 1, schoolId: 10, academicYearId: 1, examType: 'BEPC', isActive: true });
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Student', birthDate: '2010-01-01', gender: 'female', parentId: 1, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+    FIXTURES.examResults.push(
+      { id: 1, studentId: 11, academicYearId: 1, examType: 'BEPC', resultStatus: 'ADMITTED' },
+      { id: 2, studentId: 15, schoolId: 10, isActive: false, academicYearId: 1, examType: 'BEPC', resultStatus: 'ADMITTED' },
+    );
+
+    const currentResponse = await request(app)
+      .get('/api/exam-results?classId=1&schoolId=10&academicYearId=1&examType=BEPC')
+      .set('Authorization', 'Bearer token-school');
+    expect(currentResponse.status).toBe(200);
+    expect(currentResponse.body.map((student: any) => student.id)).toEqual([11]);
+
+    const activeSaveResponse = await request(app)
+      .put('/api/exam-results/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send({ classId: 1, schoolId: 10, academicYearId: 1, examType: 'BEPC', results: [{ studentId: 11, resultStatus: 'ADMITTED' }] });
+    expect(activeSaveResponse.status, JSON.stringify(activeSaveResponse.body)).toBe(200);
+    expect(FIXTURES.examResults.some((result: any) => result.studentId === 11)).toBe(true);
+
+    const historicalResponse = await request(app)
+      .get('/api/exam-results?studentId=15')
+      .set('Authorization', 'Bearer token-school');
+    expect(historicalResponse.status).toBe(200);
+    expect(historicalResponse.body).toEqual([expect.objectContaining({ id: 2, studentId: 15, resultStatus: 'ADMITTED' })]);
+
+    const updateResponse = await request(app)
+      .put('/api/exam-results/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send({ classId: 1, schoolId: 10, academicYearId: 1, examType: 'BEPC', results: [{ studentId: 15, resultStatus: 'ADMITTED' }] });
+    expect(updateResponse.status).toBe(403);
+    expect(FIXTURES.examResults).toHaveLength(2);
+
+    const deleteResponse = await request(app)
+      .delete('/api/exam-results/2')
+      .set('Authorization', 'Bearer token-super');
+    expect(deleteResponse.status).toBe(409);
+    expect(FIXTURES.examResults.some((result: any) => result.id === 2)).toBe(true);
   });
 
   it('surveillant: cannot record an absence outside the assigned school', async () => {
@@ -1620,6 +1795,50 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects new parent-child associations to former students across create and import routes', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Student', birthDate: '2010-01-01', gender: 'female', parentId: null, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+    const initialUserCount = FIXTURES.users.length;
+
+    const parentProfileResponse = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Former Student Parent', email: 'former-profile@x.test', phone: '+228 90000001', address: 'Rue Test', schoolId: 10, studentId: 15 });
+    expect(parentProfileResponse.status).toBe(400);
+
+    const adminUserResponse = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid: 'former-parent-account', email: 'former-account@x.test', name: 'Former Account', role: 'parent', schoolId: 10, studentId: 15 });
+    expect(adminUserResponse.status).toBe(400);
+
+    const batchResponse = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([
+        { name: 'Former By Id', email: 'former-id@x.test', phonePrefix: '+228', phone: '90000002', parentType: 'mere', studentId: 15 },
+        { name: 'Former By Id List', email: 'former-ids@x.test', phonePrefix: '+228', phone: '90000003', parentType: 'pere', studentIds: '15' },
+        { name: 'Former By Name', email: 'former-name@x.test', phonePrefix: '+228', phone: '90000004', parentType: 'mere', studentNames: 'Former Student' },
+      ]);
+    expect(batchResponse.status).toBe(200);
+    expect(batchResponse.body.insertedCount).toBe(0);
+    expect(batchResponse.body.errors).toHaveLength(3);
+    expect(FIXTURES.users).toHaveLength(initialUserCount);
+  });
+
+  it('preserves an existing former-student parent link when only the parent profile is edited', async () => {
+    FIXTURES.users.push({ id: 20, uid: 'former-linked-parent', email: 'former-linked@x.test', name: 'Former Linked Parent', role: 'parent', schoolId: 10, isDeleted: false });
+    FIXTURES.parents.push({ id: 4, userId: 20, studentId: 15, schoolId: 10 });
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Student', birthDate: '2010-01-01', gender: 'female', parentId: 4, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' });
+
+    const response = await request(app)
+      .put('/api/admin/users/20')
+      .set('Authorization', 'Bearer token-school')
+      .send({ email: 'former-linked@x.test', name: 'Former Linked Parent Updated', role: 'parent', schoolId: 10, studentId: 15 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.parents.find((parent: any) => parent.id === 4)?.studentId).toBe(15);
+  });
+
   it('3n. school_admin cannot batch import parents for another school via POST /api/parents/batch', async () => {
     const res = await request(app)
       .post('/api/parents/batch')
@@ -1868,6 +2087,48 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.success).toBe(true);
     expect(FIXTURES.notifications.length).toBeGreaterThan(0);
     expect(FIXTURES.notificationAttachments.length).toBe(2);
+  });
+
+  it('school-wide notifications target parents with active children and deduplicate mixed-history families', async () => {
+    setCurrentAndFormerNotificationRecipients();
+
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Current families', body: 'Current students only', type: 'info' });
+
+    expect(res.status).toBe(200);
+    expect(FIXTURES.notifications.map((notification: any) => notification.userId).sort()).toEqual([6, 8]);
+  });
+
+  it('class notifications exclude former-only parents and retain mixed-history parents with an active child', async () => {
+    setCurrentAndFormerNotificationRecipients();
+
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Class update', body: 'Class 1', type: 'info', classId: 1 });
+
+    expect(res.status).toBe(200);
+    expect(FIXTURES.notifications.map((notification: any) => notification.userId).sort()).toEqual([6, 8]);
+  });
+
+  it('individual notifications reject former-only parents but allow a parent with an active child', async () => {
+    setCurrentAndFormerNotificationRecipients();
+
+    const formerOnlyResponse = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Former only', body: 'Not eligible', type: 'info', userId: 7 });
+    expect(formerOnlyResponse.status).toBe(403);
+    expect(FIXTURES.notifications).toHaveLength(0);
+
+    const activeFamilyResponse = await request(app)
+      .post('/api/notifications/send')
+      .set('Authorization', 'Bearer token-school')
+      .send({ title: 'Active family', body: 'Eligible', type: 'info', userId: 6 });
+    expect(activeFamilyResponse.status).toBe(200);
+    expect(FIXTURES.notifications.map((notification: any) => notification.userId)).toEqual([6]);
   });
 
   it('3q2. parent GET /api/notifications includes attachment metadata', async () => {

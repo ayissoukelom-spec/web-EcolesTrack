@@ -59,6 +59,43 @@ describe('registerBulletinGenerateRoute', () => {
     expect(await response.json()).toEqual({ id: 777, studentId: 10, termId: 2 });
   });
 
+  it('returns 400 with a specific code when the student has no current class', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin' };
+      next();
+    };
+
+    registerBulletinGenerateRoute(app, {
+      resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
+      verifyMiddleware: verifyMiddleware as any,
+      generateHandler: async () => {
+        throw new Error('Student does not have a current class');
+      },
+    });
+
+    await new Promise<void>((resolve) => {
+      activeServer = app.listen(0, () => resolve());
+    });
+    const address = activeServer.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const response = await fetch(`${baseUrl}/api/bulletins/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentId: 10, termId: 2 }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'Student does not have a current class',
+      code: 'STUDENT_WITHOUT_CURRENT_CLASS',
+    });
+  });
+
   it('uses studentAccess to load authorized class students when an actor is present', async () => {
     const app = express();
     app.use(express.json());

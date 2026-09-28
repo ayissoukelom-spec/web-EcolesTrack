@@ -145,13 +145,7 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
       return conditions;
     }
 
-    const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
-    if (authorizedStudentIds.length === 0) {
-      conditions.push(sql`1 = 0`);
-      return conditions;
-    }
-
-    conditions.push(inArray(bulletins.studentId, authorizedStudentIds));
+    conditions.push(inArray(bulletins.classId, teacherClassIds));
   } else if (actor.role === 'parent') {
     if (!actor.id) {
       conditions.push(sql`1 = 0`);

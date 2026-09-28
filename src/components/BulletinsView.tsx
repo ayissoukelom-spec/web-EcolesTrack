@@ -144,6 +144,7 @@ export default function BulletinsView({
     const schoolId = generateSchoolId ? Number(generateSchoolId) : null;
 
     return studentsList.filter((student) => {
+      if (student.isActive === false) return false;
       if (classId != null && student.classId !== classId) return false;
       if (schoolId != null && student.schoolId !== schoolId) return false;
       return true;

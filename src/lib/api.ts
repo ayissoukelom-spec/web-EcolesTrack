@@ -547,6 +547,10 @@ export async function fetchExamResults(filters: { classId: number; academicYearI
   return apiFetch(`/api/exam-results?${params.toString()}`);
 }
 
+export async function fetchStudentExamHistory(studentId: number): Promise<ExamResultRow[]> {
+  return apiFetch(`/api/exam-results?studentId=${encodeURIComponent(String(studentId))}`);
+}
+
 export async function deleteExamResult(id: number): Promise<{ success: boolean }> {
   return apiFetch(`/api/exam-results/${id}`, { method: 'DELETE' });
 }

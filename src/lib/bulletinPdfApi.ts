@@ -806,16 +806,15 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
 
   if (!header) return null;
 
-  const classStudentCount = header.studentSchoolId == null
-    ? 0
-    : ((await db
-      .select({ count: sql<number>`count(${students.id})::integer` })
-      .from(students)
-      .where(and(
-        eq(students.classId, header.classId),
-        eq(students.schoolId, header.studentSchoolId),
-      ))
-    ))[0]?.count ?? 0;
+  const classStudentRows = await db
+    .selectDistinct({ id: bulletins.studentId })
+    .from(bulletins)
+    .where(and(
+      eq(bulletins.classId, header.classId),
+      eq(bulletins.schoolYearId, header.schoolYearId),
+      eq(bulletins.termId, header.termId),
+    ));
+  const classStudentCount = classStudentRows.length;
 
   if (actor.role === 'super_admin') return { ...header, classStudentCount };
 
@@ -1026,9 +1025,12 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .orderBy(desc(bulletins.id));
 
     const annualClassStudents = await db
-      .select({ id: students.id })
-      .from(students)
-      .where(eq(students.classId, header.classId));
+      .selectDistinct({ id: bulletins.studentId })
+      .from(bulletins)
+      .where(and(
+        eq(bulletins.classId, header.classId),
+        eq(bulletins.schoolYearId, header.schoolYearId),
+      ));
     const annualBulletins = await db
       .select({
         id: bulletins.id,

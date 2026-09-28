@@ -146,6 +146,28 @@ describe('bulletin read API routes', () => {
     expect(payload.items[0].termId).toBe(7);
   });
 
+  it('keeps a former student bulletin available through the history read route', async () => {
+    const formerBulletin = {
+      ...baseListResponse,
+      items: [{ ...baseListResponse.items[0], id: 15, studentId: 15, studentName: 'Former Student' }],
+    };
+    const service: BulletinReadService = {
+      list: async (_actor, filters) => {
+        expect(filters.studentId).toBe(15);
+        return formerBulletin;
+      },
+      getById: async () => baseDetailResponse,
+    };
+
+    const app = createApp(service);
+    const baseUrl = await withServer(app);
+    const response = await fetch(`${baseUrl}/api/bulletins?studentId=15`);
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.items[0]).toMatchObject({ studentId: 15, studentName: 'Former Student' });
+  });
+
   it('récupère un bulletin complet avec ses lignes', async () => {
     const service: BulletinReadService = {
       list: async () => baseListResponse,

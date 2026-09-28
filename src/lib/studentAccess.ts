@@ -43,7 +43,7 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
   // super_admin: full access — return all student ids (optionally filtered by classIds)
   if (actor.role === 'super_admin') {
     if (opts?.classIds && opts.classIds.length > 0) {
-      const rows = await db.select({ id: students.id }).from(students).where(inArray(students.classId, opts.classIds));
+      const rows = await db.select({ id: students.id }).from(students).where(and(inArray(students.classId, opts.classIds), eq(students.isActive, true)));
       return (rows as any).map((r: any) => r.id);
     }
     const rows = await db.select({ id: students.id }).from(students);
@@ -61,7 +61,7 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
   if (!allowedClassIds || allowedClassIds.length === 0) return [];
 
   const actorSchoolId = actor.schoolId ?? null;
-  const rows = await db.select({ id: students.id }).from(students).where(and(inArray(students.classId, allowedClassIds), eq(students.schoolId, actorSchoolId)));
+  const rows = await db.select({ id: students.id }).from(students).where(and(inArray(students.classId, allowedClassIds), eq(students.schoolId, actorSchoolId), eq(students.isActive, true)));
   return (rows as any).map((r: any) => r.id);
 }
 

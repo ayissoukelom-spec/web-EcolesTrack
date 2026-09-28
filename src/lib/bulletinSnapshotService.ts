@@ -1184,6 +1184,9 @@ export const registerBulletinGenerateRoute = (
         console.error('Bulletin generation authorization error:', err.message);
         return res.status(403).json({ error: 'Unauthorized to generate bulletin for this class' });
       }
+      if (err instanceof Error && err.message === 'Student does not have a current class') {
+        return res.status(400).json({ error: 'Student does not have a current class', code: 'STUDENT_WITHOUT_CURRENT_CLASS' });
+      }
       console.error('Failed to generate bulletin:', err);
       return res.status(500).json({ error: 'Failed to generate bulletin' });
     }
@@ -1314,6 +1317,7 @@ export const generateBulletinSnapshot = async (
   return resolvedPersistence.transaction(async (ctx) => {
     const student = await ctx.getStudentById(studentId);
     if (!student) throw new Error('Student not found');
+    if (student.classId == null) throw new Error('Student does not have a current class');
 
     const klass = await ctx.getClassById(student.classId);
     if (!klass) throw new Error('Class not found');

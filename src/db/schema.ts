@@ -226,7 +226,9 @@ export const classTeachers = pgTable('class_teachers', {
 export const students = pgTable('students', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
-  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }),
+  isActive: boolean('is_active').default(true).notNull(),
+  withdrawnAt: timestamp('withdrawn_at'),
   firstName: text('first_name').notNull(),
   lastName: text('last_name').notNull(),
   matricule: text('matricule').notNull().default('').unique('students_matricule_unique'),

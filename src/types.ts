@@ -187,7 +187,9 @@ export interface ClassProgression {
 export interface Student {
   id: number;
   schoolId: number;
-  classId: number;
+  classId: number | null;
+  isActive?: boolean;
+  withdrawnAt?: string | null;
   matricule?: string;
   className: string;
   yearId?: number;

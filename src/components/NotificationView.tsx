@@ -44,6 +44,8 @@ export default function NotificationView({
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const activeStudentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false).map((student) => student.id)), [studentsList]);
+  const activeParentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false && student.parentId != null).map((student) => student.parentId!)), [studentsList]);
 
   const handleBroadcast = (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +96,9 @@ export default function NotificationView({
       apiFetch(`/api/parents?q=${encodeURIComponent(query)}`)
         .then((results) => {
           if (requestId === parentSearchRequestRef.current) {
-            setParentSearchResults(Array.isArray(results) ? results : []);
+            setParentSearchResults((Array.isArray(results) ? results : []).filter((parent: Parent) =>
+              activeParentIds.has(parent.id) || (parent.studentId != null && activeStudentIds.has(parent.studentId)),
+            ));
           }
         })
         .catch(() => {
@@ -106,14 +110,14 @@ export default function NotificationView({
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [notifForm.recipientMode, parentSearchQuery]);
+  }, [notifForm.recipientMode, parentSearchQuery, activeParentIds, activeStudentIds]);
 
   const parentLabel = (parent: Parent) => String(parent.name || `${parent.firstName || ''} ${parent.lastName || ''}`).trim() || `Parent #${parent.id}`;
   const parentStudentLabel = (parent: Parent) => [parent.studentFirstName, parent.studentLastName].filter(Boolean).join(' ').trim();
   const selectedClassParentCount = notifForm.classId
     ? new Set(
       studentsList
-        .filter((student) => String(student.classId) === notifForm.classId && student.parentId != null)
+        .filter((student) => student.isActive !== false && String(student.classId) === notifForm.classId && student.parentId != null)
         .map((student) => student.parentId),
     ).size
     : 0;

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult, fetchClassExamConfigurations, fetchExamResults, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser, saveClassExamConfiguration, saveExamResultsBatch } from '../lib/api';
+import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult, fetchClassExamConfigurations, fetchExamResults, fetchStudentExamHistory, getSimulatedSchoolId, findTeacherProfileFromSimulatedUser, saveClassExamConfiguration, saveExamResultsBatch } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
@@ -375,6 +375,7 @@ interface AdminViewProps {
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
+  onRemoveStudentFromClass?: (id: number) => Promise<any>;
   onAddYear: (data: { name: string; isActive: boolean; schoolId?: number }) => void;
   onSetActiveYear?: (id: number) => Promise<any>;
   onDeleteYear?: (id: number) => Promise<any>;
@@ -420,6 +421,7 @@ export default function AdminView({
   onUpdateSchool,
   onUploadSchoolLogo,
   onUpdateStudent,
+  onRemoveStudentFromClass,
   onAddYear,
   onSetActiveYear,
   onDeleteYear,
@@ -490,6 +492,7 @@ export default function AdminView({
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
   const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
+  const [studentRosterFilter, setStudentRosterFilter] = useState<'active' | 'former' | 'all'>('active');
   const [teacherStudentClassFilterId, setTeacherStudentClassFilterId] = useState<number | null>(null);
   const [studentFilterClasses, setStudentFilterClasses] = useState<Class[] | null>(null);
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
@@ -998,6 +1001,9 @@ export default function AdminView({
   })();
 
   const studentsInCurrentScope = studentsList.filter((st) =>
+    (userRole === 'super_admin' || userRole === 'school_admin'
+      ? studentRosterFilter === 'all' || (studentRosterFilter === 'former' ? st.isActive === false : st.isActive !== false)
+      : st.isActive !== false) &&
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || st.schoolId === superAdminSchoolFilterId) &&
     (userRole !== 'teacher' || currentTeacherClassIds.includes(st.classId)) &&
     (userRole !== 'parent' || (currentParent ? st.parentId === currentParent.id : false)) &&
@@ -1054,7 +1060,11 @@ export default function AdminView({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'liste-eleves.xlsx';
+    link.download = studentRosterFilter === 'active'
+      ? 'liste-eleves-actifs.xlsx'
+      : studentRosterFilter === 'former'
+        ? 'liste-anciens-eleves.xlsx'
+        : 'liste-eleves.xlsx';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -2099,6 +2109,8 @@ export default function AdminView({
   const [showCreatedUserPreview, setShowCreatedUserPreview] = useState(false);
   const [studentDetailOpen, setStudentDetailOpen] = useState(false);
   const [studentDetail, setStudentDetail] = useState<Student | null>(null);
+  const [studentExamHistory, setStudentExamHistory] = useState<any[]>([]);
+  const [studentExamHistoryLoading, setStudentExamHistoryLoading] = useState(false);
   const [teacherDetailOpen, setTeacherDetailOpen] = useState(false);
   const [teacherDetail, setTeacherDetail] = useState<Teacher | null>(null);
   const [parentDetailOpen, setParentDetailOpen] = useState(false);
@@ -2259,6 +2271,12 @@ export default function AdminView({
   const openStudentDetail = (student: Student) => {
     setStudentDetail(student);
     setStudentDetailOpen(true);
+    setStudentExamHistory([]);
+    setStudentExamHistoryLoading(true);
+    fetchStudentExamHistory(student.id)
+      .then((rows) => setStudentExamHistory(Array.isArray(rows) ? rows : []))
+      .catch(() => setStudentExamHistory([]))
+      .finally(() => setStudentExamHistoryLoading(false));
   };
 
   const openStudentEdit = (student: Student) => {
@@ -3024,6 +3042,25 @@ export default function AdminView({
                 >
                   Enregistrer
                 </button>
+                {studentToEdit && studentToEdit.classId != null && (
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm('Retirer cet élève de sa classe actuelle ? Ses données et son parent seront conservés.')) return;
+                      try {
+                        setEditStudentError(null);
+                        if (!onRemoveStudentFromClass) return;
+                        await onRemoveStudentFromClass(studentToEdit.id);
+                        setEditStudentOpen(false);
+                        setStudentToEdit(null);
+                      } catch (err: any) {
+                        setEditStudentError(err?.message || 'Impossible de retirer l’élève de sa classe');
+                      }
+                    }}
+                    className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-lg font-semibold text-sm transition-colors cursor-pointer"
+                  >
+                    Retirer de la classe
+                  </button>
+                )}
               </div>
             </div>
           </ModalSurface>
@@ -3163,7 +3200,7 @@ export default function AdminView({
                     >
                       <option value="">-- Aucun élève associé --</option>
                       {studentsList
-                        .filter((st) => !userForm.schoolId || String(st.schoolId) === userForm.schoolId)
+                        .filter((st) => st.isActive !== false && (!userForm.schoolId || String(st.schoolId) === userForm.schoolId))
                         .map((st) => (
                           <option key={st.id} value={String(st.id)}>{`${st.lastName} ${st.firstName}`}</option>
                         ))}
@@ -3376,6 +3413,7 @@ export default function AdminView({
               </div>
               <div className="text-sm text-slate-700 space-y-3">
                 <div><strong>Nom complet:</strong> {studentDetail.lastName} {studentDetail.firstName}</div>
+                <div><strong>Statut:</strong> {studentDetail.isActive === false ? `Ancien élève${studentDetail.withdrawnAt ? ` · sorti le ${new Date(studentDetail.withdrawnAt).toLocaleString('fr-FR')}` : ''}` : 'Élève actif'}</div>
                 <div><strong>Date de naissance:</strong> {studentDetail.birthDate || '—'}</div>
                 <div><strong>École:</strong> {schoolsList.find((s) => s.id === studentDetail.schoolId)?.name || '—'}</div>
                 <div><strong>Classe:</strong> {studentDetail.className || '—'}</div>
@@ -3389,6 +3427,16 @@ export default function AdminView({
                 )}
                 <div><strong>Admin école lié:</strong> {studentDetail.schoolAdminId ? (usersList.find((u) => u.id === studentDetail.schoolAdminId)?.name || `ID ${studentDetail.schoolAdminId}`) : '—'}</div>
                 <div><strong>ID élève:</strong> {studentDetail.id}</div>
+                <div>
+                  <strong>Résultats d'examens historiques:</strong>
+                  {studentExamHistoryLoading ? <span> Chargement…</span> : studentExamHistory.length === 0 ? <span> Aucun résultat</span> : (
+                    <ul className="mt-1 space-y-1">
+                      {studentExamHistory.map((result) => (
+                        <li key={result.id}>{result.examType} · année {result.academicYearId} · {result.resultStatus}{result.examSession ? ` · ${result.examSession}` : ''}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
                 <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setStudentDetailOpen(false); setStudentDetail(null); }}>Fermer</button>
@@ -5390,6 +5438,19 @@ export default function AdminView({
                         ))}
                     </select>
                   </div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-slate-600 text-xs sm:text-sm font-semibold" htmlFor="student-roster-filter">Statut</label>
+                    <select
+                      id="student-roster-filter"
+                      className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
+                      value={studentRosterFilter}
+                      onChange={(event) => setStudentRosterFilter(event.target.value as 'active' | 'former' | 'all')}
+                    >
+                      <option value="active">Élèves actifs</option>
+                      <option value="former">Anciens élèves</option>
+                      <option value="all">Tous les dossiers</option>
+                    </select>
+                  </div>
                 </div>
                 <div className="flex justify-end w-full sm:w-auto">
                   <div className="flex items-center gap-2">
@@ -5475,7 +5536,7 @@ export default function AdminView({
               </div>
             )}
             <div className="mb-4 text-sm font-semibold text-slate-700" data-testid="students-total-count">
-              Effectif total : {studentsInCurrentScope.length} élèves
+              {studentRosterFilter === 'active' ? 'Effectif actif' : studentRosterFilter === 'former' ? 'Anciens élèves' : 'Tous les dossiers'} : {studentsInCurrentScope.length} élèves
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs sm:text-sm text-slate-600">
@@ -5492,7 +5553,7 @@ export default function AdminView({
                 <tbody className="divide-y divide-slate-100">
                   {sortedVisibleStudents.map((st) => (
                     <tr key={st.id} className="hover:bg-slate-50/60 transition-colors">
-                          <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.lastName} {st.firstName}</td>
+                          <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{st.lastName} {st.firstName}{st.isActive === false && <span className="ml-2 font-normal text-amber-700">Ancien élève{st.withdrawnAt ? ` · sorti le ${new Date(st.withdrawnAt).toLocaleDateString('fr-FR')}` : ''}</span>}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{st.className || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name || st.yearName || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{st.parentName || '—'}</td>

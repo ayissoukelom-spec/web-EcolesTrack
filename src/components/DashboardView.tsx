@@ -105,7 +105,7 @@ export default function DashboardView({
           <div className="absolute -right-6 -top-7 h-24 w-24 rounded-full bg-white/10 blur-2xl" />
           <div className="relative flex items-center justify-between gap-4">
             <div className="space-y-2">
-              <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-indigo-100">Effectif Total</span>
+              <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-indigo-100">Effectif Actif</span>
               <p className="text-4xl font-black leading-none text-white">{stats.totalStudents}</p>
               <p className="text-xs font-semibold tracking-tight text-indigo-100/90">Élèves inscrits</p>
             </div>

@@ -29,6 +29,12 @@ const createBuilder = (table: any, rows: any[]) => ({
   where() {
     return this;
   },
+  innerJoin() {
+    return this;
+  },
+  leftJoin() {
+    return this;
+  },
   values(values: any) {
     return {
       returning: async () => {
@@ -174,5 +180,44 @@ describe('POST /api/grades', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('date prévue');
     expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('allows a grade for an active student in the evaluation class', async () => {
+    mockDbState.evaluations = [{ id: 77, classId: 1, teacherId: 1, termId: null, subject: 'Mathématiques', title: 'Devoir 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-01-01', createdAt: null, schoolId: 1 }];
+    mockDbState.students = [{ id: 11, firstName: 'Jean', lastName: 'Dupont', schoolId: 1, classId: 1, isActive: true, withdrawnAt: null, enrolledAt: null, parentId: null }];
+
+    const res = await request(app)
+      .post('/api/grades')
+      .set('x-simulated-role', 'super_admin')
+      .send({ evaluationId: 77, studentId: 11, score: '15', remarks: '' });
+
+    expect(res.status).toBe(200);
+    expect(mockDbState.grades).toContainEqual(expect.objectContaining({ evaluationId: 77, studentId: 11, score: '15' }));
+  });
+
+  it('rejects a new grade for a withdrawn student without deleting existing grade history', async () => {
+    mockDbState.evaluations = [{ id: 77, classId: 1, teacherId: 1, termId: null, subject: 'Mathématiques', title: 'Devoir 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-01-01', createdAt: null, schoolId: 1 }];
+    mockDbState.students = [{ id: 11, firstName: 'Jean', lastName: 'Dupont', schoolId: 1, classId: null, isActive: false, withdrawnAt: new Date('2026-09-01T10:00:00.000Z'), enrolledAt: null, parentId: null }];
+    mockDbState.grades = [{ id: 9, evaluationId: 76, studentId: 11, score: '12', remarks: 'Historique' }];
+
+    const res = await request(app)
+      .post('/api/grades')
+      .set('x-simulated-role', 'super_admin')
+      .send({ evaluationId: 77, studentId: 11, score: '15', remarks: '' });
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toEqual([{ id: 9, evaluationId: 76, studentId: 11, score: '12', remarks: 'Historique' }]);
+  });
+
+  it('keeps grades for a withdrawn student readable', async () => {
+    mockDbState.students = [{ id: 11, firstName: 'Jean', lastName: 'Dupont', schoolId: 1, classId: null, isActive: false, withdrawnAt: new Date(), parentId: null }];
+    mockDbState.grades = [{ id: 9, evaluationId: 76, studentId: 11, score: '12', remarks: 'Historique' }];
+
+    const res = await request(app)
+      .get('/api/grades')
+      .set('x-simulated-role', 'super_admin');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(mockDbState.grades);
   });
 });

@@ -203,7 +203,7 @@ export default function AbsenceView({
   };
 
   const studentsInSelectedClass = newAbsenceForm.classId
-    ? sortedStudents.filter((st) => String(st.classId) === newAbsenceForm.classId)
+    ? sortedStudents.filter((st) => st.isActive !== false && String(st.classId) === newAbsenceForm.classId)
     : [];
   const filteredStudentsInClass = studentSearchQuery.trim()
     ? studentsInSelectedClass.filter((st) => {

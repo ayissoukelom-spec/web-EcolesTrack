@@ -1,15 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
 
 // Mock the DB module that studentAccess imports (src/db/index.ts)
 const mockDb: any = vi.hoisted(() => ({
   selectReturn: [],
+  lastWhere: null as any,
   select: vi.fn(() => {
     const builder: any = {
       _rows: Array.isArray(mockDb.selectReturn) ? mockDb.selectReturn : [mockDb.selectReturn],
       from(_table: any) {
         return builder;
       },
-      where: async (_cond?: any) => builder,
+      where: async (cond?: any) => {
+        mockDb.lastWhere = cond;
+        return builder;
+      },
       innerJoin: (_t: any, _on?: any) => builder,
       then(onFulfilled: any, onRejected: any) {
         return Promise.resolve(builder._rows).then(onFulfilled, onRejected);
@@ -34,6 +39,7 @@ beforeEach(() => {
   mockDb.select.mockClear?.();
   mockDb.execute.mockClear?.();
   mockDb.selectReturn = [];
+  mockDb.lastWhere = null;
 });
 
 describe('studentAccess.getAuthorizedStudentIds (unit)', () => {
@@ -63,5 +69,16 @@ describe('studentAccess.getAuthorizedStudentIds (unit)', () => {
     mockDb.selectReturn = [{ id: 200 }];
     const ids = await studentAccess.getAuthorizedStudentIds(actor, { classIds: [80] });
     expect(ids).toEqual([200]);
+  });
+
+  it('class-scoped authorization only selects active students', async () => {
+    const actor = { id: 10, role: 'teacher', schoolId: 4 } as any;
+    mockDb.selectReturn = [{ id: 123 }];
+
+    const ids = await studentAccess.getAuthorizedStudentIds(actor, { classIds: [80] });
+    const query = new PgDialect().sqlToQuery(mockDb.lastWhere);
+
+    expect(ids).toEqual([123]);
+    expect(query.sql).toContain('"students"."is_active" = $');
   });
 });

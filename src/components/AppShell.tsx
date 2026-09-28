@@ -240,6 +240,14 @@ export default function AppShell() {
     await fetchAllData();
   };
 
+  const handleRemoveStudentFromClass = async (id: number) => {
+    await apiFetch(`/api/students/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ classId: null }),
+    });
+    await fetchAllData();
+  };
+
   const handleAddTeacher = async (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => {
     const created = await apiFetch('/api/teachers', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData(false);
@@ -421,6 +429,7 @@ export default function AppShell() {
             onAddSchool={handleAddSchool}
             onUpdateSchool={handleUpdateSchool}
             onUpdateStudent={handleUpdateStudent}
+            onRemoveStudentFromClass={handleRemoveStudentFromClass}
             onAddYear={handleAddYear}
             onAddClass={handleAddClass}
             onAddTeacher={handleAddTeacher}
