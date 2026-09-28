@@ -359,7 +359,7 @@ describe('AdminView create-user teacher form', () => {
     try {
       renderWithAuth(
         <AdminView
-          userRole="school_admin"
+          userRole="super_admin"
           schoolsList={schools}
           yearsList={[]}
           classesList={[]}
@@ -380,6 +380,12 @@ describe('AdminView create-user teacher form', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+      const closeButton = screen.getByRole('button', { name: 'Clôturer' });
+      const createButton = screen.getByRole('button', { name: 'Créer un élève' });
+      expect(closeButton.className).toContain('shrink-0');
+      expect(createButton.className).toContain('shrink-0');
+      expect(closeButton.parentElement).toBe(createButton.parentElement);
+      expect(closeButton.parentElement?.className).toContain('flex-wrap');
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
 
       const blob = createObjectURL.mock.calls[0][0] as Blob;
