@@ -2775,9 +2775,9 @@ export default function AdminView({
             contentClassName="max-w-3xl"
             ariaLabel="Modifier l'élève"
           >
-              <div className="w-full relative">
-                <h3 className="text-lg font-bold mb-4 text-slate-800">Modifier l'élève</h3>
-                <div className={`space-y-3 text-sm max-h-[70vh] ${allowSelectOverflow ? 'overflow-visible' : 'overflow-auto'} pr-2`}>
+              <div className="w-full min-h-0 flex flex-col relative">
+                <h3 className="shrink-0 text-lg font-bold mb-4 text-slate-800">Modifier l'élève</h3>
+                <div className={`min-h-0 flex-1 space-y-3 text-sm ${allowSelectOverflow ? 'overflow-visible' : 'overflow-y-auto'} pr-2`}>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
                     <RequiredLabel label="Prénom" required />
@@ -2987,7 +2987,7 @@ export default function AdminView({
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 mt-4">
+              <div className="shrink-0 flex flex-wrap justify-end gap-2 mt-4">
                 <button
                   onClick={() => {
                     setEditStudentOpen(false);

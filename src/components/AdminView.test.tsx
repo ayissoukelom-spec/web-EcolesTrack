@@ -341,7 +341,7 @@ describe('AdminView create-user teacher form', () => {
     expect(renderedNames).toEqual(['amani Koffi', 'Élodie Yao', 'Koffi Awa', 'tano Moussa']);
   });
 
-  it('exports the sorted visible students as an Excel workbook', async () => {
+  it('keeps student edit actions visible and exports the filtered roster', async () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const students: Student[] = [
       { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearName: '2024-2025', parentName: 'Parent Tano' },
@@ -416,6 +416,19 @@ describe('AdminView create-user teacher form', () => {
       expect((click.mock.instances[2] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
       const allRows = XLSX.utils.sheet_to_json(allWorkbook.Sheets['Élèves']) as Array<{ Nom: string }>;
       expect(allRows.map((row) => row.Nom)).toEqual(expect.arrayContaining(['Amani', 'Ancien', 'Tano']));
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Modifier' })[0]);
+      const studentDialog = screen.getByRole('dialog', { name: "Modifier l'élève" });
+      expect(within(studentDialog).getByRole('button', { name: 'Annuler' })).toBeTruthy();
+      expect(within(studentDialog).getByRole('button', { name: 'Enregistrer' })).toBeTruthy();
+      expect(within(studentDialog).getByRole('button', { name: 'Retirer de la classe' })).toBeTruthy();
+
+      const scrollBody = studentDialog.querySelector('.overflow-y-auto');
+      const footer = within(studentDialog).getByRole('button', { name: 'Annuler' }).parentElement;
+      expect(scrollBody?.className).toContain('min-h-0');
+      expect(scrollBody?.className).toContain('flex-1');
+      expect(footer?.className).toContain('flex-wrap');
+      expect(footer?.className).toContain('shrink-0');
     } finally {
       if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
       else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
