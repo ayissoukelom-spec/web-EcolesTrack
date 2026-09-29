@@ -16,11 +16,13 @@ import {
   classProgressions,
   classSuccessions,
   classExamConfigurations,
+  cycles,
   examResults,
   evaluations,
   grades,
   parents,
   schoolClasses,
+  schoolCycles,
   schools,
   schoolTerms,
   subjects,
@@ -168,6 +170,8 @@ export interface BulletinPdfData {
   classStudentCount: number;
   schoolName: string;
   principalName?: string | null;
+  principalGender?: string | null;
+  schoolHasLycee?: boolean | null;
   school?: {
     name: string;
     officialName?: string | null;
@@ -715,6 +719,23 @@ const loadPdfFonts = async (pdf: PDFDocument) => {
 
 export const BULLETIN_FINAL_AVERAGE_LABEL = 'Note /20';
 
+export const resolvePrincipalTitle = (
+  schoolHasLycee: boolean | null | undefined,
+  principalGender: string | null | undefined,
+): string => {
+  const isLycee = schoolHasLycee ?? true;
+  const gender = principalGender?.trim().toUpperCase();
+  if (gender !== 'M' && gender !== 'F') return 'Responsable';
+  if (isLycee) return gender === 'F' ? 'La Proviseure' : 'Le Proviseur';
+  return gender === 'F' ? 'La Directrice' : 'Le Directeur';
+};
+
+export const resolveSchoolHasLycee = (
+  configuredCycles: Array<{ code: string; isActive: boolean }>,
+): boolean | null => configuredCycles.length === 0
+  ? null
+  : configuredCycles.some((cycle) => cycle.code === 'lycee' && cycle.isActive);
+
 const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
   const [header] = await db
     .select({
@@ -729,6 +750,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       className: classes.name,
       schoolName: schools.name,
       principalName: schools.principalName,
+      principalGender: schools.principalGender,
       school: {
         name: schools.name,
         officialName: schools.officialName,
@@ -806,6 +828,15 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
 
   if (!header) return null;
 
+  const configuredSchoolCycles = await db.select({
+    code: cycles.code,
+    isActive: schoolCycles.isActive,
+  })
+    .from(schoolCycles)
+    .innerJoin(cycles, eq(schoolCycles.cycleId, cycles.id))
+    .where(eq(schoolCycles.schoolId, header.studentSchoolId));
+  const schoolHasLycee = resolveSchoolHasLycee(configuredSchoolCycles);
+
   const classStudentRows = await db
     .selectDistinct({ id: bulletins.studentId })
     .from(bulletins)
@@ -816,22 +847,22 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     ));
   const classStudentCount = classStudentRows.length;
 
-  if (actor.role === 'super_admin') return { ...header, classStudentCount };
+  if (actor.role === 'super_admin') return { ...header, classStudentCount, schoolHasLycee };
 
   if (actor.role === 'teacher') {
     const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any);
     if (authorizedStudentIds.length === 0 || !authorizedStudentIds.includes(header.studentId)) return null;
-    return { ...header, classStudentCount };
+    return { ...header, classStudentCount, schoolHasLycee };
   }
 
   if (actor.role === 'school_admin') {
     if (actor.schoolId == null || header.studentSchoolId !== actor.schoolId) return null;
-    return { ...header, classStudentCount };
+    return { ...header, classStudentCount, schoolHasLycee };
   }
 
   if (actor.role === 'parent') {
     if (!actor.id || header.parentUserId !== actor.id) return null;
-    return { ...header, classStudentCount };
+    return { ...header, classStudentCount, schoolHasLycee };
   }
 
   return null;
@@ -1222,6 +1253,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       classStudentCount: header.classStudentCount,
       schoolName: header.schoolName,
       principalName: header.principalName,
+      principalGender: header.principalGender,
+      schoolHasLycee: header.schoolHasLycee,
       school: header.school ? { ...header.school, logoPath: header.school.logoPath ?? null, logo: null } : { name: header.schoolName },
       schoolYearId: header.schoolYearId,
       schoolYearName: header.schoolYearName,
@@ -2740,7 +2773,7 @@ export const createBulletinPdfDocument = async (
       thickness: 0.7,
     });
 
-    const principalLabel = 'Le Proviseur';
+    const principalLabel = resolvePrincipalTitle(data.schoolHasLycee, data.principalGender);
     const principalLabelY = signatureNameY - 22;
     const principalNameY = principalLabelY - 37;
     const principalLabelFontSize = 9;

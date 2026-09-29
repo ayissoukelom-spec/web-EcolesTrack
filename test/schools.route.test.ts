@@ -9,7 +9,7 @@ const mockState = {
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
-  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
+  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
   lastSchoolUpdate: null as Record<string, any> | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
@@ -246,11 +246,11 @@ describe('POST /api/schools', () => {
   it('creates a school when classNames and subjectNames are provided', async () => {
     const res = await request(app)
       .post('/api/schools')
-      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
       .expect(201);
 
-    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', promotionThreshold: '10.00' });
-    expect((await request(app).get('/api/schools').expect(200)).body[0]).toMatchObject({ ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU' });
+    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M', promotionThreshold: '10.00' });
+    expect((await request(app).get('/api/schools').expect(200)).body[0]).toMatchObject({ ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M' });
   });
 
   it('enregistre et modifie le seuil de passage de l école', async () => {
@@ -289,6 +289,17 @@ describe('POST /api/schools', () => {
       .expect(200);
 
     expect(mockState.lastSchoolUpdate).toMatchObject({ principalName: 'Kossi AYISSOU' });
+  });
+
+  it('enregistre le genre explicite du responsable lors de la modification d une école', async () => {
+    mockState.schools = [{ id: 1, name: 'École du Lac', phone: '+228 90000000', principalName: 'Kossi AYISSOU', principalGender: 'M' }];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', address: '', phone: '+228 90000000', principalGender: 'F' })
+      .expect(200);
+
+    expect(mockState.lastSchoolUpdate).toMatchObject({ principalGender: 'F' });
   });
 
   it('preserves the current logoPath unless a new explicit logoPath is supplied', async () => {

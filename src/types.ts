@@ -16,6 +16,7 @@ export interface School {
   educationDirection?: string | null;
   ministryName?: string | null;
   principalName?: string | null;
+  principalGender?: 'M' | 'F' | null;
   logoPath?: string | null;
   promotionThreshold?: string | number | null;
   studentsCreationLocked?: boolean;

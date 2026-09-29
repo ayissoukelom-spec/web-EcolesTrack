@@ -16,6 +16,8 @@ import {
   fitHeaderParagraphFontSize,
   computeWrappedTextLines,
   formatPdfDisplayNumber,
+  resolvePrincipalTitle,
+  resolveSchoolHasLycee,
   resolvePreviousPeriodSummaries,
   calculateClassAverageSummary,
   normalizeStudentGender,
@@ -45,6 +47,7 @@ const snapshotData: BulletinPdfData = {
   className: '3ème A',
   classStudentCount: 42,
   schoolName: 'C.S LE SAVOIR',
+  principalGender: 'M',
   school: {
     name: 'C.S LE SAVOIR',
     officialName: 'COLLEGE LE SAVOIR',
@@ -842,7 +845,7 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('SNAPSHOT_MENTION');
     expect(text).toContain('SNAPSHOT_APPRECIATION');
     expect(text).toContain('Signature du titulaire de classe');
-    expect(text).toContain('Le Proviseur');
+    expect(normalizePdfTextForAssertion(text)).toContain('Responsable');
     expect(text).toContain('Page 1/1');
   });
 
@@ -1206,23 +1209,56 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Absences : 5');
   });
 
-  it('affiche le proviseur de l établissement quand il est renseigné', async () => {
+  it.each([
+    [true, 'M', 'Le Proviseur'],
+    [true, 'F', 'La Proviseure'],
+    [false, 'M', 'Le Directeur'],
+    [false, 'F', 'La Directrice'],
+  ] as const)('affiche le titre %s/%s et conserve le nom %s', async (schoolHasLycee, principalGender, expectedTitle) => {
     const text = extractPdfText(await createBulletinPdfDocument({
       ...snapshotData,
       principalName: 'Kossi AYISSOU',
+      principalGender,
+      schoolHasLycee,
     }));
 
-    expect(text).toContain('Le Proviseur');
+    expect(text).toContain(expectedTitle);
     expect(text).toContain('Kossi AYISSOU');
   });
 
-  it('tolère un établissement sans proviseur renseigné', async () => {
+  it('garde le comportement lycée pour une école historique sans cycles déclarés', async () => {
+    expect(resolvePrincipalTitle(undefined, 'M')).toBe('Le Proviseur');
     const text = extractPdfText(await createBulletinPdfDocument({
       ...snapshotData,
-      principalName: null,
+      principalName: 'Responsable historique',
+      principalGender: 'M',
+      schoolHasLycee: null,
     }));
 
     expect(text).toContain('Le Proviseur');
+    expect(text).toContain('Responsable historique');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('considère le lycée actif présent même lorsque le CEG est aussi configuré', () => {
+    expect(resolveSchoolHasLycee([
+      { code: 'college', isActive: true },
+      { code: 'lycee', isActive: true },
+    ])).toBe(true);
+    expect(resolveSchoolHasLycee([{ code: 'college', isActive: true }])).toBe(false);
+    expect(resolveSchoolHasLycee([])).toBeNull();
+  });
+
+  it('uses a neutral title when the responsible person gender is unknown', async () => {
+    const text = extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      principalName: 'Responsable historique',
+      principalGender: null,
+      schoolHasLycee: false,
+    }));
+
+    expect(normalizePdfTextForAssertion(text)).toContain('Responsable');
+    expect(text).toContain('Responsable historique');
     expect(text).not.toContain('undefined');
   });
 

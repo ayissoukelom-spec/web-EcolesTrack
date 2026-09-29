@@ -22,6 +22,7 @@ export const schools = pgTable('schools', {
   educationDirection: text('education_direction'),
   ministryName: text('ministry_name'),
   principalName: text('principal_name'),
+  principalGender: text('principal_gender'),
   logoPath: text('logo_path'),
   promotionThreshold: numeric('promotion_threshold', { precision: 5, scale: 2 }).default('10.00').notNull(),
   studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),

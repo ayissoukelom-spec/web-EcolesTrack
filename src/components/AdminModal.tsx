@@ -481,8 +481,16 @@ export default function AdminModal(props: any) {
                 <legend className="px-1 text-xs font-bold uppercase tracking-wider text-slate-600">Informations administratives du bulletin</legend>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <label className="text-xs font-semibold text-slate-600">
-                    Nom du proviseur
+                    Nom du responsable
                     <input type="text" value={schoolForm.principalName || ''} onChange={(e) => setSchoolForm({ ...schoolForm, principalName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Sexe du responsable
+                    <select value={schoolForm.principalGender || ''} onChange={(event) => setSchoolForm({ ...schoolForm, principalGender: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800">
+                      <option value="">Non renseigné</option>
+                      <option value="M">Masculin</option>
+                      <option value="F">Féminin</option>
+                    </select>
                   </label>
                   <label className="text-xs font-semibold text-slate-600">
                     Seuil de passage (/20)

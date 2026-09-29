@@ -2597,6 +2597,8 @@ export async function createApp() {
       const educationDirection = req.body?.educationDirection != null ? String(req.body.educationDirection).trim() : null;
       const ministryName = req.body?.ministryName != null ? String(req.body.ministryName).trim() : null;
       const principalName = req.body?.principalName != null ? String(req.body.principalName).trim() : null;
+      const principalGenderRaw = req.body?.principalGender;
+      const principalGender = principalGenderRaw == null || principalGenderRaw === '' ? null : String(principalGenderRaw).trim().toUpperCase();
       const promotionThresholdRaw = req.body?.promotionThreshold;
       const promotionThreshold = promotionThresholdRaw == null || promotionThresholdRaw === ''
         ? 10
@@ -2606,6 +2608,7 @@ export async function createApp() {
 
       if (!name) return res.status(400).json({ error: 'Name is required' });
       if (!phone) return res.status(400).json({ error: 'Phone is required' });
+      if (principalGender != null && !['M', 'F'].includes(principalGender)) return res.status(400).json({ error: 'principalGender must be M or F' });
       if (!Number.isFinite(promotionThreshold) || promotionThreshold < 0 || promotionThreshold > 20) {
         return res.status(400).json({ error: 'promotionThreshold must be between 0 and 20' });
       }
@@ -2640,7 +2643,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName, promotionThreshold: promotionThreshold.toFixed(2) }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName, principalGender, promotionThreshold: promotionThreshold.toFixed(2) }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -2860,6 +2863,8 @@ export async function createApp() {
       const phone2Raw = req.body?.phone2;
       const phone2 = phone2Raw != null ? String(phone2Raw).trim() : undefined;
       const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName', 'principalName'] as const;
+      const principalGenderRaw = req.body?.principalGender;
+      const principalGender = principalGenderRaw == null || principalGenderRaw === '' ? null : String(principalGenderRaw).trim().toUpperCase();
       const promotionThresholdRaw = req.body?.promotionThreshold;
       const logoPathRaw = req.body?.logoPath;
       const logoPath = logoPathRaw == null ? undefined : String(logoPathRaw).trim() || null;
@@ -2867,6 +2872,9 @@ export async function createApp() {
       const subjectNames = req.body?.subjectNames;
 
       if (!name) return res.status(400).json({ error: 'Name is required' });
+      if (principalGenderRaw !== undefined && principalGender != null && !['M', 'F'].includes(principalGender)) {
+        return res.status(400).json({ error: 'principalGender must be M or F' });
+      }
       if (phone !== undefined) {
         if (!phone) {
           return res.status(400).json({ error: 'Phone is required' });
@@ -2922,6 +2930,7 @@ export async function createApp() {
       administrativeFields.forEach((field) => {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
+      if (principalGenderRaw !== undefined) updatePayload.principalGender = principalGender;
       if (promotionThresholdRaw !== undefined) updatePayload.promotionThreshold = Number(promotionThresholdRaw).toFixed(2);
       if (logoPathRaw !== undefined) {
         updatePayload.logoPath = logoPath == null ? null : buildSchoolLogoRelativePath(path.basename(logoPath));
