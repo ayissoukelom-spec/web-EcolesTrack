@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import crypto from 'node:crypto';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { absenceDeclarations, absences, classes, notifications, parents, students, users } from '../src/db/schema.ts';
@@ -186,6 +187,86 @@ describe('parent absence declaration routes', () => {
     await request(app).post('/api/absence-declarations').send(declarationInput(999)).expect(403);
     await request(app).post('/api/absence-declarations').set('x-test-role', 'teacher').send(declarationInput(20)).expect(403);
     expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('rejects declarations without a nonblank reason on create and update', async () => {
+    const invalidReasons = [undefined, null, '', '   '];
+    mockState.declarations = [{
+      id: 18,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(1),
+      startTime: '08:00',
+      endTime: '10:00',
+      reason: 'Motif existant',
+      status: 'RECEIVED',
+    }];
+
+    for (const reason of invalidReasons) {
+      const payload = { ...declarationInput(20), reason };
+      const created = await request(app).post('/api/absence-declarations').send(payload).expect(400);
+      expect(created.body.error).toMatch(/motif.*obligatoire/i);
+
+      const updated = await request(app).put('/api/absence-declarations/18').send(payload).expect(400);
+      expect(updated.body.error).toMatch(/motif.*obligatoire/i);
+    }
+
+    expect(mockState.declarations).toHaveLength(1);
+  });
+
+  it('trims and accepts a nonblank reason on create and update', async () => {
+    const created = await request(app)
+      .post('/api/absence-declarations')
+      .send({ ...declarationInput(20), reason: '  Maladie  ' })
+      .expect(201);
+    expect(created.body.reason).toBe('Maladie');
+
+    mockState.declarations = [{
+      id: 19,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(1),
+      startTime: '08:00',
+      endTime: '10:00',
+      reason: 'Ancien motif',
+      status: 'RECEIVED',
+    }];
+    const updated = await request(app)
+      .put('/api/absence-declarations/19')
+      .send({ ...declarationInput(20), reason: '  Maladie  ' })
+      .expect(200);
+    expect(updated.body.reason).toBe('Maladie');
+  });
+
+  it('does not let the signed internal relay bypass the reason requirement', async () => {
+    for (const action of ['create', 'update'] as const) {
+      const payload = {
+        parentUserId: 7,
+        action,
+        input: {
+          id: 18,
+          studentId: 20,
+          date: isoDay(0),
+          startTime: '08:00',
+          endTime: '10:00',
+          reason: '   ',
+        },
+      };
+      const timestamp = Date.now().toString();
+      const signature = crypto.createHmac('sha256', 'absence-declaration-test-secret')
+        .update(`${JSON.stringify(payload)}${timestamp}`)
+        .digest('hex');
+
+      const response = await request(app)
+        .post('/api/internal/absence-declarations')
+        .set('X-Internal-Timestamp', timestamp)
+        .set('X-Internal-Signature', signature)
+        .send(payload)
+        .expect(400);
+
+      expect(response.body.error).toMatch(/motif.*obligatoire/i);
+    }
+    expect(mockState.declarations).toHaveLength(0);
   });
 
   it('allows edits only before the date and returns an approved edit to pending review', async () => {

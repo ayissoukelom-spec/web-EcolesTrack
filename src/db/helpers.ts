@@ -641,7 +641,7 @@ export async function ensureAbsenceDeclarationsSchema() {
       date TEXT NOT NULL,
       start_time TEXT NOT NULL,
       end_time TEXT NOT NULL,
-      reason TEXT,
+      reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'RECEIVED',
       rejection_reason TEXT,
       reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,

@@ -430,7 +430,7 @@ export const absenceDeclarations = pgTable('absence_declarations', {
   date: text('date').notNull(),
   startTime: text('start_time').notNull(),
   endTime: text('end_time').notNull(),
-  reason: text('reason'),
+  reason: text('reason').notNull(),
   status: text('status').default('RECEIVED').notNull(),
   rejectionReason: text('rejection_reason'),
   reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),

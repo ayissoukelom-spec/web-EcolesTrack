@@ -170,6 +170,29 @@ describe('section repliable des déclarations', () => {
 
     expect(screen.queryByTestId('absence-declarations-count')).toBeNull();
   });
+
+  it('requires a nonblank reason before submitting a parent declaration', async () => {
+    const onCreateAbsenceDeclaration = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AbsenceView
+        {...baseProps}
+        userRole="parent"
+        studentsList={[{ id: 8, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test' } as any]}
+        onCreateAbsenceDeclaration={onCreateAbsenceDeclaration}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('absence-declarations-toggle'));
+    fireEvent.click(screen.getByRole('button', { name: /Déclarer une absence/i }));
+
+    const reasonInput = screen.getByLabelText('Motif');
+    expect(reasonInput).toHaveAttribute('required');
+    fireEvent.change(reasonInput, { target: { value: '   ' } });
+    fireEvent.submit(reasonInput.closest('form')!);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Veuillez saisir un motif de déclaration.');
+    expect(onCreateAbsenceDeclaration).not.toHaveBeenCalled();
+  });
 });
 
 describe('AbsenceView surveillant', () => {

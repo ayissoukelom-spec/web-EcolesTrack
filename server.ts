@@ -6795,6 +6795,9 @@ export async function createApp() {
     const startTime = typeof input?.startTime === 'string' ? input.startTime.trim() : '';
     const endTime = typeof input?.endTime === 'string' ? input.endTime.trim() : '';
     const reason = typeof input?.reason === 'string' ? input.reason.trim() : '';
+    if ((action === 'create' || action === 'update') && !reason) {
+      return { status: 400, body: { error: 'Le motif de la déclaration est obligatoire.' } };
+    }
     if (action !== 'cancel' && (
       !Number.isInteger(studentId) || studentId <= 0 ||
       !isDeclarationDate(date) || date < todayIsoDate() ||

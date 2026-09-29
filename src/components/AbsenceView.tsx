@@ -50,8 +50,8 @@ interface AbsenceViewProps {
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
-  onCreateAbsenceDeclaration?: (data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => Promise<void>;
-  onUpdateAbsenceDeclaration?: (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => Promise<void>;
+  onCreateAbsenceDeclaration?: (data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
+  onUpdateAbsenceDeclaration?: (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
   onCancelAbsenceDeclaration?: (id: number) => Promise<void>;
   onReviewAbsenceDeclaration?: (id: number, status: 'ACCEPTED' | 'REFUSED', rejectionReason?: string) => Promise<void>;
   onCloseAbsenceDeclaration?: (id: number) => Promise<void>;
@@ -222,12 +222,17 @@ export default function AbsenceView({
 
   const submitDeclaration = async (event: React.FormEvent) => {
     event.preventDefault();
+    const reason = declarationForm.reason.trim();
+    if (!reason) {
+      setDeclarationError('Veuillez saisir un motif de déclaration.');
+      return;
+    }
     const data = {
       studentId: Number(declarationForm.studentId),
       date: declarationForm.date,
       startTime: declarationForm.startTime,
       endTime: declarationForm.endTime,
-      reason: declarationForm.reason.trim() || undefined,
+      reason,
     };
     try {
       if (declarationForm.id != null) {
@@ -809,8 +814,9 @@ export default function AbsenceView({
                 />
               </label>
               <label className="text-xs font-semibold text-slate-600">
-                Motif (facultatif)
+                Motif
                 <input
+                  required
                   value={declarationForm.reason}
                   onChange={(event) => setDeclarationForm((previous) => ({ ...previous, reason: event.target.value }))}
                   className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
