@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { absenceDeclarations, absences, classes, notifications, parents, students, users } from '../src/db/schema.ts';
 
 const mockState = {
@@ -10,12 +11,22 @@ const mockState = {
   declarations: [] as any[],
   absences: [] as any[],
 };
+const declarationListWhereConditions: any[] = [];
+const declarationListSelections: any[] = [];
 
-const createSelectBuilder = () => {
+const createSelectBuilder = (selection?: any) => {
   const builder: any = {
     table: null as any,
-    from(table: any) { builder.table = table; return builder; },
-    where() { return builder; },
+    selection,
+    from(table: any) {
+      builder.table = table;
+      if (table === absenceDeclarations && selection) declarationListSelections.push(selection);
+      return builder;
+    },
+    where(condition: any) {
+      if (builder.table === absenceDeclarations) declarationListWhereConditions.push(condition);
+      return builder;
+    },
     innerJoin() { return builder; },
     leftJoin() { return builder; },
     orderBy() { return builder; },
@@ -44,7 +55,7 @@ const makeQuery = (rows: any[]) => ({
 });
 
 const mockDb = {
-  select: () => createSelectBuilder(),
+  select: (selection?: any) => createSelectBuilder(selection),
   execute: async () => [],
   insert: (table: any) => ({
     values: (values: any) => {
@@ -139,6 +150,8 @@ describe('parent absence declaration routes', () => {
     mockState.classes = [{ id: 10, schoolId: 1 }];
     mockState.declarations = [];
     mockState.absences = [];
+    declarationListWhereConditions.length = 0;
+    declarationListSelections.length = 0;
   });
 
   afterAll(() => {
@@ -237,6 +250,8 @@ describe('parent absence declaration routes', () => {
       .send({ status: 'ACCEPTED' })
       .expect(200);
     expect(approved.body.status).toBe('ACCEPTED');
+    expect(approved.body.reviewedBy).toBe(7);
+    expect(approved.body.reviewedAt).toBeTruthy();
     expect(mockState.absences).toHaveLength(0);
 
     mockState.declarations[0].status = 'RECEIVED';
@@ -247,7 +262,67 @@ describe('parent absence declaration routes', () => {
       .expect(200);
     expect(rejected.body.status).toBe('REFUSED');
     expect(rejected.body.rejectionReason).toBe('Plage non autorisée');
+    expect(rejected.body.reviewedBy).toBe(7);
+    expect(rejected.body.reviewedAt).toBeTruthy();
     expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('links a same-day declaration to an existing absence without inserting a duplicate', async () => {
+    mockState.declarations = [{
+      id: 12,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(0),
+      startTime: '08:00',
+      endTime: '10:00',
+      status: 'RECEIVED',
+    }];
+    mockState.absences = [{
+      id: 25,
+      studentId: 20,
+      date: isoDay(0),
+      startTime: '08:30',
+      endTime: '09:30',
+      isJustified: false,
+      justificationStatus: null,
+      declarationId: null,
+    }];
+
+    const response = await request(app)
+      .put('/api/absence-declarations/12/review')
+      .set('x-test-role', 'school_admin')
+      .send({ status: 'ACCEPTED' })
+      .expect(200);
+
+    expect(response.body.reviewedBy).toBe(7);
+    expect(response.body.reviewedAt).toBeTruthy();
+    expect(mockState.absences).toHaveLength(1);
+    expect(mockState.absences[0].declarationId).toBe(12);
+    expect(mockState.absences[0].isJustified).toBe(false);
+    expect(mockState.absences[0].justificationStatus).toBeNull();
+  });
+
+  it('denies declaration-list access to users without review permission', async () => {
+    await request(app).get('/api/absence-declarations').set('x-test-role', 'student').expect(403);
+  });
+
+  it('scopes the declaration list used by the badge to the current school', async () => {
+    mockState.declarations = [{ id: 31, studentId: 20, parentId: 2, date: isoDay(1), status: 'RECEIVED' }];
+
+    await request(app).get('/api/absence-declarations').set('x-test-role', 'school_admin').expect(200);
+
+    expect(declarationListWhereConditions).toHaveLength(1);
+    const query = new PgDialect().sqlToQuery(declarationListWhereConditions[0]);
+    expect(query.sql).toContain('school_id');
+    expect(query.params).toContain(1);
+  });
+
+  it('selects parent name and creation time for the declaration validation view', async () => {
+    await request(app).get('/api/absence-declarations').set('x-test-role', 'school_admin').expect(200);
+
+    expect(declarationListSelections).toHaveLength(1);
+    expect(declarationListSelections[0]).toHaveProperty('parentName', users.name);
+    expect(declarationListSelections[0]).toHaveProperty('createdAt', absenceDeclarations.createdAt);
   });
 
   it('keeps declarations separate and only links an actual same-day absence after approval', async () => {

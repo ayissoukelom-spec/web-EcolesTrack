@@ -274,6 +274,7 @@ export interface AbsenceDeclaration {
   id: number;
   studentId: number;
   studentName: string;
+  parentName?: string | null;
   classId: number | null;
   className?: string | null;
   schoolId: number | null;
@@ -283,6 +284,7 @@ export interface AbsenceDeclaration {
   reason?: string | null;
   status: 'RECEIVED' | 'ACCEPTED' | 'REFUSED' | 'CANCELLED' | 'NOT_REALIZED';
   rejectionReason?: string | null;
+  createdAt?: string | null;
   reviewedBy?: number | null;
   reviewedAt?: string | null;
 }

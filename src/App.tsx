@@ -35,6 +35,7 @@ import DashboardView from './components/DashboardView.tsx';
 import AdminView from './components/AdminView.tsx';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
 import AbsenceView from './components/AbsenceView.tsx';
+import AbsenceDeclarationValidationsView from './components/AbsenceDeclarationValidationsView.tsx';
 import AbsenceControlsView from './components/AbsenceControlsView.tsx';
 import NotesView from './components/NotesView.tsx';
 import NotificationView from './components/NotificationView.tsx';
@@ -57,6 +58,7 @@ import {
   BookOpen,
   FileText,
   ClipboardCheck,
+  ClipboardList,
   LogOut,
   RefreshCw,
   AlertCircle
@@ -119,6 +121,7 @@ export default function App() {
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
   const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified && (!absence.declarationId || absence.justificationStatus === 'REJECTED')).length;
   const pendingAbsenceValidationsCount = Math.max(0, Number(stats.absenceStatusCounts.pending) || 0);
+  const pendingAbsenceDeclarationsCount = absenceDeclarationsList.filter((declaration) => declaration.status === 'RECEIVED').length;
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [summaryRecentGrades, setSummaryRecentGrades] = useState<any[]>([]);
@@ -1167,6 +1170,31 @@ export default function App() {
                 </button>
               )}
 
+              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                <button
+                  onClick={() => setActiveTab('absence-declaration-validations')}
+                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'absence-declaration-validations'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-absence-declaration-validations"
+                  data-testid="sidebar-nav-absence-declaration-validations"
+                >
+                  <div className="flex items-center gap-3">
+                    <ClipboardList className="h-4.5 w-4.5" />
+                    <span>Déclarations d'absence</span>
+                  </div>
+                  {pendingAbsenceDeclarationsCount > 0 && (
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      activeTab === 'absence-declaration-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
+                    }`}>
+                      {pendingAbsenceDeclarationsCount > 99 ? '99+' : pendingAbsenceDeclarationsCount}
+                    </span>
+                  )}
+                </button>
+              )}
+
               {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
                 <button
                   onClick={() => setActiveTab('absence-controls')}
@@ -1442,6 +1470,14 @@ export default function App() {
                   onCloseAbsenceDeclaration={handleCloseAbsenceDeclaration}
                   onJustifyAbsence={handleJustifyAbsence}
                   onRecordAbsenceControl={recordAbsenceControl}
+                />
+              )}
+
+              {activeTab === 'absence-declaration-validations'
+                && ['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                <AbsenceDeclarationValidationsView
+                  declarations={absenceDeclarationsList}
+                  onReview={handleReviewAbsenceDeclaration}
                 />
               )}
 

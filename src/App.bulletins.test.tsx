@@ -86,6 +86,17 @@ vi.mock('./components/AbsenceView.tsx', () => ({
     </>
   ),
 }));
+vi.mock('./components/AbsenceDeclarationValidationsView.tsx', () => ({
+  default: ({ declarations, onReview }: {
+    declarations: any[];
+    onReview: (id: number, status: 'ACCEPTED' | 'REFUSED', rejectionReason?: string) => Promise<void>;
+  }) => (
+    <div>
+      <div>DeclarationValidationsView: {declarations.filter((declaration) => declaration.status === 'RECEIVED').length}</div>
+      <button onClick={() => void onReview(1, 'ACCEPTED')}>Mock accept declaration</button>
+    </div>
+  ),
+}));
 vi.mock('./components/NotesView.tsx', () => ({
   default: ({ onAddGrade, gradesList }: { onAddGrade?: (data: any) => Promise<void>; gradesList?: any[] }) => (
     <>
@@ -290,11 +301,12 @@ describe('App bulletin navigation', () => {
     }
   });
 
-  const setupAbsencesResponse = (absences: any[], pendingCount = 0) => {
+  const setupAbsencesResponse = (absences: any[], pendingCount = 0, declarations: any[] = []) => {
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
       if (url === '/api/dashboard/summary') return Promise.resolve({ absenceStatusCounts: { justified: 0, unjustified: 0, pending: pendingCount } });
       if (url === '/api/absences') return Promise.resolve(absences);
+      if (url === '/api/absence-declarations') return Promise.resolve(declarations);
       if (url === '/api/schools') return Promise.resolve([]);
       if (url === '/api/academic-years') return Promise.resolve([]);
       if (url === '/api/teachers') return Promise.resolve([]);
@@ -307,10 +319,10 @@ describe('App bulletin navigation', () => {
     });
   };
 
-  const renderWithRole = async (role: string, absences: any[], pendingCount = 0) => {
+  const renderWithRole = async (role: string, absences: any[], pendingCount = 0, declarations: any[] = []) => {
     mockGetSimulatedRole.mockReturnValue(role);
     mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: 1, role, id: 1 });
-    setupAbsencesResponse(absences, pendingCount);
+    setupAbsencesResponse(absences, pendingCount, declarations);
     render(
       <AuthProvider>
         <App />
@@ -438,6 +450,56 @@ describe('App bulletin navigation', () => {
     await renderWithRole('parent', [], 4);
 
     expect(screen.queryByTestId('sidebar-nav-absence-validations')).toBeNull();
+  });
+
+  it.each(['school_admin', 'super_admin', 'surveillant', 'teacher'])('%s sees only RECEIVED declaration count', async (role) => {
+    await renderWithRole(role, [], 0, [
+      { id: 1, status: 'RECEIVED' },
+      { id: 2, status: 'ACCEPTED' },
+      { id: 3, status: 'REFUSED' },
+    ]);
+
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-declaration-validations');
+    expect(within(menuButton).getByText('1')).toBeInTheDocument();
+    fireEvent.click(menuButton);
+    expect(await screen.findByText('DeclarationValidationsView: 1')).toBeInTheDocument();
+  });
+
+  it('does not show declaration validation to parents', async () => {
+    await renderWithRole('parent', [], 0, [{ id: 1, status: 'RECEIVED' }]);
+
+    expect(screen.queryByTestId('sidebar-nav-absence-declaration-validations')).toBeNull();
+  });
+
+  it('hides the declaration badge for authorized staff when no declaration is received', async () => {
+    await renderWithRole('school_admin', [], 0, [{ id: 1, status: 'ACCEPTED' }, { id: 2, status: 'REFUSED' }]);
+
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-declaration-validations');
+    expect(within(menuButton).queryByText('0')).toBeNull();
+  });
+
+  it('refreshes the declaration badge after acceptance', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    let currentDeclarations = [{ id: 1, status: 'RECEIVED' }];
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/absence-declarations') return Promise.resolve(currentDeclarations);
+      if (url === '/api/absence-declarations/1/review') {
+        currentDeclarations = [{ id: 1, status: 'ACCEPTED' }];
+        return Promise.resolve({ id: 1, status: 'ACCEPTED' });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    const menuButton = await screen.findByTestId('sidebar-nav-absence-declaration-validations');
+    expect(within(menuButton).getByText('1')).toBeInTheDocument();
+    fireEvent.click(menuButton);
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock accept declaration' }));
+
+    await waitFor(() => expect(within(menuButton).queryByText('1')).toBeNull());
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/absence-declarations/1/review', expect.objectContaining({ method: 'PUT' }));
   });
 
   it('displays a zero pending count and opens the dedicated validation view', async () => {

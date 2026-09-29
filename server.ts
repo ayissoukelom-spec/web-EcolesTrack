@@ -6860,6 +6860,7 @@ export async function createApp() {
         id: absenceDeclarations.id,
         studentId: absenceDeclarations.studentId,
         studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
+        parentName: users.name,
         classId: students.classId,
         className: classes.name,
         schoolId: students.schoolId,
@@ -6871,8 +6872,11 @@ export async function createApp() {
         rejectionReason: absenceDeclarations.rejectionReason,
         reviewedBy: absenceDeclarations.reviewedBy,
         reviewedAt: absenceDeclarations.reviewedAt,
+        createdAt: absenceDeclarations.createdAt,
       }).from(absenceDeclarations)
         .innerJoin(students, eq(students.id, absenceDeclarations.studentId))
+        .innerJoin(parents, eq(parents.id, absenceDeclarations.parentId))
+        .innerJoin(users, eq(users.id, parents.userId))
         .leftJoin(classes, eq(classes.id, students.classId));
 
       if (actor.role !== 'super_admin') {
