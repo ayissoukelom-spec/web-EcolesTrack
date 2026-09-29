@@ -4767,6 +4767,39 @@ export async function createApp() {
         ...baseSelect,
         status: schoolClasses.status,
       };
+      const resolveClassesForSchool = async (classRows: any[], schoolId: number | null | undefined) => {
+        let assignmentByClassId = new Map<number, any>();
+        if (schoolId != null && classRows.length > 0) {
+          const assignmentRows = await db.select({
+            classId: classHomeroomAssignments.classId,
+            teacherId: classHomeroomAssignments.teacherId,
+            teacherName: users.name,
+          })
+            .from(classHomeroomAssignments)
+            .innerJoin(teachers, eq(teachers.id, classHomeroomAssignments.teacherId))
+            .innerJoin(users, eq(users.id, teachers.userId))
+            .where(and(
+              eq(classHomeroomAssignments.schoolId, schoolId),
+              inArray(classHomeroomAssignments.classId, classRows.map((klass: any) => klass.id)),
+            ));
+
+          assignmentByClassId = new Map(assignmentRows.map((assignment) => [assignment.classId, assignment]));
+        }
+
+        return classRows.map((klass: any) => {
+          const assignment = assignmentByClassId.get(klass.id);
+          if (klass.schoolId == null) {
+            return {
+              ...klass,
+              teacherId: assignment?.teacherId ?? null,
+              teacherName: assignment?.teacherName ?? null,
+            };
+          }
+          return assignment
+            ? { ...klass, teacherId: assignment.teacherId, teacherName: assignment.teacherName }
+            : klass;
+        });
+      };
 
       console.log('DEBUG GET /api/classes actor', { role: actor.role, id: actor.id, schoolId: actor.schoolId, targetSchoolId });
       if (actor.role === 'teacher') {
@@ -4826,8 +4859,9 @@ export async function createApp() {
             || (klass.schoolId == null && klass.status === 'approved')
           ));
 
+        const classesForTeacher = await resolveClassesForSchool(scopedAssignedClasses, targetSchoolId);
         res.set('Cache-Control', 'no-store');
-        res.json(scopedAssignedClasses);
+        res.json(classesForTeacher);
         return;
       }
 
@@ -4847,7 +4881,7 @@ export async function createApp() {
             .leftJoin(users, eq(teachers.userId, users.id))
             .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id));
 
-          res.json(approvedRows);
+          res.json(await resolveClassesForSchool(approvedRows, null));
           return;
         }
 
@@ -4909,16 +4943,17 @@ export async function createApp() {
       }
 
       const allClasses = await query;
+      const classesForSchool = await resolveClassesForSchool(allClasses, targetSchoolId);
 
       if (actor.role === 'parent') {
-        console.log('DEBUG GET /api/classes parent returning child classes', allClasses);
-        res.json(allClasses);
+        console.log('DEBUG GET /api/classes parent returning child classes', classesForSchool);
+        res.json(classesForSchool);
         return;
       }
 
       // Fill missing teacherName values by querying teachers->users for teacherIds
       try {
-        const missingTeacherIds = Array.from(new Set(allClasses.filter((c: any) => c.teacherId != null && !c.teacherName).map((c: any) => c.teacherId)));
+        const missingTeacherIds = Array.from(new Set(classesForSchool.filter((c: any) => c.teacherId != null && !c.teacherName).map((c: any) => c.teacherId)));
         if (missingTeacherIds.length > 0) {
           const teacherRows = await db
             .select({ id: teachers.id, userId: teachers.userId, name: users.name })
@@ -4931,7 +4966,7 @@ export async function createApp() {
             if (tr.id != null && tr.name) nameByTeacherId.set(tr.id, tr.name);
           }
 
-          for (const cls of allClasses) {
+          for (const cls of classesForSchool) {
             if (cls.teacherId != null && !cls.teacherName) {
               const n = nameByTeacherId.get(cls.teacherId as number);
               if (n) cls.teacherName = n;
@@ -4946,7 +4981,7 @@ export async function createApp() {
         const statusRows = await db.select().from(schoolClasses).where(eq(schoolClasses.schoolId, targetSchoolId));
         const statusMap = new Map(statusRows.map((row) => [row.classId, row.status]));
 
-        let result = allClasses.map((klass) => ({
+        let result = classesForSchool.map((klass) => ({
           ...klass,
           status: statusMap.get(klass.id) ?? (klass.schoolId === targetSchoolId ? 'approved' : 'pending'),
         }));
@@ -4967,9 +5002,10 @@ export async function createApp() {
         return;
       }
 
-      console.log('✅ GET /api/classes RESPONSE', allClasses);
-      res.json(allClasses);
+      console.log('✅ GET /api/classes RESPONSE', classesForSchool);
+      res.json(classesForSchool);
     } catch (err: any) {
+      console.error('GET /api/classes failed:', err);
       res.status(500).json({ error: 'Failed to retrieve classes' });
     }
   });

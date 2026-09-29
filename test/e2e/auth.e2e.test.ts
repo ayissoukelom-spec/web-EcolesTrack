@@ -589,8 +589,12 @@ function createMockDb() {
         return null;
       };
 
-      const resolveSelectedValue = (expr: any, baseRow: any) => {
+      const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
+        if (selectedAlias === 'teacherName' && ['classes', 'homeroomAssignments'].includes(resolveTableName(builder._table))) {
+          const teacher = FIXTURES.teachers.find((row: any) => Number(row.id) === Number(baseRow.teacherId));
+          return FIXTURES.users.find((row: any) => Number(row.id) === Number(teacher?.userId))?.name ?? null;
+        }
         if (typeof expr === 'string' || typeof expr === 'number' || typeof expr === 'boolean') return expr;
         if (typeof expr === 'object') {
           if (expr.name) {
@@ -623,7 +627,21 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
         const baseConditions = { ...conditions };
         if (hasStudentParentJoin) delete baseConditions.userId;
+        const hasSchoolClassesJoin = fromName === 'classes'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolClasses');
+        if (hasSchoolClassesJoin) delete baseConditions.schoolId;
         let rows = filterTableRows(builder._table, baseConditions);
+
+        if (hasSchoolClassesJoin && conditions.schoolId != null) {
+          rows = rows.filter((row: any) => row.schoolId === conditions.schoolId || (
+            row.schoolId == null
+            && FIXTURES.schoolClasses.some((schoolClass: any) => (
+              schoolClass.classId === row.id
+              && schoolClass.schoolId === conditions.schoolId
+              && schoolClass.status === 'approved'
+            ))
+          ));
+        }
 
         if (hasStudentParentJoin) {
           rows = rows.flatMap((student: any) => FIXTURES.parents
@@ -715,7 +733,7 @@ function createMockDb() {
           const mappedRows = rows.map((row: any) => {
             const mapped: Record<string, any> = {};
             for (const [alias, expr] of Object.entries(builder._selected)) {
-              mapped[alias] = resolveSelectedValue(expr, row);
+              mapped[alias] = resolveSelectedValue(expr, row, alias);
             }
             return mapped;
           });
@@ -2707,6 +2725,66 @@ describe('E2E security: auth & privilege checks', () => {
     const superAdminClassIds = superAdminResponse.body.map((klass: any) => klass.id).sort((a: number, b: number) => a - b);
     expect(superAdminClassIds).toEqual(schoolAdminClassIds);
     expect(new Set(superAdminClassIds).size).toBe(superAdminClassIds.length);
+  });
+
+  it('returns each global class titular for the selected school and refreshes after reassignment', async () => {
+    const globalClass = FIXTURES.classes.find((klass: any) => klass.id === 4);
+    if (globalClass) globalClass.teacherId = 88;
+    FIXTURES.homeroomAssignments.push({ id: 1, classId: 1, schoolId: 10, teacherId: 100 } as any);
+    FIXTURES.classTeachers.push({ classId: 4, teacherId: 77 } as any);
+    FIXTURES.users.push({ id: 13, uid: 'teacher-school-20', email: 'teacher20@x.test', name: 'Teacher20', role: 'teacher', schoolId: 20, isDeleted: false });
+    FIXTURES.teachers.push({ id: 101, userId: 13, schoolId: 20, phone: null, specialization: null });
+    FIXTURES.schoolClasses.push({ id: 502, classId: 4, schoolId: 20, status: 'approved' } as any);
+
+    const schoolTenBefore = await request(app)
+      .get('/api/classes?schoolId=10')
+      .set('Authorization', 'Bearer token-super');
+    expect(schoolTenBefore.status).toBe(200);
+    expect(schoolTenBefore.body.find((klass: any) => klass.id === 1)).toMatchObject({ teacherId: 100, teacherName: 'TeacherSim' });
+    expect(schoolTenBefore.body.find((klass: any) => klass.id === 2)).toMatchObject({ teacherId: 88, teacherName: 'OtherTeacher' });
+    expect(schoolTenBefore.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: null, teacherName: null });
+
+    const approvedWithoutSchool = await request(app)
+      .get('/api/classes?approvedOnly=true')
+      .set('Authorization', 'Bearer token-super');
+    expect(approvedWithoutSchool.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: null, teacherName: null });
+
+    const teacherBeforeAssignment = await request(app)
+      .get('/api/classes')
+      .set('Authorization', 'Bearer token-teacher');
+    expect(teacherBeforeAssignment.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: null, teacherName: null });
+
+    const firstAssignment = await request(app)
+      .put('/api/schools/10/classes/4/homeroom')
+      .set('Authorization', 'Bearer token-super')
+      .send({ teacherId: 77 });
+    expect(firstAssignment.status).toBe(200);
+
+    const schoolTenAfter = await request(app)
+      .get('/api/classes?schoolId=10')
+      .set('Authorization', 'Bearer token-super');
+    expect(schoolTenAfter.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: 77, teacherName: 'Teacher' });
+
+    const teacherAfterAssignment = await request(app)
+      .get('/api/classes')
+      .set('Authorization', 'Bearer token-teacher');
+    expect(teacherAfterAssignment.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: 77, teacherName: 'Teacher' });
+
+    const secondAssignment = await request(app)
+      .put('/api/schools/20/classes/4/homeroom')
+      .set('Authorization', 'Bearer token-super')
+      .send({ teacherId: 101 });
+    expect(secondAssignment.status).toBe(200);
+
+    const schoolTwenty = await request(app)
+      .get('/api/classes?schoolId=20')
+      .set('Authorization', 'Bearer token-super');
+    expect(schoolTwenty.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: 101, teacherName: 'Teacher20' });
+
+    const schoolTenStillAssigned = await request(app)
+      .get('/api/classes?schoolId=10')
+      .set('Authorization', 'Bearer token-super');
+    expect(schoolTenStillAssigned.body.find((klass: any) => klass.id === 4)).toMatchObject({ teacherId: 77, teacherName: 'Teacher' });
   });
 
   it('9. school_admin without schoolId is rejected', async () => {

@@ -384,6 +384,7 @@ interface AdminViewProps {
   onAddTeacher: (data: { name: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
   onRejectClass?: (id: number) => Promise<any>;
+  onRefreshClasses?: (schoolId: number) => Promise<Class[]>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
   onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string; studentStatus?: string | null }) => void;
   onBatchCreateStudents?: (records: any[]) => void;
@@ -450,6 +451,7 @@ export default function AdminView({
   onDeleteSubjectType,
   onApproveClass,
   onRejectClass,
+  onRefreshClasses,
   currentSchoolId,
 }: AdminViewProps) {
   const teacherSpecializations = Array.from(new Set(
@@ -495,6 +497,7 @@ export default function AdminView({
   const [studentRosterFilter, setStudentRosterFilter] = useState<'active' | 'former' | 'all'>('active');
   const [teacherStudentClassFilterId, setTeacherStudentClassFilterId] = useState<number | null>(null);
   const [studentFilterClasses, setStudentFilterClasses] = useState<Class[] | null>(null);
+  const [refreshedClassListsBySchool, setRefreshedClassListsBySchool] = useState<Map<number, Class[]>>(new Map());
   const [teacherClassFilterId, setTeacherClassFilterId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -988,6 +991,15 @@ export default function AdminView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ teacherId }),
       });
+      const refreshedPayload = onRefreshClasses
+        ? await onRefreshClasses(assignmentTargetSchoolId)
+        : await apiFetch(`/api/classes?schoolId=${assignmentTargetSchoolId}`);
+      if (!Array.isArray(refreshedPayload)) throw new Error('Impossible de recharger les classes de cette école.');
+      const refreshedClasses = Array.from(new Map((refreshedPayload as Class[]).map((klass) => [klass.id, klass])).values());
+      setRefreshedClassListsBySchool((previous) => new Map(previous).set(assignmentTargetSchoolId, refreshedClasses));
+      if (userRole === 'super_admin' && superAdminSchoolFilterId === assignmentTargetSchoolId) {
+        setStudentFilterClasses(refreshedClasses);
+      }
       setSavedClassAssignments((previous) => {
         const next = new Map(previous);
         next.set(classId, teacherId);
@@ -1223,6 +1235,11 @@ export default function AdminView({
     : getClassGroupsVisibleToSchool(groupPresets, studentFilterClasses || [], superAdminSchoolFilterId);
 
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
+  const classesForMainTable = userRole === 'super_admin' && superAdminSchoolFilterId != null
+    ? refreshedClassListsBySchool.get(superAdminSchoolFilterId) ?? studentFilterClasses ?? classesList
+    : userRole === 'school_admin' && currentSchoolId != null
+      ? refreshedClassListsBySchool.get(currentSchoolId) ?? classesList
+      : studentFilterClasses ?? classesList;
 
   const currentYear = new Date().getFullYear();
   const birthYearRangeStart = 1970;
@@ -5080,7 +5097,7 @@ export default function AdminView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {(studentFilterClasses ?? classesList)
+                {classesForMainTable
                   .filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name))
                   .map((cls) => (
                     <tr key={cls.id} className="hover:bg-slate-50/60 transition-colors">
@@ -5128,7 +5145,7 @@ export default function AdminView({
                       </td>
                     </tr>
                   ))}
-                {(studentFilterClasses ?? classesList).filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name)).length === 0 && (
+                {classesForMainTable.filter((c) => (!superAdminSchoolFilterId || isClassVisibleToSchool(c, superAdminSchoolFilterId)) && filterBySearch(c.name)).length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucune classe trouvée.</td>
                   </tr>

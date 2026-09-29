@@ -78,6 +78,73 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
+  it('shows the refreshed titular in the Classes table after saving an assignment', async () => {
+    const refreshedClasses: Class[] = [{
+      id: 10,
+      name: 'CM1',
+      schoolId: 1,
+      academicYearId: 1,
+      teacherId: 22,
+      teacherName: 'Nouveau titulaire',
+    }];
+    const refreshClasses = vi.fn().mockResolvedValue(refreshedClasses);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/schools/1/homeroom-assignments')) {
+        return new Response(JSON.stringify([{ classId: 10, teacherId: 99 }]), { status: 200 });
+      }
+      if (url.includes('/api/classes?schoolId=1')) {
+        return new Response(JSON.stringify([{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1, teacherId: 99, teacherName: 'Ancien titulaire' }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1, teacherId: 99, teacherName: 'Ancien titulaire' }]}
+          teachersList={[
+            { id: 99, name: 'Ancien titulaire', schoolId: 1 } as Teacher,
+            { id: 22, name: 'Nouveau titulaire', schoolId: 1 } as Teacher,
+          ]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+          onRefreshClasses={refreshClasses}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Assigner des enseignants titulaires/i }));
+      expect(await screen.findByText('Titulaire : Ancien titulaire')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      const teacherSelect = screen.getAllByRole('combobox').find((select) => select.querySelector('option[value="22"]'));
+      expect(teacherSelect).toBeTruthy();
+      fireEvent.change(teacherSelect!, { target: { value: '22' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+      expect(await screen.findByText(/Classe mise à jour avec succès/)).toBeTruthy();
+      expect(refreshClasses).toHaveBeenCalledWith(1);
+      fireEvent.click(screen.getByRole('button', { name: /^Classes$/i }));
+      expect(await screen.findByText('Nouveau titulaire')).toBeTruthy();
+      expect(screen.queryByText('Ancien titulaire')).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('renders birth date options in a portal so they stay visible inside the student modal', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];

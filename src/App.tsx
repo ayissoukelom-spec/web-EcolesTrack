@@ -545,6 +545,14 @@ export default function App() {
     }
   };
 
+  const refreshClassesForSchool = async (schoolId: number): Promise<Class[]> => {
+    const payload = await apiFetch(`/api/classes?schoolId=${schoolId}`);
+    if (!Array.isArray(payload)) throw new Error('Impossible de recharger les classes de cette école.');
+    const refreshedClasses = payload as Class[];
+    if (currentRole !== 'super_admin') setClassesList(refreshedClasses);
+    return refreshedClasses;
+  };
+
   const handleDeleteClass = async (id: number) => {
     try {
       await apiFetch(`/api/classes/${id}`, { method: 'DELETE' });
@@ -1442,6 +1450,7 @@ export default function App() {
                   onApproveClass={handleApproveClass}
                   onRejectClass={handleRejectClass}
                   currentSchoolId={currentSchoolId}
+                  onRefreshClasses={refreshClassesForSchool}
                   />
                 </ErrorBoundary>
               )}
