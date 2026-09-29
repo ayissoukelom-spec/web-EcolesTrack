@@ -1149,29 +1149,6 @@ export default function App() {
 
               {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
                 <button
-                  onClick={() => setActiveTab('absence-validations')}
-                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'absence-validations'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-absence-validations"
-                  data-testid="sidebar-nav-absence-validations"
-                >
-                  <div className="flex items-center gap-3">
-                    <ClipboardCheck className="h-4.5 w-4.5" />
-                    <span>Validations des absences</span>
-                  </div>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                    activeTab === 'absence-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
-                  }`}>
-                    {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
-                  </span>
-                </button>
-              )}
-
-              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
-                <button
                   onClick={() => setActiveTab('absence-declaration-validations')}
                   className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                     activeTab === 'absence-declaration-validations'
@@ -1183,7 +1160,7 @@ export default function App() {
                 >
                   <div className="flex items-center gap-3">
                     <ClipboardList className="h-4.5 w-4.5" />
-                    <span>Déclarations d'absence</span>
+                    <span>Déclarations d’absence à traiter</span>
                   </div>
                   {pendingAbsenceDeclarationsCount > 0 && (
                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1192,6 +1169,29 @@ export default function App() {
                       {pendingAbsenceDeclarationsCount > 99 ? '99+' : pendingAbsenceDeclarationsCount}
                     </span>
                   )}
+                </button>
+              )}
+
+              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                <button
+                  onClick={() => setActiveTab('absence-validations')}
+                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'absence-validations'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-absence-validations"
+                  data-testid="sidebar-nav-absence-validations"
+                >
+                  <div className="flex items-center gap-3">
+                    <ClipboardCheck className="h-4.5 w-4.5" />
+                    <span>Validation des absences à traiter</span>
+                  </div>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    activeTab === 'absence-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
+                  }`}>
+                    {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
+                  </span>
                 </button>
               )}
 
@@ -1450,6 +1450,7 @@ export default function App() {
                 <AbsenceView
                   userRole={currentRole}
                   pendingReviewOnly={activeTab === 'absence-validations'}
+                  showAbsenceDeclarationSection={activeTab === 'absences'}
                   absencesList={absencesList}
                   absenceDeclarationsList={absenceDeclarationsList}
                   lateArrivalsList={lateArrivalsList}

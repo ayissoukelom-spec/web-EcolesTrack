@@ -436,6 +436,7 @@ describe('App bulletin navigation', () => {
     ], 2);
 
     const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
+    expect(within(menuButton).getByText('Validation des absences à traiter')).toBeInTheDocument();
     expect(within(menuButton).getByText('2')).toBeInTheDocument();
   });
 
@@ -452,7 +453,7 @@ describe('App bulletin navigation', () => {
     expect(screen.queryByTestId('sidebar-nav-absence-validations')).toBeNull();
   });
 
-  it.each(['school_admin', 'super_admin', 'surveillant', 'teacher'])('%s sees only RECEIVED declaration count', async (role) => {
+  it.each(['school_admin', 'super_admin', 'surveillant', 'teacher'])('%s sees only the RECEIVED declaration badge and can navigate to validation', async (role) => {
     await renderWithRole(role, [], 0, [
       { id: 1, status: 'RECEIVED' },
       { id: 2, status: 'ACCEPTED' },
@@ -460,33 +461,34 @@ describe('App bulletin navigation', () => {
     ]);
 
     const menuButton = await screen.findByTestId('sidebar-nav-absence-declaration-validations');
+    expect(within(menuButton).getByText('Déclarations d’absence à traiter')).toBeInTheDocument();
     expect(within(menuButton).getByText('1')).toBeInTheDocument();
     fireEvent.click(menuButton);
     expect(await screen.findByText('DeclarationValidationsView: 1')).toBeInTheDocument();
   });
 
-  it('does not show declaration validation to parents', async () => {
+  it('keeps the declaration submenu hidden for parents and hides a zero badge', async () => {
     await renderWithRole('parent', [], 0, [{ id: 1, status: 'RECEIVED' }]);
 
     expect(screen.queryByTestId('sidebar-nav-absence-declaration-validations')).toBeNull();
   });
 
-  it('hides the declaration badge for authorized staff when no declaration is received', async () => {
+  it('hides the declaration badge for authorized staff when there are no RECEIVED declarations', async () => {
     await renderWithRole('school_admin', [], 0, [{ id: 1, status: 'ACCEPTED' }, { id: 2, status: 'REFUSED' }]);
 
     const menuButton = await screen.findByTestId('sidebar-nav-absence-declaration-validations');
     expect(within(menuButton).queryByText('0')).toBeNull();
   });
 
-  it('refreshes the declaration badge after acceptance', async () => {
+  it('refreshes the declaration badge after acceptance from the sidebar page', async () => {
     mockGetSimulatedRole.mockReturnValue('school_admin');
     mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
-    let currentDeclarations = [{ id: 1, status: 'RECEIVED' }];
+    let declarations = [{ id: 1, status: 'RECEIVED' }];
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
-      if (url === '/api/absence-declarations') return Promise.resolve(currentDeclarations);
+      if (url === '/api/absence-declarations') return Promise.resolve(declarations);
       if (url === '/api/absence-declarations/1/review') {
-        currentDeclarations = [{ id: 1, status: 'ACCEPTED' }];
+        declarations = [{ id: 1, status: 'ACCEPTED' }];
         return Promise.resolve({ id: 1, status: 'ACCEPTED' });
       }
       return Promise.resolve([]);
@@ -501,6 +503,7 @@ describe('App bulletin navigation', () => {
     await waitFor(() => expect(within(menuButton).queryByText('1')).toBeNull());
     expect(mockApiFetch).toHaveBeenCalledWith('/api/absence-declarations/1/review', expect.objectContaining({ method: 'PUT' }));
   });
+
 
   it('displays a zero pending count and opens the dedicated validation view', async () => {
     await renderWithRole('school_admin', [], 0);

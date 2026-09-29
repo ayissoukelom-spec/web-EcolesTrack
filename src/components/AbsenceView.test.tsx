@@ -1,5 +1,6 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AbsenceView from './AbsenceView';
 
@@ -71,6 +72,103 @@ describe('absence liée à une déclaration parentale', () => {
     expect(linkedRow).not.toBeNull();
     expect(linkedRow?.textContent).not.toContain('Injustifiée');
     expect(linkedRow?.textContent).toContain('Absence rattachée à une déclaration parentale');
+  });
+});
+
+describe('section repliable des déclarations', () => {
+  const baseProps = {
+    userRole: 'school_admin' as const,
+    absencesList: [{
+      id: 101,
+      studentId: 1,
+      studentName: 'Élève Absente',
+      classId: 10,
+      className: '6e A',
+      date: '2026-09-29',
+      period: 'morning' as const,
+      isJustified: false,
+    }],
+    studentsList: [],
+    classesList: [],
+    schoolsList: [],
+    teachersList: [],
+    approvedSubjectsList: [],
+    onAddAbsence: vi.fn(),
+    onJustifyAbsence: vi.fn(),
+    onReviewAbsenceDeclaration: vi.fn().mockResolvedValue(undefined),
+  };
+
+  it('is collapsed by default, keeps its RECEIVED badge visible, and toggles the list', () => {
+    const declarations = [{
+      id: 51,
+      studentId: 1,
+      studentName: 'Déclaration Élève',
+      parentName: 'Parent Exemple',
+      classId: 10,
+      className: '6e A',
+      schoolId: 1,
+      date: '2026-10-01',
+      startTime: '08:00',
+      endTime: '09:00',
+      status: 'RECEIVED' as const,
+      createdAt: '2026-09-29T09:00:00.000Z',
+    }];
+    render(<AbsenceView {...baseProps} absenceDeclarationsList={declarations as any} />);
+
+    const toggle = screen.getByTestId('absence-declarations-toggle');
+    expect(within(toggle).getByText('Déclarations d’absence à traiter')).toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(toggle).getByText('1')).toBeInTheDocument();
+    expect(screen.queryByText('Déclaration Élève')).toBeNull();
+    expect(screen.getByText('Élève Absente')).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Déclaration Élève')).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Déclaration Élève')).toBeNull();
+    expect(screen.getByText('Élève Absente')).toBeInTheDocument();
+  });
+
+  it('does not render a large declaration list while the section is closed', () => {
+    const declarations = Array.from({ length: 1000 }, (_, index) => ({
+      id: index + 1,
+      studentId: index + 1,
+      studentName: `Déclaration ${index + 1}`,
+      classId: 10,
+      className: '6e A',
+      schoolId: 1,
+      date: '2026-10-01',
+      startTime: '08:00',
+      endTime: '09:00',
+      status: 'RECEIVED' as const,
+    }));
+    render(<AbsenceView {...baseProps} absenceDeclarationsList={declarations as any} />);
+
+    const toggle = screen.getByTestId('absence-declarations-toggle');
+    expect(within(toggle).getByText('99+')).toBeInTheDocument();
+    expect(screen.queryByTestId('absence-declaration-1000')).toBeNull();
+    expect(screen.queryByText('Déclaration 1000')).toBeNull();
+    expect(screen.getByText('Élève Absente')).toBeInTheDocument();
+  });
+
+  it('omits the badge when no declaration needs action', () => {
+    render(<AbsenceView {...baseProps} absenceDeclarationsList={[{
+      id: 52,
+      studentId: 1,
+      studentName: 'Déjà traitée',
+      classId: 10,
+      className: '6e A',
+      schoolId: 1,
+      date: '2026-10-01',
+      startTime: '08:00',
+      endTime: '09:00',
+      status: 'ACCEPTED',
+    } as any]} />);
+
+    expect(screen.queryByTestId('absence-declarations-count')).toBeNull();
   });
 });
 

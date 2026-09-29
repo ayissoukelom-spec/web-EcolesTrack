@@ -68,7 +68,7 @@ export default function AbsenceDeclarationValidationsView({
           </thead>
           <tbody className="divide-y divide-slate-100">
             {receivedDeclarations.map((declaration) => (
-              <tr key={declaration.id} data-testid={`absence-declaration-${declaration.id}`}>
+              <tr key={declaration.id}>
                 <td className="px-4 py-3 font-semibold text-slate-800">{declaration.studentName}</td>
                 <td className="px-4 py-3 text-slate-600">{declaration.className || '—'}</td>
                 <td className="px-4 py-3 text-slate-600">{formatDate(declaration.date)}</td>

@@ -40,7 +40,7 @@ const declarations: AbsenceDeclaration[] = [
 ];
 
 describe('AbsenceDeclarationValidationsView', () => {
-  it('shows requested declaration details and excludes already processed declarations', () => {
+  it('shows received declaration details and excludes processed declarations', () => {
     render(<AbsenceDeclarationValidationsView declarations={declarations} onReview={vi.fn()} />);
 
     expect(screen.getByText('Awa Diallo')).toBeInTheDocument();
@@ -61,7 +61,7 @@ describe('AbsenceDeclarationValidationsView', () => {
     await waitFor(() => expect(onReview).toHaveBeenCalledWith(1, 'ACCEPTED', undefined));
   });
 
-  it('requires a rejection reason and sends it to the existing review callback', async () => {
+  it('sends the required rejection reason to the existing review callback', async () => {
     const prompt = vi.fn().mockReturnValue('Document non conforme');
     vi.stubGlobal('prompt', prompt);
     const onReview = vi.fn().mockResolvedValue(undefined);

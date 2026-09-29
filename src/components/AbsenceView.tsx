@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
-import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download } from 'lucide-react';
+import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
@@ -46,6 +46,7 @@ interface AbsenceViewProps {
   teacherClassIds?: number[];
   teacherSpecializations?: string[];
   pendingReviewOnly?: boolean;
+  showAbsenceDeclarationSection?: boolean;
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
@@ -71,6 +72,7 @@ export default function AbsenceView({
   teacherClassIds,
   teacherSpecializations,
   pendingReviewOnly = false,
+  showAbsenceDeclarationSection = true,
   onAddAbsence,
   onAddLateArrival,
   onReviewAbsence,
@@ -197,6 +199,7 @@ export default function AbsenceView({
   const [selectedAbsentStudentIds, setSelectedAbsentStudentIds] = useState<string[]>([]);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [isMultipleSaveInProgress, setIsMultipleSaveInProgress] = useState(false);
+  const [isDeclarationSectionOpen, setIsDeclarationSectionOpen] = useState(false);
   const [isDeclarationFormOpen, setIsDeclarationFormOpen] = useState(false);
   const [declarationError, setDeclarationError] = useState<string | null>(null);
   const [declarationForm, setDeclarationForm] = useState({
@@ -208,6 +211,8 @@ export default function AbsenceView({
     reason: '',
   });
   const declarationToday = new Date().toISOString().split('T')[0];
+  const canReviewAbsenceDeclarations = ['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(userRole);
+  const receivedAbsenceDeclarationsCount = absenceDeclarationsList.filter((declaration) => declaration.status === 'RECEIVED').length;
 
   const resetDeclarationForm = () => {
     setDeclarationForm({ id: null, studentId: '', date: declarationToday, startTime: '08:00', endTime: '09:30', reason: '' });
@@ -709,13 +714,27 @@ export default function AbsenceView({
         )}
       </div>
 
-      {(userRole === 'parent' || ['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(userRole)) && (
+      {showAbsenceDeclarationSection && (userRole === 'parent' || canReviewAbsenceDeclarations) && (
         <section className="border border-slate-200 rounded-xl bg-white" aria-label="Déclarations préalables d’absence">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-b border-slate-200">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800">Déclarations préalables</h3>
-              <p className="text-xs text-slate-500">Séparées des absences constatées.</p>
-            </div>
+          <div className="flex items-center gap-2 px-3 py-2">
+            <button
+              type="button"
+              aria-expanded={isDeclarationSectionOpen}
+              aria-controls="absence-declaration-section-content"
+              onClick={() => setIsDeclarationSectionOpen((open) => !open)}
+              className="flex min-h-10 min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 text-left text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              data-testid="absence-declarations-toggle"
+            >
+              <span className="truncate">Déclarations d’absence à traiter</span>
+              <span className="flex shrink-0 items-center gap-2">
+                {canReviewAbsenceDeclarations && receivedAbsenceDeclarationsCount > 0 && (
+                  <span className="rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-bold text-white" data-testid="absence-declarations-count">
+                    {receivedAbsenceDeclarationsCount > 99 ? '99+' : receivedAbsenceDeclarationsCount}
+                  </span>
+                )}
+                <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform duration-200 ${isDeclarationSectionOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+              </span>
+            </button>
             {userRole === 'parent' && onCreateAbsenceDeclaration && (
               <button
                 type="button"
@@ -740,6 +759,8 @@ export default function AbsenceView({
             )}
           </div>
 
+          {isDeclarationSectionOpen && (
+            <div id="absence-declaration-section-content" className="border-t border-slate-200 transition-opacity duration-200">
           {isDeclarationFormOpen && userRole === 'parent' && (
             <form onSubmit={submitDeclaration} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border-b border-slate-200">
               <label className="text-xs font-semibold text-slate-600">
@@ -832,6 +853,10 @@ export default function AbsenceView({
                         <span className="text-xs font-semibold text-slate-700">{statusLabel}</span>
                       </div>
                       {declaration.reason && <p className="mt-1 text-xs text-slate-600">{declaration.reason}</p>}
+                      <p className="mt-1 text-xs text-slate-500">
+                        Parent : {declaration.parentName || '—'}
+                        {declaration.createdAt && ` · Déposée le ${new Date(declaration.createdAt).toLocaleString('fr-FR')}`}
+                      </p>
                       {declaration.rejectionReason && <p className="mt-1 text-xs text-rose-700">Motif du refus : {declaration.rejectionReason}</p>}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -859,6 +884,8 @@ export default function AbsenceView({
             )}
           </div>
           {declarationError && !isDeclarationFormOpen && <p className="px-4 pb-3 text-xs font-semibold text-rose-700" role="alert">{declarationError}</p>}
+            </div>
+          )}
         </section>
       )}
 
