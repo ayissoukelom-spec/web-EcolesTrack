@@ -321,7 +321,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
           sql`${absences.date} <= ${header.termEndDate}`,
           sql`(
             ${absences.justificationStatus} = 'REJECTED'
-            or (${absences.justificationStatus} is null and ${absences.isJustified} = false)
+            or (${absences.justificationStatus} is null and ${absences.isJustified} = false and ${absences.declarationId} is null)
           )`,
         ));
       absenceCount = Number(absenceSummary?.count ?? 0);

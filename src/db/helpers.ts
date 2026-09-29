@@ -208,6 +208,44 @@ export async function ensureSchoolClassesTableExists() {
   }
 }
 
+export async function ensureClassHomeroomAssignmentsTableExists() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS class_homeroom_assignments (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+      created_at TIMESTAMP DEFAULT now() NOT NULL,
+      updated_at TIMESTAMP DEFAULT now() NOT NULL
+    );`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS class_homeroom_assignments_school_class_idx ON class_homeroom_assignments (school_id, class_id);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS class_homeroom_assignments_school_teacher_idx ON class_homeroom_assignments (school_id, teacher_id);`);
+    await db.execute(sql`
+      INSERT INTO class_homeroom_assignments (school_id, class_id, teacher_id, created_at, updated_at)
+      SELECT class_row.school_id, class_row.id, class_row.teacher_id, now(), now()
+      FROM classes AS class_row
+      INNER JOIN teachers AS teacher_row ON teacher_row.id = class_row.teacher_id
+      WHERE class_row.school_id IS NOT NULL
+        AND class_row.teacher_id IS NOT NULL
+        AND (
+          teacher_row.school_id = class_row.school_id
+          OR EXISTS (
+            SELECT 1
+            FROM user_schools AS membership
+            WHERE membership.user_id = teacher_row.user_id
+              AND membership.school_id = class_row.school_id
+              AND membership.role = 'teacher'
+              AND membership.is_active = true
+          )
+        )
+      ON CONFLICT (school_id, class_id) DO NOTHING;
+    `);
+  } catch (err: any) {
+    console.error('Failed to ensure class_homeroom_assignments table exists:', err?.message || err);
+    throw err;
+  }
+}
+
 export async function ensureUsersTableSchema() {
   try {
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);
@@ -592,4 +630,40 @@ export async function ensureDefaultSchoolTermsExist() {
 export async function seedDatabaseIfEmpty() {
   console.log('Database initialization: automatic demo seed disabled.');
   console.log('The application can run with zero schools.');
+}
+
+export async function ensureAbsenceDeclarationsSchema() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS absence_declarations (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'RECEIVED',
+      rejection_reason TEXT,
+      reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now()
+    )`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS absence_declarations_parent_date_idx ON absence_declarations(parent_id, date)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS absence_declarations_student_date_status_idx ON absence_declarations(student_id, date, status)`);
+    await db.execute(sql`ALTER TABLE absences ADD COLUMN IF NOT EXISTS declaration_id INTEGER REFERENCES absence_declarations(id) ON DELETE SET NULL`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS absences_declaration_id_idx ON absences(declaration_id)`);
+    await db.execute(sql`UPDATE absence_declarations SET status = CASE status
+      WHEN 'PENDING' THEN 'RECEIVED'
+      WHEN 'APPROVED' THEN 'ACCEPTED'
+      WHEN 'REJECTED' THEN 'REFUSED'
+      ELSE status
+    END WHERE status IN ('PENDING', 'APPROVED', 'REJECTED')`);
+    await db.execute(sql`UPDATE absences SET is_justified = false, justification_reason = NULL,
+      justification_status = NULL, rejection_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
+      WHERE declaration_id IS NOT NULL AND justification_status = 'APPROVED'`);
+  } catch (error: any) {
+    console.error('Failed to ensure absence declarations schema exists:', error?.message || error);
+    throw error;
+  }
 }

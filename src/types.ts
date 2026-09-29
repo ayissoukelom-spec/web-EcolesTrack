@@ -267,6 +267,24 @@ export interface Absence {
   rejectionReason?: string | null;
   reviewedBy?: number | null;
   reviewedAt?: string | null;
+  declarationId?: number | null;
+}
+
+export interface AbsenceDeclaration {
+  id: number;
+  studentId: number;
+  studentName: string;
+  classId: number | null;
+  className?: string | null;
+  schoolId: number | null;
+  date: string;
+  startTime: string;
+  endTime: string;
+  reason?: string | null;
+  status: 'RECEIVED' | 'ACCEPTED' | 'REFUSED' | 'CANCELLED' | 'NOT_REALIZED';
+  rejectionReason?: string | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
 }
 
 export interface LateArrival {

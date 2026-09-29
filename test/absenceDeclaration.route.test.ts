@@ -1,0 +1,360 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import request from 'supertest';
+import { absenceDeclarations, absences, classes, notifications, parents, students, users } from '../src/db/schema.ts';
+
+const mockState = {
+  users: [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }],
+  parents: [{ id: 2, userId: 7, studentId: 20 }],
+  students: [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }],
+  classes: [{ id: 10, schoolId: 1 }],
+  declarations: [] as any[],
+  absences: [] as any[],
+};
+
+const createSelectBuilder = () => {
+  const builder: any = {
+    table: null as any,
+    from(table: any) { builder.table = table; return builder; },
+    where() { return builder; },
+    innerJoin() { return builder; },
+    leftJoin() { return builder; },
+    orderBy() { return builder; },
+    limit() { return builder; },
+    then(resolve: (value: any) => void, reject: (reason?: any) => void) {
+      const rows = builder.table === users ? mockState.users
+        : builder.table === parents ? mockState.parents
+          : builder.table === students ? mockState.students
+            : builder.table === classes ? mockState.classes
+              : builder.table === absenceDeclarations ? mockState.declarations
+                : builder.table === absences ? mockState.absences
+                  : [];
+      return Promise.resolve(rows).then(resolve, reject);
+    },
+    catch(reject: (reason?: any) => void) { return Promise.resolve([]).catch(reject); },
+    finally(callback: () => void) { return Promise.resolve([]).finally(callback); },
+  };
+  return builder;
+};
+
+const makeQuery = (rows: any[]) => ({
+  returning: async () => rows,
+  then: (resolve: (value: any) => void, reject: (reason?: any) => void) => Promise.resolve({ rowCount: rows.length }).then(resolve, reject),
+  catch: (reject: (reason?: any) => void) => Promise.resolve({ rowCount: rows.length }).catch(reject),
+  finally: (callback: () => void) => Promise.resolve({ rowCount: rows.length }).finally(callback),
+});
+
+const mockDb = {
+  select: () => createSelectBuilder(),
+  execute: async () => [],
+  insert: (table: any) => ({
+    values: (values: any) => {
+      if (table === absenceDeclarations) {
+        const row = { id: mockState.declarations.length + 1, ...values };
+        mockState.declarations.push(row);
+        return makeQuery([row]);
+      }
+      if (table === absences) {
+        const row = { id: mockState.absences.length + 1, ...values };
+        mockState.absences.push(row);
+        return makeQuery([row]);
+      }
+      if (table === notifications) return makeQuery([{ id: 1, ...values }]);
+      return makeQuery([]);
+    },
+  }),
+  update: (table: any) => ({
+    set: (values: Record<string, any>) => ({
+      where: () => {
+        let didUpdate = false;
+        const applyUpdate = () => {
+          if (didUpdate) return;
+          didUpdate = true;
+          if (table === absenceDeclarations) {
+            mockState.declarations.forEach((row) => Object.assign(row, values));
+          } else if (table === absences) {
+            mockState.absences.forEach((row) => Object.assign(row, values));
+          }
+        };
+        const updatedRows = () => table === absenceDeclarations
+          ? mockState.declarations.slice(0, 1)
+          : table === absences ? mockState.absences : [];
+        return {
+          then: (resolve: (value: any) => void, reject: (reason?: any) => void) => {
+            applyUpdate();
+            return Promise.resolve(updatedRows()).then(resolve, reject);
+          },
+          returning: async () => {
+            applyUpdate();
+            return updatedRows();
+          },
+        };
+      },
+    }),
+  }),
+  delete: () => ({ where: async () => [] }),
+};
+
+vi.mock('../src/db/index.ts', () => ({ db: mockDb }));
+vi.mock('../src/db', () => ({ db: mockDb }));
+vi.mock('src/db/index.ts', () => ({ db: mockDb }));
+vi.mock('../src/middleware/auth.ts', async () => {
+  const actual = await vi.importActual('../src/middleware/auth.ts');
+  return {
+    ...actual,
+    requireAuth(req: any, _res: any, next: () => void) {
+      const role = req.headers['x-test-role'] || 'parent';
+      req.user = { uid: `sim-${role}`, email: `${role}@example.com`, role, schoolId: 1, id: 7, simulated: true };
+      next();
+    },
+  };
+});
+vi.mock('src/middleware/auth', async () => {
+  const actual = await vi.importActual('../src/middleware/auth.ts');
+  return {
+    ...actual,
+    requireAuth(req: any, _res: any, next: () => void) {
+      const role = req.headers['x-test-role'] || 'parent';
+      req.user = { uid: `sim-${role}`, email: `${role}@example.com`, role, schoolId: 1, id: 7, simulated: true };
+      next();
+    },
+  };
+});
+
+describe('parent absence declaration routes', () => {
+  let app: any;
+  let originalInternalSecret: string | undefined;
+
+  beforeAll(async () => {
+    originalInternalSecret = process.env.INTERNAL_SECRET;
+    process.env.INTERNAL_SECRET = 'absence-declaration-test-secret';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200 })));
+    const serverModule = await import('../server.ts');
+    app = await serverModule.createApp();
+  });
+
+  beforeEach(() => {
+    mockState.users = [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }];
+    mockState.parents = [{ id: 2, userId: 7, studentId: 20 }];
+    mockState.students = [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }];
+    mockState.classes = [{ id: 10, schoolId: 1 }];
+    mockState.declarations = [];
+    mockState.absences = [];
+  });
+
+  afterAll(() => {
+    if (originalInternalSecret === undefined) delete process.env.INTERNAL_SECRET;
+    else process.env.INTERNAL_SECRET = originalInternalSecret;
+    vi.unstubAllGlobals();
+  });
+
+  const isoDay = (offset: number) => {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + offset);
+    return date.toISOString().slice(0, 10);
+  };
+
+  const declarationInput = (studentId: number, date = isoDay(0)) => ({
+    studentId,
+    date,
+    startTime: '08:00',
+    endTime: '10:00',
+    reason: 'Rendez-vous médical',
+  });
+
+  it('accepts today and future for the parent’s child, rejects past dates and unrelated children', async () => {
+    const today = await request(app).post('/api/absence-declarations').send(declarationInput(20)).expect(201);
+    expect(today.body.status).toBe('RECEIVED');
+    expect(mockState.absences).toHaveLength(0);
+
+    const future = await request(app).post('/api/absence-declarations').send(declarationInput(20, isoDay(2))).expect(201);
+    expect(future.body.date).toBe(isoDay(2));
+    await request(app).post('/api/absence-declarations').send(declarationInput(20, isoDay(-1))).expect(400);
+    await request(app).post('/api/absence-declarations').send(declarationInput(20, '2030-02-31')).expect(400);
+    await request(app).post('/api/absence-declarations').send(declarationInput(999)).expect(403);
+    await request(app).post('/api/absence-declarations').set('x-test-role', 'teacher').send(declarationInput(20)).expect(403);
+    expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('allows edits only before the date and returns an approved edit to pending review', async () => {
+    mockState.declarations = [{
+      id: 8,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(1),
+      startTime: '08:00',
+      endTime: '10:00',
+      reason: 'Ancien motif',
+      status: 'ACCEPTED',
+    }];
+
+    const updated = await request(app)
+      .put('/api/absence-declarations/8')
+      .send(declarationInput(20, isoDay(2)))
+      .expect(200);
+    expect(updated.body.status).toBe('RECEIVED');
+    expect(updated.body.date).toBe(isoDay(2));
+
+    await request(app)
+      .put('/api/absence-declarations/8')
+      .send(declarationInput(20, isoDay(-1)))
+      .expect(400);
+
+    mockState.declarations[0].status = 'REFUSED';
+    await request(app)
+      .put('/api/absence-declarations/8')
+      .send(declarationInput(20))
+      .expect(409);
+  });
+
+  it('cancels an owned pending declaration and keeps it out of absences', async () => {
+    mockState.declarations = [{ id: 9, studentId: 20, parentId: 2, date: isoDay(0), status: 'RECEIVED' }];
+
+    const cancelled = await request(app).put('/api/absence-declarations/9/cancel').send({}).expect(200);
+    expect(cancelled.body.status).toBe('CANCELLED');
+    await request(app).put('/api/absence-declarations/9/cancel').send({}).expect(409);
+    expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('closes a declaration as not realized without creating an absence', async () => {
+    mockState.declarations = [{ id: 11, studentId: 20, parentId: 2, date: isoDay(0), status: 'RECEIVED' }];
+
+    const closed = await request(app)
+      .put('/api/absence-declarations/11/not-realized')
+      .set('x-test-role', 'surveillant')
+      .send({})
+      .expect(200);
+
+    expect(closed.body.status).toBe('NOT_REALIZED');
+    expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('lets authorized school staff approve or reject without creating an absence', async () => {
+    mockState.declarations = [{ id: 10, studentId: 20, parentId: 2, date: isoDay(2), status: 'RECEIVED' }];
+
+    const approved = await request(app)
+      .put('/api/absence-declarations/10/review')
+      .set('x-test-role', 'school_admin')
+      .send({ status: 'ACCEPTED' })
+      .expect(200);
+    expect(approved.body.status).toBe('ACCEPTED');
+    expect(mockState.absences).toHaveLength(0);
+
+    mockState.declarations[0].status = 'RECEIVED';
+    const rejected = await request(app)
+      .put('/api/absence-declarations/10/review')
+      .set('x-test-role', 'school_admin')
+      .send({ status: 'REFUSED', rejectionReason: 'Plage non autorisée' })
+      .expect(200);
+    expect(rejected.body.status).toBe('REFUSED');
+    expect(rejected.body.rejectionReason).toBe('Plage non autorisée');
+    expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('keeps declarations separate and only links an actual same-day absence after approval', async () => {
+    mockState.declarations = [{
+      id: 4,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(0),
+      startTime: '08:00',
+      endTime: '10:00',
+      reason: 'Rendez-vous médical',
+      status: 'ACCEPTED',
+      reviewedBy: 7,
+      reviewedAt: new Date(),
+    }];
+
+    const response = await request(app)
+      .post('/api/absences')
+      .set('x-test-role', 'surveillant')
+      .send({ studentId: 20, classId: 10, date: isoDay(0), subjectId: 5, startTime: '09:00', endTime: '10:30' })
+      .expect(201);
+
+    expect(response.body.isJustified).toBe(false);
+    expect(response.body.justificationStatus).toBeUndefined();
+    expect(response.body.declarationId).toBe(4);
+  });
+
+  it('links a received declaration without turning the real absence into a justification', async () => {
+    mockState.declarations = [{
+      id: 5,
+      studentId: 20,
+      parentId: 2,
+      date: isoDay(0),
+      startTime: '08:00',
+      endTime: '10:00',
+      status: 'RECEIVED',
+    }];
+
+    const response = await request(app)
+      .post('/api/absences')
+      .set('x-test-role', 'surveillant')
+      .send({ studentId: 20, classId: 10, date: isoDay(0), subjectId: 5, startTime: '09:00', endTime: '10:30' })
+      .expect(201);
+
+    expect(response.body.isJustified).toBe(false);
+    expect(response.body.justificationStatus).toBeUndefined();
+    expect(response.body.declarationId).toBe(5);
+
+    mockState.declarations[0].status = 'REFUSED';
+    mockState.absences = [];
+    const refusedDeclarationAbsence = await request(app)
+      .post('/api/absences')
+      .set('x-test-role', 'surveillant')
+      .send({ studentId: 20, classId: 10, date: isoDay(0), subjectId: 5, startTime: '09:00', endTime: '10:30' })
+      .expect(201);
+    expect(refusedDeclarationAbsence.body.declarationId).toBe(5);
+    expect(refusedDeclarationAbsence.body.isJustified).toBe(false);
+    expect(refusedDeclarationAbsence.body.justificationStatus).toBeUndefined();
+  });
+
+  it('links an existing same-day absence when the parent declares afterward', async () => {
+    mockState.absences = [{
+      id: 15,
+      studentId: 20,
+      date: isoDay(0),
+      startTime: '08:30',
+      endTime: '09:30',
+      isJustified: false,
+      justificationStatus: null,
+      declarationId: null,
+    }];
+
+    const response = await request(app)
+      .post('/api/absence-declarations')
+      .send(declarationInput(20))
+      .expect(201);
+
+    expect(mockState.absences[0].declarationId).toBe(response.body.id);
+    expect(mockState.absences[0].isJustified).toBe(false);
+    expect(mockState.absences[0].justificationStatus).toBeNull();
+  });
+
+  it('returns the declaration link with a real absence', async () => {
+    mockState.absences = [{
+      id: 15,
+      studentId: 20,
+      classId: 10,
+      date: isoDay(0),
+      period: 'morning',
+      isJustified: false,
+      justificationStatus: null,
+      declarationId: 9,
+    }];
+
+    const response = await request(app).get('/api/absences').expect(200);
+
+    expect(response.body[0].declarationId).toBe(9);
+  });
+
+  it('limits establishment review to the school that owns the student', async () => {
+    mockState.declarations = [{ id: 6, studentId: 20, parentId: 2, date: isoDay(0), status: 'RECEIVED' }];
+    mockState.students[0].schoolId = 2;
+
+    await request(app)
+      .put('/api/absence-declarations/6/review')
+      .set('x-test-role', 'school_admin')
+      .send({ status: 'ACCEPTED' })
+      .expect(403);
+  });
+});

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Absence, Student, Class, Teacher, UserRole } from '../types.ts';
+import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
@@ -36,6 +36,7 @@ type PresenceEvent =
 interface AbsenceViewProps {
   userRole: UserRole;
   absencesList: Absence[];
+  absenceDeclarationsList?: AbsenceDeclaration[];
   lateArrivalsList?: LateArrivalEntry[];
   studentsList: Student[];
   classesList: Class[];
@@ -48,6 +49,11 @@ interface AbsenceViewProps {
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+  onCreateAbsenceDeclaration?: (data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => Promise<void>;
+  onUpdateAbsenceDeclaration?: (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => Promise<void>;
+  onCancelAbsenceDeclaration?: (id: number) => Promise<void>;
+  onReviewAbsenceDeclaration?: (id: number, status: 'ACCEPTED' | 'REFUSED', rejectionReason?: string) => Promise<void>;
+  onCloseAbsenceDeclaration?: (id: number) => Promise<void>;
   onJustifyAbsence: (id: number, reason: string, files?: File[] | File | null) => void;
   onRecordAbsenceControl?: (data: { classId: number; date: string; subjectId?: number; startTime?: string; endTime?: string; controlType: 'none'; period?: string }) => Promise<void>;
 }
@@ -55,6 +61,7 @@ interface AbsenceViewProps {
 export default function AbsenceView({
   userRole,
   absencesList,
+  absenceDeclarationsList = [],
   lateArrivalsList = [],
   studentsList,
   classesList,
@@ -67,6 +74,11 @@ export default function AbsenceView({
   onAddAbsence,
   onAddLateArrival,
   onReviewAbsence,
+  onCreateAbsenceDeclaration,
+  onUpdateAbsenceDeclaration,
+  onCancelAbsenceDeclaration,
+  onReviewAbsenceDeclaration,
+  onCloseAbsenceDeclaration,
   onJustifyAbsence,
   onRecordAbsenceControl,
 }: AbsenceViewProps) {
@@ -185,6 +197,91 @@ export default function AbsenceView({
   const [selectedAbsentStudentIds, setSelectedAbsentStudentIds] = useState<string[]>([]);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [isMultipleSaveInProgress, setIsMultipleSaveInProgress] = useState(false);
+  const [isDeclarationFormOpen, setIsDeclarationFormOpen] = useState(false);
+  const [declarationError, setDeclarationError] = useState<string | null>(null);
+  const [declarationForm, setDeclarationForm] = useState({
+    id: null as number | null,
+    studentId: '',
+    date: new Date().toISOString().split('T')[0],
+    startTime: '08:00',
+    endTime: '09:30',
+    reason: '',
+  });
+  const declarationToday = new Date().toISOString().split('T')[0];
+
+  const resetDeclarationForm = () => {
+    setDeclarationForm({ id: null, studentId: '', date: declarationToday, startTime: '08:00', endTime: '09:30', reason: '' });
+    setIsDeclarationFormOpen(false);
+    setDeclarationError(null);
+  };
+
+  const submitDeclaration = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const data = {
+      studentId: Number(declarationForm.studentId),
+      date: declarationForm.date,
+      startTime: declarationForm.startTime,
+      endTime: declarationForm.endTime,
+      reason: declarationForm.reason.trim() || undefined,
+    };
+    try {
+      if (declarationForm.id != null) {
+        if (!onUpdateAbsenceDeclaration) return;
+        await onUpdateAbsenceDeclaration(declarationForm.id, data);
+      } else {
+        if (!onCreateAbsenceDeclaration) return;
+        await onCreateAbsenceDeclaration(data);
+      }
+      resetDeclarationForm();
+    } catch (error: any) {
+      setDeclarationError(error?.message || 'Impossible d’enregistrer la déclaration.');
+    }
+  };
+
+  const editDeclaration = (declaration: AbsenceDeclaration) => {
+    setDeclarationForm({
+      id: declaration.id,
+      studentId: String(declaration.studentId),
+      date: declaration.date,
+      startTime: declaration.startTime,
+      endTime: declaration.endTime,
+      reason: declaration.reason || '',
+    });
+    setDeclarationError(null);
+    setIsDeclarationFormOpen(true);
+  };
+
+  const cancelDeclaration = async (declaration: AbsenceDeclaration) => {
+    if (!onCancelAbsenceDeclaration) return;
+    try {
+      await onCancelAbsenceDeclaration(declaration.id);
+      setDeclarationError(null);
+    } catch (error: any) {
+      setDeclarationError(error?.message || 'Impossible d’annuler la déclaration.');
+    }
+  };
+
+  const reviewDeclaration = async (declaration: AbsenceDeclaration, status: 'ACCEPTED' | 'REFUSED') => {
+    if (!onReviewAbsenceDeclaration) return;
+    const rejectionReason = status === 'REFUSED' ? window.prompt('Motif du refus :')?.trim() || '' : '';
+    if (status === 'REFUSED' && !rejectionReason) return;
+    try {
+      await onReviewAbsenceDeclaration(declaration.id, status, status === 'REFUSED' ? rejectionReason : undefined);
+      setDeclarationError(null);
+    } catch (error: any) {
+      setDeclarationError(error?.message || 'Impossible de traiter la déclaration.');
+    }
+  };
+
+  const closeAsNotRealized = async (declaration: AbsenceDeclaration) => {
+    if (!onCloseAbsenceDeclaration) return;
+    try {
+      await onCloseAbsenceDeclaration(declaration.id);
+      setDeclarationError(null);
+    } catch (error: any) {
+      setDeclarationError(error?.message || 'Impossible de clôturer la déclaration.');
+    }
+  };
 
   const calculateLateMinutes = (expectedStartTime: string, arrivalTime: string) => {
     const expected = /^([01]\d|2[0-3]):[0-5]\d$/.test(expectedStartTime) ? expectedStartTime.split(':').map(Number) : null;
@@ -571,7 +668,11 @@ export default function AbsenceView({
       return false;
     }
 
-    if (filterJustification === 'unjustified' && event.isJustified) {
+    if (filterJustification === 'unjustified' && (event.isJustified || (event.declarationId && !event.justificationStatus))) {
+      return false;
+    }
+
+    if (filterJustification === 'declared' && !event.declarationId) {
       return false;
     }
 
@@ -607,6 +708,159 @@ export default function AbsenceView({
           </button>
         )}
       </div>
+
+      {(userRole === 'parent' || ['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(userRole)) && (
+        <section className="border border-slate-200 rounded-xl bg-white" aria-label="Déclarations préalables d’absence">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-b border-slate-200">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Déclarations préalables</h3>
+              <p className="text-xs text-slate-500">Séparées des absences constatées.</p>
+            </div>
+            {userRole === 'parent' && onCreateAbsenceDeclaration && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDeclarationForm((previous) => ({
+                    ...previous,
+                    id: null,
+                    studentId: previous.studentId || (sortedStudents[0] ? String(sortedStudents[0].id) : ''),
+                    date: declarationToday,
+                    startTime: '08:00',
+                    endTime: '09:30',
+                    reason: '',
+                  }));
+                  setDeclarationError(null);
+                  setIsDeclarationFormOpen(true);
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+              >
+                <Plus className="h-4 w-4" />
+                Déclarer une absence
+              </button>
+            )}
+          </div>
+
+          {isDeclarationFormOpen && userRole === 'parent' && (
+            <form onSubmit={submitDeclaration} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border-b border-slate-200">
+              <label className="text-xs font-semibold text-slate-600">
+                Enfant
+                <select
+                  required
+                  value={declarationForm.studentId}
+                  onChange={(event) => setDeclarationForm((previous) => ({ ...previous, studentId: event.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                >
+                  <option value="">Choisir un enfant</option>
+                  {sortedStudents.map((student) => (
+                    <option key={student.id} value={student.id}>{student.lastName} {student.firstName}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Date
+                <input
+                  required
+                  type="date"
+                  min={declarationToday}
+                  value={declarationForm.date}
+                  onChange={(event) => setDeclarationForm((previous) => ({ ...previous, date: event.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                De
+                <input
+                  required
+                  type="time"
+                  value={declarationForm.startTime}
+                  onChange={(event) => setDeclarationForm((previous) => ({ ...previous, startTime: event.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                À
+                <input
+                  required
+                  type="time"
+                  value={declarationForm.endTime}
+                  onChange={(event) => setDeclarationForm((previous) => ({ ...previous, endTime: event.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Motif (facultatif)
+                <input
+                  value={declarationForm.reason}
+                  onChange={(event) => setDeclarationForm((previous) => ({ ...previous, reason: event.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                />
+              </label>
+              {declarationError && <p className="sm:col-span-2 lg:col-span-5 text-xs font-semibold text-rose-700" role="alert">{declarationError}</p>}
+              <div className="sm:col-span-2 lg:col-span-5 flex justify-end gap-2">
+                <button type="button" onClick={resetDeclarationForm} className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Annuler</button>
+                <button type="submit" className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+                  {declarationForm.id == null ? 'Envoyer la déclaration' : 'Enregistrer les modifications'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="divide-y divide-slate-100">
+            {absenceDeclarationsList
+              .filter((declaration) => !pendingReviewOnly || declaration.status === 'RECEIVED')
+              .map((declaration) => {
+                const canParentChange = userRole === 'parent'
+                  && ['RECEIVED', 'ACCEPTED'].includes(declaration.status)
+                  && declaration.date >= declarationToday;
+                const canCloseAsNotRealized = declaration.date <= declarationToday
+                  && ['RECEIVED', 'ACCEPTED'].includes(declaration.status);
+                const statusLabel = {
+                  RECEIVED: 'Reçue',
+                  ACCEPTED: 'Acceptée',
+                  REFUSED: 'Refusée',
+                  CANCELLED: 'Annulée',
+                  NOT_REALIZED: 'Non réalisée',
+                }[declaration.status] || declaration.status;
+                return (
+                  <div key={declaration.id} className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-sm font-semibold text-slate-800">{declaration.studentName}</span>
+                        {declaration.className && <span className="text-xs text-slate-500">{declaration.className}</span>}
+                        <span className="text-xs text-slate-600">{new Date(`${declaration.date}T12:00:00`).toLocaleDateString('fr-FR')}</span>
+                        <span className="text-xs text-slate-600">{declaration.startTime}–{declaration.endTime}</span>
+                        <span className="text-xs font-semibold text-slate-700">{statusLabel}</span>
+                      </div>
+                      {declaration.reason && <p className="mt-1 text-xs text-slate-600">{declaration.reason}</p>}
+                      {declaration.rejectionReason && <p className="mt-1 text-xs text-rose-700">Motif du refus : {declaration.rejectionReason}</p>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canParentChange && onUpdateAbsenceDeclaration && (
+                        <button type="button" onClick={() => editDeclaration(declaration)} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700">Modifier</button>
+                      )}
+                      {canParentChange && onCancelAbsenceDeclaration && (
+                        <button type="button" onClick={() => void cancelDeclaration(declaration)} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700">Annuler la déclaration</button>
+                      )}
+                      {userRole !== 'parent' && declaration.status === 'RECEIVED' && onReviewAbsenceDeclaration && (
+                        <>
+                          <button type="button" onClick={() => void reviewDeclaration(declaration, 'ACCEPTED')} className="rounded-md bg-emerald-700 px-2.5 py-1.5 text-xs font-semibold text-white">Accepter</button>
+                          <button type="button" onClick={() => void reviewDeclaration(declaration, 'REFUSED')} className="rounded-md bg-rose-700 px-2.5 py-1.5 text-xs font-semibold text-white">Refuser</button>
+                        </>
+                      )}
+                      {userRole !== 'parent' && canCloseAsNotRealized && onCloseAbsenceDeclaration && (
+                        <button type="button" onClick={() => void closeAsNotRealized(declaration)} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700">Clôturer : non réalisée</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            {absenceDeclarationsList.length === 0 && (
+              <p className="px-4 py-5 text-center text-xs text-slate-500">Aucune déclaration préalable.</p>
+            )}
+          </div>
+          {declarationError && !isDeclarationFormOpen && <p className="px-4 pb-3 text-xs font-semibold text-rose-700" role="alert">{declarationError}</p>}
+        </section>
+      )}
 
       {/* New Absence Registry form */}
       {isFormOpen && (
@@ -1046,6 +1300,7 @@ export default function AbsenceView({
           >
             <option value="">Toutes</option>
             <option value="justified">Justifiées</option>
+            <option value="declared">Déclarées par un parent</option>
             <option value="unjustified">Injustifiées</option>
           </select>
           <select
@@ -1108,6 +1363,10 @@ export default function AbsenceView({
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
                         Retard
                       </span>
+                    ) : abs.declarationId && !abs.justificationStatus && !abs.isJustified ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-50 text-sky-700 text-xs font-bold rounded-full border border-sky-100">
+                        Déclaration parentale associée
+                      </span>
                     ) : getJustificationStatus(abs) === 'PENDING' ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
                         En attente de validation
@@ -1137,7 +1396,9 @@ export default function AbsenceView({
                     ) : (
                       <>
                         <div className="font-bold">
-                          {abs.justificationStatus === 'REJECTED'
+                          {abs.declarationId && !abs.justificationStatus && !abs.isJustified
+                            ? 'Absence rattachée à une déclaration parentale'
+                            : abs.justificationStatus === 'REJECTED'
                             ? `Motif du refus : ${abs.rejectionReason || 'Non précisé'}`
                             : abs.justificationReason || '— En attente de motif de l\'enfant...'}
                         </div>

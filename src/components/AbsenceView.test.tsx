@@ -41,6 +41,39 @@ describe('visibilite du bouton Justifier', () => {
   });
 });
 
+describe('absence liée à une déclaration parentale', () => {
+  it('affiche le lien sans classer l’absence comme injustifiée', () => {
+    render(
+      <AbsenceView
+        userRole="parent"
+        absencesList={[{
+          id: 52,
+          studentId: 12,
+          studentName: 'Awa Exemple',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-29',
+          period: 'morning',
+          isJustified: false,
+          declarationId: 9,
+        }] as any}
+        studentsList={[]}
+        classesList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onJustifyAbsence={vi.fn()}
+      />
+    );
+
+    const linkedRow = screen.getByText('Déclaration parentale associée').closest('tr');
+    expect(linkedRow).not.toBeNull();
+    expect(linkedRow?.textContent).not.toContain('Injustifiée');
+    expect(linkedRow?.textContent).toContain('Absence rattachée à une déclaration parentale');
+  });
+});
+
 describe('AbsenceView surveillant', () => {
   it('affiche le bouton de signalement pour un surveillant', () => {
     render(

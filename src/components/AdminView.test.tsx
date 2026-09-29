@@ -32,6 +32,52 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
+  it('loads titular assignments in an explicit school scope', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/schools/1/homeroom-assignments')) {
+        return new Response(JSON.stringify([{ classId: 10, teacherId: 22, teacherName: 'Titulaire' }]), { status: 200 });
+      }
+      if (url.includes('/api/classes?schoolId=1')) {
+        return new Response(JSON.stringify([{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1, teacherId: 99 }]), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1, teacherId: 99 }]}
+          teachersList={[{ id: 22, name: 'Titulaire', schoolId: 1 } as Teacher]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Assigner des enseignants titulaires/i }));
+      fireEvent.change(screen.getByLabelText('Filtrer par école'), { target: { value: '1' } });
+
+      expect(await screen.findByText('Titulaire : Titulaire')).toBeTruthy();
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/api/schools/1/homeroom-assignments'), expect.anything());
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('renders birth date options in a portal so they stay visible inside the student modal', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];

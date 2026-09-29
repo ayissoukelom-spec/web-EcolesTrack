@@ -12,6 +12,7 @@ import {
   AuditEvent,
   SubjectType,
   EducationLevel,
+  AbsenceDeclaration,
 } from './types.ts';
 import {
   apiFetch,
@@ -21,6 +22,7 @@ import {
   clearSimulatedUser,
   setSimulatedUser,
   findTeacherProfileFromSimulatedUser,
+  type HomeroomClassSummary,
 } from './lib/api.ts';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
@@ -42,6 +44,7 @@ import ParentNotesView from './components/ParentNotesView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
 import BulletinsView from './components/BulletinsView.tsx';
 import GlobalErrorToast from './components/GlobalErrorToast.tsx';
+import HomeroomView from './components/HomeroomView.tsx';
 
 import {
   LayoutDashboard,
@@ -83,6 +86,7 @@ export default function App() {
       justified: 0,
       unjustified: 0,
       pending: 0,
+      declared: 0,
     },
   });
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
@@ -92,6 +96,7 @@ export default function App() {
   const [teachersList, setTeachersList] = useState<Teacher[]>([]);
   const [studentsList, setStudentsList] = useState<Student[]>([]);
   const [parentsList, setParentsList] = useState<Parent[]>([]);
+  const [homeroomClassesList, setHomeroomClassesList] = useState<HomeroomClassSummary[]>([]);
 
   const logTeachersPayload = (prefix: string, payload: unknown) => {
     if (!Array.isArray(payload)) {
@@ -109,9 +114,10 @@ export default function App() {
     });
   };
   const [absencesList, setAbsencesList] = useState<any[]>([]);
+  const [absenceDeclarationsList, setAbsenceDeclarationsList] = useState<AbsenceDeclaration[]>([]);
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
-  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified).length;
+  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified && (!absence.declarationId || absence.justificationStatus === 'REJECTED')).length;
   const pendingAbsenceValidationsCount = Math.max(0, Number(stats.absenceStatusCounts.pending) || 0);
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
@@ -136,8 +142,8 @@ export default function App() {
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
   const currentTeacherClassIds = (currentTeacherProfile?.classIds || [])
-    .map((classId) => Number(classId))
-    .filter((classId) => Number.isInteger(classId));
+    .map((classId: string | number) => Number(classId))
+    .filter((classId: number) => Number.isInteger(classId));
   const currentTeacherSpecializations = currentTeacherProfile?.specialization
     ? Array.isArray(currentTeacherProfile.specialization)
       ? currentTeacherProfile.specialization
@@ -270,6 +276,7 @@ export default function App() {
         ? `/api/classes?schoolId=${currentSchoolId}`
         : '/api/classes';
       const studentsEndpoint = '/api/students?includeFormer=true';
+      const homeroomClassesEndpoint = currentRole === 'teacher' ? '/api/my-homeroom-classes' : null;
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
@@ -278,6 +285,7 @@ export default function App() {
         studentsEndpoint,
         '/api/parents',
         '/api/absences',
+        '/api/absence-declarations',
         '/api/late-arrivals',
         '/api/absence-controls',
         '/api/evaluations',
@@ -288,6 +296,7 @@ export default function App() {
         '/api/subject-types',
         '/api/education/levels',
         '/api/simulation/users',
+        ...(homeroomClassesEndpoint ? [homeroomClassesEndpoint] : []),
       ];
 
       const promises = endpoints.map(e => apiFetch(e).catch((err) => ({ __error: true, error: err })));
@@ -316,6 +325,7 @@ export default function App() {
 
       if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
       if (Array.isArray(map['/api/absences'])) setAbsencesList(map['/api/absences']);
+      if (Array.isArray(map['/api/absence-declarations'])) setAbsenceDeclarationsList(map['/api/absence-declarations']);
       if (Array.isArray(map['/api/late-arrivals'])) setLateArrivals(map['/api/late-arrivals']);
       if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
       if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
@@ -326,6 +336,11 @@ export default function App() {
       if (Array.isArray(map['/api/subject-types'])) setSubjectTypesList(map['/api/subject-types']);
       if (Array.isArray(map['/api/education/levels'])) setEducationLevels(map['/api/education/levels']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
+      if (homeroomClassesEndpoint && Array.isArray(map[homeroomClassesEndpoint])) {
+        setHomeroomClassesList(map[homeroomClassesEndpoint]);
+      } else if (currentRole !== 'teacher') {
+        setHomeroomClassesList([]);
+      }
 
       if (currentRole === 'super_admin') {
         await fetchAuditEvents();
@@ -791,6 +806,34 @@ export default function App() {
     }
   };
 
+  const handleCreateAbsenceDeclaration = async (data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => {
+    await apiFetch('/api/absence-declarations', { method: 'POST', body: JSON.stringify(data) });
+    await fetchAllData(false);
+  };
+
+  const handleUpdateAbsenceDeclaration = async (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason?: string }) => {
+    await apiFetch(`/api/absence-declarations/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    await fetchAllData(false);
+  };
+
+  const handleCancelAbsenceDeclaration = async (id: number) => {
+    await apiFetch(`/api/absence-declarations/${id}/cancel`, { method: 'PUT', body: JSON.stringify({}) });
+    await fetchAllData(false);
+  };
+
+  const handleReviewAbsenceDeclaration = async (id: number, status: 'ACCEPTED' | 'REFUSED', rejectionReason?: string) => {
+    await apiFetch(`/api/absence-declarations/${id}/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ status, ...(status === 'REFUSED' ? { rejectionReason } : {}) }),
+    });
+    await fetchAllData(false);
+  };
+
+  const handleCloseAbsenceDeclaration = async (id: number) => {
+    await apiFetch(`/api/absence-declarations/${id}/not-realized`, { method: 'PUT', body: JSON.stringify({}) });
+    await fetchAllData(false);
+  };
+
   const handleAddLateArrival = async (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => {
     await addLateArrival(data);
     await fetchAllData(false);
@@ -1066,6 +1109,17 @@ export default function App() {
                 <span>Administration</span>
               </button>}
 
+              {currentRole === 'teacher' && homeroomClassesList.length > 0 && (
+                <button
+                  onClick={() => setActiveTab('homeroom')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${activeTab === 'homeroom' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'}`}
+                  id="sidebar-nav-homeroom"
+                >
+                  <Building2 className="h-4.5 w-4.5" />
+                  <span>Mes classes titulaires</span>
+                </button>
+              )}
+
               {/* Tab 3: Absences */}
               <button
                 onClick={() => setActiveTab('absences')}
@@ -1309,6 +1363,10 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'homeroom' && currentRole === 'teacher' && homeroomClassesList.length > 0 && (
+                <HomeroomView classes={homeroomClassesList} />
+              )}
+
               {activeTab === 'administration' && (
                 <ErrorBoundary>
                           <AdminView
@@ -1365,6 +1423,7 @@ export default function App() {
                   userRole={currentRole}
                   pendingReviewOnly={activeTab === 'absence-validations'}
                   absencesList={absencesList}
+                  absenceDeclarationsList={absenceDeclarationsList}
                   lateArrivalsList={lateArrivalsList}
                   studentsList={studentsList}
                   classesList={classesList}
@@ -1376,6 +1435,11 @@ export default function App() {
                   onAddAbsence={handleAddAbsence}
                   onAddLateArrival={handleAddLateArrival}
                   onReviewAbsence={handleReviewAbsence}
+                  onCreateAbsenceDeclaration={handleCreateAbsenceDeclaration}
+                  onUpdateAbsenceDeclaration={handleUpdateAbsenceDeclaration}
+                  onCancelAbsenceDeclaration={handleCancelAbsenceDeclaration}
+                  onReviewAbsenceDeclaration={handleReviewAbsenceDeclaration}
+                  onCloseAbsenceDeclaration={handleCloseAbsenceDeclaration}
                   onJustifyAbsence={handleJustifyAbsence}
                   onRecordAbsenceControl={recordAbsenceControl}
                 />

@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, customType, integer, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, customType, index, integer, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -222,6 +222,18 @@ export const classTeachers = pgTable('class_teachers', {
   classTeacherUniqueIdx: uniqueIndex('class_teachers_class_id_teacher_id_idx').on(table.classId, table.teacherId),
 }));
 
+export const classHomeroomAssignments = pgTable('class_homeroom_assignments', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  classHomeroomSchoolClassUniqueIdx: uniqueIndex('class_homeroom_assignments_school_class_idx').on(table.schoolId, table.classId),
+  classHomeroomTeacherIdx: index('class_homeroom_assignments_school_teacher_idx').on(table.schoolId, table.teacherId),
+}));
+
 // 8. Students
 export const students = pgTable('students', {
   id: serial('id').primaryKey(),
@@ -410,6 +422,23 @@ export const gradeHistory = pgTable('grade_history', {
   changedAt: timestamp('changed_at').defaultNow().notNull(),
 });
 
+// 11. Parent-declared future absences, kept separate from recorded absences.
+export const absenceDeclarations = pgTable('absence_declarations', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
+  parentId: integer('parent_id').references(() => parents.id, { onDelete: 'cascade' }).notNull(),
+  date: text('date').notNull(),
+  startTime: text('start_time').notNull(),
+  endTime: text('end_time').notNull(),
+  reason: text('reason'),
+  status: text('status').default('RECEIVED').notNull(),
+  rejectionReason: text('rejection_reason'),
+  reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 // 11. Absences
 export const absences = pgTable('absences', {
   id: serial('id').primaryKey(),
@@ -426,6 +455,7 @@ export const absences = pgTable('absences', {
   rejectionReason: text('rejection_reason'),
   reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
   reviewedAt: timestamp('reviewed_at'),
+  declarationId: integer('declaration_id').references(() => absenceDeclarations.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -575,6 +605,7 @@ export const schoolsRelations = relations(schools, ({ many }) => ({
   classes: many(classes),
   students: many(students),
   schoolSubjects: many(schoolSubjects),
+  classHomeroomAssignments: many(classHomeroomAssignments),
 }));
 
 export const academicYearsRelations = relations(academicYears, ({ one, many }) => ({
@@ -687,6 +718,7 @@ export const teachersRelations = relations(teachers, ({ one, many }) => ({
   }),
   classes: many(classes),
   classAssignments: many(classTeachers),
+  homeroomAssignments: many(classHomeroomAssignments),
   evaluations: many(evaluations),
 }));
 
@@ -697,6 +729,21 @@ export const classTeachersRelations = relations(classTeachers, ({ one }) => ({
   }),
   teacher: one(teachers, {
     fields: [classTeachers.teacherId],
+    references: [teachers.id],
+  }),
+}));
+
+export const classHomeroomAssignmentsRelations = relations(classHomeroomAssignments, ({ one }) => ({
+  school: one(schools, {
+    fields: [classHomeroomAssignments.schoolId],
+    references: [schools.id],
+  }),
+  class: one(classes, {
+    fields: [classHomeroomAssignments.classId],
+    references: [classes.id],
+  }),
+  teacher: one(teachers, {
+    fields: [classHomeroomAssignments.teacherId],
     references: [teachers.id],
   }),
 }));
@@ -732,6 +779,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
   absences: many(absences),
   lateArrivals: many(lateArrivals),
   schoolClasses: many(schoolClasses),
+  homeroomAssignments: many(classHomeroomAssignments),
 }));
 
 export const schoolClassesRelations = relations(schoolClasses, ({ one }) => ({

@@ -28,6 +28,41 @@ export interface ExamResultStudentRow {
   result: ExamResultRow | null;
 }
 
+export interface HomeroomClassSummary {
+  id: number;
+  name: string;
+  schoolId: number;
+  schoolName: string;
+  academicYearId: number;
+  yearName: string;
+  levelId: number | null;
+  levelName: string | null;
+  teacherId: number;
+  teacherName: string;
+}
+
+export interface HomeroomClassDetail {
+  class: HomeroomClassSummary & { schoolAddress: string | null; schoolPhone: string | null };
+  students: Array<{
+    id: number; firstName: string; lastName: string; birthDate: string | null; gender: string | null;
+    isActive: boolean; withdrawnAt: string | null; studentStatus: string | null;
+    parentId: number | null; parentName: string | null; parentEmail: string | null;
+    parentPhone: string | null; parentAddress: string | null;
+  }>;
+  evaluations: Array<Record<string, any>>;
+  grades: Array<Record<string, any>>;
+  absences: Array<Record<string, any>>;
+  lateArrivals: Array<Record<string, any>>;
+  bulletins: Array<Record<string, any>>;
+  examResults: Array<Record<string, any>>;
+}
+
+export interface SchoolHomeroomAssignment {
+  classId: number;
+  teacherId: number;
+  teacherName: string;
+}
+
 // Client-side name validation utils
 const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/\-]+$/u;
 
@@ -549,6 +584,25 @@ export async function fetchExamResults(filters: { classId: number; academicYearI
 
 export async function fetchStudentExamHistory(studentId: number): Promise<ExamResultRow[]> {
   return apiFetch(`/api/exam-results?studentId=${encodeURIComponent(String(studentId))}`);
+}
+
+export async function fetchMyHomeroomClasses(): Promise<HomeroomClassSummary[]> {
+  return apiFetch('/api/my-homeroom-classes');
+}
+
+export async function fetchMyHomeroomClass(classId: number): Promise<HomeroomClassDetail> {
+  return apiFetch(`/api/my-homeroom-classes/${encodeURIComponent(String(classId))}`);
+}
+
+export async function fetchSchoolHomeroomAssignments(schoolId: number): Promise<SchoolHomeroomAssignment[]> {
+  return apiFetch(`/api/schools/${schoolId}/homeroom-assignments`);
+}
+
+export async function saveSchoolHomeroomAssignment(schoolId: number, classId: number, teacherId: number | null): Promise<void> {
+  await apiFetch(`/api/schools/${schoolId}/classes/${classId}/homeroom`, {
+    method: 'PUT',
+    body: JSON.stringify({ teacherId }),
+  });
 }
 
 export async function deleteExamResult(id: number): Promise<{ success: boolean }> {

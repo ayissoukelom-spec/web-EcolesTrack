@@ -92,6 +92,28 @@ describe('DashboardView absence status counts', () => {
     expect(unjustifiedRow && within(unjustifiedRow).getByText('3')).toBeTruthy();
   });
 
+  it('counts absences linked to parental declarations separately from unjustified absences', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 3, totalAbsences: 3, totalClasses: 1, totalTeachers: 1, attendanceRate: 0 }}
+        recentAbsences={[
+          { id: 1, isJustified: false, declarationId: 8 },
+          { id: 2, isJustified: false },
+          { id: 3, isJustified: true },
+        ]}
+        recentGrades={[]}
+        userRole="school_admin"
+        absenceStatusCounts={{ justified: 1, unjustified: 1, pending: 0, declared: 1 }}
+      />
+    );
+
+    const declaredRow = screen.getByText('Déclarées par un parent').closest('.flex.justify-between');
+    const unjustifiedRow = screen.getByText('Non Justifiées').closest('.flex.justify-between');
+
+    expect(declaredRow && within(declaredRow).getByText('1')).toBeTruthy();
+    expect(unjustifiedRow && within(unjustifiedRow).getByText('1')).toBeTruthy();
+  });
+
   it('hides recent grades for surveillant while keeping the dashboard visible', () => {
     render(
       <DashboardView

@@ -55,6 +55,7 @@ const FIXTURES = {
     { classId: 1, teacherId: 77 },
     { classId: 1, teacherId: 100 },
   ],
+  homeroomAssignments: [] as Array<{ id: number; schoolId: number; classId: number; teacherId: number; name?: string; schoolName?: string; yearName?: string; levelName?: string }>,
   schoolClasses: [
     { id: 500, classId: 3, schoolId: 10, status: 'approved' },
     { id: 501, classId: 4, schoolId: 10, status: 'approved' },
@@ -63,6 +64,7 @@ const FIXTURES = {
     { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
   ],
   lateArrivals: [],
+  evaluations: [] as any[],
   grades: [],
   examResults: [],
   classExamConfigurations: [],
@@ -364,12 +366,14 @@ function createMockDb() {
       if (lower.includes('academicyears')) return 'academicYears';
       if (lower.includes('localauths')) return 'localAuths';
       if (lower.includes('userschools')) return 'userSchools';
+      if (lower.includes('classhomeroomassignments') || lower.includes('class_homeroom_assignments')) return 'homeroomAssignments';
       if (lower.includes('parents')) return 'parents';
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
       if (lower.includes('latearrivals') || lower.includes('late_arrivals')) return 'lateArrivals';
+      if (lower.includes('evaluations')) return 'evaluations';
       if (lower.includes('grades')) return 'grades';
       if (lower.includes('examresults')) return 'examResults';
       if (lower.includes('classexamconfigurations')) return 'classExamConfigurations';
@@ -385,6 +389,7 @@ function createMockDb() {
       if (keys.includes('actoruserid') && keys.includes('resourceid')) return 'auditEvents';
       if (keys.includes('userid') && keys.includes('passwordhash')) return 'localAuths';
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('role') && keys.includes('isactive')) return 'userSchools';
+      if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('teacherid')) return 'homeroomAssignments';
       if (keys.includes('schoolid') && keys.includes('isactive') && keys.includes('name')) return 'academicYears';
       if (keys.includes('name') && keys.includes('address')) return 'schools';
       if (keys.includes('userid') && keys.includes('studentid') && keys.includes('address')) return 'parents';
@@ -393,6 +398,7 @@ function createMockDb() {
       if (keys.includes('classid') && keys.includes('academicyearid') && keys.includes('examtype') && keys.includes('isactive')) return 'classExamConfigurations';
       if (keys.includes('studentid') && keys.includes('expectedstarttime') && keys.includes('arrivaltime')) return 'lateArrivals';
       if (keys.includes('studentid') && keys.includes('evaluationid') && keys.includes('score')) return 'grades';
+      if (keys.includes('classid') && keys.includes('teacherid') && keys.includes('subject') && keys.includes('title')) return 'evaluations';
       if (keys.includes('name') && keys.includes('schoolid') && keys.includes('teacherid')) return 'classes';
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('id')) return 'teachers';
       if (keys.includes('schoolid') && keys.includes('teacherid') && keys.includes('userid')) return 'teachers';
@@ -415,11 +421,13 @@ function createMockDb() {
       if (lower.includes('academicyears')) return 'academicYears';
       if (lower.includes('localauths')) return 'localAuths';
       if (lower.includes('userschools')) return 'userSchools';
+      if (normalizedName.includes('classhomeroomassignments')) return 'homeroomAssignments';
       if (lower.includes('parents')) return 'parents';
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
+      if (normalizedName.includes('evaluations')) return 'evaluations';
       if (normalizedName.includes('latearrivals')) return 'lateArrivals';
       if (normalizedName.includes('examresults')) return 'examResults';
       if (normalizedName.includes('classexamconfigurations')) return 'classExamConfigurations';
@@ -439,6 +447,7 @@ function createMockDb() {
       : tableName === 'academicYears' ? FIXTURES.academicYears
       : tableName === 'localAuths' ? FIXTURES.localAuths
       : tableName === 'userSchools' ? FIXTURES.userSchools
+      : tableName === 'homeroomAssignments' ? FIXTURES.homeroomAssignments
       : tableName === 'parents' ? FIXTURES.parents
       : tableName === 'students' ? FIXTURES.students.map((student: any) => ({ isActive: true, withdrawnAt: null, ...student }))
       : tableName === 'classes' ? FIXTURES.classes
@@ -447,6 +456,7 @@ function createMockDb() {
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'absences' ? FIXTURES.absences
       : tableName === 'lateArrivals' ? FIXTURES.lateArrivals
+      : tableName === 'evaluations' ? FIXTURES.evaluations
       : tableName === 'grades' ? FIXTURES.grades
       : tableName === 'examResults' ? FIXTURES.examResults
       : tableName === 'classExamConfigurations' ? FIXTURES.classExamConfigurations
@@ -766,6 +776,12 @@ function createMockDb() {
               FIXTURES.userSchools.push(obj as any);
               return [obj];
             }
+            if (obj.schoolId !== undefined && obj.classId !== undefined && obj.teacherId !== undefined) {
+              const existing = FIXTURES.homeroomAssignments.find((row) => row.schoolId === obj.schoolId && row.classId === obj.classId);
+              if (existing) Object.assign(existing, obj);
+              else FIXTURES.homeroomAssignments.push({ id: FIXTURES.homeroomAssignments.length + 1, ...obj } as any);
+              return [existing || FIXTURES.homeroomAssignments[FIXTURES.homeroomAssignments.length - 1]];
+            }
             if (obj.userId !== undefined && obj.passwordHash) {
               FIXTURES.localAuths.push(obj as any);
               return [obj];
@@ -857,6 +873,7 @@ function createMockDb() {
               if (tableName === 'students') return updateRow(FIXTURES.students);
               if (tableName === 'parents') return updateRow(FIXTURES.parents);
               if (tableName === 'teachers') return updateRow(FIXTURES.teachers);
+              if (tableName === 'homeroomAssignments') return updateRow(FIXTURES.homeroomAssignments);
               if (tableName === 'userSchools') return updateRow(FIXTURES.userSchools);
               if (tableName === 'localAuths') return updateRow(FIXTURES.localAuths);
               if (tableName === 'schoolClasses') return updateRow(FIXTURES.schoolClasses);
@@ -899,6 +916,12 @@ function createMockDb() {
         where: async (cond: any) => {
           const conditions = extractConditions(cond);
           const tableName = resolveTableName(table);
+          if (tableName === 'homeroomAssignments') {
+            const before = FIXTURES.homeroomAssignments.length;
+            const remaining = FIXTURES.homeroomAssignments.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
+            FIXTURES.homeroomAssignments.splice(0, before, ...remaining);
+            return [];
+          }
           if (conditions.id != null) {
             if (tableName === 'users') {
               const idx = FIXTURES.users.findIndex((u) => u.id === Number(conditions.id));
@@ -2531,6 +2554,134 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
     expect(res.body.some((c: any) => c.id === 2)).toBe(false);
     expect(res.body.some((c: any) => c.id === 3)).toBe(false);
+  });
+
+  it('homeroom teacher can read only the homeroom classes assigned in their active school', async () => {
+    FIXTURES.homeroomAssignments.push(
+      { id: 2, classId: 2, schoolId: 10, teacherId: 77, name: 'Unassigned Class', schoolName: 'Test School', yearName: '2025-2026', levelName: 'Sixième', status: 'approved' } as any,
+      { id: 4, classId: 4, schoolId: 10, teacherId: 77, name: 'Global Approved Class', schoolName: 'Test School', yearName: '2025-2026', levelName: 'Sixième', status: 'approved' } as any,
+    );
+
+    const listResponse = await request(app)
+      .get('/api/my-homeroom-classes')
+      .set('Authorization', 'Bearer token-teacher');
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.body.map((row: any) => row.id).sort()).toEqual([2, 4]);
+
+    const ownClass = await request(app)
+      .get('/api/my-homeroom-classes/2')
+      .set('Authorization', 'Bearer token-teacher');
+    expect(ownClass.status).toBe(200);
+    expect(ownClass.body.class).toMatchObject({ id: 2, schoolId: 10 });
+    expect(ownClass.body).toHaveProperty('students');
+    expect(ownClass.body).toHaveProperty('grades');
+    expect(ownClass.body).toHaveProperty('absences');
+    expect(ownClass.body).toHaveProperty('bulletins');
+    expect(ownClass.body).toHaveProperty('examResults');
+
+    const globalClass = await request(app)
+      .get('/api/my-homeroom-classes/4')
+      .set('Authorization', 'Bearer token-teacher');
+    expect(globalClass.status).toBe(200);
+    expect(globalClass.body.class).toMatchObject({ id: 4, schoolId: 10 });
+  });
+
+  it('does not grant titular read access from classTeachers or a forged classId', async () => {
+    FIXTURES.homeroomAssignments.push(
+      { id: 2, classId: 2, schoolId: 10, teacherId: 77, name: 'Unassigned Class', schoolName: 'Test School', yearName: '2025-2026', status: 'approved' } as any,
+    );
+
+    const notHomeroom = await request(app)
+      .get('/api/my-homeroom-classes/1')
+      .set('Authorization', 'Bearer token-teacher');
+    const foreignClass = await request(app)
+      .get('/api/my-homeroom-classes/3')
+      .set('Authorization', 'Bearer token-teacher');
+    const forgedQuery = await request(app)
+      .get('/api/my-homeroom-classes?classId=3')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(notHomeroom.status).toBe(404);
+    expect(foreignClass.status).toBe(404);
+    expect(forgedQuery.status).toBe(200);
+    expect(forgedQuery.body.map((row: any) => row.id)).toEqual([2]);
+  });
+
+  it('does not share a global class titular assignment with another school', async () => {
+    FIXTURES.users.push({ id: 13, uid: 'teacher-school-20', email: 'teacher20@x.test', name: 'Teacher20', role: 'teacher', schoolId: 20, isDeleted: false });
+    FIXTURES.teachers.push({ id: 101, userId: 13, schoolId: 20, phone: null, specialization: null });
+    FIXTURES.homeroomAssignments.push(
+      { id: 4, classId: 4, schoolId: 10, teacherId: 77, name: 'Global Approved Class', schoolName: 'Test School', yearName: '2025-2026', status: 'approved' } as any,
+    );
+
+    const response = await request(app)
+      .get('/api/my-homeroom-classes/4')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-school-20')
+      .set('x-simulated-email', 'teacher20@x.test')
+      .set('x-simulated-school-id', '20');
+
+    expect(response.status).toBe(404);
+  });
+
+  it('school_admin can assign a global class titular only in its approved school context', async () => {
+    const assigned = await request(app)
+      .put('/api/schools/10/classes/4/homeroom')
+      .set('Authorization', 'Bearer token-school')
+      .send({ teacherId: 77 });
+    expect(assigned.status).toBe(200);
+    expect(FIXTURES.homeroomAssignments).toContainEqual(expect.objectContaining({ schoolId: 10, classId: 4, teacherId: 77 }));
+    expect(FIXTURES.classes.find((klass: any) => klass.id === 4)?.teacherId).toBeNull();
+
+    const unapproved = await request(app)
+      .put('/api/schools/10/classes/5/homeroom')
+      .set('Authorization', 'Bearer token-school')
+      .send({ teacherId: 77 });
+    const foreignSchool = await request(app)
+      .put('/api/schools/20/classes/3/homeroom')
+      .set('Authorization', 'Bearer token-school')
+      .send({ teacherId: 88 });
+    expect(unapproved.status).toBe(403);
+    expect(foreignSchool.status).toBe(403);
+  });
+
+  it('teacher cannot create or change homeroom assignments', async () => {
+    const response = await request(app)
+      .put('/api/schools/10/classes/1/homeroom')
+      .set('Authorization', 'Bearer token-teacher')
+      .send({ teacherId: 77 });
+    expect(response.status).toBe(403);
+    expect(FIXTURES.homeroomAssignments).toHaveLength(0);
+  });
+
+  it('scopes teacher grade reads to pedagogical assignments plus homeroom classes only', async () => {
+    FIXTURES.homeroomAssignments.push(
+      { id: 2, classId: 2, schoolId: 10, teacherId: 77 } as any,
+    );
+    FIXTURES.students.push(
+      { id: 31, schoolId: 10, classId: 2, firstName: 'Homeroom', lastName: 'Student', isActive: true },
+      { id: 32, schoolId: 10, classId: 5, firstName: 'Unassigned', lastName: 'Student', isActive: true },
+      { id: 33, schoolId: 20, classId: 3, firstName: 'Foreign', lastName: 'Student', isActive: true },
+    );
+    FIXTURES.evaluations.push(
+      { id: 101, classId: 1, teacherId: 77, subject: 'Math', title: 'Pedagogical class' },
+      { id: 102, classId: 2, teacherId: 88, subject: 'Science', title: 'Homeroom class' },
+      { id: 103, classId: 5, teacherId: 88, subject: 'Science', title: 'Unassigned same-school class' },
+      { id: 104, classId: 3, teacherId: 88, subject: 'Science', title: 'Foreign-school class' },
+    );
+    FIXTURES.grades.push(
+      { id: 201, evaluationId: 101, classId: 1, schoolId: 10, studentId: 11, score: '12' },
+      { id: 202, evaluationId: 102, classId: 2, schoolId: 10, studentId: 31, score: '15' },
+      { id: 203, evaluationId: 103, classId: 5, schoolId: 10, studentId: 32, score: '18' },
+      { id: 204, evaluationId: 104, classId: 3, schoolId: 20, studentId: 33, score: '20' },
+    );
+
+    const response = await request(app)
+      .get('/api/grades')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(response.status).toBe(200);
+    expect(response.body.map((grade: any) => grade.id).sort()).toEqual([201, 202]);
   });
 
   it('8. school_admin with schoolId can fetch classes', async () => {

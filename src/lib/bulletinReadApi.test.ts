@@ -1,6 +1,10 @@
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { db } from '../db/index.ts';
+import { absences, bulletinLines, bulletins, lateArrivals } from '../db/schema.ts';
 import {
+  createDbBulletinReadService,
   registerBulletinReadRoutes,
   type BulletinDetailResponse,
   type BulletinListResponse,
@@ -254,5 +258,67 @@ describe('bulletin read API routes', () => {
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe('Forbidden');
+  });
+});
+
+describe('bulletin absence classification', () => {
+  it('excludes a declaration-linked absence from the unjustified bulletin count', async () => {
+    let absenceCondition: any;
+    const header = {
+      id: 1,
+      studentId: 10,
+      studentFirstName: 'Alice',
+      studentLastName: 'Dupont',
+      classId: 3,
+      className: '3ème A',
+      schoolYearId: 100,
+      schoolYearName: '2025-2026',
+      termId: 7,
+      termName: 'Trimestre 1',
+      termStartDate: '2026-01-01',
+      termEndDate: '2026-06-30',
+      average: 14.5,
+      totalPoints: 58,
+      totalCoefficients: 4,
+      rank: 2,
+      mention: 'Bien',
+      appreciation: 'Très bon trimestre',
+      generatedAt: null,
+      createdAt: null,
+      updatedAt: null,
+    };
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation((() => {
+      let table: any;
+      const query: any = {
+        from(value: any) { table = value; return query; },
+        innerJoin() { return query; },
+        where(condition: any) {
+          if (table === absences) absenceCondition = condition;
+          return query;
+        },
+        orderBy() { return query; },
+        limit() { return query; },
+        offset() { return query; },
+        then(resolve: (value: any) => void, reject: (reason?: any) => void) {
+          const rows = table === bulletins ? [header]
+            : table === absences ? [{ count: 0 }]
+              : table === lateArrivals ? [{ total: 0 }]
+                : table === bulletinLines ? [] : [];
+          return Promise.resolve(rows).then(resolve, reject);
+        },
+      };
+      return query;
+    }) as any);
+
+    try {
+      const result = await createDbBulletinReadService().getById({ role: 'super_admin' }, 1);
+      const generatedSql = new PgDialect().sqlToQuery(absenceCondition).sql.toLowerCase();
+
+      expect(result?.absences).toBe(0);
+      expect(generatedSql).toContain('declaration_id');
+      expect(generatedSql).toMatch(/declaration_id"\s+is null/);
+    } finally {
+      selectSpy.mockRestore();
+    }
   });
 });

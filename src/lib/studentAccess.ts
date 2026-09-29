@@ -50,13 +50,11 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
     return (rows as any).map((r: any) => r.id);
   }
 
-  // Non-super users: if caller provided classIds, use them; otherwise compute teacher classes
-  let allowedClassIds: number[] = [];
-  if (opts?.classIds && opts.classIds.length > 0) {
-    allowedClassIds = opts.classIds;
-  } else {
-    allowedClassIds = await computeTeacherClassIds(actor);
-  }
+  // Caller-provided classIds are only a narrowing filter, never an authorization grant.
+  const assignedClassIds = await computeTeacherClassIds(actor);
+  const allowedClassIds = opts?.classIds == null
+    ? assignedClassIds
+    : assignedClassIds.filter((classId) => opts.classIds!.includes(classId));
 
   if (!allowedClassIds || allowedClassIds.length === 0) return [];
 

@@ -526,12 +526,55 @@ export default function AdminView({
   // Teacher assignment state
   const [assignmentMode, setAssignmentMode] = useState<'list' | 'assign'>('list');
   const [assignmentSchoolFilter, setAssignmentSchoolFilter] = useState<number | null>(null);
+  const [assignmentClasses, setAssignmentClasses] = useState<Class[]>([]);
   const [assignmentClassAssignments, setAssignmentClassAssignments] = useState<Map<number, number | null>>(new Map());
   const [savedClassAssignments, setSavedClassAssignments] = useState<Map<number, number | null>>(new Map());
   const [editingClassId, setEditingClassId] = useState<number | null>(null);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (userRole === 'school_admin') setAssignmentSchoolFilter(currentSchoolId ?? null);
+  }, [userRole, currentSchoolId]);
+
+  const assignmentTargetSchoolId = userRole === 'school_admin'
+    ? currentSchoolId ?? null
+    : assignmentSchoolFilter;
+
+  useEffect(() => {
+    if (!['super_admin', 'school_admin'].includes(userRole) || assignmentMode !== 'assign') return;
+    if (assignmentTargetSchoolId == null) {
+      setAssignmentClasses([]);
+      setSavedClassAssignments(new Map());
+      setAssignmentClassAssignments(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    setAssignmentError(null);
+    Promise.all([
+      apiFetch(`/api/schools/${assignmentTargetSchoolId}/homeroom-assignments`),
+      apiFetch(`/api/classes?schoolId=${assignmentTargetSchoolId}`),
+    ])
+      .then(([rows, classesPayload]) => {
+        if (cancelled) return;
+        const assignments = new Map<number, number | null>();
+        for (const row of Array.isArray(rows) ? rows : []) {
+          assignments.set(Number(row.classId), Number(row.teacherId));
+        }
+        setAssignmentClasses(Array.isArray(classesPayload) ? classesPayload : []);
+        setSavedClassAssignments(assignments);
+        setAssignmentClassAssignments(new Map());
+      })
+      .catch((error: any) => {
+        if (!cancelled) setAssignmentError(error?.message || 'Impossible de charger les titulaires.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assignmentMode, assignmentTargetSchoolId, userRole]);
   
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -930,13 +973,17 @@ export default function AdminView({
 
   const handleSaveClassAssignment = async (classId: number) => {
     if (!assignmentClassAssignments.has(classId)) return;
+    if (assignmentTargetSchoolId == null) {
+      setAssignmentError('Sélectionnez une école avant d’affecter un titulaire.');
+      return;
+    }
 
     const teacherId = assignmentClassAssignments.get(classId) ?? null;
     try {
       setAssignmentSaving(true);
       setAssignmentError(null);
       setAssignmentSuccess(null);
-      await apiFetch(`/api/classes/${classId}`, {
+      await apiFetch(`/api/schools/${assignmentTargetSchoolId}/classes/${classId}/homeroom`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ teacherId }),
@@ -5240,8 +5287,9 @@ export default function AdminView({
                   
                   {userRole === 'super_admin' && (
                     <div className="mb-4">
-                      <label className="text-emerald-700 text-xs sm:text-sm font-semibold block mb-2">Filtrer par école</label>
+                      <label htmlFor="homeroom-assignment-school-filter" className="text-emerald-700 text-xs sm:text-sm font-semibold block mb-2">Filtrer par école</label>
                       <select
+                        id="homeroom-assignment-school-filter"
                         value={assignmentSchoolFilter ?? ''}
                         onChange={(e) => setAssignmentSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
                         className="w-full px-3 py-2 border border-emerald-300 rounded-lg bg-white text-xs sm:text-sm"
@@ -5265,25 +5313,23 @@ export default function AdminView({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 text-xs">
                       <div>
                         <span className="font-semibold text-emerald-700">Nombre de classes:</span>
-                        <span className="ml-2">
-                          {classesList.filter((c) => !assignmentSchoolFilter || isClassVisibleToSchool(c, assignmentSchoolFilter)).length}
-                        </span>
+                        <span className="ml-2">{assignmentClasses.length}</span>
                       </div>
                       <div>
                         <span className="font-semibold text-emerald-700">Enseignants disponibles:</span>
                         <span className="ml-2">
-                          {teachersList.filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter)).length}
+                          {teachersList.filter((t) => !assignmentTargetSchoolId || teacherBelongsToSchool(t, assignmentTargetSchoolId)).length}
                         </span>
                       </div>
                     </div>
                     
+                    {assignmentTargetSchoolId == null ? (
+                      <p className="text-xs text-slate-500">Sélectionnez une école pour gérer ses titulaires.</p>
+                    ) : (
                     <div className="space-y-2">
-                      {classesList
-                        .filter((c) => !assignmentSchoolFilter || isClassVisibleToSchool(c, assignmentSchoolFilter))
+                      {assignmentClasses
                         .map((cls) => {
-                          const persistedTeacherId = savedClassAssignments.has(cls.id)
-                            ? savedClassAssignments.get(cls.id) ?? null
-                            : cls.teacherId ?? null;
+                          const persistedTeacherId = savedClassAssignments.get(cls.id) ?? null;
                           const selectedTeacherId = assignmentClassAssignments.has(cls.id)
                             ? assignmentClassAssignments.get(cls.id) ?? null
                             : persistedTeacherId;
@@ -5298,7 +5344,7 @@ export default function AdminView({
                                 <span>{cls.name}</span>
                                 {!isEditing && (
                                   <span className="ml-2 font-normal text-slate-600">
-                                    Enseignant principal : {assignedTeacher?.name || 'Aucun'}
+                                    Titulaire : {assignedTeacher?.name || 'Aucun'}
                                   </span>
                                 )}
                               </div>
@@ -5316,7 +5362,7 @@ export default function AdminView({
                                   >
                                     <option value="">—Aucun—</option>
                                     {sortTeachersAlphabetically(teachersList
-                                      .filter((t) => !assignmentSchoolFilter || teacherBelongsToSchool(t, assignmentSchoolFilter)))
+                                      .filter((t) => teacherBelongsToSchool(t, assignmentTargetSchoolId)))
                                       .map((teacher) => (
                                         <option key={teacher.id} value={String(teacher.id)}>
                                           {getTeacherDisplayName(teacher)}
@@ -5372,6 +5418,7 @@ export default function AdminView({
                           );
                         })}
                     </div>
+                    )}
                   </div>
                 </div>
               </div>

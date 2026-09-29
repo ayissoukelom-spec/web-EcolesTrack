@@ -57,6 +57,7 @@ interface DashboardViewProps {
     justified: number;
     unjustified: number;
     pending?: number;
+    declared?: number;
   };
   loginStats?: LoginStats;
 }
@@ -77,14 +78,16 @@ export default function DashboardView({
   console.log('CONTENT SAMPLE:', chartData?.slice?.(0, 5));
 
   const attendanceData = normalizeDashboardChartData(chartData);
-  const justifiedCount = absenceStatusCounts?.justified ?? recentAbsences.filter((a) => a.isJustified).length;
+  const justifiedCount = absenceStatusCounts?.justified ?? recentAbsences.filter((a) => a.justificationStatus === 'APPROVED' || (!a.justificationStatus && a.isJustified)).length;
   const pendingCount = absenceStatusCounts?.pending ?? recentAbsences.filter((a) => a.justificationStatus === 'PENDING').length;
-  const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => a.justificationStatus !== 'PENDING' && !a.isJustified).length;
-  const totalAbsenceCount = justifiedCount + unjustifiedCount + pendingCount;
+  const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => a.justificationStatus === 'REJECTED' || (!a.justificationStatus && !a.isJustified && !a.declarationId)).length;
+  const declaredCount = absenceStatusCounts?.declared ?? recentAbsences.filter((a) => a.declarationId && !a.justificationStatus && !a.isJustified).length;
+  const totalAbsenceCount = justifiedCount + unjustifiedCount + pendingCount + declaredCount;
   const pieData = [
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
     { name: 'En attente', value: pendingCount, color: '#f59e0b' },
+    { name: 'Déclarées par un parent', value: declaredCount, color: '#0ea5e9' },
   ];
 
   return (
