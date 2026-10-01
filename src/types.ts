@@ -295,6 +295,7 @@ export interface AbsenceDeclaration {
 export interface LateArrival {
   id: number;
   studentId: number;
+  teachingAssignmentId?: number | null;
   studentName?: string;
   classId: number;
   className?: string;

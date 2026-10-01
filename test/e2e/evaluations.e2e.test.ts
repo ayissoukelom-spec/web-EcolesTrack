@@ -21,6 +21,9 @@ const FIXTURES = {
   teacherSubjects: [
     { id: 1, teacherId: 77, schoolId: 10, subjectId: 2 },
   ],
+  teacherClassSubjects: [
+    { id: 301, teacherId: 77, schoolId: 10, classId: 300, subjectId: 2, isActive: true },
+  ],
   classTeachers: [
     { classId: 100, teacherId: 77, schoolId: 10 },
     { classId: 300, teacherId: 77, schoolId: 10 },
@@ -234,6 +237,7 @@ function resolveTableName(table: any) {
     if (normalizedName === 'classes') return 'classes';
     if (normalizedName === 'levels') return 'levels';
     if (normalizedName === 'teachersubjects') return 'teacherSubjects';
+    if (normalizedName === 'teacherclasssubjects') return 'teacherClassSubjects';
     if (normalizedName === 'teachers') return 'teachers';
     if (normalizedName === 'classteachers') return 'classTeachers';
     if (normalizedName === 'schoolterms') return 'schoolTerms';
@@ -257,6 +261,7 @@ function resolveTableName(table: any) {
     if (normalized.includes('classes')) return 'classes';
     if (normalized.includes('levels')) return 'levels';
     if (normalized.includes('teachersubjects')) return 'teacherSubjects';
+    if (normalized.includes('teacherclasssubjects')) return 'teacherClassSubjects';
     if (normalized.includes('teachers')) return 'teachers';
     if (normalized.includes('classteachers')) return 'classTeachers';
     if (normalized.includes('schoolterms')) return 'schoolTerms';
@@ -333,6 +338,7 @@ function createMockDb() {
             : this._table === 'classes' ? FIXTURES.classes
             : this._table === 'teachers' ? FIXTURES.teachers
             : this._table === 'teacherSubjects' ? FIXTURES.teacherSubjects
+            : this._table === 'teacherClassSubjects' ? FIXTURES.teacherClassSubjects
             : this._table === 'classTeachers' ? FIXTURES.classTeachers
             : this._table === 'schoolClasses' ? FIXTURES.schoolClasses
             : this._table === 'schoolTerms' ? FIXTURES.schoolTerms
@@ -367,6 +373,7 @@ function createMockDb() {
             : joinedTable === 'classes' ? FIXTURES.classes
             : joinedTable === 'teachers' ? FIXTURES.teachers
             : joinedTable === 'teacherSubjects' ? FIXTURES.teacherSubjects
+            : joinedTable === 'teacherClassSubjects' ? FIXTURES.teacherClassSubjects
             : joinedTable === 'classTeachers' ? FIXTURES.classTeachers
             : joinedTable === 'schoolClasses' ? FIXTURES.schoolClasses
             : joinedTable === 'schoolTerms' ? FIXTURES.schoolTerms
@@ -730,8 +737,8 @@ describe('GET tenant-scoped teacher lists', () => {
 
   it('returns only same-school late arrivals for an assigned global class', async () => {
     FIXTURES.lateArrivals.push(
-      { id: 901, studentId: 901, studentName: 'Student Local', classId: 300, className: 'Global Class', schoolId: 10, date: '2026-09-20', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' },
-      { id: 902, studentId: 902, studentName: 'Student Foreign', classId: 300, className: 'Global Class', schoolId: 20, date: '2026-09-20', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' },
+      { id: 901, studentId: 901, studentName: 'Student Local', classId: 300, teachingAssignmentId: 301, className: 'Global Class', schoolId: 10, date: '2026-09-20', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' },
+      { id: 902, studentId: 902, studentName: 'Student Foreign', classId: 300, teachingAssignmentId: 301, className: 'Global Class', schoolId: 20, date: '2026-09-20', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10' },
     );
 
     const response = await request(app).get('/api/late-arrivals').set(teacherHeaders).expect(200);

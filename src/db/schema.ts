@@ -499,6 +499,7 @@ export const lateArrivals = pgTable('late_arrivals', {
   id: serial('id').primaryKey(),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  teachingAssignmentId: integer('teaching_assignment_id').references(() => teacherClassSubjects.id, { onDelete: 'set null' }),
   date: text('date').notNull(),
   period: text('period').notNull(),
   expectedStartTime: text('expected_start_time').notNull(),
@@ -515,6 +516,7 @@ export const lateArrivals = pgTable('late_arrivals', {
     table.date,
     table.period,
   ),
+  lateArrivalTeachingAssignmentIdx: index('late_arrivals_teaching_assignment_id_idx').on(table.teachingAssignmentId),
 }));
 
 // 11b. Absence Justifications

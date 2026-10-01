@@ -8,6 +8,19 @@ describe('late arrivals schema', () => {
     expect(lateArrivals).toBeDefined();
   });
 
+  it('keeps the canonical teaching assignment reference nullable and preserves existing rows', () => {
+    const schemaText = fs.readFileSync(path.resolve('src/db/schema.ts'), 'utf8');
+    const migrationText = fs.readFileSync(path.resolve('drizzle/0137_add_late_arrival_teaching_assignment.sql'), 'utf8');
+
+    expect(lateArrivals.teachingAssignmentId).toBeDefined();
+    expect(schemaText).toContain("teachingAssignmentId: integer('teaching_assignment_id').references(() => teacherClassSubjects.id, { onDelete: 'set null' })");
+    expect(migrationText).toContain('ADD COLUMN IF NOT EXISTS "teaching_assignment_id" integer');
+    expect(migrationText).toContain('REFERENCES "teacher_class_subjects"("id") ON DELETE SET NULL');
+    expect(migrationText).toContain('CREATE INDEX IF NOT EXISTS "late_arrivals_teaching_assignment_id_idx"');
+    expect(migrationText).not.toMatch(/\bUPDATE\s+"?late_arrivals"?/i);
+    expect(migrationText).not.toMatch(/ALTER\s+COLUMN\s+"?teaching_assignment_id"?\s+SET\s+NOT\s+NULL/i);
+  });
+
   it('keeps the late-arrival API and its uniqueness rule aligned with the attendance flow', () => {
     const serverText = fs.readFileSync(path.resolve('server.ts'), 'utf8');
     expect(serverText).toContain("/api/late-arrivals");
