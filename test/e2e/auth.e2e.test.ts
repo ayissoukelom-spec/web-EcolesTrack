@@ -384,6 +384,7 @@ function createMockDb() {
       if (lower.includes('userloginevents')) return 'userLoginEvents';
     }
     if (table && typeof table === 'object') {
+      if (table[Symbol.for('drizzle:Name')] === 'class_teachers') return 'classTeachers';
       const keys = Object.keys(table).map((k) => k.toLowerCase());
       if (keys.includes('uid') && keys.includes('email') && keys.includes('role')) return 'users';
       if (keys.includes('actoruserid') && keys.includes('resourceid')) return 'auditEvents';
@@ -752,7 +753,8 @@ function createMockDb() {
       builder._distinct = true;
       return builder;
     },
-    insert() {
+    insert(table?: any) {
+      const tableName = resolveTableName(table);
       return {
         values: (obj: any) => {
           const executeInsert = async () => {
@@ -788,6 +790,17 @@ function createMockDb() {
                 inserted.push(item);
               }
               return inserted;
+            }
+
+            if (tableName === 'classTeachers') {
+              FIXTURES.classTeachers.push(obj as any);
+              return [obj];
+            }
+            if (tableName === 'teachers') {
+              const nextId = FIXTURES.teachers.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, ...obj };
+              FIXTURES.teachers.push(row as any);
+              return [row];
             }
 
             if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
@@ -2558,6 +2571,35 @@ describe('E2E security: auth & privilege checks', () => {
     expect(listRes.status).toBe(200);
     expect(Array.isArray(listRes.body)).toBe(true);
     expect(listRes.body.some((u: any) => u.email === 'schoolphone@x.test' && u.phone === '+228 98765432')).toBe(true);
+  });
+
+  it('creates a teacher with the selected class assignment immediately', async () => {
+    const createRes = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({
+        uid: 'teacher-assigned-at-create',
+        email: 'teacher-assigned@x.test',
+        lastName: 'Assigned',
+        firstNames: 'Teacher',
+        name: 'Assigned Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        phone: '+228 90000000',
+        specialization: 'Science',
+        classIds: [1],
+      });
+
+    expect(createRes.status).toBe(201);
+    const createdUser = FIXTURES.users.find((user) => user.uid === 'teacher-assigned-at-create');
+    const teacherProfile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
+    expect(teacherProfile).toBeDefined();
+    expect(FIXTURES.classTeachers).toContainEqual(expect.objectContaining({
+      classId: 1,
+      teacherId: teacherProfile?.id,
+      schoolId: 10,
+    }));
+    expect(createRes.body.classIds).toContain(1);
   });
 
   it('7. teacher only sees assigned classes via classTeachers', async () => {

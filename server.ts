@@ -1620,14 +1620,14 @@ export async function createApp() {
               const existingAssignment = await db.select().from(classTeachers).where(and(
                 eq(classTeachers.classId, cid),
                 eq(classTeachers.teacherId, teacherProfile.id),
-                eq(classTeachers.schoolId, parsedSchoolId),
+                eq(classTeachers.schoolId, resolvedSchoolId),
               ));
               if (existingAssignment.length === 0) {
-                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id, schoolId: parsedSchoolId });
+                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id, schoolId: resolvedSchoolId });
                 const insertedRows = await db.select().from(classTeachers).where(and(
                   eq(classTeachers.classId, cid),
                   eq(classTeachers.teacherId, teacherProfile.id),
-                  eq(classTeachers.schoolId, parsedSchoolId),
+                  eq(classTeachers.schoolId, resolvedSchoolId),
                 ));
                 console.log('DIAG admin create - inserted', { cid, teacherId: teacherProfile.id, insertedCount: insertedRows.length, cls, schoolClassRow, approved, resolvedSchoolId });
               } else {
