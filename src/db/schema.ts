@@ -67,6 +67,19 @@ export const schoolCycles = pgTable('school_cycles', {
   schoolCycleUniqueIdx: uniqueIndex('school_cycles_school_id_cycle_id_idx').on(table.schoolId, table.cycleId),
 }));
 
+export const schoolPeriodTypeApprovals = pgTable('school_period_type_approvals', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  periodType: text('period_type').notNull(),
+  status: text('status').default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolPeriodTypeApprovalUniqueIdx: uniqueIndex('school_period_type_approvals_school_type_idx').on(table.schoolId, table.periodType),
+  schoolPeriodTypeApprovalPeriodCheck: check('school_period_type_approvals_period_type_check', sql`${table.periodType} IN ('trimester', 'semester')`),
+  schoolPeriodTypeApprovalStatusCheck: check('school_period_type_approvals_status_check', sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+}));
+
 export const cyclePeriodTemplates = pgTable('cycle_period_templates', {
   id: serial('id').primaryKey(),
   cycleId: integer('cycle_id').references(() => cycles.id, { onDelete: 'cascade' }).notNull(),
@@ -183,10 +196,11 @@ export const teachers = pgTable('teachers', {
 export const teacherSubjects = pgTable('teacher_subjects', {
   id: serial('id').primaryKey(),
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'cascade' }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => ({
-  teacherSubjectUniqueIdx: uniqueIndex('teacher_subjects_teacher_id_subject_id_idx').on(table.teacherId, table.subjectId),
+  teacherSubjectUniqueIdx: uniqueIndex('teacher_subjects_teacher_school_subject_idx').on(table.teacherId, table.schoolId, table.subjectId),
 }));
 
 // 5. Parents
@@ -219,8 +233,9 @@ export const classTeachers = pgTable('class_teachers', {
   id: serial('id').primaryKey(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
 }, (table) => ({
-  classTeacherUniqueIdx: uniqueIndex('class_teachers_class_id_teacher_id_idx').on(table.classId, table.teacherId),
+  classTeacherUniqueIdx: uniqueIndex('class_teachers_school_class_teacher_idx').on(table.schoolId, table.classId, table.teacherId),
 }));
 
 export const classHomeroomAssignments = pgTable('class_homeroom_assignments', {
@@ -373,6 +388,7 @@ export const examResults = pgTable('exam_results', {
 export const evaluations = pgTable('evaluations', {
   id: serial('id').primaryKey(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }),
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
@@ -387,7 +403,9 @@ export const evaluations = pgTable('evaluations', {
   date: text('date').notNull(), // YYYY-MM-DD
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => ({
-  evaluationTermClassSequenceIdx: sql`UNIQUE NULLS NOT DISTINCT (${table.termId}, ${table.classId}, ${table.sequenceNumber})`,
+  evaluationTermClassSequenceIdx: uniqueIndex('evaluations_school_term_class_sequence_idx')
+    .on(table.schoolId, table.termId, table.classId, table.sequenceNumber)
+    .where(sql`${table.sequenceNumber} IS NOT NULL`),
 }));
 
 // 9. Grades (Notes)
@@ -557,6 +575,7 @@ export const bulletins = pgTable('bulletins', {
   schoolYearId: integer('school_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }).notNull(),
   generationId: integer('generation_id').references(() => bulletinGenerations.id, { onDelete: 'set null' }),
+  schoolScopeVersion: integer('school_scope_version').default(0).notNull(),
   average: text('average'),
   classHighestAverage: text('class_highest_average'),
   classLowestAverage: text('class_lowest_average'),
@@ -607,6 +626,7 @@ export const schoolsRelations = relations(schools, ({ many }) => ({
   students: many(students),
   schoolSubjects: many(schoolSubjects),
   classHomeroomAssignments: many(classHomeroomAssignments),
+  periodTypeApprovals: many(schoolPeriodTypeApprovals),
 }));
 
 export const academicYearsRelations = relations(academicYears, ({ one, many }) => ({
@@ -633,6 +653,10 @@ export const levelsRelations = relations(levels, ({ one, many }) => ({
 export const schoolCyclesRelations = relations(schoolCycles, ({ one }) => ({
   school: one(schools, { fields: [schoolCycles.schoolId], references: [schools.id] }),
   cycle: one(cycles, { fields: [schoolCycles.cycleId], references: [cycles.id] }),
+}));
+
+export const schoolPeriodTypeApprovalsRelations = relations(schoolPeriodTypeApprovals, ({ one }) => ({
+  school: one(schools, { fields: [schoolPeriodTypeApprovals.schoolId], references: [schools.id] }),
 }));
 
 export const cyclePeriodTemplatesRelations = relations(cyclePeriodTemplates, ({ one, many }) => ({

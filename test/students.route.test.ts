@@ -1,17 +1,22 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { students, teachers, classes, classTeachers, parents, users, schools } from '../src/db/schema.ts';
+import { students, teachers, classes, classTeachers, classHomeroomAssignments, parents, users, schools, grades, evaluations, schoolClasses, teacherSubjects, userSchools } from '../src/db/schema.ts';
 
 const mockState = {
   actorRole: 'super_admin' as string,
   actorSchoolId: null as number | null,
   actorId: null as number | null,
-  teacherRows: [] as Array<{ id: number }>,
-  classAssignments: [] as Array<{ classId: number; schoolId: number | null }>,
+  teacherRows: [] as Array<any>,
+  classAssignments: [] as Array<any>,
+  teacherSubjectRows: [] as Array<any>,
+  userSchoolRows: [] as Array<any>,
+  homeroomRows: [] as Array<any>,
   parentRows: [] as Array<{ id: number; studentId: number | null }>,
   ownedStudents: [] as Array<{ id: number }>,
   students: [] as Array<any>,
+  dashboardEvaluations: [] as Array<any>,
+  dashboardGrades: [] as Array<any>,
   users: [] as Array<any>,  // Separate mock data for users table
 };
 
@@ -26,6 +31,14 @@ const createBuilder = (rows: any[], projection?: any) => {
         builder._rows = mockState.teacherRows;
       } else if (table === classTeachers) {
         builder._rows = mockState.classAssignments;
+      } else if (table === classHomeroomAssignments) {
+        builder._rows = mockState.homeroomRows;
+      } else if (table === teacherSubjects) {
+        builder._rows = mockState.teacherSubjectRows;
+      } else if (table === userSchools) {
+        builder._rows = mockState.userSchoolRows;
+      } else if (table === schoolClasses) {
+        builder._rows = [];
       } else if (table === parents) {
         builder._rows = mockState.parentRows;
       } else if (table === schools) {
@@ -51,17 +64,67 @@ const createBuilder = (rows: any[], projection?: any) => {
         builder._rows = Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
           ? [{ count: rows.length }]
           : rows;
+      } else if (table === grades) {
+        if (projection?.schoolId === evaluations.schoolId) {
+          throw new Error('column evaluations.school_id does not exist');
+        }
+        builder._rows = mockState.dashboardGrades.map((grade: any) => {
+          const student = mockState.students.find((row: any) => row.id === grade.studentId);
+          const evaluation = mockState.dashboardEvaluations.find((row: any) => row.id === grade.evaluationId);
+          return {
+            id: grade.id,
+            studentId: grade.studentId,
+            studentName: student ? `${student.lastName} ${student.firstName}` : '',
+            evaluationTitle: evaluation?.title,
+            classId: evaluation?.classId,
+            schoolId: student?.schoolId,
+            subjectId: evaluation?.subjectId,
+            subject: evaluation?.subject,
+            score: grade.score,
+            date: evaluation?.date,
+          };
+        });
       }
       return builder;
     },
     innerJoin(joinedTable?: any) {
       if (builder.table === students && joinedTable === classes) {
         builder._rows = builder._rows.filter((student: any) => student.classId != null);
+      } else if (builder.table === classTeachers && joinedTable === classes) {
+        builder._rows = builder._rows.map((assignment: any) => ({
+          ...assignment,
+          classSchoolId: assignment.classSchoolId ?? assignment.schoolId,
+          assignmentSchoolId: assignment.assignmentSchoolId ?? assignment.schoolId,
+        }));
       }
       return builder;
     },
-    leftJoin() { return builder; },
+    leftJoin(joinedTable: any, condition?: any) {
+      if ((builder.table === classTeachers || builder.table === classHomeroomAssignments)
+        && joinedTable === schoolClasses) {
+        const query = condition ? new PgDialect().sqlToQuery(condition) : { params: [] };
+        const schoolId = (query.params as any[]).find((value) => typeof value === 'number');
+        builder._rows = builder._rows.map((assignment: any) => ({
+          ...assignment,
+          isApprovedForSchool: assignment.approvedForSchoolIds?.includes(schoolId) === true,
+          schoolClassStatus: assignment.approvedForSchoolIds?.includes(schoolId) ? 'approved' : null,
+        }));
+      }
+      return builder;
+    },
     where(condition?: any) {
+      if (builder.table === grades && condition) {
+        const query = new PgDialect().sqlToQuery(condition);
+        if (query.sql.includes('"evaluations"."school_id"')) {
+          throw new Error('column evaluations.school_id does not exist');
+        }
+        if (query.sql.includes('"students"."school_id"')) {
+          const requestedSchoolId = (query.params as any[]).find((value) => value === 10 || value === 20);
+          if (requestedSchoolId != null) {
+            builder._rows = builder._rows.filter((row: any) => row.schoolId === requestedSchoolId);
+          }
+        }
+      }
       if (builder.table === students && condition) {
         const query = new PgDialect().sqlToQuery(condition);
         if (query.sql.includes('"students"."id" in')) {
@@ -78,7 +141,17 @@ const createBuilder = (rows: any[], projection?: any) => {
         if (Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
           && query.sql.includes('"students"."is_active"')
           && query.params.includes(true)) {
-          builder._rows = [{ count: mockState.students.filter((student) => student.isActive === true).length }];
+          const schoolId = query.sql.includes('"students"."school_id"')
+            ? (query.params as any[]).find((value) => value === 10 || value === 20)
+            : undefined;
+          const authorizedIds = query.sql.includes('"students"."id" in')
+            ? (query.params as any[]).filter((value): value is number => typeof value === 'number')
+            : undefined;
+          builder._rows = [{ count: mockState.students.filter((student) =>
+            student.isActive === true
+            && (schoolId == null || student.schoolId === schoolId)
+            && (authorizedIds == null || authorizedIds.includes(student.id))
+          ).length }];
         }
       }
       return builder;
@@ -227,9 +300,14 @@ describe('GET /api/students (scope)', () => {
     mockState.actorId = null;
     mockState.teacherRows = [];
     mockState.classAssignments = [];
+    mockState.teacherSubjectRows = [];
+    mockState.userSchoolRows = [];
+    mockState.homeroomRows = [];
     mockState.parentRows = [];
     mockState.ownedStudents = [];
     mockState.students = [];
+    mockState.dashboardEvaluations = [];
+    mockState.dashboardGrades = [];
     mockState.users = [];  // Reset users mock data
   });
 
@@ -252,7 +330,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'sim_teacher', schoolId: 10 }];  // User exists in DB
-    mockState.teacherRows = [{ id: 42 }];
+    mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
     mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
     // include an unrelated student to ensure only assigned-class students are returned
     mockState.students = [
@@ -278,7 +356,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'sim_teacher', schoolId: 10 }];
-    mockState.teacherRows = [{ id: 42 }];
+    mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
     mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: 1, isActive: true },
@@ -300,7 +378,7 @@ describe('GET /api/students (scope)', () => {
 
   it('returns [] when teacher has no id', async () => {
     mockState.users = [];  // No user found - actor.id will be null
-    mockState.teacherRows = [{ id: 42 }];
+    mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
     mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
     mockState.students = [{ id: 101, schoolId: 10, classId: 1 }];
 
@@ -666,6 +744,96 @@ describe('GET /api/students (scope)', () => {
       .expect(200);
 
     expect(res.body.stats.totalStudents).toBe(1);
+  });
+
+  it('returns only school A dashboard grades for a shared global class without querying evaluations.school_id', async () => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.users = [{ id: 2, uid: 'school-a-admin', role: 'school_admin', schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', isActive: true },
+    ];
+    mockState.dashboardEvaluations = [
+      { id: 901, classId: 300, title: 'Evaluation A', subjectId: 11, subject: 'Math', date: '2026-09-20' },
+      { id: 902, classId: 300, title: 'Evaluation B', subjectId: 22, subject: 'Math', date: '2026-09-20' },
+    ];
+    mockState.dashboardGrades = [
+      { id: 1001, evaluationId: 901, studentId: 101, score: '18' },
+      { id: 2001, evaluationId: 902, studentId: 201, score: '4' },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-a-admin')
+      .set('x-simulated-user-id', '2')
+      .set('x-simulated-school-id', '10');
+
+    expect(response.status).toBe(200);
+    expect(response.body.stats.totalStudents).toBe(1);
+    expect(response.body.recentGrades.map((grade: any) => grade.id)).toEqual([1001]);
+    expect(response.body.recentGrades.map((grade: any) => grade.studentId)).not.toContain(201);
+  });
+
+  it('keeps super_admin dashboard grade access global', async () => {
+    mockState.users = [{ id: 1, uid: 'global-admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', isActive: true },
+    ];
+    mockState.dashboardEvaluations = [
+      { id: 901, classId: 300, title: 'Evaluation A', subjectId: 11, subject: 'Math', date: '2026-09-20' },
+      { id: 902, classId: 300, title: 'Evaluation B', subjectId: 22, subject: 'Math', date: '2026-09-20' },
+    ];
+    mockState.dashboardGrades = [
+      { id: 1001, evaluationId: 901, studentId: 101, score: '18' },
+      { id: 2001, evaluationId: 902, studentId: 201, score: '4' },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'global-admin')
+      .set('x-simulated-user-id', '1');
+
+    expect(response.status).toBe(200);
+    expect(response.body.stats.totalStudents).toBe(2);
+    expect(response.body.recentGrades.map((grade: any) => grade.id)).toEqual([1001, 2001]);
+  });
+
+  it('limits a teacher to school A students in a globally shared class approved only for A', async () => {
+    mockState.actorRole = 'teacher';
+    mockState.actorSchoolId = 10;
+    mockState.actorId = 7;
+    mockState.users = [{ id: 7, uid: 'teacher-a', role: 'teacher', schoolId: 10 }];
+    mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10, specialization: 'Math' }];
+    mockState.classAssignments = [{ id: 1, teacherId: 42, classId: 300, schoolId: null, classSchoolId: null, approvedForSchoolIds: [10] }];
+    mockState.teacherSubjectRows = [{ teacherId: 42, subjectId: 11, schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', isActive: true },
+    ];
+    mockState.dashboardEvaluations = [
+      { id: 901, classId: 300, title: 'Evaluation A', subjectId: 11, subject: 'Math', date: '2026-09-20' },
+      { id: 902, classId: 300, title: 'Evaluation B', subjectId: 22, subject: 'Science', date: '2026-09-20' },
+    ];
+    mockState.dashboardGrades = [
+      { id: 1001, evaluationId: 901, studentId: 101, score: '18' },
+      { id: 2001, evaluationId: 902, studentId: 201, score: '4' },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-a')
+      .set('x-simulated-user-id', '7')
+      .set('x-simulated-school-id', '10');
+
+    expect(response.status).toBe(200);
+    expect(response.body.stats.totalStudents).toBe(1);
+    expect(response.body.recentGrades.map((grade: any) => grade.id)).toEqual([1001]);
+    expect(response.body.recentGrades.map((grade: any) => grade.studentId)).not.toContain(201);
   });
 
   it('does not update a student already detached from a class', async () => {

@@ -4,6 +4,7 @@ import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import { getTeacherClassIdSet } from './teacherScope.ts';
+import { getTeacherAuthorizationScope } from './teacherAuthorization.ts';
 import studentAccess from './studentAccess';
 import {
   academicYears,
@@ -122,30 +123,13 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
       conditions.push(sql`1 = 0`);
       return conditions;
     }
-
-    const teacherRows = await db
-      .select({ id: teachers.id })
-      .from(teachers)
-      .where(eq(teachers.userId, actor.id));
-
-    if (teacherRows.length === 0) {
+    const scope = await getTeacherAuthorizationScope(actor);
+    if (!scope || scope.homeroomClassIds.size === 0) {
       conditions.push(sql`1 = 0`);
       return conditions;
     }
-
-    const assignmentRows = await db
-      .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-      .from(classTeachers)
-      .innerJoin(classes, eq(classTeachers.classId, classes.id))
-      .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-    const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-    if (teacherClassIds.length === 0) {
-      conditions.push(sql`1 = 0`);
-      return conditions;
-    }
-
-    conditions.push(inArray(bulletins.classId, teacherClassIds));
+    conditions.push(inArray(bulletins.classId, Array.from(scope.homeroomClassIds)));
+    conditions.push(eq(students.schoolId, actor.schoolId));
   } else if (actor.role === 'parent') {
     if (!actor.id) {
       conditions.push(sql`1 = 0`);
@@ -173,6 +157,14 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
       return conditions;
     }
     conditions.push(eq(students.schoolId, actor.schoolId));
+  }
+
+  if (actor.role !== 'super_admin') {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM classes scoped_class
+      WHERE scoped_class.id = ${bulletins.classId}
+        AND (scoped_class.school_id IS NOT NULL OR ${bulletins.schoolScopeVersion} >= 1)
+    )`);
   }
 
   if (filters?.schoolYearId != null) conditions.push(eq(bulletins.schoolYearId, filters.schoolYearId));

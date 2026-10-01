@@ -1,7 +1,7 @@
 import { db } from '../db/index.ts';
-import { students, classes, classTeachers, schoolClasses, teachers } from '../db/schema.ts';
+import { students, schoolClasses, classes } from '../db/schema.ts';
 import { eq, and, inArray, sql } from 'drizzle-orm';
-import { getTeacherClassIdSet } from './teacherScope.ts';
+import { getTeacherAuthorizationScope } from './teacherAuthorization.ts';
 
 type Actor = { id?: number; role: string; schoolId?: number | null; simulated?: boolean };
 
@@ -22,21 +22,8 @@ export async function isApprovedClassForSchool(classId: number, targetSchoolId: 
 }
 
 async function computeTeacherClassIds(actor: Actor): Promise<number[]> {
-  if (!actor.id) return [];
-  // Resolve teacher profile id from user id
-  const [teacherRow] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-  if (!teacherRow) return [];
-  const teacherId = teacherRow.id as number;
-  const rows = await db
-    .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-    .from(classTeachers)
-    .innerJoin(classes, eq(classTeachers.classId, classes.id))
-    .where(eq(classTeachers.teacherId, teacherId));
-
-  // Reuse shared logic from teacherScope to build class id list with same filtering rules
-  const assignmentRows: Array<{ classId: number | null | undefined; schoolId?: number | null | undefined }> = (rows as any).map((r: any) => ({ classId: r.classId ?? r.class_id, schoolId: r.schoolId ?? r.school_id }));
-  const currentSchoolId = actor.schoolId ?? null;
-  return getTeacherClassIdSet(assignmentRows, currentSchoolId);
+  const scope = await getTeacherAuthorizationScope(actor);
+  return scope ? Array.from(scope.teachingClassIds) : [];
 }
 
 export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: number[] }): Promise<number[]> {
@@ -49,6 +36,16 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
     const rows = await db.select({ id: students.id }).from(students);
     return (rows as any).map((r: any) => r.id);
   }
+
+  if (actor.role === 'school_admin') {
+    if (actor.schoolId == null) return [];
+    const conditions = [eq(students.schoolId, actor.schoolId), eq(students.isActive, true)];
+    if (opts?.classIds && opts.classIds.length > 0) conditions.push(inArray(students.classId, opts.classIds));
+    const rows = await db.select({ id: students.id }).from(students).where(and(...conditions));
+    return rows.map((row) => row.id);
+  }
+
+  if (actor.role !== 'teacher') return [];
 
   // Caller-provided classIds are only a narrowing filter, never an authorization grant.
   const assignedClassIds = await computeTeacherClassIds(actor);

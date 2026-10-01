@@ -1,11 +1,20 @@
 export function getTeacherClassIdSet(
-  assignments: Array<{ classId: number | null | undefined; schoolId?: number | null | undefined }> = [],
+  assignments: Array<{
+    classId: number | null | undefined;
+    schoolId?: number | null | undefined;
+    assignmentSchoolId?: number | null | undefined;
+    isApprovedForSchool?: boolean;
+  }> = [],
   currentSchoolId?: number | null,
 ): number[] {
+  if (currentSchoolId == null) return [];
+
   return assignments
     .filter((assignment) => {
-      if (currentSchoolId == null) return true;
-      return assignment.schoolId == null || assignment.schoolId === currentSchoolId;
+      const assignmentSchoolId = assignment.assignmentSchoolId ?? assignment.schoolId ?? currentSchoolId;
+      if (assignmentSchoolId !== currentSchoolId) return false;
+      if (assignment.schoolId != null) return assignment.schoolId === currentSchoolId;
+      return assignment.isApprovedForSchool === true;
     })
     .map((assignment) => assignment.classId)
     .filter((id): id is number => typeof id === 'number');

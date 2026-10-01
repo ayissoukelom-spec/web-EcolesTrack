@@ -641,6 +641,7 @@ export default function AdminView({
   const [termsList, setTermsList] = useState<any[]>([]);
   const [educationCycles, setEducationCycles] = useState<any[]>([]);
   const [periodTemplates, setPeriodTemplates] = useState<any[]>([]);
+  const [periodApprovalStates, setPeriodApprovalStates] = useState<any[]>([]);
   const [activeSchoolCycleCodes, setActiveSchoolCycleCodes] = useState<string[]>([]);
   const [activeSchoolCycleIds, setActiveSchoolCycleIds] = useState<number[]>([]);
   const [schoolCyclesLoaded, setSchoolCyclesLoaded] = useState(false);
@@ -1186,21 +1187,42 @@ export default function AdminView({
     return yearsList.filter((y) => y.schoolId == null || (sid !== undefined && sid !== null && y.schoolId === sid));
   };
   const visibleYearsList = userRole === 'super_admin' ? yearsList : getYearsForSchool(undefined);
+  const adminEducationSchoolId = userRole === 'super_admin'
+    ? superAdminSchoolFilterId ?? currentSchoolId
+    : userRole === 'school_admin' ? currentSchoolId : null;
+  const schoolTermsListUrl = (academicYearId: string | number) =>
+    `/api/school-terms?academicYearId=${academicYearId}${userRole === 'super_admin' ? '&globalOnly=true' : ''}`;
+  const getSchoolTermAvailability = (term: any) => {
+    if (term.isActive === false) return { label: 'Période inactive', className: 'bg-slate-100 text-slate-600' };
+    const legacyName = String(term.name ?? '').trim();
+    const periodType = term.periodType ?? (
+      /^Trimestre\b/i.test(legacyName) ? 'trimester' : /^Semestre\b/i.test(legacyName) ? 'semester' : null
+    );
+    const state = periodApprovalStates.find((item: any) => item.periodType === periodType);
+    if (!state) return { label: 'Type non reconnu', className: 'bg-slate-100 text-slate-600' };
+    if (state.status === 'pending') return { label: 'Type en attente', className: 'bg-amber-50 text-amber-700' };
+    if (state.status === 'rejected') return { label: 'Type refusé', className: 'bg-rose-50 text-rose-700' };
+    if (!state.cycleActive) return { label: 'Cycle inactif', className: 'bg-slate-100 text-slate-600' };
+    return { label: 'Type approuvé · classes compatibles', className: 'bg-emerald-50 text-emerald-700' };
+  };
   useEffect(() => {
     (async () => {
       try {
         const defaultYear = visibleYearsList.find((y) => y.isActive) ?? visibleYearsList[0];
         if (defaultYear) {
-          const list = await apiFetch(`/api/school-terms?academicYearId=${defaultYear.id}`);
+          const list = await apiFetch(schoolTermsListUrl(defaultYear.id));
           setTermsList(list || []);
         }
       } catch (e) {
         console.warn('Failed to load initial terms', e);
       }
     })();
-  }, [visibleYearsList]);
+  }, [visibleYearsList, userRole]);
   useEffect(() => {
     let cancelled = false;
+    setSchoolCyclesLoaded(false);
+    setActiveSchoolCycleCodes([]);
+    setActiveSchoolCycleIds([]);
     (async () => {
       try {
         const [cycles, templates] = await Promise.all([
@@ -1210,8 +1232,8 @@ export default function AdminView({
         if (cancelled) return;
         setEducationCycles(Array.isArray(cycles) ? cycles : []);
         setPeriodTemplates(Array.isArray(templates) ? templates : []);
-        if (currentSchoolId != null) {
-          const assignments = await apiFetch(`/api/schools/${currentSchoolId}/cycles`);
+        if (adminEducationSchoolId != null) {
+          const assignments = await apiFetch(`/api/schools/${adminEducationSchoolId}/cycles`);
           if (!cancelled) {
             const activeAssignments = Array.isArray(assignments) ? assignments.filter((assignment: any) => assignment.isActive !== false) : [];
             setActiveSchoolCycleIds(activeAssignments.map((assignment: any) => Number(assignment.cycleId)).filter(Number.isInteger));
@@ -1219,14 +1241,42 @@ export default function AdminView({
             setSchoolCyclesLoaded(true);
           }
         } else {
+          setActiveSchoolCycleCodes([]);
+          setActiveSchoolCycleIds([]);
           setSchoolCyclesLoaded(false);
         }
       } catch (error) {
         console.warn('Failed to load education structure catalog', error);
+        if (!cancelled) {
+          setActiveSchoolCycleCodes([]);
+          setActiveSchoolCycleIds([]);
+          setSchoolCyclesLoaded(false);
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [currentSchoolId, userRole]);
+  }, [adminEducationSchoolId, userRole]);
+
+  useEffect(() => {
+    setPeriodApprovalStates([]);
+    if (adminEducationSchoolId == null) {
+      setPeriodApprovalStates([]);
+      return;
+    }
+
+    let cancelled = false;
+    apiFetch(`/api/schools/${adminEducationSchoolId}/period-type-approvals`)
+      .then((payload) => {
+        if (!cancelled) setPeriodApprovalStates(Array.isArray(payload) ? payload : []);
+      })
+      .catch(() => {
+        if (!cancelled) setPeriodApprovalStates([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [adminEducationSchoolId]);
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
   const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
@@ -4589,16 +4639,18 @@ export default function AdminView({
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={userRole === 'teacher' || userRole === 'parent' || currentSchoolId == null}
+                          disabled={adminEducationSchoolId == null}
                           onChange={async (event) => {
-                            if (currentSchoolId == null) return;
+                            if (adminEducationSchoolId == null) return;
                             const nextCodes = event.target.checked
                               ? [...activeSchoolCycleCodes, String(cycle.code)]
                               : activeSchoolCycleCodes.filter((code) => code !== String(cycle.code));
                             try {
-                              await apiFetch(`/api/schools/${currentSchoolId}/cycles`, { method: 'PUT', body: JSON.stringify({ cycleCodes: nextCodes }) });
+                              await apiFetch(`/api/schools/${adminEducationSchoolId}/cycles`, { method: 'PUT', body: JSON.stringify({ cycleCodes: nextCodes }) });
                               setActiveSchoolCycleCodes(nextCodes);
                               setActiveSchoolCycleIds(educationCycles.filter((item: any) => nextCodes.includes(String(item.code))).map((item: any) => Number(item.id)));
+                              const nextPeriodStates = await apiFetch(`/api/schools/${adminEducationSchoolId}/period-type-approvals`);
+                              setPeriodApprovalStates(Array.isArray(nextPeriodStates) ? nextPeriodStates : []);
                               setTermNotice({ type: 'success', text: 'Cycles de l’école mis à jour.' });
                             } catch (error: any) {
                               setTermNotice({ type: 'error', text: error?.message || 'Impossible de mettre à jour les cycles.' });
@@ -4613,6 +4665,76 @@ export default function AdminView({
                 </div>
               </div>
             )}
+            {(userRole === 'super_admin' || userRole === 'school_admin') && adminEducationSchoolId != null && (
+              <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Types de périodes</div>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  {['trimester', 'semester'].map((periodType) => {
+                    const state = periodApprovalStates.find((item: any) => item.periodType === periodType) ?? {
+                      periodType,
+                      cycleActive: false,
+                      status: 'pending',
+                      cycleCode: periodType === 'trimester' ? 'college' : 'lycee',
+                    };
+                    const isApproved = state.status === 'approved';
+                    const isRejected = state.status === 'rejected';
+                    const schoolTargetId = adminEducationSchoolId;
+                    const cycleLabel = state.cycleActive ? `Cycle ${state.cycleCode === 'college' ? 'collège' : 'lycée'} actif` : `Cycle ${state.cycleCode === 'college' ? 'collège' : 'lycée'} inactif`;
+                    const statusClass = isApproved ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : isRejected ? 'bg-rose-50 text-rose-700 border-rose-100' : 'bg-amber-50 text-amber-700 border-amber-100';
+                    const statusLabel = isApproved ? 'Approuvé' : isRejected ? 'Refusé' : 'En attente';
+
+                    return (
+                      <div key={periodType} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-700">{periodType === 'trimester' ? 'Trimestres' : 'Semestres'}</div>
+                          <div className="text-[11px] text-slate-500">{cycleLabel}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusClass}`}>
+                            {statusLabel}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={schoolTargetId == null || !state.cycleActive || isApproved}
+                            onClick={async () => {
+                              if (schoolTargetId == null) return;
+                              try {
+                                await apiFetch(`/api/schools/${schoolTargetId}/period-types/${periodType}/approve`, { method: 'POST' });
+                                const next = await apiFetch(`/api/schools/${schoolTargetId}/period-type-approvals`);
+                                setPeriodApprovalStates(Array.isArray(next) ? next : []);
+                              } catch (error: any) {
+                                setTermNotice({ type: 'error', text: error?.message || 'Impossible d’autoriser ce type de période.' });
+                              }
+                            }}
+                            className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Approuver
+                          </button>
+                          <button
+                            type="button"
+                            disabled={schoolTargetId == null || isRejected}
+                            onClick={async () => {
+                              if (schoolTargetId == null) return;
+                              try {
+                                await apiFetch(`/api/schools/${schoolTargetId}/period-types/${periodType}/reject`, { method: 'POST' });
+                                const next = await apiFetch(`/api/schools/${schoolTargetId}/period-type-approvals`);
+                                setPeriodApprovalStates(Array.isArray(next) ? next : []);
+                              } catch (error: any) {
+                                setTermNotice({ type: 'error', text: error?.message || 'Impossible de refuser ce type de période.' });
+                              }
+                            }}
+                            className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Refuser
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {userRole === 'super_admin' && (
             <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-12 lg:items-center">
               <select
                 className="min-w-0 w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm lg:col-span-2"
@@ -4707,7 +4829,7 @@ export default function AdminView({
                     setTermStartDate('');
                     setTermEndDate('');
                     // refresh list
-                    const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}`);
+                    const list = await apiFetch(schoolTermsListUrl(termForm.academicYearId));
                     setTermsList(list || []);
                   } catch (err) {
                     console.error('Failed to create term', err);
@@ -4722,9 +4844,7 @@ export default function AdminView({
                   const templateRows = periodTemplates
                     .filter((template: any) => String(template.cycleId) === termForm.cycleId)
                     .filter((template: any) => !termsList.some((term: any) => {
-                      const sameSchoolScope = currentSchoolId == null
-                        ? term.schoolId == null
-                        : Number(term.schoolId) === Number(currentSchoolId);
+                      const sameSchoolScope = term.schoolId == null;
                       return sameSchoolScope && Number(term.cycleId) === Number(template.cycleId) && Number(term.orderIndex) === Number(template.orderIndex);
                     }))
                     .sort((a: any, b: any) => a.orderIndex - b.orderIndex);
@@ -4733,7 +4853,7 @@ export default function AdminView({
                     for (const template of templateRows) {
                       await apiFetch('/api/school-terms', { method: 'POST', body: JSON.stringify({ academicYearId: Number(termForm.academicYearId), cycleId: Number(termForm.cycleId), templateId: template.id, periodType: template.periodType, name: template.name, orderIndex: template.orderIndex, isActive: true }) });
                     }
-                    const list = await apiFetch(`/api/school-terms?academicYearId=${termForm.academicYearId}`);
+                    const list = await apiFetch(schoolTermsListUrl(termForm.academicYearId));
                     setTermsList(list || []);
                     setTermNotice({ type: 'success', text: `${templateRows.length} périodes générées depuis le template.` });
                   } catch (error: any) {
@@ -4742,6 +4862,7 @@ export default function AdminView({
                 }}>Générer depuis le template</button>
               )}
             </div>
+            )}
             {termNotice && (
               <p className={`text-sm mb-3 ${termNotice.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>{termNotice.text}</p>
             )}
@@ -4751,7 +4872,9 @@ export default function AdminView({
                 <p className="text-sm text-slate-500">Aucune période trouvée pour l'année sélectionnée.</p>
               ) : (
                 <ul className="space-y-2 text-sm">
-                  {termsList.map((t) => (
+                  {termsList.map((t) => {
+                    const availability = getSchoolTermAvailability(t);
+                    return (
                     <li key={t.id} className="flex items-center justify-between">
                       {editingTermId === t.id ? (
                         <div className="flex flex-wrap items-center gap-2">
@@ -4774,7 +4897,12 @@ export default function AdminView({
                       )}
                       <div className="inline-flex items-center gap-2">
                         <div className="text-slate-400 text-xs">{t.isActive ? 'Actif' : 'Inactif'}</div>
-                        {['super_admin', 'school_admin'].includes(userRole) && (
+                        {['super_admin', 'school_admin'].includes(userRole) && adminEducationSchoolId != null && (
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${availability.className}`}>
+                            {availability.label}
+                          </span>
+                        )}
+                        {userRole === 'super_admin' && (
                           editingTermId === t.id ? (
                             <>
                               <button
@@ -4818,24 +4946,27 @@ export default function AdminView({
                             >Modifier</button>
                           )
                         )}
-                        <button
-                          className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
-                          onClick={async () => {
-                            try {
-                              if (!window.confirm(`Supprimer la période ${t.name} ?`)) return;
-                              await apiFetch(`/api/school-terms/${t.id}`, { method: 'DELETE' });
-                              setTermsList((prev) => prev.filter((row) => row.id !== t.id));
-                              setTermNotice({ type: 'success', text: 'Période supprimée avec succès.' });
-                            } catch (err: any) {
-                              setTermNotice({ type: 'error', text: err?.message || 'Impossible de supprimer la période.' });
-                            }
-                          }}
-                        >
-                          Supprimer
-                        </button>
+                        {userRole === 'super_admin' && (
+                          <button
+                            className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
+                            onClick={async () => {
+                              try {
+                                if (!window.confirm(`Supprimer la période ${t.name} ?`)) return;
+                                await apiFetch(`/api/school-terms/${t.id}`, { method: 'DELETE' });
+                                setTermsList((prev) => prev.filter((row) => row.id !== t.id));
+                                setTermNotice({ type: 'success', text: 'Période supprimée avec succès.' });
+                              } catch (err: any) {
+                                setTermNotice({ type: 'error', text: err?.message || 'Impossible de supprimer la période.' });
+                              }
+                            }}
+                          >
+                            Supprimer
+                          </button>
+                        )}
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>

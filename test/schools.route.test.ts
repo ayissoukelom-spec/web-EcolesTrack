@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
-import { schools, academicYears, users, subjects, classes, schoolClasses } from '../src/db/schema.ts';
+import { schools, academicYears, users, subjects, classes, schoolClasses, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals } from '../src/db/schema.ts';
 
 const mockState = {
   users: [
@@ -13,6 +13,13 @@ const mockState = {
   lastSchoolUpdate: null as Record<string, any> | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
+  schoolTerms: [] as Array<Record<string, any>>,
+  cycles: [
+    { id: 1, code: 'college', isActive: true },
+    { id: 2, code: 'lycee', isActive: true },
+  ],
+  schoolCycles: [] as Array<{ id: number; schoolId: number; cycleId: number; isActive: boolean }>,
+  periodApprovals: [] as Array<{ id: number; schoolId: number; periodType: string; status: string }>,
   subjects: [] as Array<{ id: number; name: string; schoolId: number | null }>,
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
 };
@@ -45,9 +52,14 @@ const extractConditionPairs = (condition: any, pairs: Array<{ column: string; va
 const createBuilder = () => {
   const builder: any = {
     table: null as any,
+    joins: [] as any[],
     conditions: [] as any[],
     from(table: any) {
       builder.table = table;
+      return builder;
+    },
+    innerJoin(table: any) {
+      builder.joins.push(table);
       return builder;
     },
     where(...conditions: any[]) {
@@ -80,6 +92,29 @@ const createBuilder = () => {
           rows = rows.filter((row) => conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
         }
         return Promise.resolve(rows).then(resolve);
+      }
+      if (builder.table === schoolTerms || builder.table === schoolPeriodTypeApprovals || builder.table === cycles) {
+        const rows = builder.table === schoolTerms
+          ? mockState.schoolTerms
+          : builder.table === schoolPeriodTypeApprovals
+            ? mockState.periodApprovals
+            : mockState.cycles;
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        return Promise.resolve(rows.filter((row: any) => conditions.every((entry: any) => row[entry.column] === entry.value))).then(resolve);
+      }
+      if (builder.table === schoolCycles) {
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        const assignments = mockState.schoolCycles.filter((row) => conditions
+          .filter((entry: any) => entry.column in row)
+          .every((entry: any) => row[entry.column as keyof typeof row] === entry.value));
+        if (builder.joins.includes(cycles)) {
+          const rows = assignments.flatMap((assignment) => {
+            const cycle = mockState.cycles.find((item) => item.id === assignment.cycleId && item.isActive);
+            return cycle ? [{ id: cycle.id, code: cycle.code }] : [];
+          });
+          return Promise.resolve(rows).then(resolve);
+        }
+        return Promise.resolve(assignments).then(resolve);
       }
       if (builder.table === subjects) {
         return Promise.resolve(mockState.subjects).then(resolve);
@@ -133,6 +168,21 @@ const mockDb = {
           returning: async () => [subjectRow],
         };
       }
+      if (table === schoolTerms) {
+        const term = { id: mockState.schoolTerms.length + 100, ...values };
+        mockState.schoolTerms.push(term);
+        return { returning: async () => [term] };
+      }
+      if (table === schoolPeriodTypeApprovals) {
+        return {
+          onConflictDoUpdate: async () => {
+            const current = mockState.periodApprovals.find((item) => item.schoolId === values.schoolId && item.periodType === values.periodType);
+            if (current) Object.assign(current, values);
+            else mockState.periodApprovals.push({ id: mockState.periodApprovals.length + 1, ...values });
+            return [];
+          },
+        };
+      }
       return {
         returning: async () => [{ id: 1 }],
       };
@@ -140,7 +190,22 @@ const mockDb = {
   }),
   update: (table: any) => ({
     set: (values: any) => ({
-      where: () => {
+      where: (...conditions: any[]) => {
+        if (table === schoolTerms) {
+          const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
+          const updatedRows: Array<Record<string, any>> = [];
+          mockState.schoolTerms = mockState.schoolTerms.map((item) => {
+            const matches = pairs.every((entry) => item[entry.column] === entry.value);
+            if (!matches) return item;
+            const updated = { ...item, ...values };
+            updatedRows.push(updated);
+            return updated;
+          });
+          return {
+            then(resolve: (value: any) => void) { return Promise.resolve(updatedRows).then(resolve); },
+            returning: async () => updatedRows,
+          };
+        }
         if (table === classes) {
           mockState.classes = mockState.classes.map((item) => (item.id === values.id ? { ...item, ...values } : item));
         }
@@ -158,7 +223,16 @@ const mockDb = {
       },
     }),
   }),
-  delete: () => ({ where: async () => [] }),
+  delete: (table: any) => ({
+    where: async (...conditions: any[]) => {
+      if (table === schoolTerms) {
+        const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
+        mockState.schoolTerms = mockState.schoolTerms.filter((row) => !pairs.every((entry) => row[entry.column] === entry.value));
+      }
+      if (table === schoolCycles) mockState.schoolCycles = [];
+      return [];
+    },
+  }),
   execute: async (_sql: any) => [],
 };
 
@@ -175,8 +249,8 @@ vi.mock('../src/middleware/auth.ts', async () => {
       req.user = {
         uid: 'sim-admin',
         email: 'admin@example.com',
-        role: 'super_admin',
-        schoolId: null,
+        role: mockState.users[0]?.role ?? 'super_admin',
+        schoolId: mockState.users[0]?.schoolId ?? null,
         id: 1,
         simulated: true,
       };
@@ -192,8 +266,8 @@ vi.mock('src/middleware/auth', async () => {
       req.user = {
         uid: 'sim-admin',
         email: 'admin@example.com',
-        role: 'super_admin',
-        schoolId: null,
+        role: mockState.users[0]?.role ?? 'super_admin',
+        schoolId: mockState.users[0]?.schoolId ?? null,
         id: 1,
         simulated: true,
       };
@@ -221,6 +295,13 @@ describe('POST /api/schools', () => {
     mockState.lastSchoolUpdate = null;
     mockState.classes = [];
     mockState.schoolClasses = [];
+    mockState.schoolTerms = [];
+    mockState.cycles = [
+      { id: 1, code: 'college', isActive: true },
+      { id: 2, code: 'lycee', isActive: true },
+    ];
+    mockState.schoolCycles = [];
+    mockState.periodApprovals = [];
     mockState.subjects = [];
     mockState.createdClasses = [];
   });
@@ -359,5 +440,92 @@ describe('POST /api/schools', () => {
 
     expect(globalClasses).toHaveLength(1);
     expect(schoolClassLinks).toHaveLength(2);
+  });
+
+  describe('school-term catalogue permissions', () => {
+    it('allows only the Super Admin to create a global period', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      await request(app)
+        .post('/api/school-terms')
+        .send({ academicYearId: 1, name: 'Trimestre 1' })
+        .expect(403);
+      expect(mockState.schoolTerms).toHaveLength(0);
+
+      mockState.users[0].role = 'super_admin';
+      const created = await request(app)
+        .post('/api/school-terms')
+        .send({ academicYearId: 1, name: 'Trimestre 1', schoolId: 1 })
+        .expect(201);
+
+      expect(created.body.schoolId).toBeNull();
+      expect(mockState.schoolTerms[0].schoolId).toBeNull();
+    });
+
+    it('allows only the Super Admin to modify a period', async () => {
+      mockState.schoolTerms = [{ id: 10, schoolId: null, academicYearId: 1, name: 'Trimestre 1', startDate: null, endDate: null, cycleId: null }];
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      await request(app).put('/api/school-terms/10').send({ name: 'Trimestre modifié' }).expect(403);
+
+      mockState.users[0].role = 'super_admin';
+      const updated = await request(app).put('/api/school-terms/10').send({ name: 'Trimestre modifié' }).expect(200);
+      expect(updated.body.name).toBe('Trimestre modifié');
+    });
+
+    it('allows only the Super Admin to delete a period', async () => {
+      mockState.schoolTerms = [{ id: 10, schoolId: null, academicYearId: 1, name: 'Trimestre 1' }];
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      await request(app).delete('/api/school-terms/10').expect(403);
+      expect(mockState.schoolTerms).toHaveLength(1);
+
+      mockState.users[0].role = 'super_admin';
+      await request(app).delete('/api/school-terms/10').expect(200);
+      expect(mockState.schoolTerms).toHaveLength(0);
+    });
+  });
+
+  describe('school period-type approvals', () => {
+    it('allows a CEG school to approve trimesters and reject semesters', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      mockState.schoolCycles = [{ id: 1, schoolId: 1, cycleId: 1, isActive: true }];
+
+      const initial = await request(app).get('/api/schools/1/period-type-approvals').expect(200);
+      expect(initial.body).toEqual(expect.arrayContaining([
+        expect.objectContaining({ periodType: 'trimester', status: 'pending', cycleActive: true, available: false }),
+        expect.objectContaining({ periodType: 'semester', status: 'pending', cycleActive: false, available: false }),
+      ]));
+      await request(app).post('/api/schools/1/period-types/trimester/approve').expect(200);
+      const rejected = await request(app).post('/api/schools/1/period-types/semester/reject').expect(200);
+      expect(rejected.body).toMatchObject({ periodType: 'semester', status: 'rejected', cycleActive: false, available: false });
+    });
+
+    it('allows a lycée school to approve semesters and reject trimesters', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      mockState.schoolCycles = [{ id: 1, schoolId: 1, cycleId: 2, isActive: true }];
+
+      await request(app).post('/api/schools/1/period-types/semester/approve').expect(200);
+      const rejected = await request(app).post('/api/schools/1/period-types/trimester/reject').expect(200);
+      expect(rejected.body).toMatchObject({ periodType: 'trimester', status: 'rejected', cycleActive: false, available: false });
+    });
+
+    it('blocks approval without the matching active cycle but still permits rejection', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      await request(app).post('/api/schools/1/period-types/semester/approve').expect(409);
+
+      const rejected = await request(app).post('/api/schools/1/period-types/semester/reject').expect(200);
+      expect(rejected.body).toMatchObject({ periodType: 'semester', status: 'rejected', cycleActive: false, available: false });
+    });
+
+    it('keeps school-admin approval changes scoped to their own school', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      await request(app).post('/api/schools/2/period-types/trimester/reject').expect(403);
+      await request(app).get('/api/schools/2/period-type-approvals').expect(403);
+    });
   });
 });

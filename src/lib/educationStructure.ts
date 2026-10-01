@@ -1,9 +1,85 @@
 import { and, eq, or, sql, count } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { classes, cycles, levels, schoolCycles, schoolTerms } from '../db/schema.ts';
+import { classes, cycles, levels, schoolCycles, schoolPeriodTypeApprovals, schoolTerms } from '../db/schema.ts';
 
 export type EducationCycleCode = 'college' | 'lycee';
 export type PeriodType = 'trimester' | 'semester';
+export type PeriodApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+const PERIOD_CYCLE_CODES: Record<PeriodType, EducationCycleCode> = {
+  trimester: 'college',
+  semester: 'lycee',
+};
+
+export interface SchoolPeriodTypeState {
+  periodType: PeriodType;
+  cycleCode: EducationCycleCode;
+  cycleId: number | null;
+  cycleActive: boolean;
+  status: PeriodApprovalStatus;
+  available: boolean;
+}
+
+export function resolveSchoolPeriodTypeStates(
+  activeCycles: Array<{ id: number; code: string }>,
+  approvals: Array<{ periodType: string; status: string }>,
+): SchoolPeriodTypeState[] {
+  return (Object.entries(PERIOD_CYCLE_CODES) as Array<[PeriodType, EducationCycleCode]>).map(([periodType, cycleCode]) => {
+    const cycle = activeCycles.find((entry) => entry.code === cycleCode);
+    const approval = approvals.find((entry) => entry.periodType === periodType);
+    const status: PeriodApprovalStatus = approval?.status === 'approved' || approval?.status === 'rejected'
+      ? approval.status
+      : 'pending';
+    const cycleActive = cycle != null;
+    return {
+      periodType,
+      cycleCode,
+      cycleId: cycle?.id ?? null,
+      cycleActive,
+      status,
+      available: cycleActive && status === 'approved',
+    };
+  });
+}
+
+export function filterAvailableSchoolTerms<T extends {
+  periodType?: string | null;
+  name?: string | null;
+  cycleId?: number | null;
+  isActive?: boolean | null;
+}>(
+  terms: T[],
+  periodStates: SchoolPeriodTypeState[],
+  education?: { cycleId?: number | null; cycleCode?: EducationCycleCode | string | null } | null,
+): T[] {
+  const stateByType = new Map(periodStates.map((state) => [state.periodType, state]));
+  return terms.filter((term) => {
+    if (term.isActive === false) return false;
+    const periodType = term.periodType ?? inferPeriodTypeFromLegacyName(term.name);
+    if (periodType !== 'trimester' && periodType !== 'semester') return false;
+    const state = stateByType.get(periodType);
+    if (!state?.available) return false;
+    if (term.cycleId != null && term.cycleId !== state.cycleId) return false;
+    return !education || isTermCompatibleWithCycle(term, education);
+  });
+}
+
+export async function getSchoolPeriodTypeStates(schoolId: number): Promise<SchoolPeriodTypeState[]> {
+  const [activeCycles, approvals] = await Promise.all([
+    db.select({ id: cycles.id, code: cycles.code })
+      .from(schoolCycles)
+      .innerJoin(cycles, eq(schoolCycles.cycleId, cycles.id))
+      .where(and(
+        eq(schoolCycles.schoolId, schoolId),
+        eq(schoolCycles.isActive, true),
+        eq(cycles.isActive, true),
+      )),
+    db.select({ periodType: schoolPeriodTypeApprovals.periodType, status: schoolPeriodTypeApprovals.status })
+      .from(schoolPeriodTypeApprovals)
+      .where(eq(schoolPeriodTypeApprovals.schoolId, schoolId)),
+  ]);
+  return resolveSchoolPeriodTypeStates(activeCycles, approvals);
+}
 
 const LEVEL_ALIASES: Array<{ code: string; cycle: EducationCycleCode; pattern: RegExp }> = [
   { code: '6e', cycle: 'college', pattern: /^(6e|6eme|6ème)(?:\b|\s)/i },
@@ -37,9 +113,9 @@ export function isTermCompatibleWithCycle(
   term: { cycleId?: number | null; periodType?: string | null; name?: string | null },
   education: { cycleId?: number | null; cycleCode?: EducationCycleCode | string | null },
 ): boolean {
-  if (education.cycleId == null || education.cycleCode == null) return true;
+  if (education.cycleId == null || education.cycleCode == null) return false;
   const expectedPeriodType = getExpectedPeriodTypeForCycle(education.cycleCode);
-  if (expectedPeriodType == null) return true;
+  if (expectedPeriodType == null) return false;
 
   const termPeriodType = term.periodType ?? inferPeriodTypeFromLegacyName(term.name);
   if (termPeriodType !== expectedPeriodType) return false;
@@ -118,7 +194,7 @@ export async function resolveCycleForClass(classId: number) {
 
 export async function listTermsForClass(classId: number, academicYearId: number, schoolId: number | null) {
   const education = await resolveCycleForClass(classId);
-  if (!education) return [];
+  if (!education || schoolId == null) return [];
 
   const baseConditions = [
     eq(schoolTerms.academicYearId, academicYearId),
@@ -126,11 +202,8 @@ export async function listTermsForClass(classId: number, academicYearId: number,
   ];
 
   const rows = await db.select().from(schoolTerms).where(and(...baseConditions));
-  if (education.cycleId == null) {
-    return rows;
-  }
-
-  return rows.filter((term) => isTermCompatibleWithCycle(term, education));
+  const periodStates = await getSchoolPeriodTypeStates(schoolId);
+  return filterAvailableSchoolTerms(rows, periodStates, education);
 }
 
 export async function validateSchoolCycle(schoolId: number | null, cycleId: number | null) {

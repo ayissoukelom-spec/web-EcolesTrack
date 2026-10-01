@@ -152,6 +152,7 @@ export default function BulletinsView({
   }, [generateClassId, generateSchoolId, studentsList]);
 
   const [termsFromApi, setTermsFromApi] = useState<Array<{ id: number; name: string; startDate?: string | null; endDate?: string | null }>>([]);
+  const [availableTermIds, setAvailableTermIds] = useState<number[]>([]);
 
   useEffect(() => {
     const schoolId = Number(generateSchoolId);
@@ -187,9 +188,16 @@ export default function BulletinsView({
   }, [generateSchoolId]);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
-        const list = await apiFetch('/api/school-terms');
+        const [list, availableList] = await Promise.all([
+          apiFetch('/api/school-terms'),
+          generateSchoolId && generateClassId
+            ? apiFetch(`/api/school-terms?schoolId=${Number(generateSchoolId)}&classId=${Number(generateClassId)}&availableOnly=true`)
+            : Promise.resolve([]),
+        ]);
+        if (cancelled) return;
         if (Array.isArray(list)) {
           setTermsFromApi(list.map((t: any) => ({
             id: t.id,
@@ -198,26 +206,26 @@ export default function BulletinsView({
             endDate: t.endDate ?? null,
           })));
         }
+        setAvailableTermIds(Array.isArray(availableList) ? availableList.map((term: any) => Number(term.id)).filter((id: number) => Number.isInteger(id)) : []);
       } catch (e) {
-        // ignore
+        if (!cancelled) setAvailableTermIds([]);
       }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [generateClassId, generateSchoolId]);
 
   const termOptions = useMemo<BulletinTermOption[]>(() => {
-    if (termsFromApi && termsFromApi.length > 0) {
-      return termsFromApi.map((t) => ({ id: t.id, name: t.name }));
+    return termsFromApi
+      .filter((term) => availableTermIds.includes(term.id))
+      .map((term) => ({ id: term.id, name: term.name }))
+      .sort((a, b) => a.id - b.id);
+  }, [availableTermIds, termsFromApi]);
+
+  useEffect(() => {
+    if (generateTermId && !termOptions.some((term) => String(term.id) === generateTermId)) {
+      setGenerateTermId('');
     }
-    const seen = new Set<number>();
-    const options: BulletinTermOption[] = [];
-    for (const ev of evaluationsList || []) {
-      const termId = Number(ev?.termId);
-      if (!Number.isInteger(termId) || termId <= 0 || seen.has(termId)) continue;
-      seen.add(termId);
-      options.push({ id: termId, name: String(ev?.termName || `Période ${termId}`) });
-    }
-    return options.sort((a, b) => a.id - b.id);
-  }, [evaluationsList, termsFromApi]);
+  }, [generateTermId, termOptions]);
 
   const generateEvaluations = useMemo(() => {
     const classId = generateClassId ? Number(generateClassId) : null;

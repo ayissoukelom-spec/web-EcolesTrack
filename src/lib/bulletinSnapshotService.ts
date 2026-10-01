@@ -31,6 +31,7 @@ import {
   type BulletinStudentLike,
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
+import { resolveSchoolTermForClass } from './educationStructure.ts';
 
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
@@ -99,6 +100,7 @@ export interface CreateBulletinInput {
   schoolYearId: number;
   termId: number;
   generationId?: number | null;
+  schoolScopeVersion?: number;
   average: number | null;
   classHighestAverage?: number | null;
   classLowestAverage?: number | null;
@@ -129,8 +131,8 @@ export interface BulletinSnapshotContext {
   getStudentById(studentId: number): Promise<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string } | null>;
   getClassById(classId: number): Promise<{ id: number; academicYearId: number } | null>;
   getTermById(termId: number): Promise<{ id: number; academicYearId: number; periodType?: string | null } | null>;
-  getClassStudents(classId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
-  getClassTermEvaluations(classId: number, termId: number): Promise<BulletinEvaluationLike[]>;
+  getClassStudents(classId: number, schoolId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
+  getClassTermEvaluations(classId: number, termId: number, schoolId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
   getTeacherNames(teacherIds: number[]): Promise<Map<number, string>>;
   getSubjectTypes(schoolId: number): Promise<Map<string, SubjectTypeMetadata>>;
@@ -757,16 +759,19 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           }).from(schoolTerms).where(eq(schoolTerms.id, termId));
           return row ?? null;
         },
-        async getClassStudents(classId) {
+        async getClassStudents(classId, schoolId) {
           return tx.select({
             id: students.id,
             classId: students.classId,
             schoolId: students.schoolId,
             firstName: students.firstName,
             lastName: students.lastName,
-          }).from(students).where(eq(students.classId, classId));
+          }).from(students).where(and(
+            eq(students.classId, classId),
+            eq(students.schoolId, schoolId),
+          ));
         },
-        async getClassTermEvaluations(classId, termId) {
+        async getClassTermEvaluations(classId, termId, schoolId) {
           return tx.select({
             id: evaluations.id,
             classId: evaluations.classId,
@@ -781,6 +786,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             countInBulletin: evaluations.countInBulletin,
           }).from(evaluations).where(and(
             eq(evaluations.classId, classId),
+            eq(evaluations.schoolId, schoolId),
             or(
               eq(evaluations.termId, termId),
               and(
@@ -848,6 +854,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             schoolYearId: payload.schoolYearId,
             termId: payload.termId,
             generationId: payload.generationId ?? null,
+            schoolScopeVersion: payload.schoolScopeVersion ?? 0,
             average: toStoredNumber(payload.average),
             classHighestAverage: toStoredNumber(payload.classHighestAverage),
             classLowestAverage: toStoredNumber(payload.classLowestAverage),
@@ -885,6 +892,7 @@ interface RegisterBulletinGenerateRouteOptions {
   verifyMiddleware?: express.RequestHandler;
   accessMiddleware?: express.RequestHandler;
   generateHandler?: (studentId: number, termId: number, persistence?: BulletinSnapshotPersistence, generationId?: number | null) => Promise<BulletinSnapshotResult>;
+  resolveAvailableTerm?: typeof resolveSchoolTermForClass;
 }
 
 class StudentAuthorizationError extends Error {
@@ -940,6 +948,7 @@ export const registerBulletinGenerateRoute = (
     verifyMiddleware = verifyToken as any,
     accessMiddleware = requireBulletinSuperAdmin as any,
     generateHandler = async (studentId, termId, persistence, generationId) => generateBulletinSnapshot(studentId, termId, generationId, persistence),
+    resolveAvailableTerm = resolveSchoolTermForClass,
   } = options;
 
   app.post('/api/bulletins/generate', verifyMiddleware, accessMiddleware, async (req: any, res) => {
@@ -947,6 +956,7 @@ export const registerBulletinGenerateRoute = (
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
 
       const studentId = Number(req.body?.studentId);
       const termId = Number(req.body?.termId);
@@ -955,13 +965,31 @@ export const registerBulletinGenerateRoute = (
       }
 
       const [studentRecord] = await db.select({ classId: students.classId, schoolId: students.schoolId }).from(students).where(eq(students.id, studentId));
-      if (actor.role === 'school_admin' && (actor.schoolId == null || studentRecord?.schoolId !== actor.schoolId)) {
+      if (actor.role !== 'super_admin' && (actor.schoolId == null || studentRecord?.schoolId !== actor.schoolId)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
       if (studentRecord) {
-        const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, studentRecord.classId));
+        if (studentRecord.classId == null) return res.status(400).json({ error: 'Student does not have a current class', code: 'STUDENT_WITHOUT_CURRENT_CLASS' });
+        const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, studentRecord.classId));
         const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
-        if (classRecord && termRecord && classRecord.academicYearId === termRecord.academicYearId) {
+        if (classRecord && termRecord) {
+          if (classRecord.academicYearId !== termRecord.academicYearId) {
+            return res.status(400).json({ error: 'Term does not belong to student class academic year' });
+          }
+          const schoolId = studentRecord.schoolId ?? classRecord.schoolId ?? actor.schoolId ?? null;
+          if (schoolId == null) return res.status(400).json({ error: 'School context is required to generate this bulletin' });
+          if (!(await isApprovedClassForSchool(classRecord.id, schoolId))) {
+            return res.status(403).json({ error: 'Class is not approved for the student school' });
+          }
+          const termAvailability = await resolveAvailableTerm({
+            classId: classRecord.id,
+            academicYearId: classRecord.academicYearId,
+            schoolId,
+            date: '',
+            requestedTermId: termId,
+          });
+          if ('error' in termAvailability) return res.status(400).json({ error: termAvailability.error });
+
           const termEvaluations = await db.select({
             id: evaluations.id,
             classId: evaluations.classId,
@@ -974,6 +1002,7 @@ export const registerBulletinGenerateRoute = (
             countInBulletin: evaluations.countInBulletin,
           }).from(evaluations).where(and(
             eq(evaluations.classId, classRecord.id),
+            eq(evaluations.schoolId, schoolId),
             or(
               eq(evaluations.termId, termId),
               and(
@@ -1033,11 +1062,13 @@ export const registerBulletinGenerateRoute = (
                 const [row] = await tx.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId, periodType: schoolTerms.periodType }).from(schoolTerms).where(eq(schoolTerms.id, termId));
                 return row ?? null;
               },
-              async getClassStudents(classId) {
+              async getClassStudents(classId, schoolId) {
                 if (actor) {
                   try {
                     const rows = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
-                    return (rows as any).map((r: any) => ({ id: r.id, classId: r.classId, schoolId: r.schoolId, firstName: r.firstName, lastName: r.lastName }));
+                    return (rows as any)
+                      .filter((row: any) => row.schoolId === schoolId)
+                      .map((r: any) => ({ id: r.id, classId: r.classId, schoolId: r.schoolId, firstName: r.firstName, lastName: r.lastName }));
                   } catch (e: any) {
                     console.error('Bulletin generation student authorization failed', {
                       classId,
@@ -1053,9 +1084,9 @@ export const registerBulletinGenerateRoute = (
                   schoolId: students.schoolId,
                   firstName: students.firstName,
                   lastName: students.lastName,
-                }).from(students).where(eq(students.classId, classId));
+                }).from(students).where(and(eq(students.classId, classId), eq(students.schoolId, schoolId)));
               },
-              async getClassTermEvaluations(classId, termId) {
+              async getClassTermEvaluations(classId, termId, schoolId) {
                 return tx.select({
                   id: evaluations.id,
                   classId: evaluations.classId,
@@ -1070,6 +1101,7 @@ export const registerBulletinGenerateRoute = (
                   countInBulletin: evaluations.countInBulletin,
                 }).from(evaluations).where(and(
                   eq(evaluations.classId, classId),
+                  eq(evaluations.schoolId, schoolId),
                   or(
                     eq(evaluations.termId, termId),
                     and(
@@ -1198,6 +1230,7 @@ export const registerBulletinGenerateRoute = (
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
 
       const classId = Number(req.body?.classId);
       const termId = Number(req.body?.termId);
@@ -1205,52 +1238,75 @@ export const registerBulletinGenerateRoute = (
         return res.status(400).json({ error: 'classId and termId are required' });
       }
 
-      const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
-      const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+      const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, classId));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
-      if (!termRecord || classRecord.academicYearId !== termRecord.academicYearId) {
-        return res.status(400).json({ error: 'Term does not belong to class academic year' });
-      }
+      if (actor.role === 'school_admin' && (
+        actor.schoolId == null
+        || !(await isApprovedClassForSchool(classId, actor.schoolId))
+      )) return res.status(403).json({ error: 'Class is outside the school scope' });
 
       const classStudents = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
       const studentIds = classStudents.map((student: any) => Number(student.id)).filter((id) => Number.isInteger(id) && id > 0);
       if (studentIds.length === 0) return res.status(400).json({ error: 'No authorized students found in class' });
 
-      const termEvaluations = await db.select({
-        id: evaluations.id,
-        classId: evaluations.classId,
-        termId: evaluations.termId,
-        subject: evaluations.subject,
-        title: evaluations.title,
-        type: evaluations.type,
-        coefficient: evaluations.coefficient,
-        maxScore: evaluations.maxScore,
-        countInBulletin: evaluations.countInBulletin,
-      }).from(evaluations).where(and(
-        eq(evaluations.classId, classId),
-        or(
-          eq(evaluations.termId, termId),
-          and(
-            sql`${evaluations.termId} IS NULL`,
-            sql`EXISTS (
-              SELECT 1
-              FROM school_terms st
-              WHERE st.id = ${termId}
-                AND st.start_date IS NOT NULL
-                AND st.end_date IS NOT NULL
-                AND ${evaluations.date} >= st.start_date
-                AND ${evaluations.date} <= st.end_date
-            )`,
-          ),
-        ),
-      ));
-      const missingSubjects = findSubjectsMissingValidComposition(termEvaluations, classId, termId);
-      if (missingSubjects.length > 0) {
-        return res.status(400).json({
-          error: formatMissingCompositionMessage(missingSubjects),
-          code: 'MISSING_VALID_COMPOSITION',
-          subjects: missingSubjects,
+      const schoolIds = classRecord.schoolId != null
+        ? [classRecord.schoolId]
+        : actor.schoolId != null
+          ? [actor.schoolId]
+          : Array.from(new Set(classStudents.map((student: any) => Number(student.schoolId)).filter((id: number) => Number.isInteger(id) && id > 0)));
+      if (schoolIds.length === 0) return res.status(400).json({ error: 'School context is required to generate class bulletins' });
+      if (actor.role === 'school_admin' && (schoolIds.length !== 1 || schoolIds[0] !== actor.schoolId)) {
+        return res.status(403).json({ error: 'Class bulletins must stay within the actor school' });
+      }
+      for (const schoolId of schoolIds) {
+        const termAvailability = await resolveAvailableTerm({
+          classId,
+          academicYearId: classRecord.academicYearId,
+          schoolId,
+          date: '',
+          requestedTermId: termId,
         });
+        if ('error' in termAvailability) return res.status(400).json({ error: termAvailability.error });
+      }
+
+      for (const schoolId of schoolIds) {
+        const termEvaluations = await db.select({
+          id: evaluations.id,
+          classId: evaluations.classId,
+          termId: evaluations.termId,
+          subject: evaluations.subject,
+          title: evaluations.title,
+          type: evaluations.type,
+          coefficient: evaluations.coefficient,
+          maxScore: evaluations.maxScore,
+          countInBulletin: evaluations.countInBulletin,
+        }).from(evaluations).where(and(
+          eq(evaluations.classId, classId),
+          eq(evaluations.schoolId, schoolId),
+          or(
+            eq(evaluations.termId, termId),
+            and(
+              sql`${evaluations.termId} IS NULL`,
+              sql`EXISTS (
+                SELECT 1
+                FROM school_terms st
+                WHERE st.id = ${termId}
+                  AND st.start_date IS NOT NULL
+                  AND st.end_date IS NOT NULL
+                  AND ${evaluations.date} >= st.start_date
+                  AND ${evaluations.date} <= st.end_date
+              )`,
+            ),
+          ),
+        ));
+        const missingSubjects = findSubjectsMissingValidComposition(termEvaluations, classId, termId);
+        if (missingSubjects.length > 0) {
+          return res.status(400).json({
+            error: formatMissingCompositionMessage(missingSubjects),
+            code: 'MISSING_VALID_COMPOSITION',
+            subjects: missingSubjects,
+          });
+        }
       }
 
       const generation = await createBulletinGeneration({
@@ -1329,8 +1385,8 @@ export const generateBulletinSnapshot = async (
       throw new Error('Term does not belong to student class academic year');
     }
 
-    const classStudents = await ctx.getClassStudents(student.classId);
-    const termEvaluations = await ctx.getClassTermEvaluations(student.classId, termId);
+    const classStudents = await ctx.getClassStudents(student.classId, student.schoolId);
+    const termEvaluations = await ctx.getClassTermEvaluations(student.classId, termId, student.schoolId);
     const subjectTypeNames = await ctx.getSubjectTypes(student.schoolId);
     const subjectMetadataByName = await ctx.getSubjectMetadataByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
     const subjectIdsByName = await ctx.getSubjectIdsByName(student.schoolId, termEvaluations.map((evaluation) => evaluation.subject));
@@ -1413,6 +1469,7 @@ export const generateBulletinSnapshot = async (
       schoolYearId: klass.academicYearId,
       termId: term.id,
       generationId,
+      schoolScopeVersion: 1,
       average: finalAverage,
       classHighestAverage,
       classLowestAverage,

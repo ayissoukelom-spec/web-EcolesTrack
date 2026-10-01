@@ -101,11 +101,11 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
         async getTermById(termId) {
           return draft.terms.find((row) => row.id === termId) ?? null;
         },
-        async getClassStudents(classId) {
-          return draft.students.filter((row) => row.classId === classId);
+        async getClassStudents(classId, schoolId) {
+          return draft.students.filter((row) => row.classId === classId && row.schoolId === schoolId);
         },
-        async getClassTermEvaluations(classId, termId) {
-          return draft.evaluations.filter((row) => row.classId === classId && row.termId === termId);
+        async getClassTermEvaluations(classId, termId, schoolId) {
+          return draft.evaluations.filter((row) => row.classId === classId && row.termId === termId && (row.schoolId == null || row.schoolId === schoolId));
         },
         async getGradesForStudents(studentIds, evaluationIds) {
           return draft.grades.filter((row) => studentIds.includes(row.studentId) && evaluationIds.includes(row.evaluationId));
@@ -336,6 +336,33 @@ describe('generateBulletinSnapshot', () => {
     expect(bulletin?.classHighestAverage).toBe(14);
     expect(bulletin?.classLowestAverage).toBe(8.75);
     expect(bulletin?.classAverage).toBeCloseTo((14 + 11.5 + 8.75) / 3, 10);
+  });
+
+  it('exclut les élèves et évaluations d une autre école pour une classe globale partagée', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Local' },
+        { id: 2, classId: 10, schoolId: 2, firstName: 'Bob', lastName: 'Foreign' },
+      ],
+      evaluations: [
+        { id: 30, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'School A', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true, schoolId: 1 },
+        { id: 31, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'School B', type: 'composition', coefficient: 1, maxScore: 20, countInBulletin: true, schoolId: 2 },
+      ],
+      grades: [
+        { id: 30, evaluationId: 30, studentId: 1, score: '18' },
+        { id: 31, evaluationId: 31, studentId: 2, score: '2' },
+      ],
+    });
+
+    const result = await generateBulletinSnapshot(1, 7, persistence);
+    const bulletin = state.bulletins[0];
+
+    expect(result.average).toBe(18);
+    expect(result.rank).toBe(1);
+    expect(bulletin?.classHighestAverage).toBe(18);
+    expect(bulletin?.classLowestAverage).toBe(18);
+    expect(bulletin?.classAverage).toBe(18);
   });
 
   it('classe les élèves selon la moyenne officielle avec un rang standard pour les ex æquo', async () => {

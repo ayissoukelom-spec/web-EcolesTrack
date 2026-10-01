@@ -3,7 +3,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 
 const mockState = vi.hoisted(() => ({
   teacher: { id: 5, schoolId: 10, userId: 50 } as { id: number; schoolId: number; userId: number } | undefined,
-  homeroomRows: [] as Array<{ classId: number; schoolId: number; teacherId: number }>,
+  homeroomRows: [] as Array<{ classId: number; schoolId: number; teacherId: number; classSchoolId: number | null; schoolClassStatus: string }>,
   teachingRows: [] as Array<{ classId: number; schoolId: number | null; teacherId: number }>,
 }));
 
@@ -52,8 +52,8 @@ describe('homeroom access scope', () => {
   beforeEach(() => {
     mockState.teacher = { id: 5, schoolId: 10, userId: 50 };
     mockState.homeroomRows = [
-      { classId: 21, schoolId: 10, teacherId: 5 },
-      { classId: 22, schoolId: 10, teacherId: 5 },
+      { classId: 21, schoolId: 10, teacherId: 5, classSchoolId: 10, schoolClassStatus: 'approved' },
+      { classId: 22, schoolId: 10, teacherId: 5, classSchoolId: null, schoolClassStatus: 'approved' },
     ];
     mockState.teachingRows = [{ classId: 30, schoolId: 10, teacherId: 5 }];
   });

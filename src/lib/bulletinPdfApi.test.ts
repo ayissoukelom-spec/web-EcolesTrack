@@ -96,14 +96,28 @@ const normalizePdfTextForAssertion = (value: string): string => value
   .trim();
 
 const extractPdfText = (pdfBytes: Uint8Array): string => {
-  const raw = Buffer.from(pdfBytes).toString('latin1');
+  const pdfBuffer = Buffer.from(pdfBytes);
+  const raw = pdfBuffer.toString('latin1');
   const streams: string[] = [];
-  for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-    try {
-      streams.push(inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1'));
-    } catch {
-      streams.push(match[1]);
+  const streamPattern = /stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = streamPattern.exec(raw)) != null) {
+    const streamStart = match.index + match[0].length;
+    const dictionaryStart = raw.lastIndexOf('<<', match.index);
+    const dictionary = raw.slice(dictionaryStart, match.index);
+    const streamLength = Number(dictionary.match(/\/Length\s+(\d+)\b/)?.[1]);
+    if (!Number.isInteger(streamLength) || streamLength < 0 || streamStart + streamLength > pdfBuffer.length) {
+      continue;
     }
+
+    const streamEnd = streamStart + streamLength;
+    try {
+      streams.push(inflateSync(pdfBuffer.subarray(streamStart, streamEnd)).toString('latin1'));
+    } catch {
+      streams.push(pdfBuffer.subarray(streamStart, streamEnd).toString('latin1'));
+    }
+    const endMarker = /^\r?\nendstream/.exec(raw.slice(streamEnd));
+    streamPattern.lastIndex = streamEnd + (endMarker?.[0].length ?? 0);
   }
   return streams.join('\n')
     .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'))
@@ -825,27 +839,20 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Professeur');
     expect(text).toContain('Appréciation');
     expect(text).toContain('Signature');
-    expect(text).toContain('1er semestre:');
-    expect(text).toContain('2ème semestre:');
+    expect(text).toContain('1er Trimestre :');
     expect(text).toContain('Moyennes :');
-    expect(text).toContain('Moyenne du 2ème semestre');
-    expect(text).toContain('conseil de classe');
+    expect(text).toContain('conseil de la classe');
     expect(text).toContain('Retard : 0 min');
     expect(text).toContain('Absences : 0');
     expect(text).toContain('Plus forte moyenne');
     expect(text).toContain('Plus faible moyenne');
     expect(text).toContain('Moyenne de la classe');
-    expect(text).toContain('Moy. Ann. =');
     expect(text).toContain('CONSEIL DES PROFESSEURS');
     expect(text).toContain('Distinctions spéciales');
     expect(text).toContain('Sanctions');
     expect(text).toContain("APPRECIATION DU CHEF D'ETABLISSEMENT");
-    expect(text).toContain('Travail :');
-    expect(text).toContain('Assiduité :');
-    expect(text).toContain('SNAPSHOT_MENTION');
-    expect(text).toContain('SNAPSHOT_APPRECIATION');
-    expect(text).toContain('Signature du titulaire de classe');
-    expect(normalizePdfTextForAssertion(text)).toContain('Responsable');
+    expect(text).toContain('Signature du titulaire de la classe');
+    expect(text).toContain('Le Directeur');
     expect(text).toContain('Page 1/1');
   });
 
@@ -872,7 +879,7 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('MATIERES SCIENTIFIQUE');
     expect(text).toContain('TOTAL MATIERES SCIENTIFIQUE');
     expect(text).toContain('Moyenne de la classe');
-    expect(text).toContain('conseil de classe');
+    expect(text).toContain('conseil de la classe');
     expect(text).toContain('CONSEIL DES PROFESSEURS');
     expect(text).toContain('Distinctions spéciales');
     expect(text).toContain('Sanctions');
@@ -1227,15 +1234,16 @@ describe('bulletin PDF API', () => {
   });
 
   it('garde le comportement lycée pour une école historique sans cycles déclarés', async () => {
-    expect(resolvePrincipalTitle(undefined, 'M')).toBe('Le Proviseur');
+    expect(resolveSchoolHasLycee([])).toBe(false);
+    expect(resolvePrincipalTitle(undefined, 'M')).toBe('Le Directeur');
     const text = extractPdfText(await createBulletinPdfDocument({
       ...snapshotData,
       principalName: 'Responsable historique',
       principalGender: 'M',
-      schoolHasLycee: null,
+      schoolHasLycee: false,
     }));
 
-    expect(text).toContain('Le Proviseur');
+    expect(text).toContain('Le Directeur');
     expect(text).toContain('Responsable historique');
     expect(text).not.toContain('undefined');
   });
@@ -1246,7 +1254,32 @@ describe('bulletin PDF API', () => {
       { code: 'lycee', isActive: true },
     ])).toBe(true);
     expect(resolveSchoolHasLycee([{ code: 'college', isActive: true }])).toBe(false);
-    expect(resolveSchoolHasLycee([])).toBeNull();
+    expect(resolveSchoolHasLycee([
+      { code: 'college', isActive: true },
+      { code: 'lycee', isActive: false },
+    ])).toBe(false);
+    expect(resolveSchoolHasLycee([{ code: 'lycee', isActive: true }])).toBe(true);
+  });
+
+  it('uses the student school cycles rather than the bulletin class cycle', async () => {
+    const source = await readFile(path.resolve('src/lib/bulletinPdfApi.ts'), 'utf8');
+    expect(source).toContain('studentSchoolId: students.schoolId');
+    expect(source).toContain('.where(eq(schoolCycles.schoolId, header.studentSchoolId))');
+    expect(source).toContain('schoolHasLycee: header.schoolHasLycee');
+
+    const schoolHasLycee = resolveSchoolHasLycee([
+      { code: 'college', isActive: true },
+      { code: 'lycee', isActive: true },
+    ]);
+    const text = extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      className: '3ème A',
+      principalName: 'Kossi AYISSOU',
+      principalGender: 'M',
+      schoolHasLycee,
+    }));
+    expect(text).toContain('Le Proviseur');
+    expect(text).toContain('Kossi AYISSOU');
   });
 
   it('uses a neutral title when the responsible person gender is unknown', async () => {

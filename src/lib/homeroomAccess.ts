@@ -76,11 +76,25 @@ export async function getTeacherReadableClassIds(actor: HomeroomActor): Promise<
   const teacherId = await getTeacherId(actor);
   if (teacherId == null) return [];
 
-  const assignments = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
+  const assignments = await db.select({
+    classId: classTeachers.classId,
+    schoolId: classes.schoolId,
+    isApprovedForSchool: schoolClasses.id,
+  })
     .from(classTeachers)
     .innerJoin(classes, eq(classTeachers.classId, classes.id))
+    .leftJoin(schoolClasses, and(
+      eq(schoolClasses.classId, classTeachers.classId),
+      eq(schoolClasses.schoolId, actor.schoolId),
+      eq(schoolClasses.status, 'approved'),
+    ))
     .where(eq(classTeachers.teacherId, teacherId));
-  const teachingClassIds = getTeacherClassIdSet(assignments, actor.schoolId);
+  const teachingClassIds = getTeacherClassIdSet(assignments.map((assignment) => ({
+    classId: assignment.classId,
+    schoolId: assignment.schoolId,
+    assignmentSchoolId: actor.schoolId,
+    isApprovedForSchool: assignment.isApprovedForSchool != null,
+  })), actor.schoolId);
   const homeroomClassIds = await getTeacherHomeroomClassIds(actor);
   return Array.from(new Set([...teachingClassIds, ...homeroomClassIds]));
 }

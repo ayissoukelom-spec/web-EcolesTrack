@@ -354,11 +354,11 @@ vi.mock('../src/middleware/auth.ts', async () => {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
       req.user = {
-        uid: 'sim-user',
+        uid: req.headers['x-simulated-uid'] || 'sim-user',
         email: 'teacher@example.com',
-        role: 'super_admin',
-        schoolId: null,
-        id: 1,
+        role: req.headers['x-simulated-role'] || 'super_admin',
+        schoolId: req.headers['x-simulated-school-id'] ? Number(req.headers['x-simulated-school-id']) : null,
+        id: req.headers['x-simulated-user-id'] ? Number(req.headers['x-simulated-user-id']) : 1,
         simulated: true,
       };
       next();
@@ -372,11 +372,11 @@ vi.mock('src/middleware/auth', async () => {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
       req.user = {
-        uid: 'sim-user',
+        uid: req.headers['x-simulated-uid'] || 'sim-user',
         email: 'teacher@example.com',
-        role: 'super_admin',
-        schoolId: null,
-        id: 1,
+        role: req.headers['x-simulated-role'] || 'super_admin',
+        schoolId: req.headers['x-simulated-school-id'] ? Number(req.headers['x-simulated-school-id']) : null,
+        id: req.headers['x-simulated-user-id'] ? Number(req.headers['x-simulated-user-id']) : 1,
         simulated: true,
       };
       next();
@@ -396,9 +396,9 @@ describe('Evaluation participations and notification lifecycle', () => {
     mockDbState.users = [{ id: 1, uid: 'sim-user', email: 'teacher@example.com', role: 'super_admin', schoolId: null }];
     mockDbState.parents = [{ id: 10, userId: 2 }];
     mockDbState.students = [
-      { id: 101, firstName: 'Alice', lastName: 'A', schoolId: 1, classId: 100, enrolledAt: null, parentId: 10 },
-      { id: 102, firstName: 'Bob', lastName: 'B', schoolId: 1, classId: 100, enrolledAt: null, parentId: null },
-      { id: 103, firstName: 'Claire', lastName: 'C', schoolId: 1, classId: 100, enrolledAt: null, parentId: null },
+      { id: 101, firstName: 'Alice', lastName: 'A', schoolId: 1, classId: 100, isActive: true, enrolledAt: null, parentId: 10 },
+      { id: 102, firstName: 'Bob', lastName: 'B', schoolId: 1, classId: 100, isActive: true, enrolledAt: null, parentId: null },
+      { id: 103, firstName: 'Claire', lastName: 'C', schoolId: 1, classId: 100, isActive: true, enrolledAt: null, parentId: null },
     ];
     mockDbState.evaluations = [
       {
@@ -419,6 +419,40 @@ describe('Evaluation participations and notification lifecycle', () => {
     mockDbState.notifications = [];
     mockDbState.grades = [];
     mockDbState.evaluationParticipations = [];
+  });
+
+  it('rejects school_admin A from recording participation for school B despite a matching classId', async () => {
+    mockDbState.users.push({ id: 2, uid: 'school-admin-a', role: 'school_admin', schoolId: 1 });
+    mockDbState.evaluations = [{ ...mockDbState.evaluations[0], schoolId: 2 }];
+    mockDbState.students = [{ id: 201, firstName: 'Other', lastName: 'School', schoolId: 2, classId: 100, isActive: true }];
+
+    const response = await request(app)
+      .post('/api/evaluation-participations')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-admin-a')
+      .set('x-simulated-user-id', '2')
+      .set('x-simulated-school-id', '1')
+      .send({ evaluationId: 200, studentId: 201, status: 'absent' });
+
+    expect(response.status).toBe(403);
+    expect(mockDbState.evaluationParticipations).toHaveLength(0);
+  });
+
+  it('rejects teacher A from recording participation for school B despite a matching classId', async () => {
+    mockDbState.users.push({ id: 3, uid: 'teacher-a', role: 'teacher', schoolId: 1 });
+    mockDbState.evaluations = [{ ...mockDbState.evaluations[0], schoolId: 2 }];
+    mockDbState.students = [{ id: 201, firstName: 'Other', lastName: 'School', schoolId: 2, classId: 100, isActive: true }];
+
+    const response = await request(app)
+      .post('/api/evaluation-participations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-a')
+      .set('x-simulated-user-id', '3')
+      .set('x-simulated-school-id', '1')
+      .send({ evaluationId: 200, studentId: 201, status: 'absent' });
+
+    expect(response.status).toBe(403);
+    expect(mockDbState.evaluationParticipations).toHaveLength(0);
   });
 
   it('removes evaluation_created only when all eligible students are graded or absent', async () => {

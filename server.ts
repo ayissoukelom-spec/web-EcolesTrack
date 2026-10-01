@@ -56,6 +56,7 @@ import {
   subjects,
   schoolSubjects,
   schoolClasses,
+  schoolPeriodTypeApprovals,
   classSuccessions,
   classProgressions,
   classExamConfigurations,
@@ -81,14 +82,13 @@ import {
   userLoginEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne } from 'drizzle-orm';
-import { getTeacherClassIdSet } from './src/lib/teacherScope.ts';
-import { isSubjectAssignedToTeacher } from './src/lib/subjectMatching.ts';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
+import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
-import { getPeriodTypeShortName, inferLevelCodeFromClassName, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
+import { filterAvailableSchoolTerms, getPeriodTypeShortName, getSchoolPeriodTypeStates, inferLevelCodeFromClassName, resolveCycleForClass, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
 import { isExamResultStatus, isExamType } from './src/lib/examDecision.ts';
@@ -487,22 +487,30 @@ async function syncTeacherSubjectAssignments(teacherId: number, schoolId: number
         ),
       ));
 
-  await db.delete(teacherSubjects).where(eq(teacherSubjects.teacherId, teacherId));
+  await db.delete(teacherSubjects).where(and(
+    eq(teacherSubjects.teacherId, teacherId),
+    eq(teacherSubjects.schoolId, schoolId),
+  ));
   if (approvedSubjects.length > 0) {
     await db.insert(teacherSubjects).values(approvedSubjects.map((subject) => ({
       teacherId,
+      schoolId,
       subjectId: subject.id,
     })));
   }
   return approvedSubjects;
 }
 
-async function getTeacherSubjectIdSet(teacherId: number): Promise<Set<number>> {
-  const rows = await db
-    .select({ subjectId: teacherSubjects.subjectId })
-    .from(teacherSubjects)
-    .where(eq(teacherSubjects.teacherId, teacherId));
-  return new Set(rows.map((row) => row.subjectId));
+async function getTeacherTeachingClassIds(actor: AuthRequest['user'] & { schoolId?: number | null }): Promise<number[]> {
+  const scope = await getTeacherAuthorizationScope(actor as any);
+  return scope ? Array.from(scope.teachingClassIds) : [];
+}
+
+async function getTeacherReadableScopedClassIds(actor: AuthRequest['user'] & { schoolId?: number | null }): Promise<number[]> {
+  const scope = await getTeacherAuthorizationScope(actor as any);
+  return scope
+    ? Array.from(new Set([...scope.teachingClassIds, ...scope.homeroomClassIds]))
+    : [];
 }
 
 async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
@@ -628,7 +636,23 @@ async function resolveApprovedSubjectForSchool(subjectName: string, targetSchool
   return result ? { subjectId: result.subjectId, subjectName: result.subjectName } : null;
 }
 
-async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null) {
+async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null, subjectId?: number | null) {
+  if (subjectId != null && targetSchoolId != null) {
+    const [subject] = await db.select({ id: subjects.id, schoolId: subjects.schoolId })
+      .from(subjects)
+      .where(eq(subjects.id, subjectId));
+    if (!subject) return false;
+    if (subject.schoolId === targetSchoolId) return true;
+
+    const [approval] = await db.select({ id: schoolSubjects.id })
+      .from(schoolSubjects)
+      .where(and(
+        eq(schoolSubjects.subjectId, subjectId),
+        eq(schoolSubjects.schoolId, targetSchoolId),
+        eq(schoolSubjects.status, 'approved'),
+      ));
+    return !!approval;
+  }
   const approvedSubject = await resolveApprovedSubjectForSchool(subjectName, targetSchoolId);
   return !!approvedSubject;
 }
@@ -1322,6 +1346,7 @@ export async function createApp() {
       };
 
       const resolved = await resolveActor(req);
+      if (!resolved || resolved.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
 
       // Try to find a DB user by resolved actor id/uid/email
       let dbUser: any = null;
@@ -1592,10 +1617,18 @@ export async function createApp() {
             }
 
             try {
-              const existingAssignment = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, teacherProfile.id)));
+              const existingAssignment = await db.select().from(classTeachers).where(and(
+                eq(classTeachers.classId, cid),
+                eq(classTeachers.teacherId, teacherProfile.id),
+                eq(classTeachers.schoolId, parsedSchoolId),
+              ));
               if (existingAssignment.length === 0) {
-                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id });
-                const insertedRows = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, teacherProfile.id)));
+                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id, schoolId: parsedSchoolId });
+                const insertedRows = await db.select().from(classTeachers).where(and(
+                  eq(classTeachers.classId, cid),
+                  eq(classTeachers.teacherId, teacherProfile.id),
+                  eq(classTeachers.schoolId, parsedSchoolId),
+                ));
                 console.log('DIAG admin create - inserted', { cid, teacherId: teacherProfile.id, insertedCount: insertedRows.length, cls, schoolClassRow, approved, resolvedSchoolId });
               } else {
                 console.log('DIAG admin create - ignored', { cid, teacherId: teacherProfile.id, reason: 'already_assigned', existingCount: existingAssignment.length, cls, schoolClassRow, approved, resolvedSchoolId });
@@ -1649,7 +1682,10 @@ export async function createApp() {
         const assignments = await db
           .select({ classId: classTeachers.classId })
           .from(classTeachers)
-          .where(eq(classTeachers.teacherId, teacherProfile.id));
+          .where(and(
+            eq(classTeachers.teacherId, teacherProfile.id),
+            eq(classTeachers.schoolId, resolvedSchoolId),
+          ));
         responseBody.classIds = assignments.map((a) => a.classId);
       }
 
@@ -1702,7 +1738,12 @@ export async function createApp() {
       if (actor.role === 'school_admin' && actor.schoolId !== targetUser.schoolId) {
         // Teachers and parents may belong to multiple schools through userSchools.
         if (['teacher', 'parent'].includes(targetUser.role)) {
-          const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+          const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
+            eq(userSchools.userId, targetUser.id),
+            eq(userSchools.schoolId, actor.schoolId!),
+            eq(userSchools.role, targetUser.role),
+            eq(userSchools.isActive, true),
+          ));
           if (!membership) {
             return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
           }
@@ -1844,19 +1885,20 @@ export async function createApp() {
           }
         }
 
-        if (teacherProfileId != null && Array.isArray(subjectIds)) {
-          const assignmentSchoolId = parsedSchoolId ?? targetUser.schoolId;
-          if (assignmentSchoolId != null) {
-            await syncTeacherSubjectAssignments(teacherProfileId, assignmentSchoolId, subjectIds);
-          }
+        const assignmentSchoolId = actor.role === 'school_admin'
+          ? actor.schoolId
+          : parsedSchoolId ?? targetUser.schoolId;
+        if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(subjectIds)) {
+          await syncTeacherSubjectAssignments(teacherProfileId, assignmentSchoolId, subjectIds);
         }
 
-          if (teacherProfileId != null) {
-          // Clear previous class assignments for this teacher so the new set replaces them.
+        if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(classIds)) {
           console.log('Updating class assignments for teacher (admin update):', { teacherProfileId, classIds });
-          await db.delete(classTeachers).where(eq(classTeachers.teacherId, teacherProfileId));
-          if (Array.isArray(classIds) && classIds.length > 0) {
-            const assignmentSchoolId = incomingSchoolId ? parseInt(String(incomingSchoolId), 10) : (actor && actor.role === 'school_admin' && actor.schoolId != null ? actor.schoolId : targetUser.schoolId);
+          await db.delete(classTeachers).where(and(
+            eq(classTeachers.teacherId, teacherProfileId),
+            eq(classTeachers.schoolId, assignmentSchoolId),
+          ));
+          if (classIds.length > 0) {
             for (const rawClassId of classIds) {
               const cid = parseInt(rawClassId, 10);
               if (Number.isNaN(cid)) {
@@ -1883,7 +1925,7 @@ export async function createApp() {
               }
 
               try {
-                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfileId });
+                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfileId, schoolId: assignmentSchoolId });
                 const insertedRows = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, teacherProfileId)));
                 console.log('DIAG admin update - inserted', { cid, teacherProfileId, insertedCount: insertedRows.length, cls, schoolClassRow, approved, assignmentSchoolId });
               } catch (e: any) {
@@ -1943,7 +1985,12 @@ export async function createApp() {
           const assignments = await db
             .select({ classId: classTeachers.classId })
             .from(classTeachers)
-            .where(eq(classTeachers.teacherId, existingTeacher[0].id));
+            .where(and(
+              eq(classTeachers.teacherId, existingTeacher[0].id),
+              actor.role === 'super_admin'
+                ? eq(classTeachers.schoolId, existingTeacher[0].schoolId)
+                : eq(classTeachers.schoolId, actor.schoolId!),
+            ));
           classIds = assignments.map((a) => a.classId);
         }
         try {
@@ -3844,7 +3891,11 @@ export async function createApp() {
   app.get('/api/schools/:schoolId/cycles', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.params.schoolId);
+      if (!Number.isInteger(schoolId) || schoolId <= 0) return res.status(400).json({ error: 'Invalid schoolId' });
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       const rows = await db.select().from(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
       return res.json(rows);
     } catch (err) {
@@ -3875,6 +3926,52 @@ export async function createApp() {
     }
   });
 
+  app.get('/api/schools/:schoolId/period-type-approvals', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      const schoolId = parsePositiveInteger(req.params.schoolId);
+      if (!actor || schoolId == null) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      return res.json(await getSchoolPeriodTypeStates(schoolId));
+    } catch (error) {
+      console.error('Failed to list school period type approvals:', error);
+      return res.status(500).json({ error: 'Failed to list period type approvals' });
+    }
+  });
+
+  app.post('/api/schools/:schoolId/period-types/:periodType/:decision', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      const schoolId = parsePositiveInteger(req.params.schoolId);
+      const periodType = String(req.params.periodType);
+      const decision = String(req.params.decision);
+      if (!actor || schoolId == null) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (!['trimester', 'semester'].includes(periodType)) return res.status(400).json({ error: 'Invalid period type' });
+      if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'Invalid period type decision' });
+
+      const states = await getSchoolPeriodTypeStates(schoolId);
+      const current = states.find((state) => state.periodType === periodType);
+      if (decision === 'approve' && !current?.cycleActive) {
+        return res.status(409).json({ error: 'The matching education cycle must be active before approving this period type' });
+      }
+
+      const status = decision === 'approve' ? 'approved' : 'rejected';
+      await db.insert(schoolPeriodTypeApprovals)
+        .values({ schoolId, periodType, status, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: [schoolPeriodTypeApprovals.schoolId, schoolPeriodTypeApprovals.periodType],
+          set: { status, updatedAt: new Date() },
+        });
+      return res.json((await getSchoolPeriodTypeStates(schoolId)).find((state) => state.periodType === periodType));
+    } catch (error) {
+      console.error('Failed to update school period type approval:', error);
+      return res.status(500).json({ error: 'Failed to update period type approval' });
+    }
+  });
+
   // School Terms (operational periods) - CRUD
   app.get('/api/school-terms', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -3884,10 +3981,19 @@ export async function createApp() {
 
       const academicYearId = req.query.academicYearId ? Number(req.query.academicYearId) : undefined;
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
+      const availableOnly = req.query.availableOnly === 'true' || req.query.availableOnly === '1';
+      const globalOnly = req.query.globalOnly === 'true' || req.query.globalOnly === '1';
 
       let rows: any[] = [];
       if (actor.role === 'super_admin') {
-        if (academicYearId != null) {
+        if (globalOnly && academicYearId != null) {
+          rows = await db.select().from(schoolTerms).where(and(
+            sql`${schoolTerms.schoolId} IS NULL`,
+            eq(schoolTerms.academicYearId, academicYearId),
+          ));
+        } else if (globalOnly) {
+          rows = await db.select().from(schoolTerms).where(sql`${schoolTerms.schoolId} IS NULL`);
+        } else if (academicYearId != null) {
           rows = await db.select().from(schoolTerms).where(eq(schoolTerms.academicYearId, academicYearId));
         } else if (schoolIdParam != null) {
           rows = await db.select().from(schoolTerms).where(eq(schoolTerms.schoolId, schoolIdParam));
@@ -3895,7 +4001,7 @@ export async function createApp() {
           rows = await db.select().from(schoolTerms);
         }
       } else if (actor.role === 'school_admin') {
-        const targetSchoolId = actor.schoolId ?? schoolIdParam;
+        const targetSchoolId = actor.schoolId;
         if (!targetSchoolId) return res.status(403).json({ error: 'School context required' });
         if (academicYearId != null) {
           rows = await db.select().from(schoolTerms).where(
@@ -3911,12 +4017,26 @@ export async function createApp() {
         }
       } else {
         // teacher/parent: show global terms plus school-specific ones
-        const schoolId = actor.schoolId ?? schoolIdParam;
+        const schoolId = actor.schoolId;
+        if (schoolId == null) return res.json([]);
         if (academicYearId != null) {
           rows = await db.select().from(schoolTerms).where(and(or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, schoolId)), eq(schoolTerms.academicYearId, academicYearId)));
         } else {
           rows = await db.select().from(schoolTerms).where(or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, schoolId)));
         }
+      }
+
+      if (availableOnly) {
+        const targetSchoolId = actor.role === 'super_admin' ? schoolIdParam : actor.schoolId;
+        if (targetSchoolId == null) return res.status(400).json({ error: 'schoolId is required to list available periods' });
+        const states = await getSchoolPeriodTypeStates(targetSchoolId);
+        const classIdParam = req.query.classId == null ? null : Number(req.query.classId);
+        if (classIdParam != null && (!Number.isInteger(classIdParam) || classIdParam <= 0)) {
+          return res.status(400).json({ error: 'Invalid classId' });
+        }
+        const education = classIdParam == null ? null : await resolveCycleForClass(classIdParam);
+        if (classIdParam != null && !education) return res.status(404).json({ error: 'Class not found' });
+        rows = filterAvailableSchoolTerms(rows, states, education);
       }
 
       res.json(rows);
@@ -3931,18 +4051,12 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
 
-      const { academicYearId, cycleId, periodType, templateId, name, startDate, endDate, orderIndex, isActive, schoolId: incomingSchoolId } = req.body as any;
+      const { academicYearId, cycleId, periodType, templateId, name, startDate, endDate, orderIndex, isActive } = req.body as any;
       if (!academicYearId || !name) return res.status(400).json({ error: 'academicYearId and name are required' });
 
-      let targetSchoolId: number | null = null;
-      if (actor.role === 'school_admin') {
-        targetSchoolId = actor.schoolId ?? null;
-      } else if (actor.role === 'super_admin') {
-        targetSchoolId = incomingSchoolId != null ? Number(incomingSchoolId) : null;
-      } else {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
+      const targetSchoolId: number | null = null;
 
       const vals: any = {
         academicYearId: Number(academicYearId),
@@ -3956,13 +4070,6 @@ export async function createApp() {
         isActive: isActive != null ? !!isActive : true,
         schoolId: targetSchoolId,
       };
-
-      if (targetSchoolId != null && vals.cycleId != null) {
-        const configuredCycles = await db.select({ id: schoolCycles.id }).from(schoolCycles).where(eq(schoolCycles.schoolId, targetSchoolId));
-        if (configuredCycles.length > 0 && !(await validateSchoolCycle(targetSchoolId, vals.cycleId))) {
-          return res.status(403).json({ error: 'The selected period cycle is not enabled for this school' });
-        }
-      }
 
       const sameContextTerms = await db.select().from(schoolTerms).where(and(
         eq(schoolTerms.academicYearId, vals.academicYearId),
@@ -3994,19 +4101,12 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-
       const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
       if (!existing) return res.status(404).json({ error: 'Term not found' });
-
-      if (actor.role === 'school_admin' && existing.schoolId !== actor.schoolId) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
 
       const { name, startDate, endDate, orderIndex, isActive, cycleId, periodType, templateId } = req.body as any;
       const updates: any = {};
@@ -4073,13 +4173,12 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
       const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
       if (!existing) return res.status(404).json({ error: 'Term not found' });
-      if (actor.role === 'school_admin' && existing.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
-
       await db.delete(schoolTerms).where(eq(schoolTerms.id, id));
       res.json({ success: true });
     } catch (err: any) {
@@ -4150,7 +4249,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
       const sourceCode = normalizeClassProgressionCode(req.body?.sourceCode);
       const targetCode = normalizeClassProgressionCode(req.body?.targetCode);
       const cycleId = req.body?.cycleId == null || req.body.cycleId === '' ? null : Number(req.body.cycleId);
@@ -4179,7 +4278,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
       await db.update(classProgressions).set({ isActive: false, updatedAt: new Date() }).where(eq(classProgressions.id, id));
       return res.json({ success: true });
@@ -4194,6 +4293,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.query.schoolId ?? actor.schoolId);
       const academicYearId = Number(req.query.academicYearId);
       if (!Number.isInteger(schoolId) || schoolId <= 0 || !Number.isInteger(academicYearId) || academicYearId <= 0) {
@@ -4221,6 +4321,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.body?.schoolId ?? actor.schoolId);
       const academicYearId = Number(req.body?.academicYearId);
       const sourceClassId = Number(req.body?.sourceClassId);
@@ -4253,6 +4354,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
       const [row] = await db.select({ id: classSuccessions.id, schoolId: classSuccessions.schoolId }).from(classSuccessions).where(eq(classSuccessions.id, id));
       if (!row) return res.status(404).json({ error: 'Class succession not found' });
@@ -4580,6 +4682,7 @@ export async function createApp() {
           subject: sql<string>`COALESCE(${subjects.name}, ${evaluations.subject})`,
           evaluationTitle: evaluations.title,
           evaluationDate: evaluations.date,
+          evaluationSchoolId: evaluations.schoolId,
           score: grades.score,
           remarks: grades.remarks,
         })
@@ -4644,9 +4747,14 @@ export async function createApp() {
       })
         .from(bulletins)
         .innerJoin(students, eq(students.id, bulletins.studentId))
+        .innerJoin(classes, eq(classes.id, bulletins.classId))
         .innerJoin(academicYears, eq(academicYears.id, bulletins.schoolYearId))
         .leftJoin(schoolTerms, eq(schoolTerms.id, bulletins.termId))
-        .where(and(eq(bulletins.classId, classId), eq(students.schoolId, schoolId)))
+        .where(and(
+          eq(bulletins.classId, classId),
+          eq(students.schoolId, schoolId),
+          or(eq(classes.schoolId, schoolId), sql`${bulletins.schoolScopeVersion} >= 1`),
+        ))
         .orderBy(desc(bulletins.generatedAt));
       const bulletinIds = classBulletins.map((bulletin) => bulletin.id);
       const bulletinLineRows = bulletinIds.length > 0
@@ -4820,21 +4928,7 @@ export async function createApp() {
           return res.status(403).json({ error: 'Teacher identity is required' });
         }
 
-        const [teacherProfile] = await db
-          .select()
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (!teacherProfile) {
-          return res.status(403).json({ error: 'Teacher profile not found for the current user' });
-        }
-
-        const classAssignments = await db
-          .select({ classId: classTeachers.classId })
-          .from(classTeachers)
-          .where(eq(classTeachers.teacherId, teacherProfile.id));
-
-        const classIds = classAssignments.map((row: any) => row.classId).filter((id: any) => id != null);
+        const classIds = await getTeacherReadableScopedClassIds(actor);
         if (classIds.length === 0) {
           res.json([]);
           return;
@@ -5118,7 +5212,7 @@ export async function createApp() {
             academicYearId: Number(academicYearId),
             levelId: resolvedLevelId,
             progressionCode: normalizeClassProgressionCode(trimmedName),
-            teacherId: teacherId ? Number(teacherId) : null,
+            teacherId: null,
           }).returning();
           classRow = createdClass;
         } else if (classRow.levelId == null && resolvedLevelId != null) {
@@ -5208,12 +5302,6 @@ export async function createApp() {
         return res.status(409).json({ error: 'Class already belongs to another school' });
       }
 
-      if (classRow.schoolId == null) {
-        await db.update(classes)
-          .set({ schoolId })
-          .where(eq(classes.id, classId));
-      }
-
       const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
       if (existing[0]) {
         const [updated] = await db.update(schoolClasses)
@@ -5248,6 +5336,12 @@ export async function createApp() {
 
       if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const [classRow] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, classId));
+      if (!classRow) return res.status(404).json({ error: 'Class not found' });
+      if (classRow.schoolId != null && classRow.schoolId !== schoolId) {
+        return res.status(409).json({ error: 'Class belongs to another school' });
       }
 
       const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
@@ -5319,15 +5413,18 @@ export async function createApp() {
         if (actor.role !== 'school_admin') {
           return res.status(403).json({ error: 'Only super_admin or school_admin can update classes' });
         }
-        if (actor.schoolId) {
-          const classBelongsToSchool = classToUpdate.schoolId === actor.schoolId;
-          const classIsApprovedForSchool = classToUpdate.schoolId == null
-            && await isApprovedClassForSchool(classToUpdate.id, actor.schoolId);
+        if (actor.schoolId == null) return res.status(403).json({ error: 'School admin school context is required' });
+        const classBelongsToSchool = classToUpdate.schoolId === actor.schoolId;
+        const classIsApprovedForSchool = classToUpdate.schoolId == null
+          && await isApprovedClassForSchool(classToUpdate.id, actor.schoolId);
 
-          if (!classBelongsToSchool && !classIsApprovedForSchool) {
-            return res.status(403).json({ error: 'Cannot update class in another school' });
-          }
+        if (!classBelongsToSchool && !classIsApprovedForSchool) {
+          return res.status(403).json({ error: 'Cannot update class in another school' });
         }
+      }
+
+      if (classToUpdate.schoolId == null) {
+        return res.status(400).json({ error: 'Use the school-scoped homeroom assignment endpoint for a global class' });
       }
 
       // If teacherId is provided, validate it exists and belongs to the same school
@@ -5350,6 +5447,7 @@ export async function createApp() {
               eq(userSchools.userId, teacher.userId),
               eq(userSchools.role, 'teacher'),
               eq(userSchools.schoolId, classToUpdate.schoolId),
+              eq(userSchools.isActive, true),
             ),
           );
           teacherMatchesSchool = Boolean(membership);
@@ -5360,10 +5458,31 @@ export async function createApp() {
 
         // Update class with new teacher
         const [updated] = await db.update(classes).set({ teacherId: parsedTeacherId }).where(eq(classes.id, id)).returning();
+        const [existingHomeroom] = await db.select({ id: classHomeroomAssignments.id })
+          .from(classHomeroomAssignments)
+          .where(and(
+            eq(classHomeroomAssignments.classId, id),
+            eq(classHomeroomAssignments.schoolId, classToUpdate.schoolId),
+          ));
+        if (existingHomeroom) {
+          await db.update(classHomeroomAssignments).set({ teacherId: parsedTeacherId, updatedAt: new Date() })
+            .where(eq(classHomeroomAssignments.id, existingHomeroom.id));
+        } else {
+          await db.insert(classHomeroomAssignments).values({
+            schoolId: classToUpdate.schoolId,
+            classId: id,
+            teacherId: parsedTeacherId,
+            updatedAt: new Date(),
+          });
+        }
         return res.json(updated);
       } else {
         // Clear the teacher assignment if teacherId is null/undefined
         const [updated] = await db.update(classes).set({ teacherId: null }).where(eq(classes.id, id)).returning();
+        await db.delete(classHomeroomAssignments).where(and(
+          eq(classHomeroomAssignments.classId, id),
+          eq(classHomeroomAssignments.schoolId, classToUpdate.schoolId),
+        ));
         return res.json(updated);
       }
     } catch (err: any) {
@@ -5495,7 +5614,11 @@ export async function createApp() {
         })
         .from(teachers)
         .innerJoin(users, eq(teachers.userId, users.id))
-        .innerJoin(userSchools, and(eq(userSchools.userId, users.id), eq(userSchools.role, 'teacher')));
+        .innerJoin(userSchools, and(
+          eq(userSchools.userId, users.id),
+          eq(userSchools.role, 'teacher'),
+          eq(userSchools.isActive, true),
+        ));
 
       let oldModelQuery = baseOldModel;
       let newModelQuery = baseNewModel;
@@ -5558,7 +5681,9 @@ export async function createApp() {
         ? await db.select({ teacherId: teacherSubjects.teacherId, subjectId: teacherSubjects.subjectId, subjectName: subjects.name })
           .from(teacherSubjects)
           .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
-          .where(inArray(teacherSubjects.teacherId, teacherIds))
+          .where(actor.role === 'super_admin'
+            ? inArray(teacherSubjects.teacherId, teacherIds)
+            : and(inArray(teacherSubjects.teacherId, teacherIds), eq(teacherSubjects.schoolId, actor.schoolId!)))
         : [];
       const subjectAssignmentMap = new Map<number, Array<{ id: number; name: string }>>();
       for (const assignment of subjectAssignments) {
@@ -5572,7 +5697,9 @@ export async function createApp() {
         assignments = await db
           .select({ teacherId: classTeachers.teacherId, classId: classTeachers.classId })
           .from(classTeachers)
-          .where(inArray(classTeachers.teacherId, teacherIds));
+          .where(actor.role === 'super_admin'
+            ? inArray(classTeachers.teacherId, teacherIds)
+            : and(inArray(classTeachers.teacherId, teacherIds), eq(classTeachers.schoolId, actor.schoolId!)));
       }
 
       console.log('GET /api/teachers - assignments count:', assignments.length);
@@ -5709,10 +5836,18 @@ export async function createApp() {
           }
 
           try {
-            const existingAssignment = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, createdTeacher.id)));
+              const existingAssignment = await db.select().from(classTeachers).where(and(
+                eq(classTeachers.classId, cid),
+                eq(classTeachers.teacherId, createdTeacher.id),
+                eq(classTeachers.schoolId, parsedSchoolId),
+              ));
             if (existingAssignment.length === 0) {
-              await db.insert(classTeachers).values({ classId: cid, teacherId: createdTeacher.id });
-              const insertedRows = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, createdTeacher.id)));
+              await db.insert(classTeachers).values({ classId: cid, teacherId: createdTeacher.id, schoolId: parsedSchoolId });
+                const insertedRows = await db.select().from(classTeachers).where(and(
+                  eq(classTeachers.classId, cid),
+                  eq(classTeachers.teacherId, createdTeacher.id),
+                  eq(classTeachers.schoolId, parsedSchoolId),
+                ));
               console.log('DIAG public create - inserted', { cid, teacherId: createdTeacher.id, insertedCount: insertedRows.length, cls, schoolClassRow, approved, parsedSchoolId });
             } else {
               console.log('DIAG public create - ignored', { cid, teacherId: createdTeacher.id, reason: 'already_assigned', existingCount: existingAssignment.length, cls, schoolClassRow, approved, parsedSchoolId });
@@ -5729,7 +5864,10 @@ export async function createApp() {
         const assignments = await db
           .select({ classId: classTeachers.classId })
           .from(classTeachers)
-          .where(eq(classTeachers.teacherId, createdTeacher.id));
+          .where(and(
+            eq(classTeachers.teacherId, createdTeacher.id),
+            eq(classTeachers.schoolId, parsedSchoolId),
+          ));
         classIdsForResponse = assignments.map((a) => a.classId);
       }
 
@@ -6291,28 +6429,9 @@ export async function createApp() {
           if (!actor.id) return res.json([]);
           if (actor.schoolId == null) return res.json([]);
 
-          const currentSchoolId = actor.schoolId as number;
-
-          const teacherRows = await db
-            .select({ id: teachers.id })
-            .from(teachers)
-            .where(eq(teachers.userId, actor.id));
-
-          if (teacherRows.length === 0) return res.json([]);
-
-          const teacherId = teacherRows[0].id;
-          const assignmentRows = await db
-            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-            .from(classTeachers)
-            .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(eq(classTeachers.teacherId, teacherId));
-
-          // Ensure getTeacherClassIdSet receives a defined school context
-          const teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
-          if (teacherClassIds.length === 0) return res.json([]);
-
-          // Use centralized studentAccess to compute authorized student ids for the teacher
-          const authorizedIds = await studentAccess.getAuthorizedStudentIds({ id: actor.id, role: actor.role, schoolId: actor.schoolId } as any, { classIds: teacherClassIds });
+          const teacherScope = await getTeacherAuthorizationScope(actor);
+          if (!teacherScope) return res.json([]);
+          const authorizedIds = await getScopedTeacherReadableStudentIds(teacherScope);
           if (!authorizedIds || authorizedIds.length === 0) return res.json([]);
 
           queryConditions.push(inArray(students.id, authorizedIds));
@@ -6930,14 +7049,7 @@ export async function createApp() {
       if (actor.role !== 'super_admin') {
         if (actor.schoolId == null) return res.json([]);
         if (actor.role === 'teacher') {
-          if (!actor.id) return res.json([]);
-          const [teacher] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-          if (!teacher) return res.json([]);
-          const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-            .from(classTeachers)
-            .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(eq(classTeachers.teacherId, teacher.id));
-          const classIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+          const classIds = await getTeacherReadableScopedClassIds(actor);
           if (!classIds.length) return res.json([]);
           query = query.where(and(
             eq(students.schoolId, actor.schoolId),
@@ -7046,14 +7158,7 @@ export async function createApp() {
     if (actor.role === 'super_admin') return student;
     if (actor.schoolId == null || student.schoolId !== actor.schoolId) return null;
     if (actor.role === 'teacher') {
-      if (!actor.id) return null;
-      const [teacher] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-      if (!teacher) return null;
-      const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-        .from(classTeachers)
-        .innerJoin(classes, eq(classTeachers.classId, classes.id))
-        .where(eq(classTeachers.teacherId, teacher.id));
-      const classIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+      const classIds = await getTeacherTeachingClassIds(actor);
       return student.classId != null && classIds.includes(student.classId) ? student : null;
     }
     if (actor.role === 'school_admin' || actor.role === 'surveillant') {
@@ -7169,24 +7274,14 @@ export async function createApp() {
         if (actor.schoolId == null) return res.json([]);
 
         if (actor.role === 'teacher') {
-          if (!actor.id) return res.json([]);
-          const [teacherRow] = await db
-            .select({ id: teachers.id })
-            .from(teachers)
-            .where(eq(teachers.userId, actor.id));
-          if (!teacherRow) return res.json([]);
-
-          const assignmentRows = await db
-            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-            .from(classTeachers)
-            .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(eq(classTeachers.teacherId, teacherRow.id));
-          const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-          if (teacherClassIds.length === 0) return res.json([]);
+          const scope = await getTeacherAuthorizationScope(actor);
+          if (!scope) return res.json([]);
+          const readableClassIds = Array.from(new Set([...scope.teachingClassIds, ...scope.homeroomClassIds]));
+          if (readableClassIds.length === 0) return res.json([]);
 
           query = query.where(and(
             eq(absenceControls.schoolId, actor.schoolId),
-            inArray(absenceControls.classId, teacherClassIds),
+            inArray(absenceControls.classId, readableClassIds),
           )) as any;
         } else if (actor.role === 'surveillant') {
           query = query.where(eq(absenceControls.schoolId, actor.schoolId)) as any;
@@ -7195,7 +7290,14 @@ export async function createApp() {
         }
       }
 
-      const rows = await query.orderBy(desc(absenceControls.createdAt));
+      let rows = await query.orderBy(desc(absenceControls.createdAt));
+      if (actor.role === 'teacher') {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope) return res.json([]);
+        rows = rows.filter((row) => scope.homeroomClassIds.has(row.classId)
+          || (scope.teachingClassIds.has(row.classId)
+            && (row.subjectId == null || scope.subjectIds.has(row.subjectId))));
+      }
       return res.json(rows);
     } catch (error: any) {
       console.error('❌ GET /api/absence-controls ERROR:', error);
@@ -7242,6 +7344,14 @@ export async function createApp() {
         return res.status(403).json({ error: 'Teacher profile not found for the authenticated user' });
       }
 
+      const scope = await getTeacherAuthorizationScope(actor);
+      if (!scope || !scope.teachingClassIds.has(normalClassId)) {
+        return res.status(403).json({ error: 'Teacher is not authorized for this class in this school' });
+      }
+      if (normalizedSubjectId != null && !scope.subjectIds.has(normalizedSubjectId)) {
+        return res.status(403).json({ error: 'Teacher is not assigned to this subject' });
+      }
+
       const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, normalClassId));
       if (!classRecord) {
         return res.status(404).json({ error: 'Class not found' });
@@ -7251,12 +7361,8 @@ export async function createApp() {
         return res.status(403).json({ error: 'Teacher cannot control a class outside authenticated school scope' });
       }
 
-      const assignmentRows = await db.select().from(classTeachers).where(and(eq(classTeachers.teacherId, teacherRow.id), eq(classTeachers.classId, normalClassId)));
-      if (assignmentRows.length === 0) {
-        return res.status(403).json({ error: 'Teacher is not authorized for this class' });
-      }
-
       const existingDuplicate = await db.select().from(absenceControls).where(and(
+        eq(absenceControls.schoolId, actor.schoolId),
         eq(absenceControls.classId, normalClassId),
         eq(absenceControls.date, parsedDate),
         eq(absenceControls.controlType, 'none'),
@@ -7269,7 +7375,10 @@ export async function createApp() {
         return res.status(409).json({ error: 'Duplicate absence-control none already exists for this context' });
       }
 
-      const conflictingAbsence = await db.select().from(absences).where(and(
+      const conflictingAbsence = await db.select({ id: absences.id }).from(absences)
+        .innerJoin(students, eq(students.id, absences.studentId))
+        .where(and(
+        eq(students.schoolId, actor.schoolId),
         eq(absences.classId, normalClassId),
         eq(absences.date, parsedDate),
         normalizedSubjectId != null ? eq(absences.subjectId, normalizedSubjectId) : sql`${absences.subjectId} IS NULL`,
@@ -7331,16 +7440,8 @@ export async function createApp() {
     if (actor.schoolId == null || student.schoolId !== actor.schoolId || !classBelongsToSchool) return false;
     if (actor.role !== 'teacher') return true;
 
-    if (!actor.id) return false;
-    const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-    if (teacherRows.length === 0) return false;
-    const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-      .from(classTeachers)
-      .innerJoin(classes, eq(classTeachers.classId, classes.id))
-      .where(eq(classTeachers.teacherId, teacherRows[0].id));
-    const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-    const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor, { classIds: teacherClassIds });
-    return authorizedStudentIds.includes(studentId);
+    const teacherClassIds = await getTeacherTeachingClassIds(actor);
+    return teacherClassIds.includes(classId) && student.schoolId === actor.schoolId;
   };
 
   app.get('/api/late-arrivals', requireAuth, async (req: AuthRequest, res) => {
@@ -7378,13 +7479,13 @@ export async function createApp() {
           if (childStudentIds.length === 0) return res.json([]);
           query = query.where(inArray(lateArrivals.studentId, childStudentIds)) as any;
         } else if (actor.role === 'teacher') {
-          if (!actor.id || actor.schoolId == null) return res.json([]);
-          const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-          if (teacherRows.length === 0) return res.json([]);
-          const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId }).from(classTeachers).innerJoin(classes, eq(classTeachers.classId, classes.id)).where(eq(classTeachers.teacherId, teacherRows[0].id));
-          const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+          if (actor.schoolId == null) return res.json([]);
+          const teacherClassIds = await getTeacherReadableScopedClassIds(actor);
           if (teacherClassIds.length === 0) return res.json([]);
-          query = query.where(inArray(lateArrivals.classId, teacherClassIds)) as any;
+          query = query.where(and(
+            eq(students.schoolId, actor.schoolId),
+            inArray(lateArrivals.classId, teacherClassIds),
+          )) as any;
         } else {
           if (actor.schoolId) {
             query = query.where(eq(students.schoolId, actor.schoolId)) as any;
@@ -7440,11 +7541,7 @@ export async function createApp() {
       }
 
       if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) return res.status(403).json({ error: 'Teacher context is missing' });
-        const teacherRows = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-        if (teacherRows.length === 0) return res.status(403).json({ error: 'Teacher profile not found' });
-        const assignmentRows = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId }).from(classTeachers).innerJoin(classes, eq(classTeachers.classId, classes.id)).where(eq(classTeachers.teacherId, teacherRows[0].id));
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+        const teacherClassIds = await getTeacherTeachingClassIds(actor);
         const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
         if (!authorizedStudentIds.includes(student.id)) {
           return res.status(403).json({ error: 'Cannot record a late arrival for a student outside your assigned classes' });
@@ -7681,30 +7778,15 @@ export async function createApp() {
 
           query = query.where(inArray(absences.studentId, childStudentIds)) as any;
         } else if (actor.role === 'teacher') {
-          if (!actor.id || actor.schoolId == null) {
-            return res.json([]);
-          }
-
-          const teacherRows = await db
-            .select({ id: teachers.id })
-            .from(teachers)
-            .where(eq(teachers.userId, actor.id));
-
-          if (teacherRows.length === 0) {
-            return res.json([]);
-          }
-
-          const assignmentRows = await db
-            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-            .from(classTeachers)
-            .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-          const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+          if (actor.schoolId == null) return res.json([]);
+          const teacherClassIds = await getTeacherReadableScopedClassIds(actor);
           if (teacherClassIds.length === 0) {
             return res.json([]);
           }
-          query = query.where(inArray(absences.classId, teacherClassIds)) as any;
+          query = query.where(and(
+            eq(students.schoolId, actor.schoolId),
+            inArray(absences.classId, teacherClassIds),
+          )) as any;
         } else if (actor.role === 'surveillant') {
           if (actor.schoolId) {
             query = query.where(eq(students.schoolId, actor.schoolId)) as any;
@@ -7720,7 +7802,16 @@ export async function createApp() {
         }
       }
 
-      const list = await query;
+      let list = await query;
+      if (actor.role === 'teacher') {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope) return res.json([]);
+        list = list.filter((absence) => {
+          if (scope.homeroomClassIds.has(absence.classId)) return true;
+          if (!scope.teachingClassIds.has(absence.classId)) return false;
+          return absence.subjectId == null || scope.subjectIds.has(absence.subjectId);
+        });
+      }
       const studentIds = list.map((student: any) => student.id).filter((id: any): id is number => Number.isInteger(id));
       const statusRows = studentIds.length > 0
         ? await db
@@ -7786,6 +7877,13 @@ export async function createApp() {
 
       const classBelongsToSchool = classRecord.schoolId === actor.schoolId
         || await isApprovedClassForSchool(parseInt(classId), actor.schoolId);
+      if (actor.role !== 'super_admin' && (
+        actor.schoolId == null
+        || student.schoolId !== actor.schoolId
+        || !classBelongsToSchool
+      )) {
+        return res.status(403).json({ error: 'Cannot record absence outside the actor school scope' });
+      }
 
       if (actor.role === 'surveillant') {
         if (actor.schoolId == null) {
@@ -7797,29 +7895,12 @@ export async function createApp() {
       }
 
       if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) {
-          return res.status(403).json({ error: 'Cannot record absence for this user' });
-        }
-
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (teacherRows.length === 0) {
-          return res.status(403).json({ error: 'Cannot record absence for this student' });
-        }
-
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
-        if (!authorizedStudentIds.includes(student.id)) {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope || !scope.teachingClassIds.has(student.classId!)) {
           return res.status(403).json({ error: 'Cannot record absence for student outside your assigned classes' });
+        }
+        if (!scope.subjectIds.has(normalizedSubjectIds[0])) {
+          return res.status(403).json({ error: 'Teacher is not assigned to the absence subject' });
         }
       } else if (actor.role !== 'super_admin') {
         if (actor.schoolId && (student.schoolId !== actor.schoolId || !classBelongsToSchool)) {
@@ -8095,15 +8176,9 @@ export async function createApp() {
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
 
       if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) return res.status(403).json({ error: 'Teacher context is missing' });
-        const [teacher] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
-        if (!teacher) return res.status(403).json({ error: 'Teacher profile not found' });
-        const assignments = await db.select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacher.id));
-        const teacherClassIds = getTeacherClassIdSet(assignments, actor.schoolId);
-        if (!teacherClassIds.includes(absence.classId) || student.schoolId !== actor.schoolId) {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope || student.schoolId !== scope.schoolId || !scope.teachingClassIds.has(absence.classId)
+          || (absence.subjectId != null && !scope.subjectIds.has(absence.subjectId))) {
           return res.status(403).json({ error: 'Teacher is not assigned to this absence class' });
         }
       } else if (actor.role === 'school_admin' || actor.role === 'surveillant') {
@@ -8364,26 +8439,7 @@ export async function createApp() {
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
 
       if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) {
-          return res.status(403).json({ error: 'Cannot justify absence for this student' });
-        }
-
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (teacherRows.length === 0) {
-          return res.status(403).json({ error: 'Cannot justify absence for this student' });
-        }
-
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
+        const teacherClassIds = await getTeacherTeachingClassIds(actor);
         const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
         if (!authorizedStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot justify absence for student outside your assigned classes' });
@@ -8486,28 +8542,15 @@ export async function createApp() {
 
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
       if (actor.role === 'teacher') {
-        if (!actor.id || actor.schoolId == null) {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope || absenceStudent.schoolId !== scope.schoolId) {
           return res.status(403).json({ error: 'Cannot access absence justification for this student' });
         }
-
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (teacherRows.length === 0) {
-          return res.status(403).json({ error: 'Cannot access absence justification for this student' });
-        }
-
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherRows[0].id));
-
-        const teacherClassIds = getTeacherClassIdSet(assignmentRows, actor.schoolId);
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
-        if (!authorizedStudentIds.includes(absenceStudent.id)) {
+        const authorizedStudentIds = await getScopedTeacherReadableStudentIds(scope);
+        const canReadAbsence = scope.homeroomClassIds.has(absence.classId)
+          || (scope.teachingClassIds.has(absence.classId)
+            && (absence.subjectId == null || scope.subjectIds.has(absence.subjectId)));
+        if (!authorizedStudentIds.includes(absenceStudent.id) || !canReadAbsence) {
           return res.status(403).json({ error: 'Cannot access absence justification for student outside your assigned classes' });
         }
       } else if (actor.role === 'parent') {
@@ -8967,6 +9010,14 @@ export async function createApp() {
       const [subject] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
       if (!subject) return res.status(404).json({ error: 'Subject not found' });
 
+      if (actor.role === 'school_admin') {
+        if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
+        if (subject.schoolId != null && subject.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+        if (subject.schoolId == null && (req.body?.name !== undefined || req.body?.code !== undefined)) {
+          return res.status(403).json({ error: 'Global subject names can only be changed by a super admin' });
+        }
+      }
+
       const { name, code, subjectTypeId: bodySubjectTypeId } = req.body;
       const hasSubjectTypeId = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'subjectTypeId');
       if (!hasSubjectTypeId && (!name || !name.trim())) {
@@ -8999,6 +9050,7 @@ export async function createApp() {
           const [relation] = await db.select().from(schoolSubjects).where(and(
             eq(schoolSubjects.schoolId, targetSchoolId),
             eq(schoolSubjects.subjectId, subjectId),
+            eq(schoolSubjects.status, 'approved'),
           ));
 
           if (subject.schoolId === null && !relation) {
@@ -9037,12 +9089,7 @@ export async function createApp() {
                   .set({ subjectTypeId: parsedSubjectTypeId, updatedAt: new Date() })
                   .where(and(eq(schoolSubjects.schoolId, targetSchoolId), eq(schoolSubjects.subjectId, subjectId)));
               } else {
-                await db.insert(schoolSubjects).values({
-                  schoolId: targetSchoolId,
-                  subjectId,
-                  status: 'approved',
-                  subjectTypeId: parsedSubjectTypeId,
-                });
+                return res.status(403).json({ error: 'Global subject is not approved for your school' });
               }
               res.json({ ...subject, subjectTypeId: parsedSubjectTypeId, schoolId: subject.schoolId ?? null, status: relation?.status ?? 'approved' });
               return;
@@ -9154,10 +9201,8 @@ export async function createApp() {
         return res.status(409).json({ error: 'Subject already belongs to another school' });
       }
 
-      if (subjectRow.schoolId == null) {
-        await db.update(subjects)
-          .set({ schoolId })
-          .where(eq(subjects.id, subjectId));
+      if (subjectRow.schoolId != null && subjectRow.schoolId !== schoolId) {
+        return res.status(409).json({ error: 'Subject belongs to another school' });
       }
 
       const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));
@@ -9243,7 +9288,7 @@ export async function createApp() {
           countInBulletin: evaluations.countInBulletin,
           date: evaluations.date,
           createdAt: evaluations.createdAt,
-          schoolId: classes.schoolId,
+          schoolId: evaluations.schoolId,
         })
         .from(evaluations)
         .innerJoin(classes, eq(evaluations.classId, classes.id))
@@ -9262,23 +9307,30 @@ export async function createApp() {
           }
 
           const childClassRows = await db
-            .selectDistinct({ classId: students.classId })
+            .selectDistinct({ classId: students.classId, schoolId: students.schoolId })
             .from(students)
             .where(inArray(students.id, childStudentIds));
 
           const childClassIds = childClassRows.map((row) => row.classId).filter((id): id is number => id != null);
+          const childSchoolIds = Array.from(new Set(childClassRows.map((row) => row.schoolId)));
           if (childClassIds.length === 0) {
             return res.json([]);
           }
 
-          query = query.where(inArray(evaluations.classId, childClassIds)) as any;
-        } else if (actor.schoolId) {
-          query = query.where(or(
-            eq(classes.schoolId, actor.schoolId),
-            and(
-              sql`${classes.schoolId} IS NULL`,
-              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${actor.schoolId} AND sc.status = 'approved')`
-            )
+          query = query.where(and(
+            inArray(evaluations.classId, childClassIds),
+            inArray(evaluations.schoolId, childSchoolIds),
+          )) as any;
+        } else if (actor.schoolId != null) {
+          query = query.where(and(
+            eq(evaluations.schoolId, actor.schoolId),
+            or(
+              eq(classes.schoolId, actor.schoolId),
+              and(
+                sql`${classes.schoolId} IS NULL`,
+                sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${actor.schoolId} AND sc.status = 'approved')`
+              )
+            ),
           )) as any;
         } else {
           return res.json([]);
@@ -9287,33 +9339,23 @@ export async function createApp() {
       }
 
       let list = await query;
+      if ((actor.role === 'school_admin' || actor.role === 'teacher') && actor.schoolId != null) {
+        const classApprovalById = new Map<number, Promise<boolean>>();
+        const inSchoolScope = await Promise.all(list.map(async (evaluation) => {
+          if (evaluation.schoolId !== actor.schoolId) return false;
+          let approval = classApprovalById.get(evaluation.classId);
+          if (!approval) {
+            approval = isApprovedClassForSchool(evaluation.classId, actor.schoolId);
+            classApprovalById.set(evaluation.classId, approval);
+          }
+          return approval;
+        }));
+        list = list.filter((_evaluation, index) => inSchoolScope[index]);
+      }
       if (actor.role === 'teacher') {
-        if (actor.id == null) return res.json([]);
-
-        const [teacherProfile] = await db
-          .select({ id: teachers.id, schoolId: teachers.schoolId, specialization: teachers.specialization })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-        if (!teacherProfile) return res.json([]);
-
-        const assignmentRows = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(eq(classTeachers.teacherId, teacherProfile.id));
-        const teacherClassIds = new Set(
-          teacherProfile.schoolId === actor.schoolId
-            ? getTeacherClassIdSet(assignmentRows, actor.schoolId)
-            : [],
-        );
-        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfile.id);
-
-        list = list.filter((evaluation) =>
-          teacherClassIds.has(evaluation.classId)
-          && (evaluation.subjectId != null
-            ? teacherSubjectIds.has(evaluation.subjectId)
-            : isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization))
-        );
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope) return res.json([]);
+        list = list.filter((evaluation) => canTeacherReadEvaluation(scope, evaluation));
       }
       res.json(list);
     } catch (err: any) {
@@ -9336,16 +9378,17 @@ export async function createApp() {
         return res.status(400).json({ error: 'evaluation id and countInBulletin are required' });
       }
 
-      const [evaluation] = await db.select({ id: evaluations.id, classId: evaluations.classId })
+      const [evaluation] = await db.select({ id: evaluations.id, classId: evaluations.classId, schoolId: evaluations.schoolId })
         .from(evaluations).where(eq(evaluations.id, evaluationId));
       if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
 
-      if (actor.role === 'school_admin' && actor.schoolId != null) {
-        const [classRecord] = await db.select({ schoolId: classes.schoolId })
-          .from(classes).where(eq(classes.id, evaluation.classId));
-        const allowed = classRecord?.schoolId === actor.schoolId
-          || await isApprovedClassForSchool(evaluation.classId, actor.schoolId);
-        if (!allowed) return res.status(403).json({ error: 'Cannot validate an evaluation for another school' });
+      if (actor.role === 'school_admin') {
+        if (actor.schoolId == null || evaluation.schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Cannot validate an evaluation for another school' });
+        }
+        if (!(await isApprovedClassForSchool(evaluation.classId, actor.schoolId))) {
+          return res.status(403).json({ error: 'Evaluation class is outside the school scope' });
+        }
       }
 
       const [updated] = await db.update(evaluations)
@@ -9386,7 +9429,7 @@ export async function createApp() {
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to create evaluations' });
       }
-      const { classId, teacherId, termId, subject, subjectId, type, coefficient, maxScore, date } = req.body;
+      const { classId, teacherId, termId, subject, subjectId, type, coefficient, maxScore, date, schoolId: requestedSchoolId } = req.body;
       if (!classId || !subject || !type || !date) {
         return res.status(400).json({ error: 'Missing mandatory assessment data' });
       }
@@ -9414,6 +9457,8 @@ export async function createApp() {
         }
       }
 
+      let teacherScope: Awaited<ReturnType<typeof getTeacherAuthorizationScope>> = null;
+
       // Automatically determine teacher Id if not explicitly provided
       let resolvedTeacherId = teacherId ? parseInt(teacherId) : null;
       let teacherProfileId: number | null = null;
@@ -9423,18 +9468,16 @@ export async function createApp() {
       }
 
       if (actor.role === 'teacher') {
-        const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, dbUser.id));
-        if (!teacherProfile) {
+        teacherScope = await getTeacherAuthorizationScope(actor);
+        if (!teacherScope) {
           return res.status(403).json({ error: 'Teacher profile not found for the current user' });
         }
-        teacherProfileId = teacherProfile.id;
-
-        const [assignment] = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, parseInt(classId)), eq(classTeachers.teacherId, teacherProfile.id)));
-        if (!assignment) {
+        teacherProfileId = teacherScope.teacherId;
+        if (!teacherScope.teachingClassIds.has(parseInt(classId))) {
           return res.status(403).json({ error: 'Un enseignant ne peut créer une évaluation que pour une classe qui lui est assignée' });
         }
 
-        resolvedTeacherId = teacherProfile.id;
+        resolvedTeacherId = teacherScope.teacherId;
       }
 
       if (!resolvedTeacherId) {
@@ -9447,6 +9490,21 @@ export async function createApp() {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
       }
 
+      if (actor.role === 'school_admin') {
+        const [evaluationTeacher] = await db.select({ id: teachers.id, userId: teachers.userId, schoolId: teachers.schoolId })
+          .from(teachers).where(eq(teachers.id, resolvedTeacherId));
+        if (!evaluationTeacher) return res.status(400).json({ error: 'Invalid teacherId' });
+        if (evaluationTeacher.schoolId !== actor.schoolId) {
+          const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
+            eq(userSchools.userId, evaluationTeacher.userId),
+            eq(userSchools.schoolId, actor.schoolId!),
+            eq(userSchools.role, 'teacher'),
+            eq(userSchools.isActive, true),
+          ));
+          if (!membership) return res.status(403).json({ error: 'Evaluation teacher is not active in this school' });
+        }
+      }
+
       const evaluationDate = String(date || '');
       const parsedEvaluationDate = new Date(evaluationDate);
       if (!evaluationDate || Number.isNaN(parsedEvaluationDate.getTime())) {
@@ -9454,33 +9512,41 @@ export async function createApp() {
       }
 
       let resolvedTermId: number | null = null;
-      const evaluationSchoolId = classRecord.schoolId ?? actor.schoolId ?? null;
-      if (evaluationSchoolId != null) {
-        const resolvedTerm = await resolveSchoolTermForClass({
-          classId: parseInt(classId),
-          academicYearId: classRecord.academicYearId,
-          schoolId: evaluationSchoolId,
-          date: evaluationDate,
-          requestedTermId: termId != null && termId !== '' ? Number(termId) : null,
-        });
-        if ('error' in resolvedTerm) {
-          return res.status(400).json({ error: resolvedTerm.error });
-        }
-        resolvedTermId = resolvedTerm.term.id;
-      } else {
-        const termsForYear = await db
-          .select({ id: schoolTerms.id, startDate: schoolTerms.startDate, endDate: schoolTerms.endDate, orderIndex: schoolTerms.orderIndex, isActive: schoolTerms.isActive })
-          .from(schoolTerms)
-          .where(eq(schoolTerms.academicYearId, classRecord.academicYearId))
-          .orderBy(schoolTerms.orderIndex);
-        const requestedTermId = termId != null && termId !== '' ? Number(termId) : null;
-        const selected = requestedTermId != null
-          ? termsForYear.find((term) => term.id === requestedTermId)
-          : termsForYear.find((term) => !!term.startDate && !!term.endDate && evaluationDate >= term.startDate && evaluationDate <= term.endDate)
-            ?? termsForYear.find((term) => term.isActive)
-            ?? (termsForYear.length === 1 ? termsForYear[0] : undefined);
-        resolvedTermId = selected?.id ?? null;
+      let evaluationSchoolId = actor.role === 'super_admin'
+        ? (requestedSchoolId != null && requestedSchoolId !== '' ? parsePositiveInteger(requestedSchoolId) : classRecord.schoolId)
+        : actor.schoolId;
+      if (requestedSchoolId != null && requestedSchoolId !== '' && parsePositiveInteger(requestedSchoolId) == null) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
       }
+      if (evaluationSchoolId == null) {
+        const approvedSchoolClasses = await db.select({ schoolId: schoolClasses.schoolId }).from(schoolClasses).where(and(
+          eq(schoolClasses.classId, parseInt(classId)),
+          eq(schoolClasses.status, 'approved'),
+        ));
+        const approvedSchoolIds = Array.from(new Set(approvedSchoolClasses.map((row) => row.schoolId)));
+        if (approvedSchoolIds.length > 1) {
+          return res.status(400).json({ error: 'schoolId is required for a class shared by multiple schools' });
+        }
+        if (approvedSchoolIds.length !== 1) {
+          return res.status(400).json({ error: 'Cannot determine a unique school context for this class' });
+        }
+        evaluationSchoolId = approvedSchoolIds[0];
+      }
+      if (actor.role !== 'super_admin' && evaluationSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot create an evaluation outside the actor school' });
+      }
+      if (!(await isApprovedClassForSchool(parseInt(classId), evaluationSchoolId))) {
+        return res.status(403).json({ error: 'Class is not approved for the evaluation school' });
+      }
+      const resolvedTerm = await resolveSchoolTermForClass({
+        classId: parseInt(classId),
+        academicYearId: classRecord.academicYearId,
+        schoolId: evaluationSchoolId,
+        date: evaluationDate,
+        requestedTermId: termId != null && termId !== '' ? Number(termId) : null,
+      });
+      if ('error' in resolvedTerm) return res.status(400).json({ error: resolvedTerm.error });
+      resolvedTermId = resolvedTerm.term.id;
 
       if (!resolvedTermId) {
         return res.status(400).json({ error: 'Unable to resolve a compatible term for this evaluation. Please select a term explicitly.' });
@@ -9578,8 +9644,7 @@ export async function createApp() {
       const resolvedSubjectName = approvedSubject.subjectName;
 
       if (actor.role === 'teacher' && teacherProfileId != null) {
-        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfileId);
-        if (!teacherSubjectIds.has(resolvedSubjectId)) {
+        if (!teacherScope || !teacherScope.subjectIds.has(resolvedSubjectId)) {
           return res.status(403).json({ error: 'Cette matière n’est pas assignée à cet enseignant' });
         }
       }
@@ -9593,7 +9658,8 @@ export async function createApp() {
           .from(evaluations)
           .where(and(
             eq(evaluations.termId, resolvedTermId),
-            eq(evaluations.classId, parseInt(classId))
+            eq(evaluations.classId, parseInt(classId)),
+            eq(evaluations.schoolId, approvalSchoolId),
           ));
 
         const maxSeq = existingSequences[0]?.maxSeq ?? 0;
@@ -9620,6 +9686,7 @@ export async function createApp() {
 
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),
+        schoolId: approvalSchoolId,
         teacherId: resolvedTeacherId,
         termId: resolvedTermId,
         subjectId: resolvedSubjectId,
@@ -9742,6 +9809,7 @@ if (uniqueParentIds.length > 0) {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'teacher'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const { evaluationId, studentId, status } = req.body ?? {};
       const parsedEvaluationId = Number(evaluationId);
@@ -9757,9 +9825,24 @@ if (uniqueParentIds.length > 0) {
         return res.status(404).json({ error: 'Evaluation not found' });
       }
 
-      const [student] = await db.select({ id: students.id, classId: students.classId, isActive: students.isActive }).from(students).where(eq(students.id, parsedStudentId));
+      const [student] = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId, isActive: students.isActive }).from(students).where(eq(students.id, parsedStudentId));
       if (!student || student.isActive !== true || student.classId !== evaluation.classId) {
         return res.status(403).json({ error: 'Student must be active and belong to the evaluation class' });
+      }
+      if (actor.role !== 'super_admin' && (actor.schoolId == null || student.schoolId !== actor.schoolId || evaluation.schoolId !== actor.schoolId)) {
+        return res.status(403).json({ error: 'Participation is outside the actor school scope' });
+      }
+      if (actor.role !== 'super_admin' && !(await isApprovedSubjectForSchool(evaluation.subject, actor.schoolId!, evaluation.subjectId ?? null))) {
+        return res.status(403).json({ error: 'Evaluation subject is outside the actor school scope' });
+      }
+      if (actor.role !== 'super_admin' && !(await isApprovedClassForSchool(evaluation.classId, actor.schoolId))) {
+        return res.status(403).json({ error: 'Evaluation class is outside the actor school scope' });
+      }
+      if (actor.role === 'teacher') {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope || !canTeacherWriteEvaluation(scope, evaluation)) {
+          return res.status(403).json({ error: 'Teacher is not authorized for this evaluation' });
+        }
       }
 
       await db.execute(sql`
@@ -9769,7 +9852,11 @@ if (uniqueParentIds.length > 0) {
         DO UPDATE SET status = ${normalizedStatus}, updated_at = NOW()
       `);
 
-      const studentRows = await db.select().from(students).where(and(eq(students.classId, evaluation.classId), eq(students.isActive, true)));
+      const studentRows = await db.select().from(students).where(and(
+        eq(students.classId, evaluation.classId),
+        eq(students.schoolId, evaluation.schoolId!),
+        eq(students.isActive, true),
+      ));
       const participationRows = await db.select().from(evaluationParticipations).where(eq(evaluationParticipations.evaluationId, parsedEvaluationId));
       const completedCount = participationRows.filter((row: any) => row.status === 'graded' || row.status === 'absent').length;
       const eligibleCount = studentRows.length;
@@ -9803,6 +9890,7 @@ if (uniqueParentIds.length > 0) {
         .select({
           id: grades.id,
           evaluationId: grades.evaluationId,
+          classId: evaluations.classId,
           evaluationTitle: evaluations.title,
           evaluationDate: evaluations.date,
           subjectId: evaluations.subjectId,
@@ -9831,24 +9919,35 @@ if (uniqueParentIds.length > 0) {
 
           query = query.where(inArray(grades.studentId, childStudentIds)) as any;
         } else if (actor.role === 'teacher') {
-          if (actor.schoolId == null) return res.json([]);
-          const readableClassIds = await getTeacherReadableClassIds(actor);
+          const scope = await getTeacherAuthorizationScope(actor);
+          if (!scope) return res.json([]);
+          const readableClassIds = Array.from(new Set([...scope.teachingClassIds, ...scope.homeroomClassIds]));
           if (readableClassIds.length === 0) return res.json([]);
           query = query.where(and(
-            eq(students.schoolId, actor.schoolId),
+            eq(students.schoolId, scope.schoolId),
+            eq(evaluations.schoolId, scope.schoolId),
             inArray(evaluations.classId, readableClassIds),
           )) as any;
         } else {
-          // School admins and other staff see only their school's grades.
-          if (actor.schoolId) {
-            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
-          } else {
-            return res.json([]);
-          }
+          if (actor.role !== 'school_admin' || actor.schoolId == null) return res.json([]);
+          query = query.where(and(
+            eq(students.schoolId, actor.schoolId),
+            eq(evaluations.schoolId, actor.schoolId),
+          )) as any;
         }
       }
 
-      const list = await query;
+      let list = await query;
+      if (actor.role === 'teacher') {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope) return res.json([]);
+        list = list.filter((grade) => canTeacherReadEvaluation(scope, {
+          schoolId: grade.evaluationSchoolId,
+          classId: grade.classId,
+          subjectId: grade.subjectId,
+          subject: grade.subject,
+        }));
+      }
       if (actor.role !== 'parent' || list.length === 0) {
         return res.json(list);
       }
@@ -9898,6 +9997,9 @@ if (uniqueParentIds.length > 0) {
       // Load the evaluation to verify permissions and existence
       const [evaluation] = await db.select().from(evaluations).where(eq(evaluations.id, parseInt(evaluationId)));
       if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
+      if (actor.role !== 'super_admin' && (actor.schoolId == null || evaluation.schoolId !== actor.schoolId)) {
+        return res.status(403).json({ error: 'Evaluation is outside the actor school scope' });
+      }
 
       const evaluationDate = String(evaluation.date || '');
       const plannedDate = new Date(evaluationDate);
@@ -9952,35 +10054,15 @@ if (uniqueParentIds.length > 0) {
 
       // School admin can only record grades for students in their own school
       if (actor.role === 'school_admin') {
-        if (actor.schoolId && student.schoolId !== actor.schoolId) {
+        if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot record grade for student in another school' });
         }
       }
 
       // Teachers can record grades only for an assigned class and matching subject.
       if (actor.role === 'teacher') {
-        const [teacherProfile] = await db.select().from(teachers).where(eq(teachers.userId, actor.id));
-        if (!teacherProfile) {
-          return res.status(403).json({ error: 'Profile enseignant introuvable' });
-        }
-
-        const [assignment] = await db
-          .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-          .from(classTeachers)
-          .innerJoin(classes, eq(classTeachers.classId, classes.id))
-          .where(and(
-            eq(classTeachers.classId, evaluation.classId),
-            eq(classTeachers.teacherId, teacherProfile.id),
-          ));
-        const sameSchoolClass = assignment && actor.schoolId != null && teacherProfile.schoolId === actor.schoolId && (
-          assignment.schoolId === actor.schoolId
-          || (assignment.schoolId == null && await isApprovedClassForSchool(evaluation.classId, actor.schoolId))
-        );
-        const teacherSubjectIds = await getTeacherSubjectIdSet(teacherProfile.id);
-        const subjectAssigned = evaluation.subjectId != null
-          ? teacherSubjectIds.has(evaluation.subjectId)
-          : isSubjectAssignedToTeacher(evaluation.subject, teacherProfile.specialization);
-        if (!sameSchoolClass || !subjectAssigned) {
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (!scope || !canTeacherWriteEvaluation(scope, evaluation)) {
           return res.status(403).json({ error: 'Vous n’êtes pas autorisé à noter cette évaluation' });
         }
         if (student.classId !== evaluation.classId) {
@@ -10176,8 +10258,7 @@ if (uniqueParentIds.length > 0) {
         const rows = await db
           .select({ id: evaluations.id })
           .from(evaluations)
-          .innerJoin(classes, eq(evaluations.classId, classes.id))
-          .where(eq(classes.schoolId, actor.schoolId));
+          .where(eq(evaluations.schoolId, actor.schoolId!));
         evaluationIds = rows.map((row) => row.id);
       }
 
@@ -10283,29 +10364,16 @@ if (uniqueParentIds.length > 0) {
       let schoolFilter: any = undefined;
       let parentChildIds: number[] | null = null;
       let teacherClassIds: number[] | null = null;
+      let teacherScope: Awaited<ReturnType<typeof getTeacherAuthorizationScope>> = null;
       if (actor.role !== 'super_admin' && actor.schoolId) {
         schoolFilter = actor.schoolId;
       }
 
       if (actor.role === 'teacher') {
-        const currentSchoolId = actor.schoolId ?? null;
-        const teacherRows = await db
-          .select({ id: teachers.id })
-          .from(teachers)
-          .where(eq(teachers.userId, actor.id));
-
-        if (teacherRows.length === 0) {
-          teacherClassIds = [];
-        } else {
-          const teacherId = teacherRows[0].id;
-          const assignmentRows = await db
-            .select({ classId: classTeachers.classId, schoolId: classes.schoolId })
-            .from(classTeachers)
-            .innerJoin(classes, eq(classTeachers.classId, classes.id))
-            .where(eq(classTeachers.teacherId, teacherId));
-
-          teacherClassIds = getTeacherClassIdSet(assignmentRows, currentSchoolId);
-        }
+        teacherScope = await getTeacherAuthorizationScope(actor);
+        teacherClassIds = teacherScope
+          ? Array.from(new Set([...teacherScope.teachingClassIds, ...teacherScope.homeroomClassIds]))
+          : [];
       }
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
@@ -10353,7 +10421,9 @@ if (uniqueParentIds.length > 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 } });
         }
 
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds });
+        const authorizedStudentIds = teacherScope
+          ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds)
+          : [];
         if (authorizedStudentIds.length === 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 } });
         }
@@ -10420,7 +10490,9 @@ if (uniqueParentIds.length > 0) {
           absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, parentChildIds)) as any;
         }
       } else if (actor.role === 'teacher') {
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds || [] });
+        const authorizedStudentIds = teacherScope
+          ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds || [])
+          : [];
         if (authorizedStudentIds.length === 0) {
           absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer`, pending: sql<number>`0::integer`, declared: sql<number>`0::integer` }) as any;
         } else {
@@ -10510,7 +10582,9 @@ if (uniqueParentIds.length > 0) {
       if (actor.role === 'parent') {
         recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, parentChildIds || [])) as any;
       } else if (actor.role === 'teacher') {
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds || [] });
+        const authorizedStudentIds = teacherScope
+          ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds || [])
+          : [];
         recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, authorizedStudentIds)) as any;
       } else if (schoolFilter) {
         recentAbsencesQuery = recentAbsencesQuery.where(eq(students.schoolId, schoolFilter)) as any;
@@ -10525,6 +10599,10 @@ if (uniqueParentIds.length > 0) {
           studentId: grades.studentId,
           studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           evaluationTitle: evaluations.title,
+          classId: evaluations.classId,
+          schoolId: students.schoolId,
+          subjectId: evaluations.subjectId,
+          subject: evaluations.subject,
           score: grades.score,
           date: evaluations.date,
         })
@@ -10537,13 +10615,24 @@ if (uniqueParentIds.length > 0) {
       if (actor.role === 'parent') {
         recentGradesQuery = recentGradesQuery.where(inArray(grades.studentId, parentChildIds || [])) as any;
       } else if (actor.role === 'teacher') {
-        const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any, { classIds: teacherClassIds || [] });
-        recentGradesQuery = recentGradesQuery.where(inArray(grades.studentId, authorizedStudentIds)) as any;
+        const authorizedStudentIds = teacherScope
+          ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds || [])
+          : [];
+        recentGradesQuery = recentGradesQuery.where(and(
+          inArray(grades.studentId, authorizedStudentIds),
+          eq(students.schoolId, actor.schoolId!),
+        )) as any;
       } else if (schoolFilter) {
         recentGradesQuery = recentGradesQuery.where(eq(students.schoolId, schoolFilter)) as any;
       }
 
-      const recentGrades = await recentGradesQuery;
+      let recentGrades = await recentGradesQuery;
+      if (schoolFilter != null) {
+        recentGrades = recentGrades.filter((grade) => grade.schoolId === schoolFilter);
+      }
+      if (actor.role === 'teacher' && teacherScope) {
+        recentGrades = recentGrades.filter((grade) => canTeacherReadEvaluation(teacherScope!, grade));
+      }
 
       const stats = {
         totalStudents,

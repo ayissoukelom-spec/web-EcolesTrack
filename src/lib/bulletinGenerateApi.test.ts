@@ -38,6 +38,7 @@ describe('registerBulletinGenerateRoute', () => {
     registerBulletinGenerateRoute(app, {
       resolveActor: async (req) => ({ role: req.user?.role || 'admin', schoolId: req.user?.schoolId ?? null }),
       verifyMiddleware: verifyMiddleware as any,
+      resolveAvailableTerm: async ({ requestedTermId }) => ({ term: { id: requestedTermId! }, education: {} as any }),
       generateHandler: async (studentId, termId, persistence) => ({ id: 777, studentId, termId } as any),
     });
 
@@ -71,6 +72,7 @@ describe('registerBulletinGenerateRoute', () => {
     registerBulletinGenerateRoute(app, {
       resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
       verifyMiddleware: verifyMiddleware as any,
+      resolveAvailableTerm: async ({ requestedTermId }) => ({ term: { id: requestedTermId! }, education: {} as any }),
       generateHandler: async () => {
         throw new Error('Student does not have a current class');
       },
@@ -249,7 +251,6 @@ describe('registerBulletinGenerateRoute', () => {
     };
     const queryResults = [
       [{ id: 80, academicYearId: 2 }],
-      [{ id: 2, academicYearId: 2 }],
       [
         { id: 1, classId: 80, termId: 2, subject: 'Mathématiques', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true },
         { id: 2, classId: 80, termId: 2, subject: 'Dessin', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true },
@@ -269,6 +270,7 @@ describe('registerBulletinGenerateRoute', () => {
       registerBulletinGenerateRoute(app, {
         resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
         verifyMiddleware: verifyMiddleware as any,
+        resolveAvailableTerm: async ({ requestedTermId }) => ({ term: { id: requestedTermId! }, education: {} as any }),
       });
 
       await new Promise<void>((resolve) => {
@@ -323,6 +325,7 @@ describe('registerBulletinGenerateRoute', () => {
       registerBulletinGenerateRoute(app, {
         resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
         verifyMiddleware: verifyMiddleware as any,
+        resolveAvailableTerm: async ({ requestedTermId }) => ({ term: { id: requestedTermId! }, education: {} as any }),
         generateHandler,
       });
 

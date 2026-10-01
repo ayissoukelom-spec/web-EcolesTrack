@@ -598,6 +598,7 @@ const computeSubjectBreakdown = async (
   studentId: number,
   classId: number,
   termId: number,
+  schoolId: number,
   termStartDate: Date | string | null,
   termEndDate: Date | string | null,
 ): Promise<Map<string, { interrogation: number | null; devoir: number | null; composition: number | null; classAverage: number | null }>> => {
@@ -623,8 +624,11 @@ const computeSubjectBreakdown = async (
     })
     .from(grades)
     .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
+    .innerJoin(students, eq(students.id, grades.studentId))
     .where(and(
       eq(evaluations.classId, classId),
+      eq(evaluations.schoolId, schoolId),
+      eq(students.schoolId, schoolId),
       eq(evaluations.countInBulletin, true),
       termScopeCondition,
     ));
@@ -723,7 +727,7 @@ export const resolvePrincipalTitle = (
   schoolHasLycee: boolean | null | undefined,
   principalGender: string | null | undefined,
 ): string => {
-  const isLycee = schoolHasLycee ?? true;
+  const isLycee = schoolHasLycee === true;
   const gender = principalGender?.trim().toUpperCase();
   if (gender !== 'M' && gender !== 'F') return 'Responsable';
   if (isLycee) return gender === 'F' ? 'La Proviseure' : 'Le Proviseur';
@@ -732,9 +736,7 @@ export const resolvePrincipalTitle = (
 
 export const resolveSchoolHasLycee = (
   configuredCycles: Array<{ code: string; isActive: boolean }>,
-): boolean | null => configuredCycles.length === 0
-  ? null
-  : configuredCycles.some((cycle) => cycle.code === 'lycee' && cycle.isActive);
+): boolean => configuredCycles.some((cycle) => cycle.code === 'lycee' && cycle.isActive);
 
 const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
   const [header] = await db
@@ -747,6 +749,8 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       studentGender: students.gender,
       studentStatus: studentAcademicYearStatuses.status,
       classId: bulletins.classId,
+      classSchoolId: classes.schoolId,
+      schoolScopeVersion: bulletins.schoolScopeVersion,
       className: classes.name,
       schoolName: schools.name,
       principalName: schools.principalName,
@@ -827,6 +831,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     .where(eq(bulletins.id, bulletinId));
 
   if (!header) return null;
+  if (actor.role !== 'super_admin' && header.classSchoolId == null && header.schoolScopeVersion < 1) return null;
 
   const configuredSchoolCycles = await db.select({
     code: cycles.code,
@@ -840,10 +845,12 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
   const classStudentRows = await db
     .selectDistinct({ id: bulletins.studentId })
     .from(bulletins)
+    .innerJoin(students, eq(students.id, bulletins.studentId))
     .where(and(
       eq(bulletins.classId, header.classId),
       eq(bulletins.schoolYearId, header.schoolYearId),
       eq(bulletins.termId, header.termId),
+      eq(students.schoolId, header.studentSchoolId),
     ));
   const classStudentCount = classStudentRows.length;
 
@@ -943,7 +950,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       };
     });
 
-    const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.termStartDate ?? null, header.termEndDate ?? null);
+    const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.studentSchoolId, header.termStartDate ?? null, header.termEndDate ?? null);
     resolvedLines = resolvedLines.map((line) => {
       const subjectBreakdown = breakdownBySubject.get(line.subjectName) ?? null;
       const classAverage = subjectBreakdown?.classAverage ?? null;

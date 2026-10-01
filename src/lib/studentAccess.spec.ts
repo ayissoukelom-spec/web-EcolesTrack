@@ -4,7 +4,7 @@ import { classTeachers, students, teachers } from '../db/schema.ts';
 
 const mockState = vi.hoisted(() => ({
   teacherRows: [] as Array<{ id: number; userId: number }>,
-  classAssignments: [] as Array<{ teacherId: number; classId: number; schoolId: number | null }>,
+  classAssignments: [] as Array<{ teacherId: number; classId: number; schoolId: number | null; classSchoolId?: number | null; isApprovedForSchool?: boolean }>,
   studentRows: [] as Array<{ id: number; schoolId: number; classId: number; isActive: boolean }>,
   lastStudentWhere: null as any,
 }));
@@ -45,6 +45,27 @@ const mockDb = vi.hoisted(() => ({
 }));
 
 vi.mock('../db/index.ts', () => ({ db: mockDb }));
+vi.mock('./teacherAuthorization.ts', () => ({
+  getTeacherAuthorizationScope: vi.fn(async (actor: any) => {
+    const teacher = mockState.teacherRows.find((row) => row.userId === actor.id);
+    if (!teacher || actor.role !== 'teacher' || actor.schoolId == null) return null;
+    const teachingClassIds = mockState.classAssignments
+      .filter((assignment) => assignment.teacherId === teacher.id)
+      .filter((assignment) => assignment.schoolId === actor.schoolId)
+      .filter((assignment) => assignment.classSchoolId === undefined
+        ? true
+        : assignment.classSchoolId === actor.schoolId || (assignment.classSchoolId == null && assignment.isApprovedForSchool === true))
+      .map((assignment) => assignment.classId);
+    return {
+      teacherId: teacher.id,
+      schoolId: actor.schoolId,
+      specialization: null,
+      teachingClassIds: new Set(teachingClassIds),
+      homeroomClassIds: new Set<number>(),
+      subjectIds: new Set<number>(),
+    };
+  }),
+}));
 
 import studentAccess from './studentAccess';
 
@@ -81,7 +102,7 @@ describe('studentAccess.getAuthorizedStudentIds (unit)', () => {
 
   it('keeps approved global-class assignments visible in the teacher school', async () => {
     const actor = { id: 10, role: 'teacher', schoolId: 4 };
-    mockState.classAssignments = [{ teacherId: 5, classId: 80, schoolId: null }];
+    mockState.classAssignments = [{ teacherId: 5, classId: 80, schoolId: 4, classSchoolId: null, isApprovedForSchool: true }];
     const ids = await studentAccess.getAuthorizedStudentIds(actor, { classIds: [80] });
     expect(ids).toEqual([123]);
   });
