@@ -238,6 +238,22 @@ export const classTeachers = pgTable('class_teachers', {
   classTeacherUniqueIdx: uniqueIndex('class_teachers_school_class_teacher_idx').on(table.schoolId, table.classId, table.teacherId),
 }));
 
+export const teacherClassSubjects = pgTable('teacher_class_subjects', {
+  id: serial('id').primaryKey(),
+  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'cascade' }).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  teacherClassSubjectUniqueIdx: uniqueIndex('teacher_class_subjects_teacher_school_class_subject_idx')
+    .on(table.teacherId, table.schoolId, table.classId, table.subjectId),
+  teacherClassSubjectLookupIdx: index('teacher_class_subjects_school_teacher_active_idx')
+    .on(table.schoolId, table.teacherId, table.isActive),
+}));
+
 export const classHomeroomAssignments = pgTable('class_homeroom_assignments', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
@@ -463,6 +479,7 @@ export const absences = pgTable('absences', {
   id: serial('id').primaryKey(),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
+  teachingAssignmentId: integer('teaching_assignment_id').references(() => teacherClassSubjects.id, { onDelete: 'set null' }),
   date: text('date').notNull(), // YYYY-MM-DD
   period: text('period').notNull(), // 'morning' | 'afternoon' | 'all_day'
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
@@ -694,11 +711,20 @@ export const subjectsRelations = relations(subjects, ({ one, many }) => ({
   }),
   schoolSubjects: many(schoolSubjects),
   teacherSubjects: many(teacherSubjects),
+  teachingAssignments: many(teacherClassSubjects),
 }));
 
 export const teacherSubjectsRelations = relations(teacherSubjects, ({ one }) => ({
   teacher: one(teachers, { fields: [teacherSubjects.teacherId], references: [teachers.id] }),
   subject: one(subjects, { fields: [teacherSubjects.subjectId], references: [subjects.id] }),
+}));
+
+export const teacherClassSubjectsRelations = relations(teacherClassSubjects, ({ one, many }) => ({
+  teacher: one(teachers, { fields: [teacherClassSubjects.teacherId], references: [teachers.id] }),
+  school: one(schools, { fields: [teacherClassSubjects.schoolId], references: [schools.id] }),
+  class: one(classes, { fields: [teacherClassSubjects.classId], references: [classes.id] }),
+  subject: one(subjects, { fields: [teacherClassSubjects.subjectId], references: [subjects.id] }),
+  absences: many(absences),
 }));
 
 export const schoolSubjectsRelations = relations(schoolSubjects, ({ one }) => ({
@@ -744,6 +770,7 @@ export const teachersRelations = relations(teachers, ({ one, many }) => ({
   classes: many(classes),
   classAssignments: many(classTeachers),
   homeroomAssignments: many(classHomeroomAssignments),
+  teachingAssignments: many(teacherClassSubjects),
   evaluations: many(evaluations),
 }));
 
@@ -801,6 +828,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
   }),
   students: many(students),
   evaluations: many(evaluations),
+  teachingAssignments: many(teacherClassSubjects),
   absences: many(absences),
   lateArrivals: many(lateArrivals),
   schoolClasses: many(schoolClasses),
@@ -931,6 +959,10 @@ export const absencesRelations = relations(absences, ({ one }) => ({
   class: one(classes, {
     fields: [absences.classId],
     references: [classes.id],
+  }),
+  teachingAssignment: one(teacherClassSubjects, {
+    fields: [absences.teachingAssignmentId],
+    references: [teacherClassSubjects.id],
   }),
 }));
 

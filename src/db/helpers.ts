@@ -667,3 +667,30 @@ export async function ensureAbsenceDeclarationsSchema() {
     throw error;
   }
 }
+
+export async function ensureAbsenceTeachingAssignmentsSchema() {
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS teacher_class_subjects (
+      id SERIAL PRIMARY KEY,
+      teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+      school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT teacher_class_subjects_teacher_school_class_subject_unique
+        UNIQUE (teacher_id, school_id, class_id, subject_id)
+    )`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS teacher_class_subjects_school_teacher_active_idx
+      ON teacher_class_subjects (school_id, teacher_id, is_active)`);
+    await db.execute(sql`ALTER TABLE absences
+      ADD COLUMN IF NOT EXISTS teaching_assignment_id INTEGER
+      REFERENCES teacher_class_subjects(id) ON DELETE SET NULL`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS absences_teaching_assignment_id_idx
+      ON absences (teaching_assignment_id)`);
+  } catch (error: any) {
+    console.error('Failed to ensure absence teaching assignments schema exists:', error?.message || error);
+    throw error;
+  }
+}

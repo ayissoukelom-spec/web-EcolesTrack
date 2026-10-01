@@ -238,7 +238,7 @@ describe('absence justification routes', () => {
       .set('x-test-role', 'parent')
       .expect(200);
 
-    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0 });
+    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0, declared: 0 });
   });
 
   it('returns an explicit zero pending count when a teacher has no classes', async () => {
@@ -247,7 +247,7 @@ describe('absence justification routes', () => {
       .set('x-test-role', 'teacher')
       .expect(200);
 
-    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0 });
+    expect(response.body.absenceStatusCounts).toEqual({ justified: 0, unjustified: 0, pending: 0, declared: 0 });
   });
 
   it('keeps administrator approval and rejection available', async () => {

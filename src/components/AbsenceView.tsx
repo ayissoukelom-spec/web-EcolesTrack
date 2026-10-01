@@ -43,8 +43,7 @@ interface AbsenceViewProps {
   schoolsList: { id: number; name: string }[];
   teachersList: Teacher[];
   approvedSubjectsList: { id: number; name: string }[];
-  teacherClassIds?: number[];
-  teacherSpecializations?: string[];
+  teacherSubjectIds?: number[];
   pendingReviewOnly?: boolean;
   showAbsenceDeclarationSection?: boolean;
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
@@ -69,8 +68,7 @@ export default function AbsenceView({
   schoolsList,
   teachersList,
   approvedSubjectsList,
-  teacherClassIds,
-  teacherSpecializations,
+  teacherSubjectIds = [],
   pendingReviewOnly = false,
   showAbsenceDeclarationSection = true,
   onAddAbsence,
@@ -361,14 +359,12 @@ export default function AbsenceView({
     })
   ));
 
-  const effectiveTeacherSubjectNames = userRole === 'teacher' && selectedClassIdNumber !== null && teacherClassIds?.includes(selectedClassIdNumber)
-    ? teacherSpecializations || classTeacherSubjectNames
-    : classTeacherSubjectNames;
-
   const availableSubjects = userRole === 'surveillant'
     ? approvedSubjectsList || []
+    : userRole === 'teacher'
+    ? (approvedSubjectsList || []).filter((subject) => teacherSubjectIds.includes(Number(subject.id)))
     : (approvedSubjectsList || []).filter((subject) => {
-      return effectiveTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
+      return classTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
     });
 
   const handleCreateAbsence = async (e: React.FormEvent) => {
@@ -440,11 +436,13 @@ export default function AbsenceView({
       return;
     }
 
+    const selectedSubjectId = newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined;
+
     await onAddAbsence({
       studentId: student.id,
       classId: student.classId,
       date: newAbsenceForm.date,
-      subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
+      subjectId: selectedSubjectId,
       startTime: newAbsenceForm.startTime,
       endTime: newAbsenceForm.endTime,
       isJustified: false,
@@ -469,6 +467,7 @@ export default function AbsenceView({
 
   const handleCreateMultipleAbsences = async () => {
     if (selectedAbsentStudentIds.length === 0 || !newAbsenceForm.classId || isMultipleSaveInProgress) return;
+    const selectedSubjectId = newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined;
 
     setIsMultipleSaveInProgress(true);
     try {
@@ -481,7 +480,7 @@ export default function AbsenceView({
           studentId: student.id,
           classId: student.classId,
           date: newAbsenceForm.date,
-          subjectId: newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined,
+          subjectId: selectedSubjectId,
           startTime: newAbsenceForm.startTime,
           endTime: newAbsenceForm.endTime,
           isJustified: false,

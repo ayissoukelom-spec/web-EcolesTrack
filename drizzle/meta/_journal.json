@@ -64,6 +64,13 @@
       "when": 1789044186238,
       "tag": "0008_bright_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790850000000,
+      "tag": "0136_add_absence_teaching_assignments",
+      "breakpoints": true
     }
   ]
 }

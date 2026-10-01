@@ -248,7 +248,7 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleAddTeacher = async (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; gender?: string }) => {
+  const handleAddTeacher = async (data: { name: string; email: string; phone: string; specialization: string | string[]; schoolId: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }>; gender?: string }) => {
     const created = await apiFetch('/api/teachers', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData(false);
     return created;
@@ -282,13 +282,13 @@ export default function AppShell() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
     const created = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
     return created;
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; classIds?: number[] }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; gender?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
     await apiFetch(`/api/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
     await fetchAllData();
   };
@@ -459,6 +459,7 @@ export default function AppShell() {
         classesList={classesList}
         schoolsList={schoolsList}
         teachersList={teachersList}
+        teacherSubjectIds={currentRole === 'teacher' ? currentTeacherProfile?.subjectIds || [] : []}
         approvedSubjectsList={approvedSubjectsList}
         teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
         teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}

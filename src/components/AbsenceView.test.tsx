@@ -540,3 +540,65 @@ describe('AbsenceView surveillant', () => {
     expect(onAddAbsence).not.toHaveBeenCalled();
   });
 });
+
+describe('AbsenceView teacher teaching assignment payload', () => {
+  const renderTeacherAbsenceForm = (multiple: boolean, onAddAbsence = vi.fn()) => {
+    const view = render(
+      <AbsenceView
+        userRole="teacher"
+        absencesList={[]}
+        studentsList={[{ id: 1, classId: 10, firstName: 'Ada', lastName: 'Lovelace', schoolId: 7 } as any]}
+        classesList={[{ id: 10, name: '3e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        teacherSubjectIds={[5]}
+        approvedSubjectsList={[{ id: 5, name: 'Mathématiques' }, { id: 6, name: 'Physique' }]}
+        onAddAbsence={onAddAbsence}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Signaler une absence/i }));
+    if (multiple) {
+      fireEvent.click(screen.getByRole('checkbox'));
+    } else {
+      const studentFields = view.container.querySelectorAll('#box-absence-form select');
+      fireEvent.change(studentFields[0], { target: { value: 'Lovelace' } });
+      fireEvent.change(studentFields[1], { target: { value: 'Ada' } });
+      fireEvent.change(studentFields[2], { target: { value: '1' } });
+    }
+    fireEvent.click(screen.getByRole('radio', { name: 'Mathématiques' }));
+    return onAddAbsence;
+  };
+
+  it('shows only subject ids assigned to the current teacher', () => {
+    renderTeacherAbsenceForm(true);
+    expect(screen.getByRole('radio', { name: 'Mathématiques' })).toBeTruthy();
+    expect(screen.queryByRole('radio', { name: 'Physique' })).toBeNull();
+  });
+
+  it('submits an individual absence without requiring a canonical assignment in the frontend', async () => {
+    const onAddAbsence = renderTeacherAbsenceForm(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
+
+    await waitFor(() => expect(onAddAbsence).toHaveBeenCalledWith(expect.objectContaining({
+      studentId: 1,
+      classId: 10,
+      subjectId: 5,
+    })));
+    expect(onAddAbsence.mock.calls[0][0]).not.toHaveProperty('teachingAssignmentId');
+  });
+
+  it('submits multiple absences without requiring a canonical assignment in the frontend', async () => {
+    const onAddAbsence = renderTeacherAbsenceForm(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les absences sélectionnées' }));
+
+    await waitFor(() => expect(onAddAbsence).toHaveBeenCalledWith(expect.objectContaining({
+      studentId: 1,
+      classId: 10,
+      subjectId: 5,
+    })));
+    expect(onAddAbsence.mock.calls[0][0]).not.toHaveProperty('teachingAssignmentId');
+  });
+});

@@ -117,6 +117,8 @@ export interface Teacher {
   schoolId: number;
   schoolIds?: number[];
   classIds?: number[];
+  subjectIds?: number[];
+  teachingAssignments?: Array<{ id: number; classId: number; subjectId: number; isActive: boolean }>;
   gender?: string;
 }
 

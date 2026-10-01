@@ -7,6 +7,7 @@ import ModalSurface from './ModalSurface';
 import PortalCustomDropdown from './CustomDropdown';
 import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
 import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
+import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
 
 export default function AdminModal(props: any) {
   const {
@@ -938,6 +939,15 @@ export default function AdminModal(props: any) {
                 })()}
                 {renderTeacherClassesState(selectedTeacherSchoolId)}
               </div>
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-xs font-bold text-slate-500 uppercase tracking-wider">Affectations exactes classe-matière</label>
+                <TeachingAssignmentsEditor
+                  classes={sortedClasses.filter((item: any) => item.schoolId == null || Number(item.schoolId) === teacherFormSchoolId).map((item: any) => ({ id: item.id, name: item.name }))}
+                  subjects={subjectsList.map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                  value={teacherForm.teachingAssignments || []}
+                  onChange={(teachingAssignments) => setTeacherForm({ ...teacherForm, teachingAssignments })}
+                />
+              </div>
             </div>
           )}
 
@@ -1117,6 +1127,15 @@ export default function AdminModal(props: any) {
                     />
                       );
                     })()}
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-bold text-slate-500 uppercase tracking-wider">Affectations exactes classe-matière</label>
+                    <TeachingAssignmentsEditor
+                      classes={sortedClasses.filter((item: any) => item.schoolId == null || Number(item.schoolId) === newTeacherFormSchoolId).map((item: any) => ({ id: item.id, name: item.name }))}
+                      subjects={subjectsList.map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                      value={newTeacherForm.teachingAssignments || []}
+                      onChange={(teachingAssignments) => setNewTeacherForm({ ...newTeacherForm, teachingAssignments })}
+                    />
                   </div>
                   <div className="flex items-center justify-between gap-2 pt-2">
                     <button type="button" className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold transition-colors" onClick={() => setNewTeacherMode(false)}>
