@@ -916,7 +916,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateSubject = async (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => {
+  const handleUpdateSubject = async (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => {
     try {
       const updatedSubject = await apiFetch(`/api/subjects/${id}`, {
         method: 'PUT',

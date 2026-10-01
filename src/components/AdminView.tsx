@@ -397,7 +397,7 @@ interface AdminViewProps {
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number) => void;
   onAddSubject?: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => Promise<any>;
-  onUpdateSubject?: (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => Promise<any>;
+  onUpdateSubject?: (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => Promise<any>;
   onAddSubjectType?: (data: { name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
   onUpdateSubjectType?: (id: number, data: { name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
   onDeleteSubjectType?: (id: number) => Promise<void>;

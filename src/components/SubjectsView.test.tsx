@@ -101,31 +101,59 @@ describe('SubjectsView', () => {
     expect(screen.getByText('Aucun type')).toBeDefined();
     expect(screen.getByRole('button', { name: /modifier/i })).toBeDefined();
 
-    fireEvent.click(screen.getByRole('button', { name: /modifier/i }));
+    fireEvent.click(within(screen.getByRole('table')).getByRole('button', { name: /modifier/i }));
 
+    expect((screen.getByLabelText(/nom de la matière/i) as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByLabelText(/code/i) as HTMLInputElement).readOnly).toBe(true);
     const typeSelect = screen.getByLabelText(/type de matière/i) as HTMLSelectElement;
+    expect(typeSelect.disabled).toBe(false);
     expect(typeSelect.value).toBe('');
     fireEvent.change(typeSelect, { target: { value: '7' } });
     fireEvent.click(screen.getByRole('button', { name: /mettre à jour/i }));
 
-    expect(onUpdateSubject).toHaveBeenCalledWith(1, {
-      name: 'Mathématique',
-      code: undefined,
-      subjectTypeId: 7,
-    });
+    expect(onUpdateSubject).toHaveBeenCalledWith(1, { subjectTypeId: 7 });
     expect(screen.getByText('Mathématique')).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: /modifier/i }));
     fireEvent.change(screen.getByLabelText(/type de matière/i), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /mettre à jour/i }));
 
-    expect(onUpdateSubject).toHaveBeenLastCalledWith(1, {
-      name: 'Mathématique',
-      code: undefined,
-      subjectTypeId: null,
-    });
+    expect(onUpdateSubject).toHaveBeenLastCalledWith(1, { subjectTypeId: null });
     expect(screen.getByText('Mathématique')).toBeDefined();
     expect(screen.getByText('Aucun type')).toBeDefined();
+  });
+
+  it('allows super_admin to edit a global subject name, code and type together', async () => {
+    const onUpdateSubject = vi.fn();
+
+    render(
+      <SubjectsView
+        subjectsList={[{ id: 1, schoolId: null, name: 'Mathématique', code: 'MATH', subjectTypeId: null }]}
+        subjectTypesList={[{ id: 7, name: 'Scientifique', sortOrder: 0 }]}
+        userRole="super_admin"
+        onAddSubject={vi.fn()}
+        onUpdateSubject={onUpdateSubject}
+        onDeleteSubject={vi.fn()}
+      />
+    );
+
+    fireEvent.click(within(screen.getByRole('table')).getByRole('button', { name: /modifier/i }));
+    const nameInput = screen.getByLabelText(/nom de la matière/i) as HTMLInputElement;
+    const codeInput = screen.getByLabelText(/code/i) as HTMLInputElement;
+    expect(nameInput.readOnly).toBe(false);
+    expect(codeInput.readOnly).toBe(false);
+    fireEvent.change(nameInput, { target: { value: 'Mathématiques' } });
+    fireEvent.change(codeInput, { target: { value: 'MATHS' } });
+    fireEvent.change(document.getElementById('subject-type-select')!, { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: /mettre à jour/i }));
+
+    await waitFor(() => {
+      expect(onUpdateSubject).toHaveBeenCalledWith(1, {
+        name: 'Mathématiques',
+        code: 'MATHS',
+        subjectTypeId: 7,
+      });
+    });
   });
 
   it('ne considère pas une matière globale non attribuée comme approuvée', () => {

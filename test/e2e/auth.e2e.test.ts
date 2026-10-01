@@ -41,8 +41,12 @@ const FIXTURES = {
     { id: 99, userId: 5, schoolId: null, phone: '+22933333333', specialization: 'History' },
     { id: 100, userId: 10, schoolId: 10, phone: '+22944444444', specialization: 'Science' },
   ],
-  subjects: [{ id: 901, schoolId: null, name: 'Physique', subjectTypeId: null }],
-  schoolSubjects: [{ id: 1, schoolId: 20, subjectId: 901, status: 'approved', subjectTypeId: null }],
+  subjects: [{ id: 901, schoolId: null, name: 'Physique', subjectTypeId: 11 }],
+  subjectTypes: [
+    { id: 11, name: 'Littéraire', description: null, sortOrder: 1 },
+    { id: 12, name: 'Scientifique', description: null, sortOrder: 2 },
+  ],
+  schoolSubjects: [{ id: 1, schoolId: 20, subjectId: 901, status: 'approved', subjectTypeId: 12 }],
   teacherSubjects: [] as Array<{ teacherId: number; schoolId: number; subjectId: number }>,
   parents: [
     { id: 1, userId: 6, studentId: 11, schoolId: 10 },
@@ -390,6 +394,7 @@ function createMockDb() {
       const drizzleName = table[Symbol.for('drizzle:Name')];
       if (drizzleName === 'class_teachers') return 'classTeachers';
       if (drizzleName === 'subjects') return 'subjects';
+      if (drizzleName === 'subject_types') return 'subjectTypes';
       if (drizzleName === 'school_subjects') return 'schoolSubjects';
       if (drizzleName === 'teacher_subjects') return 'teacherSubjects';
       const keys = Object.keys(table).map((k) => k.toLowerCase());
@@ -461,6 +466,7 @@ function createMockDb() {
       : tableName === 'classes' ? FIXTURES.classes
       : tableName === 'teachers' ? FIXTURES.teachers
       : tableName === 'subjects' ? FIXTURES.subjects
+      : tableName === 'subjectTypes' ? FIXTURES.subjectTypes
       : tableName === 'schoolSubjects' ? FIXTURES.schoolSubjects
       : tableName === 'teacherSubjects' ? FIXTURES.teacherSubjects
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
@@ -606,6 +612,11 @@ function createMockDb() {
           const teacher = FIXTURES.teachers.find((row: any) => Number(row.id) === Number(baseRow.teacherId));
           return FIXTURES.users.find((row: any) => Number(row.id) === Number(teacher?.userId))?.name ?? null;
         }
+        if (resolveTableName(builder._table) === 'subjects' && ['subjectTypeId', 'status'].includes(String(selectedAlias))) {
+          const relation = baseRow._schoolSubject;
+          if (selectedAlias === 'subjectTypeId') return relation ? relation.subjectTypeId ?? null : baseRow.subjectTypeId ?? null;
+          return relation?.status ?? 'approved';
+        }
         if (typeof expr === 'string' || typeof expr === 'number' || typeof expr === 'boolean') return expr;
         if (typeof expr === 'object') {
           if (expr.name) {
@@ -645,6 +656,19 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
         let rows = filterTableRows(builder._table, baseConditions);
+
+        if (hasSchoolSubjectsJoin) {
+          const joinConditions = builder._joins
+            .filter((join: any) => resolveTableName(join.table) === 'schoolSubjects')
+            .reduce((acc: Record<string, any>, join: any) => Object.assign(acc, extractConditions(join.cond)), {});
+          rows = rows.map((subject: any) => ({
+            ...subject,
+            _schoolSubject: FIXTURES.schoolSubjects.find((schoolSubject: any) => (
+              schoolSubject.subjectId === subject.id
+              && (joinConditions.schoolId == null || schoolSubject.schoolId === joinConditions.schoolId)
+            )) ?? null,
+          }));
+        }
 
         if (hasSchoolClassesJoin && conditions.schoolId != null) {
           rows = rows.filter((row: any) => row.schoolId === conditions.schoolId || (
@@ -916,6 +940,11 @@ function createMockDb() {
           const executeUpdate = async (cond: any) => {
             const conditions = extractConditions(cond);
             const tableName = resolveTableName(table);
+            if (tableName === 'schoolSubjects') {
+              const matchedRows = FIXTURES.schoolSubjects.filter((row: any) => Object.entries(conditions).every(([key, value]) => row[key] === value));
+              matchedRows.forEach((row: any) => Object.assign(row, values));
+              return matchedRows;
+            }
             if (conditions.id != null) {
               const id = Number(conditions.id);
               const updateRow = (rows: any[]) => {
@@ -935,11 +964,18 @@ function createMockDb() {
               if (tableName === 'homeroomAssignments') return updateRow(FIXTURES.homeroomAssignments);
               if (tableName === 'userSchools') return updateRow(FIXTURES.userSchools);
               if (tableName === 'localAuths') return updateRow(FIXTURES.localAuths);
+              if (tableName === 'subjects') return updateRow(FIXTURES.subjects);
+              if (tableName === 'subjectTypes') return updateRow(FIXTURES.subjectTypes);
               if (tableName === 'schoolClasses') return updateRow(FIXTURES.schoolClasses);
               if (tableName === 'absences') return updateRow(FIXTURES.absences);
               if (tableName === 'notifications') return updateRow(FIXTURES.notifications);
               if (tableName === 'notificationAttachments') return updateRow(FIXTURES.notificationAttachments);
               if (tableName === 'auditEvents') return updateRow(FIXTURES.auditEvents);
+            }
+            if (tableName === 'schoolSubjects') {
+              const updatedRows = FIXTURES.schoolSubjects.filter((row: any) => Object.entries(conditions).every(([key, value]) => row[key] === value));
+              updatedRows.forEach((row: any) => Object.assign(row, values));
+              return updatedRows;
             }
             return [];
           };
@@ -1818,6 +1854,78 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.loginsByDay).toHaveLength(30);
     expect(res.body.loginsByDay.every((entry: any) => entry.total === 0 && entry.web === 0 && entry.android === 0)).toBe(true);
     expect(res.body.loginsByRole).toEqual([]);
+  });
+
+  it('Super Admin can update a global subject name, code and default type', async () => {
+    const response = await request(app)
+      .put('/api/subjects/901')
+      .set('Authorization', 'Bearer token-super')
+      .send({ name: 'Physique générale', code: 'PHY-G', subjectTypeId: 12 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.subjects.find((subject: any) => subject.id === 901)).toMatchObject({
+      name: 'Physique générale',
+      code: 'PHY-G',
+      subjectTypeId: 12,
+    });
+  });
+
+  it('School Admin updates an assigned global subject type only for its school and reads the effective type', async () => {
+    FIXTURES.schoolSubjects.push({ id: 2, schoolId: 10, subjectId: 901, status: 'approved', subjectTypeId: 11 });
+
+    const updateResponse = await request(app)
+      .put('/api/subjects/901')
+      .set('Authorization', 'Bearer token-school')
+      .send({ subjectTypeId: 12 });
+
+    expect(updateResponse.status).toBe(200);
+    expect(FIXTURES.schoolSubjects.find((relation: any) => relation.schoolId === 10 && relation.subjectId === 901)?.subjectTypeId).toBe(12);
+    expect(FIXTURES.subjects.find((subject: any) => subject.id === 901)?.subjectTypeId).toBe(11);
+
+    const readResponse = await request(app)
+      .get('/api/subjects')
+      .set('Authorization', 'Bearer token-school');
+    expect(readResponse.status).toBe(200);
+    expect(readResponse.body.find((subject: any) => subject.id === 901)).toMatchObject({ subjectTypeId: 12, status: 'approved' });
+  });
+
+  it('School Admin cannot change the name of an assigned global subject', async () => {
+    FIXTURES.schoolSubjects.push({ id: 2, schoolId: 10, subjectId: 901, status: 'approved', subjectTypeId: 11 });
+
+    const response = await request(app)
+      .put('/api/subjects/901')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Nom interdit', subjectTypeId: 12 });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('Global subject names can only be changed by a super admin');
+    expect(FIXTURES.subjects.find((subject: any) => subject.id === 901)?.name).toBe('Physique');
+    expect(FIXTURES.schoolSubjects.find((relation: any) => relation.schoolId === 10)?.subjectTypeId).toBe(11);
+  });
+
+  it('School Admin cannot change the code of an assigned global subject', async () => {
+    FIXTURES.schoolSubjects.push({ id: 2, schoolId: 10, subjectId: 901, status: 'approved', subjectTypeId: 11 });
+
+    const response = await request(app)
+      .put('/api/subjects/901')
+      .set('Authorization', 'Bearer token-school')
+      .send({ code: 'PHY-NEW', subjectTypeId: 12 });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('Global subject names can only be changed by a super admin');
+    expect(FIXTURES.subjects.find((subject: any) => subject.id === 901)?.code).toBeUndefined();
+    expect(FIXTURES.schoolSubjects.find((relation: any) => relation.schoolId === 10)?.subjectTypeId).toBe(11);
+  });
+
+  it('School Admin cannot change a global subject type without an approved school assignment', async () => {
+    const response = await request(app)
+      .put('/api/subjects/901')
+      .set('Authorization', 'Bearer token-school')
+      .send({ subjectTypeId: 12 });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('Global subject is not assigned to your school');
+    expect(FIXTURES.subjects.find((subject: any) => subject.id === 901)?.subjectTypeId).toBe(11);
   });
 
   it('3i. school_admin can create a teacher in their own school via POST /api/teachers', async () => {

@@ -15,7 +15,7 @@ interface SubjectsViewProps {
   schoolsList?: SchoolOption[];
   subjectTypesList?: SubjectType[];
   onAddSubject: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => void;
-  onUpdateSubject: (id: number, data: { name: string; code?: string; subjectTypeId?: number | null }) => void;
+  onUpdateSubject: (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => void;
   onDeleteSubject: (id: number) => void;
   onAddSubjectType?: (data: { name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
   onUpdateSubjectType?: (id: number, data: { name?: string; description?: string | null; sortOrder?: number }) => Promise<any>;
@@ -68,6 +68,7 @@ export default function SubjectsView({
   const [subjectTypeDescription, setSubjectTypeDescription] = useState('');
   const [subjectTypeSortOrder, setSubjectTypeSortOrder] = useState(0);
   const [editingSubjectTypeId, setEditingSubjectTypeId] = useState<number | null>(null);
+  const isSchoolAdminEditingSubject = userRole === 'school_admin' && editingId != null;
 
   const handleOpenForm = (subject?: Subject) => {
     if (subject) {
@@ -98,11 +99,16 @@ export default function SubjectsView({
     if (!formName.trim()) return;
 
     if (editingId) {
-      onUpdateSubject(editingId, {
-        name: formName.trim(),
-        code: formCode.trim() || undefined,
-        subjectTypeId: formSubjectTypeId === '' ? null : Number(formSubjectTypeId),
-      });
+      const subjectTypeId = formSubjectTypeId === '' ? null : Number(formSubjectTypeId);
+      if (isSchoolAdminEditingSubject) {
+        onUpdateSubject(editingId, { subjectTypeId });
+      } else {
+        onUpdateSubject(editingId, {
+          name: formName.trim(),
+          code: formCode.trim() || undefined,
+          subjectTypeId,
+        });
+      }
     } else {
       const targetSchoolId = userRole === 'super_admin' ? (selectedSchoolId ? Number(selectedSchoolId) : undefined) : schoolId;
       const newSubjectData: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null } = {
@@ -484,8 +490,9 @@ export default function SubjectsView({
                   type="text"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
+                  readOnly={isSchoolAdminEditingSubject}
                   placeholder="Ex. Mathématiques"
-                  className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className={`w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 ${isSchoolAdminEditingSubject ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                   required
                 />
               </div>
@@ -499,8 +506,9 @@ export default function SubjectsView({
                   type="text"
                   value={formCode}
                   onChange={(e) => setFormCode(e.target.value)}
+                  readOnly={isSchoolAdminEditingSubject}
                   placeholder="Ex. MATH"
-                  className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className={`w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 ${isSchoolAdminEditingSubject ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                 />
               </div>
 

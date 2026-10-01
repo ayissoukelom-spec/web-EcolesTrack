@@ -9013,8 +9013,14 @@ export async function createApp() {
       if (actor.role === 'school_admin') {
         if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
         if (subject.schoolId != null && subject.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
-        if (subject.schoolId == null && (req.body?.name !== undefined || req.body?.code !== undefined)) {
-          return res.status(403).json({ error: 'Global subject names can only be changed by a super admin' });
+        const requestedName = req.body?.name === undefined ? undefined : String(req.body.name).trim();
+        const requestedCode = req.body?.code === undefined ? undefined : String(req.body.code ?? '').trim() || null;
+        const changesGlobalName = requestedName !== undefined && requestedName !== subject.name;
+        const changesGlobalCode = requestedCode !== undefined && requestedCode !== (subject.code ?? null);
+        if (changesGlobalName || changesGlobalCode) {
+          return res.status(403).json({ error: subject.schoolId == null
+            ? 'Global subject names can only be changed by a super admin'
+            : 'School admins cannot change subject names or codes' });
         }
       }
 
@@ -9035,9 +9041,11 @@ export async function createApp() {
       } = {
         updatedAt: new Date(),
       };
-      if (name !== undefined) {
+      if (name !== undefined && actor.role !== 'school_admin') {
         updateValues.name = name.trim();
-        updateValues.code = code ? code.trim() : undefined;
+      }
+      if (code !== undefined && actor.role !== 'school_admin') {
+        updateValues.code = String(code ?? '').trim() || null;
       }
 
       if (hasSubjectTypeId) {
@@ -9097,21 +9105,19 @@ export async function createApp() {
             updateValues.subjectTypeId = parsedSubjectTypeId;
           }
         } else if (actor.role === 'super_admin') {
-          if (subject.schoolId !== null) {
-            if (bodySubjectTypeId === null || bodySubjectTypeId === '') {
-              updateValues.subjectTypeId = null;
-            } else {
-              const parsedSubjectTypeId = Number(bodySubjectTypeId);
-              if (!Number.isInteger(parsedSubjectTypeId) || parsedSubjectTypeId <= 0) {
-                return res.status(400).json({ error: 'Invalid subjectTypeId' });
-              }
-
-              const [subjectType] = await db.select({ id: subjectTypes.id })
-                .from(subjectTypes)
-                .where(eq(subjectTypes.id, parsedSubjectTypeId));
-              if (!subjectType) return res.status(404).json({ error: 'Subject type not found' });
-              updateValues.subjectTypeId = parsedSubjectTypeId;
+          if (bodySubjectTypeId === null || bodySubjectTypeId === '') {
+            updateValues.subjectTypeId = null;
+          } else {
+            const parsedSubjectTypeId = Number(bodySubjectTypeId);
+            if (!Number.isInteger(parsedSubjectTypeId) || parsedSubjectTypeId <= 0) {
+              return res.status(400).json({ error: 'Invalid subjectTypeId' });
             }
+
+            const [subjectType] = await db.select({ id: subjectTypes.id })
+              .from(subjectTypes)
+              .where(eq(subjectTypes.id, parsedSubjectTypeId));
+            if (!subjectType) return res.status(404).json({ error: 'Subject type not found' });
+            updateValues.subjectTypeId = parsedSubjectTypeId;
           }
         }
       }
