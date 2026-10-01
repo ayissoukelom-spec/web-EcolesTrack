@@ -2,14 +2,17 @@ import express from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/index.ts';
 import { registerBulletinGenerateRoute } from './bulletinSnapshotService.ts';
+import { registerBulletinPdfRoute } from './bulletinPdfApi.ts';
 
 vi.mock('./studentAccess', () => ({
   default: {
     getAuthorizedStudents: vi.fn(),
   },
+  isApprovedClassForSchool: vi.fn(),
 }));
 
 let studentAccessMock: any;
+let isApprovedClassForSchoolMock: any;
 let activeServer: any = null;
 
 afterEach(async () => {
@@ -24,6 +27,8 @@ describe('registerBulletinGenerateRoute', () => {
     const module = await import('./studentAccess');
     studentAccessMock = module.default;
     studentAccessMock.getAuthorizedStudents.mockReset();
+    isApprovedClassForSchoolMock = module.isApprovedClassForSchool;
+    isApprovedClassForSchoolMock.mockReset().mockResolvedValue(true);
   });
 
   it('creates a bulletin snapshot via the generate endpoint', async () => {
@@ -58,6 +63,170 @@ describe('registerBulletinGenerateRoute', () => {
 
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ id: 777, studentId: 10, termId: 2 });
+  });
+
+  it('uses the shared class approval helper before generating an individual bulletin', async () => {
+    const app = express();
+    app.use(express.json());
+
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin' };
+      next();
+    };
+    const queryResults = [
+      [{ classId: 53, schoolId: 25 }],
+      [{ id: 53, academicYearId: 4, schoolId: null }],
+      [{ id: 2, academicYearId: 4 }],
+    ];
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve(queryResults.shift() || []) }),
+    } as any));
+    const generateHandler = vi.fn();
+    isApprovedClassForSchoolMock.mockResolvedValue(false);
+
+    try {
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
+        verifyMiddleware: verifyMiddleware as any,
+        generateHandler,
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const response = await fetch(`http://127.0.0.1:${port}/api/bulletins/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: 10, termId: 2 }),
+      });
+
+      expect(response.status).toBe(403);
+      expect(isApprovedClassForSchoolMock).toHaveBeenCalledWith(53, 25);
+      expect(generateHandler).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+
+  it('persists the individual bulletin scope version and downloads that bulletin for its school admin', async () => {
+    const app = express();
+    app.use(express.json());
+    const persistedBulletins: any[] = [];
+    const downloadedIds: number[] = [];
+    const queryResults = [
+      [{ classId: 53, schoolId: 25 }],
+      [{ id: 53, academicYearId: 4, schoolId: null }],
+      [{ id: 2, academicYearId: 4 }],
+      [],
+    ];
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve(queryResults.shift() || []) }),
+    } as any));
+    const insertSpy = vi.spyOn(db, 'insert').mockImplementation(() => ({
+      values: (values: any) => ({
+        returning: async () => [{ id: 900, ...values }],
+      }),
+    } as any));
+    const updateSpy = vi.spyOn(db, 'update').mockImplementation(() => ({
+      set: () => ({ where: async () => [] }),
+    } as any));
+    const transactionSpy = vi.spyOn(db, 'transaction').mockImplementation(async (run: any) => run({
+      insert: () => ({
+        values: (values: any) => ({
+          returning: async () => {
+            const bulletin = { id: 501, ...values };
+            persistedBulletins.push(bulletin);
+            return [bulletin];
+          },
+        }),
+      }),
+    } as any));
+    const verifyMiddleware = (req: any, _res: any, next: any) => {
+      req.user = { id: 8, uid: 'school-admin-25', role: 'school_admin', appRole: 'admin', schoolId: 25 };
+      next();
+    };
+
+    try {
+      isApprovedClassForSchoolMock.mockResolvedValue(true);
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 8, role: 'school_admin', schoolId: 25 }),
+        verifyMiddleware: verifyMiddleware as any,
+        resolveAvailableTerm: async ({ requestedTermId }) => ({ term: { id: requestedTermId! }, education: {} as any }),
+        generateHandler: async (studentId, termId, persistence, generationId) => {
+          const inserted = await persistence.transaction((context) => context.insertBulletin({
+            studentId,
+            classId: 53,
+            schoolYearId: 4,
+            termId,
+            generationId,
+            schoolScopeVersion: 1,
+            average: 12,
+            totalPoints: 12,
+            totalCoefficients: 1,
+            rank: 1,
+            mention: null,
+            appreciation: null,
+            generatedAt: new Date(),
+          }));
+          return {
+            bulletinId: inserted.id,
+            studentId,
+            termId,
+            average: 12,
+            totalPoints: 12,
+            totalCoefficients: 1,
+            rank: 1,
+            mention: null,
+            appreciation: null,
+            linesCount: 0,
+            subjectGroups: [],
+          };
+        },
+      });
+      registerBulletinPdfRoute(app, {
+        resolveActor: async () => ({ role: 'school_admin', schoolId: 25 }),
+        verifyMiddleware: verifyMiddleware as any,
+        dataProvider: {
+          getById: async (actor, bulletinId) => {
+            downloadedIds.push(bulletinId);
+            const bulletin = persistedBulletins.find((row) => row.id === bulletinId);
+            if (!bulletin) return null;
+            if (actor.role === 'school_admin' && bulletin.schoolScopeVersion < 1) return null;
+            return { id: bulletin.id } as any;
+          },
+        },
+        pdfGenerator: async (bulletin) => new TextEncoder().encode(`%PDF-1.4\nBULLETIN:${bulletin.id}`),
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const generateResponse = await fetch(`${baseUrl}/api/bulletins/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: 10, termId: 2 }),
+      });
+      const generated = await generateResponse.json();
+      const persisted = persistedBulletins.find((bulletin) => bulletin.id === generated.id);
+      const pdfResponse = await fetch(`${baseUrl}/api/bulletins/${generated.id}/pdf`);
+
+      expect(generateResponse.status).toBe(201);
+      expect(persisted).toMatchObject({ id: 501, schoolScopeVersion: 1 });
+      expect(pdfResponse.status).toBe(200);
+      expect(pdfResponse.headers.get('content-type')).toContain('application/pdf');
+      expect(await pdfResponse.text()).toContain(`BULLETIN:${generated.id}`);
+      expect(downloadedIds).toEqual([generated.id]);
+    } finally {
+      selectSpy.mockRestore();
+      insertSpy.mockRestore();
+      updateSpy.mockRestore();
+      transactionSpy.mockRestore();
+    }
   });
 
   it('returns 400 with a specific code when the student has no current class', async () => {

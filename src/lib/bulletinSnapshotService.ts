@@ -2,7 +2,7 @@ import type express from 'express';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { requireRole, verifyToken } from '../middleware/auth.ts';
-import studentAccess from './studentAccess';
+import studentAccess, { isApprovedClassForSchool } from './studentAccess';
 import { bulletinGenerations } from '../db/schema.ts';
 import {
   bulletinLines,
@@ -1164,6 +1164,7 @@ export const registerBulletinGenerateRoute = (
                   schoolYearId: payload.schoolYearId,
                   termId: payload.termId,
                   generationId: payload.generationId ?? null,
+                  schoolScopeVersion: payload.schoolScopeVersion ?? 0,
                   average: toStoredNumber(payload.average),
                   classHighestAverage: toStoredNumber(payload.classHighestAverage),
                   classLowestAverage: toStoredNumber(payload.classLowestAverage),
