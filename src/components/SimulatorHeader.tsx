@@ -178,6 +178,11 @@ export default function SimulatorHeader({
   const [createParentSchoolId, setCreateParentSchoolId] = useState('');
   const [createSpecializations, setCreateSpecializations] = useState<string[]>([]);
   const [createAssignedClassIds, setCreateAssignedClassIds] = useState<number[]>([]);
+  const [schoolTeacherSubjects, setSchoolTeacherSubjects] = useState<{
+    schoolId: number;
+    subjects: Array<{ id: number; name: string }>;
+  } | null>(null);
+  const [isLoadingSchoolTeacherSubjects, setIsLoadingSchoolTeacherSubjects] = useState(false);
   
   // Ensure default password prefilled when open
   useEffect(() => {
@@ -217,13 +222,66 @@ export default function SimulatorHeader({
     };
   }, [createTeacherSchoolId]);
 
+  useEffect(() => {
+    if (currentRole !== 'super_admin' || createRole !== 'teacher') {
+      setSchoolTeacherSubjects(null);
+      setIsLoadingSchoolTeacherSubjects(false);
+      return;
+    }
+
+    if (createTeacherSchoolId == null) {
+      setSchoolTeacherSubjects(null);
+      setIsLoadingSchoolTeacherSubjects(false);
+      setCreateSpecializations([]);
+      return;
+    }
+
+    let cancelled = false;
+    setSchoolTeacherSubjects(null);
+    setIsLoadingSchoolTeacherSubjects(true);
+    apiFetch(`/api/subjects?schoolId=${createTeacherSchoolId}&approvedOnly=true`)
+      .then((payload) => {
+        if (cancelled) return;
+
+        const uniqueSubjectsById = new Map<number, { id: number; name: string }>();
+        for (const subject of Array.isArray(payload) ? payload : []) {
+          const id = Number(subject?.id);
+          const name = String(subject?.name || '').trim();
+          if (Number.isInteger(id) && id > 0 && name && !uniqueSubjectsById.has(id)) {
+            uniqueSubjectsById.set(id, { id, name });
+          }
+        }
+
+        const subjects = Array.from(uniqueSubjectsById.values());
+        const availableIds = new Set(subjects.map((subject) => String(subject.id)));
+        setSchoolTeacherSubjects({ schoolId: createTeacherSchoolId, subjects });
+        setCreateSpecializations((selectedIds) => selectedIds.filter((id) => availableIds.has(id)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSchoolTeacherSubjects({ schoolId: createTeacherSchoolId, subjects: [] });
+        setCreateSpecializations([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingSchoolTeacherSubjects(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRole, createRole, createTeacherSchoolId]);
+
   const availableTeacherClasses = createTeacherSchoolId
     ? (teacherSchoolClasses ?? [])
     : (classesList || []);
 
-  const teacherSpecializations = approvedSubjectsList && approvedSubjectsList.length > 0
-    ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
-    : [];
+  const teacherSpecializations = currentRole === 'super_admin'
+    ? schoolTeacherSubjects != null && schoolTeacherSubjects.schoolId === createTeacherSchoolId
+      ? schoolTeacherSubjects.subjects.map((subject) => ({ id: String(subject.id), name: subject.name }))
+      : []
+    : (approvedSubjectsList || [])
+      .map((subject) => ({ id: String(subject.name || '').trim(), name: String(subject.name || '').trim() }))
+      .filter((subject) => subject.name);
   const roles = [
     {
       id: 'super_admin',
@@ -985,23 +1043,32 @@ export default function SimulatorHeader({
                       <RequiredLabel label="Spécialisation" required />
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border border-slate-200 rounded-lg p-2 bg-slate-50 max-h-56 overflow-auto">
-                      {teacherSpecializations.map((subject) => (
-                        <label key={subject} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 cursor-pointer">
+                        {teacherSpecializations.map((subject) => {
+                          const selectionValue = currentRole === 'super_admin' ? subject.id : subject.name;
+                          return (
+                          <label key={selectionValue} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 cursor-pointer">
                           <input
                             type="checkbox"
-                            checked={createSpecializations.includes(subject)}
+                              checked={createSpecializations.includes(selectionValue)}
                             onChange={() => {
-                              if (createSpecializations.includes(subject)) {
-                                setCreateSpecializations(createSpecializations.filter((item) => item !== subject));
+                                if (createSpecializations.includes(selectionValue)) {
+                                  setCreateSpecializations(createSpecializations.filter((item) => item !== selectionValue));
                               } else {
-                                setCreateSpecializations([...createSpecializations, subject]);
+                                  setCreateSpecializations([...createSpecializations, selectionValue]);
                               }
                             }}
                             className="h-4 w-4 accent-indigo-600"
                           />
-                          <span className="text-sm text-slate-700">{subject}</span>
+                            <span className="text-sm text-slate-700">{subject.name}</span>
                         </label>
-                      ))}
+                          );
+                        })}
+                        {currentRole === 'super_admin' && isLoadingSchoolTeacherSubjects && (
+                          <div className="text-slate-500">Chargement des matières de l’école...</div>
+                        )}
+                        {currentRole === 'super_admin' && !isLoadingSchoolTeacherSubjects && createTeacherSchoolId != null && teacherSpecializations.length === 0 && (
+                          <div className="text-slate-500">Aucune matière approuvée pour cette école.</div>
+                        )}
                     </div>
                   </div>}
                 </>
@@ -1081,6 +1148,13 @@ export default function SimulatorHeader({
                     }
                   }
                   if (createRole === 'teacher') {
+                    if (currentRole === 'super_admin' && (
+                      isLoadingSchoolTeacherSubjects
+                      || schoolTeacherSubjects?.schoolId !== createTeacherSchoolId
+                    )) {
+                      setCreateError('Les matières approuvées de l’école ne sont pas encore chargées');
+                      return;
+                    }
                     if (!Array.isArray(createSpecializations) || createSpecializations.length === 0) {
                       setCreateError('Au moins une spécialisation est requise pour un enseignant');
                       return;
@@ -1098,20 +1172,29 @@ export default function SimulatorHeader({
                   const normalizedLastName = createRole === 'teacher' ? createLastName.trim().toUpperCase() : createLastName.trim();
                   const normalizedFirstNames = createRole === 'teacher' ? normalizeFirstName(createFirstName) : createFirstName.trim();
                   const name = `${normalizedLastName} ${normalizedFirstNames}`.trim() || `${createRole} Test`;
+                  const isSuperAdminTeacher = currentRole === 'super_admin' && createRole === 'teacher';
+                  const subjectCatalog = isSuperAdminTeacher
+                    ? schoolTeacherSubjects?.schoolId === createTeacherSchoolId ? schoolTeacherSubjects.subjects : []
+                    : approvedSubjectsList;
                   const subjectIds = createRole === 'teacher'
                     ? Array.from(new Set(
-                        approvedSubjectsList
-                          .filter((subject) => createSpecializations.includes(String(subject.name || '').trim()))
+                        subjectCatalog
+                          .filter((subject) => createSpecializations.includes(isSuperAdminTeacher ? String(subject.id) : String(subject.name || '').trim()))
                           .map((subject) => Number(subject.id))
                           .filter((id) => Number.isInteger(id) && id > 0)
                       ))
                     : [];
+                  const specialization = isSuperAdminTeacher
+                    ? subjectCatalog
+                        .filter((subject) => createSpecializations.includes(String(subject.id)))
+                        .map((subject) => String(subject.name || '').trim())
+                    : createSpecializations;
                   const payload: any = {
                     email: createEmail,
                     name,
                     role: createRole,
                     phone: `${createPhonePrefix}${createPhone}`,
-                    specialization: createRole === 'teacher' ? createSpecializations : undefined,
+                    specialization: createRole === 'teacher' ? specialization : undefined,
                     subjectIds: createRole === 'teacher' ? subjectIds : undefined,
                     ...(createRole === 'teacher'
                       ? {

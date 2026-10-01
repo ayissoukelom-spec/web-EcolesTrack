@@ -41,6 +41,9 @@ const FIXTURES = {
     { id: 99, userId: 5, schoolId: null, phone: '+22933333333', specialization: 'History' },
     { id: 100, userId: 10, schoolId: 10, phone: '+22944444444', specialization: 'Science' },
   ],
+  subjects: [{ id: 901, schoolId: null, name: 'Physique', subjectTypeId: null }],
+  schoolSubjects: [{ id: 1, schoolId: 20, subjectId: 901, status: 'approved', subjectTypeId: null }],
+  teacherSubjects: [] as Array<{ teacherId: number; schoolId: number; subjectId: number }>,
   parents: [
     { id: 1, userId: 6, studentId: 11, schoolId: 10 },
     { id: 2, userId: 7, studentId: 11, schoolId: 10 },
@@ -384,7 +387,11 @@ function createMockDb() {
       if (lower.includes('userloginevents')) return 'userLoginEvents';
     }
     if (table && typeof table === 'object') {
-      if (table[Symbol.for('drizzle:Name')] === 'class_teachers') return 'classTeachers';
+      const drizzleName = table[Symbol.for('drizzle:Name')];
+      if (drizzleName === 'class_teachers') return 'classTeachers';
+      if (drizzleName === 'subjects') return 'subjects';
+      if (drizzleName === 'school_subjects') return 'schoolSubjects';
+      if (drizzleName === 'teacher_subjects') return 'teacherSubjects';
       const keys = Object.keys(table).map((k) => k.toLowerCase());
       if (keys.includes('uid') && keys.includes('email') && keys.includes('role')) return 'users';
       if (keys.includes('actoruserid') && keys.includes('resourceid')) return 'auditEvents';
@@ -453,6 +460,9 @@ function createMockDb() {
       : tableName === 'students' ? FIXTURES.students.map((student: any) => ({ isActive: true, withdrawnAt: null, ...student }))
       : tableName === 'classes' ? FIXTURES.classes
       : tableName === 'teachers' ? FIXTURES.teachers
+      : tableName === 'subjects' ? FIXTURES.subjects
+      : tableName === 'schoolSubjects' ? FIXTURES.schoolSubjects
+      : tableName === 'teacherSubjects' ? FIXTURES.teacherSubjects
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'absences' ? FIXTURES.absences
@@ -631,6 +641,9 @@ function createMockDb() {
         const hasSchoolClassesJoin = fromName === 'classes'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolClasses');
         if (hasSchoolClassesJoin) delete baseConditions.schoolId;
+        const hasSchoolSubjectsJoin = fromName === 'subjects'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
+        if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
         let rows = filterTableRows(builder._table, baseConditions);
 
         if (hasSchoolClassesJoin && conditions.schoolId != null) {
@@ -640,6 +653,16 @@ function createMockDb() {
               schoolClass.classId === row.id
               && schoolClass.schoolId === conditions.schoolId
               && schoolClass.status === 'approved'
+            ))
+          ));
+        }
+
+        if (hasSchoolSubjectsJoin && conditions.schoolId != null) {
+          rows = rows.filter((subject: any) => subject.schoolId === conditions.schoolId || (
+            FIXTURES.schoolSubjects.some((schoolSubject: any) => (
+              schoolSubject.subjectId === subject.id
+              && schoolSubject.schoolId === conditions.schoolId
+              && schoolSubject.status === 'approved'
             ))
           ));
         }
@@ -802,6 +825,11 @@ function createMockDb() {
               FIXTURES.teachers.push(row as any);
               return [row];
             }
+            if (tableName === 'teacherSubjects') {
+              const rows = (Array.isArray(obj) ? obj : [obj]) as any[];
+              FIXTURES.teacherSubjects.push(...rows);
+              return rows;
+            }
 
             if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
               FIXTURES.userSchools.push(obj as any);
@@ -951,6 +979,11 @@ function createMockDb() {
             const before = FIXTURES.homeroomAssignments.length;
             const remaining = FIXTURES.homeroomAssignments.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
             FIXTURES.homeroomAssignments.splice(0, before, ...remaining);
+            return [];
+          }
+          if (tableName === 'teacherSubjects') {
+            const remaining = FIXTURES.teacherSubjects.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
+            FIXTURES.teacherSubjects.splice(0, FIXTURES.teacherSubjects.length, ...remaining);
             return [];
           }
           if (conditions.id != null) {
@@ -2600,6 +2633,34 @@ describe('E2E security: auth & privilege checks', () => {
       schoolId: 10,
     }));
     expect(createRes.body.classIds).toContain(1);
+  });
+
+  it('does not associate a subject approved only for another school when creating a teacher', async () => {
+    const createRes = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({
+        uid: 'teacher-with-unapproved-subject',
+        email: 'teacher-unapproved-subject@x.test',
+        lastName: 'Unapproved',
+        firstNames: 'Teacher',
+        name: 'Unapproved Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        phone: '+228 90000001',
+        specialization: 'Physique',
+        subjectIds: [901],
+      });
+
+    expect(createRes.status).toBe(201);
+    const createdUser = FIXTURES.users.find((user) => user.uid === 'teacher-with-unapproved-subject');
+    const teacherProfile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
+    expect(teacherProfile).toBeDefined();
+    expect(FIXTURES.teacherSubjects).not.toContainEqual(expect.objectContaining({
+      teacherId: teacherProfile?.id,
+      schoolId: 10,
+      subjectId: 901,
+    }));
   });
 
   it('7. teacher only sees assigned classes via classTeachers', async () => {
