@@ -5,6 +5,24 @@ import { getTeacherAuthorizationScope } from './teacherAuthorization.ts';
 
 type Actor = { id?: number; role: string; schoolId?: number | null; simulated?: boolean };
 
+export async function getActiveStudentsForClassScope(
+  classIds?: number[],
+  schoolId?: number | null,
+  queryDb: any = db,
+) {
+  const conditions = [eq(students.isActive, true)];
+  if (classIds && classIds.length > 0) conditions.push(inArray(students.classId, classIds));
+  if (schoolId != null) conditions.push(eq(students.schoolId, schoolId));
+
+  return queryDb.select({
+    id: students.id,
+    classId: students.classId,
+    schoolId: students.schoolId,
+    firstName: students.firstName,
+    lastName: students.lastName,
+  }).from(students).where(and(...conditions));
+}
+
 export async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
   if (targetSchoolId == null) return false;
   const [cls] = await db.select().from(classes).where(eq(classes.id, classId));
@@ -29,19 +47,13 @@ async function computeTeacherClassIds(actor: Actor): Promise<number[]> {
 export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: number[] }): Promise<number[]> {
   // super_admin: full access — return all student ids (optionally filtered by classIds)
   if (actor.role === 'super_admin') {
-    if (opts?.classIds && opts.classIds.length > 0) {
-      const rows = await db.select({ id: students.id }).from(students).where(and(inArray(students.classId, opts.classIds), eq(students.isActive, true)));
-      return (rows as any).map((r: any) => r.id);
-    }
-    const rows = await db.select({ id: students.id }).from(students);
-    return (rows as any).map((r: any) => r.id);
+    const rows = await getActiveStudentsForClassScope(opts?.classIds, undefined);
+    return rows.map((row) => row.id);
   }
 
   if (actor.role === 'school_admin') {
     if (actor.schoolId == null) return [];
-    const conditions = [eq(students.schoolId, actor.schoolId), eq(students.isActive, true)];
-    if (opts?.classIds && opts.classIds.length > 0) conditions.push(inArray(students.classId, opts.classIds));
-    const rows = await db.select({ id: students.id }).from(students).where(and(...conditions));
+    const rows = await getActiveStudentsForClassScope(opts?.classIds, actor.schoolId);
     return rows.map((row) => row.id);
   }
 
@@ -56,8 +68,8 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
   if (!allowedClassIds || allowedClassIds.length === 0) return [];
 
   const actorSchoolId = actor.schoolId ?? null;
-  const rows = await db.select({ id: students.id }).from(students).where(and(inArray(students.classId, allowedClassIds), eq(students.schoolId, actorSchoolId), eq(students.isActive, true)));
-  return (rows as any).map((r: any) => r.id);
+  const rows = await getActiveStudentsForClassScope(allowedClassIds, actorSchoolId);
+  return rows.map((row) => row.id);
 }
 
 export async function getAuthorizedStudents(actor: Actor, opts?: { classIds?: number[] }) {

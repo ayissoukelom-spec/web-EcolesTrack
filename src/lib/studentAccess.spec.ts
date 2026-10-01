@@ -32,7 +32,11 @@ const mockDb = vi.hoisted(() => ({
           builder._rows = builder._rows.filter((assignment: any) => assignment.teacherId === teacherId);
         } else if (builder.table === students) {
           mockState.lastStudentWhere = condition;
-          builder._rows = mockState.studentRows;
+          const query = new PgDialect().sqlToQuery(condition);
+          const shouldFilterActiveOnly = query.sql.includes('is_active');
+          builder._rows = shouldFilterActiveOnly
+            ? mockState.studentRows.filter((row) => row.isActive)
+            : mockState.studentRows;
         }
         return builder;
       },
@@ -91,13 +95,13 @@ describe('studentAccess.getAuthorizedStudentIds (unit)', () => {
     expect(ids).toEqual([]);
   });
 
-  it('returns all students for super_admin', async () => {
+  it('returns only active students for super_admin', async () => {
     mockState.studentRows = [
       { id: 1, schoolId: 4, classId: 80, isActive: true },
       { id: 2, schoolId: 9, classId: 200, isActive: false },
     ];
     const ids = await studentAccess.getAuthorizedStudentIds({ role: 'super_admin' });
-    expect(ids).toEqual([1, 2]);
+    expect(ids).toEqual([1]);
   });
 
   it('keeps approved global-class assignments visible in the teacher school', async () => {

@@ -50,7 +50,7 @@ import {
 import { getGradeAppreciation } from './gradeColor';
 import { getTeacherDisplayName } from '../types.ts';
 import { inferPeriodTypeFromLegacyName } from './educationStructure';
-import studentAccess from './studentAccess';
+import studentAccess, { getActiveStudentsForClassScope } from './studentAccess';
 import { normalizeClassProgressionCode } from './classProgression';
 import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type ExamResultStatus } from './examDecision';
 import { selectPreferredClassExamConfiguration } from './classExamConfiguration';
@@ -842,17 +842,8 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     .where(eq(schoolCycles.schoolId, header.studentSchoolId));
   const schoolHasLycee = resolveSchoolHasLycee(configuredSchoolCycles);
 
-  const classStudentRows = await db
-    .selectDistinct({ id: bulletins.studentId })
-    .from(bulletins)
-    .innerJoin(students, eq(students.id, bulletins.studentId))
-    .where(and(
-      eq(bulletins.classId, header.classId),
-      eq(bulletins.schoolYearId, header.schoolYearId),
-      eq(bulletins.termId, header.termId),
-      eq(students.schoolId, header.studentSchoolId),
-    ));
-  const classStudentCount = classStudentRows.length;
+  const activeClassStudentRows = await getActiveStudentsForClassScope([header.classId], header.studentSchoolId);
+  const classStudentCount = activeClassStudentRows.length;
 
   if (actor.role === 'super_admin') return { ...header, classStudentCount, schoolHasLycee };
 
@@ -1182,14 +1173,19 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       bulletins: historicalBulletins,
     });
 
-    let classAverageSummary: ClassAverageSummary = { highest: null, lowest: null, average: null };
+    let classAverageSummary: ClassAverageSummary = {
+      highest: parseNumber(header.classHighestAverage),
+      lowest: parseNumber(header.classLowestAverage),
+      average: parseNumber(header.classAverage),
+    };
+
     if (header.generationId != null) {
       const [generation] = await db
         .select({ generationType: bulletinGenerations.generationType, status: bulletinGenerations.status })
         .from(bulletinGenerations)
         .where(eq(bulletinGenerations.id, header.generationId));
 
-      if (generation?.generationType === 'class' && generation.status === 'completed') {
+      if (generation?.generationType === 'class' && generation.status === 'completed' && classAverageSummary.highest == null && classAverageSummary.lowest == null && classAverageSummary.average == null) {
         const classBulletinRows = await db
           .select({ average: bulletins.average })
           .from(bulletins)
@@ -1204,12 +1200,6 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
             sql`${bulletins.average} is not null`,
           ));
         classAverageSummary = calculateClassAverageSummary(classBulletinRows.map((row) => row.average));
-      } else if (generation?.generationType === 'individual') {
-        classAverageSummary = {
-          highest: parseNumber(header.classHighestAverage),
-          lowest: parseNumber(header.classLowestAverage),
-          average: parseNumber(header.classAverage),
-        };
       }
     }
 

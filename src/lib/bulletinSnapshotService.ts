@@ -769,6 +769,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           }).from(students).where(and(
             eq(students.classId, classId),
             eq(students.schoolId, schoolId),
+            eq(students.isActive, true),
           ));
         },
         async getClassTermEvaluations(classId, termId, schoolId) {
@@ -1084,7 +1085,11 @@ export const registerBulletinGenerateRoute = (
                   schoolId: students.schoolId,
                   firstName: students.firstName,
                   lastName: students.lastName,
-                }).from(students).where(and(eq(students.classId, classId), eq(students.schoolId, schoolId)));
+                }).from(students).where(and(
+                  eq(students.classId, classId),
+                  eq(students.schoolId, schoolId),
+                  eq(students.isActive, true),
+                ));
               },
               async getClassTermEvaluations(classId, termId, schoolId) {
                 return tx.select({
