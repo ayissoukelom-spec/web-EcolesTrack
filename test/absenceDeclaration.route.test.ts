@@ -19,12 +19,14 @@ const createSelectBuilder = (selection?: any) => {
   const builder: any = {
     table: null as any,
     selection,
+    condition: null as any,
     from(table: any) {
       builder.table = table;
       if (table === absenceDeclarations && selection) declarationListSelections.push(selection);
       return builder;
     },
     where(condition: any) {
+      builder.condition = condition;
       if (builder.table === absenceDeclarations) declarationListWhereConditions.push(condition);
       return builder;
     },
@@ -40,7 +42,13 @@ const createSelectBuilder = (selection?: any) => {
               : builder.table === absenceDeclarations ? mockState.declarations
                 : builder.table === absences ? mockState.absences
                   : [];
-      return Promise.resolve(rows).then(resolve, reject);
+      const query = builder.condition ? new PgDialect().sqlToQuery(builder.condition) : { sql: '', params: [] };
+      const equalityConditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+        key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+        value: query.params[Number(match[2]) - 1],
+      }));
+      const filteredRows = rows.filter((row: any) => equalityConditions.every(({ key, value }: any) => !(key in row) || row[key] === value));
+      return Promise.resolve(filteredRows).then(resolve, reject);
     },
     catch(reject: (reason?: any) => void) { return Promise.resolve([]).catch(reject); },
     finally(callback: () => void) { return Promise.resolve([]).finally(callback); },
@@ -76,20 +84,26 @@ const mockDb = {
   }),
   update: (table: any) => ({
     set: (values: Record<string, any>) => ({
-      where: () => {
+      where: (condition: any) => {
         let didUpdate = false;
+        const targetRows = () => {
+          const rows = table === absenceDeclarations ? mockState.declarations
+            : table === absences ? mockState.absences
+              : [];
+          if (!condition) return rows;
+          const query = new PgDialect().sqlToQuery(condition);
+          const equalityConditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+            key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+            value: query.params[Number(match[2]) - 1],
+          }));
+          return rows.filter((row: any) => equalityConditions.every(({ key, value }: any) => !(key in row) || row[key] === value));
+        };
         const applyUpdate = () => {
           if (didUpdate) return;
           didUpdate = true;
-          if (table === absenceDeclarations) {
-            mockState.declarations.forEach((row) => Object.assign(row, values));
-          } else if (table === absences) {
-            mockState.absences.forEach((row) => Object.assign(row, values));
-          }
+          targetRows().forEach((row: any) => Object.assign(row, values));
         };
-        const updatedRows = () => table === absenceDeclarations
-          ? mockState.declarations.slice(0, 1)
-          : table === absences ? mockState.absences : [];
+        const updatedRows = () => targetRows();
         return {
           then: (resolve: (value: any) => void, reject: (reason?: any) => void) => {
             applyUpdate();
@@ -115,7 +129,8 @@ vi.mock('../src/middleware/auth.ts', async () => {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
       const role = req.headers['x-test-role'] || 'parent';
-      req.user = { uid: `sim-${role}`, email: `${role}@example.com`, role, schoolId: 1, id: 7, simulated: true };
+      const id = Number(req.headers['x-test-user-id'] || 7);
+      req.user = { uid: id === 7 ? 'test-user' : `test-user-${id}`, email: id === 7 ? 'parent@example.com' : `parent-${id}@example.com`, role, schoolId: id === 8 ? 2 : 1, id, simulated: true };
       next();
     },
   };
@@ -126,7 +141,8 @@ vi.mock('src/middleware/auth', async () => {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
       const role = req.headers['x-test-role'] || 'parent';
-      req.user = { uid: `sim-${role}`, email: `${role}@example.com`, role, schoolId: 1, id: 7, simulated: true };
+      const id = Number(req.headers['x-test-user-id'] || 7);
+      req.user = { uid: id === 7 ? 'test-user' : `test-user-${id}`, email: id === 7 ? 'parent@example.com' : `parent-${id}@example.com`, role, schoolId: id === 8 ? 2 : 1, id, simulated: true };
       next();
     },
   };
@@ -307,6 +323,52 @@ describe('parent absence declaration routes', () => {
     expect(cancelled.body.status).toBe('CANCELLED');
     await request(app).put('/api/absence-declarations/9/cancel').send({}).expect(409);
     expect(mockState.absences).toHaveLength(0);
+  });
+
+  it('denies update and cancellation after the declared child is transferred, and denies cross-parent declaration IDs', async () => {
+    mockState.users.push({ id: 8, uid: 'test-user-8', email: 'parent-b@example.com', name: 'Parent B', role: 'parent', schoolId: 2, isDeleted: false });
+    mockState.parents.push({ id: 3, userId: 8, studentId: 21, schoolId: 2 });
+    mockState.parents[0].studentId = 21;
+    mockState.students = [
+      { id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true },
+      { id: 21, schoolId: 2, classId: 20, firstName: 'Binta', lastName: 'Test', parentId: 3, isActive: true },
+    ];
+    mockState.declarations = [
+      { id: 40, studentId: 21, parentId: 2, date: isoDay(1), startTime: '08:00', endTime: '10:00', reason: 'Ancien rattachement', status: 'RECEIVED' },
+      { id: 41, studentId: 21, parentId: 3, date: isoDay(1), startTime: '08:00', endTime: '10:00', reason: 'Parent B', status: 'RECEIVED' },
+    ];
+
+    await request(app)
+      .put('/api/absence-declarations/40')
+      .send(declarationInput(20, isoDay(2)))
+      .expect(403);
+    await request(app)
+      .put('/api/absence-declarations/40/cancel')
+      .send({})
+      .expect(403);
+
+    await request(app)
+      .put('/api/absence-declarations/40')
+      .set('x-test-user-id', '8')
+      .send(declarationInput(21, isoDay(2)))
+      .expect(404);
+    await request(app)
+      .put('/api/absence-declarations/40/cancel')
+      .set('x-test-user-id', '8')
+      .send({})
+      .expect(404);
+
+    await request(app)
+      .put('/api/absence-declarations/41')
+      .send(declarationInput(20, isoDay(2)))
+      .expect(404);
+    await request(app)
+      .put('/api/absence-declarations/41/cancel')
+      .send({})
+      .expect(404);
+
+    expect(mockState.declarations.map((declaration) => declaration.status)).toEqual(['RECEIVED', 'RECEIVED']);
+    expect(mockState.declarations.map((declaration) => declaration.studentId)).toEqual([21, 21]);
   });
 
   it('closes a declaration as not realized without creating an absence', async () => {

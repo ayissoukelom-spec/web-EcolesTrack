@@ -7287,6 +7287,9 @@ export async function createApp() {
       eq(absenceDeclarations.parentId, parentRecord.id),
     ));
     if (!declaration) return { status: 404, body: { error: 'Declaration not found' } };
+    if (!childStudentIds.includes(declaration.studentId)) {
+      return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
+    }
     if (declaration.date < todayIsoDate()) {
       return { status: 409, body: { error: 'A past declaration cannot be changed' } };
     }
