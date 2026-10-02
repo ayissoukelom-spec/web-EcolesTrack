@@ -66,7 +66,7 @@ export default function MobileParentView({
   const connectedParentName = currentParent?.name || simulatedUser?.name || 'Parent';
 
   const children = currentParent
-    ? studentsList.filter((s) => s.parentId === currentParent.id || s.id === currentParent.studentId)
+    ? studentsList.filter((s) => s.parentId === currentParent.id)
     : [];
 
   useEffect(() => {

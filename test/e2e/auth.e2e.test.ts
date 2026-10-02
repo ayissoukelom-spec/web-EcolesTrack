@@ -3,6 +3,7 @@ import request from 'supertest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { PgDialect } from 'drizzle-orm/pg-core';
 
 // Mock DB and Auth middleware before importing the server so the real server
 // uses our test doubles when startServer() runs on import.
@@ -71,6 +72,7 @@ const FIXTURES = {
     { id: 1, studentId: 11, classId: 1, date: '2026-06-01', period: '1', isJustified: false, justificationReason: null },
   ],
   lateArrivals: [],
+  absenceDeclarations: [] as any[],
   evaluations: [] as any[],
   grades: [],
   examResults: [],
@@ -112,6 +114,7 @@ function setCurrentAndFormerNotificationRecipients() {
     { id: 15, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Sibling', parentId: 1 },
     { id: 16, schoolId: 10, classId: null, isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', firstName: 'Former', lastName: 'Only', parentId: 2 },
     { id: 17, schoolId: 10, classId: 1, isActive: true, withdrawnAt: null, firstName: 'Current', lastName: 'Sibling', parentId: 3 },
+    { id: 18, schoolId: 10, classId: 1, isActive: true, withdrawnAt: null, firstName: 'Current', lastName: 'Sibling Two', parentId: 1 },
   );
 }
 
@@ -264,7 +267,9 @@ function createMockDb() {
           const rawValues = chunk as any[];
           const values = rawValues.map((v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v);
           const parsed = values.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
-          if (normalizedLast.includes('studentid')) {
+          if (normalizedLast.includes('schoolid')) {
+            result.schoolIds = parsed;
+          } else if (normalizedLast.includes('studentid')) {
             result.studentIds = parsed;
           } else if (normalizedLast.includes('parentid')) {
             result.parentIds = parsed;
@@ -302,7 +307,10 @@ function createMockDb() {
         if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
         if (leftStr.includes('uid') && rightIsPrimitive) result.uid = rawRight;
         if (leftStr.includes('email') && rightIsPrimitive) result.email = rawRight;
-        if (/school.*id/.test(leftStr) && rightIsPrimitive) result.schoolId = rawRight === null ? null : Number(rawRight);
+        if (/school.*id/.test(leftStr)) {
+          if (Array.isArray(rawRight)) result.schoolIds = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
+          else if (rightIsPrimitive) result.schoolId = rawRight === null ? null : Number(rawRight);
+        }
         if (/user.*id/.test(leftStr) && rightIsPrimitive) result.userId = rawRight === null ? null : Number(rawRight);
         if (/student.*id/.test(leftStr)) {
           if (Array.isArray(rawRight)) {
@@ -379,6 +387,7 @@ function createMockDb() {
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
+      if (lower.includes('absence_declarations') || lower.includes('absencedeclarations')) return 'absenceDeclarations';
       if (lower.includes('latearrivals') || lower.includes('late_arrivals')) return 'lateArrivals';
       if (lower.includes('evaluations')) return 'evaluations';
       if (lower.includes('grades')) return 'grades';
@@ -393,6 +402,8 @@ function createMockDb() {
     if (table && typeof table === 'object') {
       const drizzleName = table[Symbol.for('drizzle:Name')];
       if (drizzleName === 'class_teachers') return 'classTeachers';
+      if (drizzleName === 'evaluations') return 'evaluations';
+      if (drizzleName === 'absence_declarations') return 'absenceDeclarations';
       if (drizzleName === 'subjects') return 'subjects';
       if (drizzleName === 'subject_types') return 'subjectTypes';
       if (drizzleName === 'school_subjects') return 'schoolSubjects';
@@ -406,6 +417,7 @@ function createMockDb() {
       if (keys.includes('schoolid') && keys.includes('isactive') && keys.includes('name')) return 'academicYears';
       if (keys.includes('name') && keys.includes('address')) return 'schools';
       if (keys.includes('userid') && keys.includes('studentid') && keys.includes('address')) return 'parents';
+      if (keys.includes('parentid') && keys.includes('studentid') && keys.includes('date') && keys.includes('status')) return 'absenceDeclarations';
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('parentid')) return 'students';
       if (keys.includes('studentid') && keys.includes('academicyearid') && keys.includes('examtype')) return 'examResults';
       if (keys.includes('classid') && keys.includes('academicyearid') && keys.includes('examtype') && keys.includes('isactive')) return 'classExamConfigurations';
@@ -435,6 +447,7 @@ function createMockDb() {
       if (lower.includes('localauths')) return 'localAuths';
       if (lower.includes('userschools')) return 'userSchools';
       if (normalizedName.includes('classhomeroomassignments')) return 'homeroomAssignments';
+      if (normalizedName.includes('absencedeclarations')) return 'absenceDeclarations';
       if (lower.includes('parents')) return 'parents';
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
@@ -453,7 +466,7 @@ function createMockDb() {
     return '';
   };
 
-  const filterTableRows = (table: any, cond: any) => {
+  const filterTableRows = (table: any, cond: any, rawCond?: any) => {
     const tableName = resolveTableName(table);
     const rows = (tableName === 'users' ? FIXTURES.users
       : tableName === 'schools' ? FIXTURES.schools
@@ -473,6 +486,7 @@ function createMockDb() {
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'absences' ? FIXTURES.absences
       : tableName === 'lateArrivals' ? FIXTURES.lateArrivals
+      : tableName === 'absenceDeclarations' ? FIXTURES.absenceDeclarations
       : tableName === 'evaluations' ? FIXTURES.evaluations
       : tableName === 'grades' ? FIXTURES.grades
       : tableName === 'examResults' ? FIXTURES.examResults
@@ -487,6 +501,25 @@ function createMockDb() {
     const conditions = isNormalizedConditionsObject
       ? (cond as Record<string, any>)
       : extractConditions(cond);
+    if (tableName === 'grades' && rawCond) {
+      const query = new PgDialect().sqlToQuery(rawCond);
+      if (/"grades"\."evaluation_id"/i.test(query.sql)) {
+        const evaluationIds = query.params.flat(Infinity)
+          .filter((value): value is number => typeof value === 'number');
+        if (evaluationIds.length > 0) {
+          conditions.evaluationIds = evaluationIds;
+          delete conditions.ids;
+        }
+      }
+    }
+    if (tableName === 'students' && rawCond) {
+      const query = new PgDialect().sqlToQuery(rawCond);
+      for (const match of query.sql.matchAll(/LOWER\("students"\."(first_name|last_name)"\)\s*=\s*\$(\d+)/gi)) {
+        const field = match[1] === 'first_name' ? 'firstName' : 'lastName';
+        conditions[field] = String(query.params[Number(match[2]) - 1] ?? '').toLowerCase();
+      }
+      if (/"students"\."parent_id"\s+IS\s+NULL/i.test(query.sql)) conditions.parentId = null;
+    }
     if (!Object.keys(conditions).length && typeof cond === 'string') {
       const maybeUid = /"([a-z0-9\-]+)"/gi.exec(cond);
       if (maybeUid) conditions.uid = maybeUid[1];
@@ -515,17 +548,20 @@ function createMockDb() {
       if (conditions.ids !== undefined) {
         const idMatchTarget = tableName === 'parents' ? Number(row.studentId)
           : tableName === 'absences' ? Number(row.studentId)
+          : tableName === 'absenceJustifications' ? Number(row.absenceId)
           : tableName === 'notificationAttachments' ? Number(row.notificationId)
           : Number(row.id);
         if (!Array.isArray(conditions.ids) || !conditions.ids.includes(idMatchTarget)) return false;
       }
       if (conditions.notificationId !== undefined && row.notificationId !== conditions.notificationId) return false;
       if (conditions.schoolId !== undefined && row.schoolId !== conditions.schoolId) return false;
+      if (conditions.schoolIds !== undefined && !conditions.schoolIds.includes(Number(row.schoolId))) return false;
       if (conditions.userId !== undefined && row.userId !== conditions.userId) return false;
       if (conditions.studentId !== undefined && row.studentId !== conditions.studentId) return false;
       if (conditions.studentIds !== undefined) {
         if (!Array.isArray(conditions.studentIds) || !conditions.studentIds.includes(Number(row.studentId))) return false;
       }
+      if (conditions.evaluationIds !== undefined && !conditions.evaluationIds.includes(Number(row.evaluationId))) return false;
       if (conditions.parentId !== undefined && row.parentId !== conditions.parentId) return false;
       if (conditions.parentIds !== undefined) {
         if (!Array.isArray(conditions.parentIds) || !conditions.parentIds.includes(Number(row.parentId))) return false;
@@ -540,6 +576,8 @@ function createMockDb() {
       }
       if (conditions.status !== undefined && row.status !== conditions.status) return false;
       if (conditions.isActive !== undefined && row.isActive !== conditions.isActive) return false;
+      if (conditions.firstName !== undefined && String(row.firstName).toLowerCase() !== conditions.firstName) return false;
+      if (conditions.lastName !== undefined && String(row.lastName).toLowerCase() !== conditions.lastName) return false;
       return true;
     });
   };
@@ -608,6 +646,17 @@ function createMockDb() {
 
       const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
+        if (baseRow._currentStudent !== undefined) {
+          const studentFields: Record<string, string> = {
+            studentId: 'id',
+            studentFirstName: 'firstName',
+            studentLastName: 'lastName',
+            studentClassId: 'classId',
+            studentSchoolId: 'schoolId',
+          };
+          const studentField = studentFields[String(selectedAlias)];
+          if (studentField) return baseRow._currentStudent?.[studentField] ?? null;
+        }
         if (selectedAlias === 'teacherName' && ['classes', 'homeroomAssignments'].includes(resolveTableName(builder._table))) {
           const teacher = FIXTURES.teachers.find((row: any) => Number(row.id) === Number(baseRow.teacherId));
           return FIXTURES.users.find((row: any) => Number(row.id) === Number(teacher?.userId))?.name ?? null;
@@ -647,6 +696,8 @@ function createMockDb() {
         const fromName = resolveTableName(builder._table);
         const hasStudentParentJoin = fromName === 'students'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
+        const hasParentStudentJoin = fromName === 'parents'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const baseConditions = { ...conditions };
         if (hasStudentParentJoin) delete baseConditions.userId;
         const hasSchoolClassesJoin = fromName === 'classes'
@@ -655,7 +706,7 @@ function createMockDb() {
         const hasSchoolSubjectsJoin = fromName === 'subjects'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
-        let rows = filterTableRows(builder._table, baseConditions);
+        let rows = filterTableRows(builder._table, baseConditions, builder._cond);
 
         if (hasSchoolSubjectsJoin) {
           const joinConditions = builder._joins
@@ -693,8 +744,19 @@ function createMockDb() {
 
         if (hasStudentParentJoin) {
           rows = rows.flatMap((student: any) => FIXTURES.parents
-            .filter((parent: any) => parent.id === student.parentId || parent.studentId === student.id)
+            .filter((parent: any) => parent.id === student.parentId)
             .map((parent: any) => ({ ...student, userId: parent.userId })));
+        }
+
+        if (hasParentStudentJoin) {
+          rows = rows.flatMap((parent: any) => {
+            const linkedStudents = FIXTURES.students.filter((student: any) => (
+              student.parentId === parent.id && student.schoolId === parent.schoolId
+            ));
+            return linkedStudents.length > 0
+              ? linkedStudents.map((student: any) => ({ ...parent, _currentStudent: student }))
+              : [{ ...parent, _currentStudent: null }];
+          });
         }
 
         if (builder._selected && typeof builder._selected === 'object') {
@@ -800,6 +862,15 @@ function createMockDb() {
       builder._distinct = true;
       return builder;
     },
+    async transaction(callback: (tx: any) => Promise<any>) {
+      const studentsBefore = JSON.parse(JSON.stringify(FIXTURES.students));
+      try {
+        return await callback(db);
+      } catch (error) {
+        FIXTURES.students.splice(0, FIXTURES.students.length, ...studentsBefore);
+        throw error;
+      }
+    },
     insert(table?: any) {
       const tableName = resolveTableName(table);
       return {
@@ -853,6 +924,12 @@ function createMockDb() {
               const rows = (Array.isArray(obj) ? obj : [obj]) as any[];
               FIXTURES.teacherSubjects.push(...rows);
               return rows;
+            }
+            if (tableName === 'students') {
+              const nextId = FIXTURES.students.reduce((max: number, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, isActive: true, withdrawnAt: null, ...obj };
+              FIXTURES.students.push(row as any);
+              return [row];
             }
 
             if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
@@ -1791,6 +1868,120 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body[0]?.studentId).toBe(11);
   });
 
+  it('isolates parent data by current student.parentId across child-data routes and IDOR inputs', async () => {
+    FIXTURES.users.push({ id: 20, uid: 'parent-b-uid', email: 'parent-b@x.test', name: 'Parent B', role: 'parent', schoolId: 10, isDeleted: false });
+    FIXTURES.parents.splice(0, FIXTURES.parents.length,
+      { id: 1, userId: 6, studentId: 13, schoolId: 10 },
+      { id: 4, userId: 20, studentId: 11, schoolId: 10 },
+    );
+    FIXTURES.students.splice(0, FIXTURES.students.length,
+      { id: 11, schoolId: 10, classId: 1, firstName: 'Awa', lastName: 'One', isActive: true, parentId: 1 },
+      { id: 12, schoolId: 10, classId: 2, firstName: 'Awa', lastName: 'Two', isActive: true, parentId: 1 },
+      { id: 13, schoolId: 10, classId: 3, firstName: 'Binta', lastName: 'Three', isActive: true, parentId: 4 },
+      { id: 14, schoolId: 10, classId: 1, firstName: 'Other', lastName: 'Minimum', isActive: true, parentId: null },
+      { id: 15, schoolId: 10, classId: 1, firstName: 'Other', lastName: 'Maximum', isActive: true, parentId: null },
+    );
+    FIXTURES.classes.find((klass: any) => klass.id === 3)!.schoolId = 10;
+    FIXTURES.absences = [
+      { id: 101, studentId: 11, classId: 1, date: '2026-09-20', period: '1', isJustified: false },
+      { id: 102, studentId: 12, classId: 2, date: '2026-09-21', period: '1', isJustified: false },
+      { id: 103, studentId: 13, classId: 3, date: '2026-09-22', period: '1', isJustified: false },
+    ];
+    FIXTURES.lateArrivals = [
+      { id: 201, studentId: 11, classId: 1, date: '2026-09-20', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10', lateMinutes: 10 },
+      { id: 202, studentId: 12, classId: 2, date: '2026-09-21', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10', lateMinutes: 10 },
+      { id: 203, studentId: 13, classId: 3, date: '2026-09-22', period: 'morning', expectedStartTime: '08:00', arrivalTime: '08:10', lateMinutes: 10 },
+    ];
+    FIXTURES.absenceDeclarations = [
+      { id: 301, studentId: 11, parentId: 1, date: '2026-09-20', status: 'RECEIVED' },
+      { id: 302, studentId: 12, parentId: 1, date: '2026-09-21', status: 'RECEIVED' },
+      { id: 303, studentId: 13, parentId: 4, date: '2026-09-22', status: 'RECEIVED' },
+    ];
+    FIXTURES.evaluations = [
+      { id: 51, classId: 1, schoolId: 10, teacherId: 77, title: 'Evaluation A', subject: 'Math', maxScore: 20, date: '2026-09-20' },
+      { id: 52, classId: 2, schoolId: 10, teacherId: 77, title: 'Evaluation B', subject: 'Math', maxScore: 20, date: '2026-09-21' },
+      { id: 53, classId: 3, schoolId: 10, teacherId: 77, title: 'Evaluation B-only', subject: 'Math', maxScore: 20, date: '2026-09-22' },
+    ];
+    FIXTURES.grades = [
+      { id: 401, evaluationId: 51, classId: 1, schoolId: 10, studentId: 11, score: '8', maxScore: 20, evaluationTitle: 'Evaluation A' },
+      { id: 402, evaluationId: 52, classId: 2, schoolId: 10, studentId: 12, score: '12', maxScore: 20, evaluationTitle: 'Evaluation B' },
+      { id: 403, evaluationId: 51, classId: 1, schoolId: 10, studentId: 14, score: '2', maxScore: 20, evaluationTitle: 'Evaluation A' },
+      { id: 404, evaluationId: 51, classId: 1, schoolId: 10, studentId: 15, score: '19', maxScore: 20, evaluationTitle: 'Evaluation A' },
+      { id: 405, evaluationId: 53, classId: 3, schoolId: 10, studentId: 13, score: '20', maxScore: 20, evaluationTitle: 'Evaluation B-only' },
+    ];
+    FIXTURES.absenceJustifications = [{ id: 701, absenceId: 101, fileName: 'child-a.pdf', filePath: 'missing-child-a.pdf', mimeType: 'application/pdf', uploadedBy: 6 }];
+    FIXTURES.notifications = [{ id: 501, userId: 20, type: 'info', title: 'Parent B only', body: 'Private' }];
+    FIXTURES.notificationAttachments = [{ id: 801, notificationId: 501, fileName: 'parent-b.pdf', filePath: 'missing-parent-b.pdf', mimeType: 'application/pdf', uploadedBy: 2 }];
+
+    const parentAGet = (url: string) => request(app).get(url)
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+    const parentAPost = (url: string) => request(app).post(url)
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10');
+
+    const students = await parentAGet('/api/students?studentId=13');
+    expect(students.status).toBe(200);
+    expect(students.body.map((student: any) => student.id).sort()).toEqual([11, 12]);
+
+    const classes = await parentAGet('/api/classes?classId=3');
+    expect(classes.status).toBe(200);
+    expect(classes.body.map((klass: any) => klass.id).sort()).toEqual([1, 2]);
+
+    const parents = await parentAGet('/api/parents?parentId=4');
+    expect(parents.status).toBe(200);
+    expect(parents.body.map((parent: any) => parent.id)).toEqual([1, 1]);
+    expect(parents.body.map((parent: any) => parent.studentId).sort()).toEqual([11, 12]);
+
+    const absences = await parentAGet('/api/absences');
+    expect(absences.status).toBe(200);
+    expect(absences.body.map((absence: any) => absence.studentId).sort()).toEqual([11, 12]);
+
+    const lateArrivals = await parentAGet('/api/late-arrivals');
+    expect(lateArrivals.status).toBe(200);
+    expect(lateArrivals.body.map((arrival: any) => arrival.studentId).sort()).toEqual([11, 12]);
+
+    const declarations = await parentAGet('/api/absence-declarations');
+    expect(declarations.status).toBe(200);
+    expect(declarations.body.map((declaration: any) => declaration.studentId).sort()).toEqual([11, 12]);
+
+    const evaluations = await parentAGet('/api/evaluations?evaluationId=53');
+    expect(evaluations.status).toBe(200);
+    expect(evaluations.body.map((evaluation: any) => evaluation.id).sort()).toEqual([51, 52]);
+
+    const grades = await parentAGet('/api/grades?evaluationId=53');
+    expect(grades.status).toBe(200);
+    expect(grades.body.map((grade: any) => grade.studentId).sort()).toEqual([11, 12]);
+    expect(grades.body.find((grade: any) => grade.evaluationId === 51)).toMatchObject({
+      evaluationMinimumScore: 2,
+      evaluationMaximumScore: 19,
+    });
+    expect(grades.body.some((grade: any) => [13, 14, 15].includes(grade.studentId))).toBe(false);
+    expect(grades.body.every((grade: any) => !('minimumStudentId' in grade) && !('maximumStudentId' in grade))).toBe(true);
+
+    const ownJustification = await parentAGet('/api/absences/101/justification/download');
+    expect(ownJustification.status).toBe(404);
+    expect(ownJustification.body.error).toBe('Justification file not found on disk');
+    await parentAGet('/api/absences/103/justification/download').expect(403);
+    await parentAGet('/api/absences/103/justification/download?studentId=11').expect(403);
+    await request(app).put('/api/absences/103/justify')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'sim-parent')
+      .set('x-simulated-email', 'parent@x.test')
+      .set('x-simulated-school-id', '10')
+      .send({ justificationReason: 'IDOR test' })
+      .expect(403);
+
+    await parentAPost('/api/absence-declarations')
+      .send({ parentId: 4, studentId: 13, date: '2026-10-03', startTime: '08:00', endTime: '10:00', reason: 'IDOR test' })
+      .expect(403);
+    await parentAGet('/api/notifications/501/attachments/801').expect(403);
+  });
+
   it('3h4. parent dashboard summary is scoped to their child', async () => {
     const res = await request(app)
       .get('/api/dashboard/summary')
@@ -2046,15 +2237,17 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('3o. school_admin can batch import parents for their own school via POST /api/parents/batch', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, isActive: true, firstName: 'New', lastName: 'Student', parentId: null });
     const res = await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
-      .send([{ name: 'Local Parent', email: 'localparent@x.test', phonePrefix: '+228', phone: '90000000', parentType: 'mere', studentId: 11 }]);
+      .send([{ name: 'Local Parent', email: 'localparent@x.test', phonePrefix: '+228', phone: '90000000', parentType: 'mere', studentId: 15 }]);
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(1);
     expect(res.body.inserted[0].user.email).toBe('localparent@x.test');
     expect(res.body.inserted[0].user.schoolId).toBe(10);
+    expect(FIXTURES.students.find((student: any) => student.id === 15)?.parentId).toBe(res.body.inserted[0].parentId);
 
     const importedUserId = res.body.inserted[0].user.id;
     const auth = FIXTURES.localAuths.find((row: any) => row.userId === importedUserId);
@@ -2084,7 +2277,8 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('3o1. duplicate Parent email is rejected clearly during batch import', async () => {
-    const payload = [{ name: 'Duplicate Parent', email: 'duplicate@x.test', phonePrefix: '+228', phone: '90000001', parentType: 'pere', studentId: 11 }];
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, isActive: true, firstName: 'New', lastName: 'Student', parentId: null });
+    const payload = [{ name: 'Duplicate Parent', email: 'duplicate@x.test', phonePrefix: '+228', phone: '90000001', parentType: 'pere', studentId: 15 }];
     await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
@@ -3047,6 +3241,7 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('13. parent without schoolId can still fetch their children classes', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, firstName: 'No School', lastName: 'Parent Child', isActive: true, parentId: 2 });
     const res = await request(app)
       .get('/api/classes')
       .set('x-simulated-role', 'parent')
@@ -3060,6 +3255,7 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('14. parent cannot bypass schoolId query param and still sees only their child classes', async () => {
+    FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, firstName: 'Query', lastName: 'Parent Child', isActive: true, parentId: 3 });
     const res = await request(app)
       .get('/api/classes?schoolId=10')
       .set('x-simulated-role', 'parent')

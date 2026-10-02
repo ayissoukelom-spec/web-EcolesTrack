@@ -12,23 +12,17 @@ export const checkBulletinOwnership = async (actor: { id?: number } | null, bull
 
   const [row] = await db
     .select({
-      studentId: bulletins.studentId,
       parentUserId: parents.userId,
     })
     .from(bulletins)
     .innerJoin(students, eq(bulletins.studentId, students.id))
-    .leftJoin(parents, eq(students.parentId, parents.id))
+    .leftJoin(parents, and(
+      eq(students.parentId, parents.id),
+      eq(students.schoolId, parents.schoolId),
+    ))
     .where(eq(bulletins.id, bulletinId));
 
-  if (!row) return false;
-  if (row.parentUserId === userId) return true;
-
-  const [parentLink] = await db
-    .select({ id: parents.id })
-    .from(parents)
-    .where(and(eq(parents.userId, userId), eq(parents.studentId, row.studentId)));
-
-  return !!parentLink;
+  return row?.parentUserId === userId;
 };
 
 // Compatibility wrapper: given a resolveActor(req) function, return a resolver

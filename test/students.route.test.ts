@@ -12,7 +12,7 @@ const mockState = {
   teacherSubjectRows: [] as Array<any>,
   userSchoolRows: [] as Array<any>,
   homeroomRows: [] as Array<any>,
-  parentRows: [] as Array<{ id: number; studentId: number | null }>,
+  parentRows: [] as Array<{ id: number; studentId?: number | null; schoolId?: number | null; userId?: number }>,
   ownedStudents: [] as Array<{ id: number }>,
   students: [] as Array<any>,
   dashboardEvaluations: [] as Array<any>,
@@ -54,8 +54,11 @@ const createBuilder = (rows: any[], projection?: any) => {
           const assignedClassIds = (mockState.classAssignments || []).map((a) => a.classId);
           rows = rows.filter((s: any) => assignedClassIds.includes(s.classId) && (mockState.actorSchoolId == null || s.schoolId === mockState.actorSchoolId));
         } else if (role === 'parent') {
-          const childIds = (mockState.parentRows || []).map((p) => p.studentId).filter((id: any) => id != null);
-          rows = rows.filter((s: any) => childIds.includes(s.id));
+          rows = rows.filter((student: any) => (mockState.parentRows || []).some((parent) =>
+            parent.id === student.parentId
+            && parent.schoolId != null
+            && parent.schoolId === student.schoolId,
+          ));
         } else if (role === 'school_admin') {
           if (mockState.actorSchoolId != null) {
             rows = rows.filter((s: any) => s.schoolId === mockState.actorSchoolId);
@@ -400,10 +403,10 @@ describe('GET /api/students (scope)', () => {
     mockState.actorId = 9;
     mockState.users = [{ id: 9, uid: 'sim_parent', schoolId: null }];
     // include both the child and another foreign student
-    mockState.parentRows = [{ id: 1, studentId: 101 }];
+    mockState.parentRows = [{ id: 1, schoolId: 10 }];
     mockState.students = [
-      { id: 101, schoolId: 10, classId: 1 },
-      { id: 202, schoolId: 20, classId: 2 },
+      { id: 101, schoolId: 10, classId: 1, parentId: 1 },
+      { id: 202, schoolId: 20, classId: 2, parentId: 2 },
     ];
 
     const res = await request(app)
@@ -466,7 +469,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorRole = 'parent';
     mockState.actorSchoolId = null;
     mockState.users = [{ id: 9, uid: 'sim_parent', schoolId: null }];
-    mockState.parentRows = [{ id: 1, studentId: 101 }];
+    mockState.parentRows = [{ id: 1, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: null, parentId: 1, isActive: false },
       { id: 202, schoolId: 20, classId: null, parentId: 2, isActive: false },

@@ -82,9 +82,7 @@ export default function ParentNotesView({
     // On parent accounts, studentsList is already filtered by backend scope.
     // Keep an explicit attachment filter when parent profile is available.
     if (currentParent) {
-      return studentsList.filter((student) => (
-        student.parentId === currentParent.id || student.id === currentParent.studentId
-      ));
+      return studentsList.filter((student) => student.parentId === currentParent.id);
     }
 
     return studentsList;

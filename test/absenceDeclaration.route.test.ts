@@ -6,7 +6,7 @@ import { absenceDeclarations, absences, classes, notifications, parents, student
 
 const mockState = {
   users: [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }],
-  parents: [{ id: 2, userId: 7, studentId: 20 }],
+  parents: [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }],
   students: [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }],
   classes: [{ id: 10, schoolId: 1 }],
   declarations: [] as any[],
@@ -146,7 +146,7 @@ describe('parent absence declaration routes', () => {
 
   beforeEach(() => {
     mockState.users = [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }];
-    mockState.parents = [{ id: 2, userId: 7, studentId: 20 }];
+    mockState.parents = [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }];
     mockState.students = [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }];
     mockState.classes = [{ id: 10, schoolId: 1 }];
     mockState.declarations = [];

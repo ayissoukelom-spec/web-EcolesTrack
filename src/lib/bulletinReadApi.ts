@@ -5,6 +5,7 @@ import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.t
 import { isBulletinOwnedByCurrentUser } from './bulletinAccess.ts';
 import { getTeacherClassIdSet } from './teacherScope.ts';
 import { getTeacherAuthorizationScope } from './teacherAuthorization.ts';
+import { getParentChildStudentIds } from './parentStudentAccess.ts';
 import studentAccess from './studentAccess';
 import {
   academicYears,
@@ -136,14 +137,7 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
       return conditions;
     }
 
-    const childRows = await db
-      .select({ studentId: parents.studentId })
-      .from(parents)
-      .where(eq(parents.userId, actor.id));
-
-    const childIds = childRows
-      .map((row) => row.studentId)
-      .filter((studentId): studentId is number => Number.isInteger(studentId) && studentId > 0);
+    const childIds = await getParentChildStudentIds(actor.id);
 
     if (childIds.length === 0) {
       conditions.push(sql`1 = 0`);

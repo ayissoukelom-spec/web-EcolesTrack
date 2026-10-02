@@ -44,7 +44,6 @@ export default function NotificationView({
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const activeStudentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false).map((student) => student.id)), [studentsList]);
   const activeParentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false && student.parentId != null).map((student) => student.parentId!)), [studentsList]);
 
   const handleBroadcast = (e: React.FormEvent) => {
@@ -97,7 +96,7 @@ export default function NotificationView({
         .then((results) => {
           if (requestId === parentSearchRequestRef.current) {
             setParentSearchResults((Array.isArray(results) ? results : []).filter((parent: Parent) =>
-              activeParentIds.has(parent.id) || (parent.studentId != null && activeStudentIds.has(parent.studentId)),
+              activeParentIds.has(parent.id),
             ));
           }
         })
@@ -110,7 +109,7 @@ export default function NotificationView({
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [notifForm.recipientMode, parentSearchQuery, activeParentIds, activeStudentIds]);
+  }, [notifForm.recipientMode, parentSearchQuery, activeParentIds]);
 
   const parentLabel = (parent: Parent) => String(parent.name || `${parent.firstName || ''} ${parent.lastName || ''}`).trim() || `Parent #${parent.id}`;
   const parentStudentLabel = (parent: Parent) => [parent.studentFirstName, parent.studentLastName].filter(Boolean).join(' ').trim();
