@@ -97,6 +97,7 @@ import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfig
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
 import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
+import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, resolveStoredLocalPath, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -145,12 +146,13 @@ export const isSupportedSchoolLogo = (file: { mimetype?: string; originalname?: 
 export const buildSchoolLogoRelativePath = (fileName: string): string => path.posix.join('school-logos', path.basename(fileName));
 
 export function resolveAbsenceJustificationStorageDirs() {
+  const config = getFileStorageConfig();
   const configuredUploadRoot = (process.env.UPLOADS_DIR || '').trim();
-  const primaryRoot = configuredUploadRoot ? path.resolve(configuredUploadRoot) : path.resolve(process.cwd(), 'uploads');
+  const primaryRoot = configuredUploadRoot ? path.resolve(configuredUploadRoot) : config.localRoot;
   const primaryDir = path.resolve(primaryRoot, 'absence-justifications');
   const legacyDir = path.resolve(process.cwd(), 'uploads', 'absence-justifications');
   const candidates = Array.from(new Set([primaryDir, legacyDir].filter(Boolean)));
-  return { primaryDir, legacyDir, candidates };
+  return { primaryDir, legacyDir, candidates, storageMode: config.mode };
 }
 
 export async function resolveAbsenceJustificationFilePath(fileName: string): Promise<string | null> {
@@ -172,7 +174,8 @@ export async function resolveAbsenceJustificationFilePath(fileName: string): Pro
     }
   }
 
-  return null;
+  const legacyFallback = await resolveStoredLocalPath('absence-justifications', safeFileName);
+  return legacyFallback ?? null;
 }
 
 function toUserDto(user: any) {
@@ -893,15 +896,19 @@ export async function createApp() {
   // JSON parsing middleware
   app.use(express.json());
 
+  const storageConfig = getFileStorageConfig();
   const { primaryDir: uploadStorageDir, legacyDir: legacyUploadStorageDir, candidates: uploadStorageDirCandidates } = resolveAbsenceJustificationStorageDirs();
-  const notificationUploadStorageDir = path.join(process.cwd(), 'uploads', 'notification-attachments');
-  const schoolLogoUploadStorageDir = path.join(process.cwd(), 'uploads', 'school-logos');
+  const notificationUploadStorageDir = path.join(storageConfig.localRoot, 'notification-attachments');
+  const schoolLogoUploadStorageDir = path.join(storageConfig.localRoot, 'school-logos');
 
-  console.log('[uploads] absence justification storage initialized', {
+  console.log('[uploads] storage initialized', {
+    provider: storageConfig.mode,
     uploadEnv: process.env.UPLOADS_DIR || '(default)',
+    fileStorageProvider: process.env.FILE_STORAGE_PROVIDER || '(default)',
     primaryDir: uploadStorageDir,
     legacyDir: legacyUploadStorageDir,
     candidates: uploadStorageDirCandidates,
+    bucket: storageConfig.bucket || '(local-only)',
   });
 
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
@@ -965,8 +972,39 @@ export async function createApp() {
     },
   });
 
+  const persistFilesToConfiguredStorage = async (files: any[], kind: 'absence-justifications' | 'notification-attachments') => {
+    if (getFileStorageConfig().mode !== 's3') {
+      return files;
+    }
+
+    const persistedFiles: any[] = [];
+    try {
+      for (const file of files) {
+        if (!file) continue;
+        const persisted = await persistUploadedFile(file, kind);
+        persistedFiles.push({
+          ...file,
+          filename: persisted.storedReference,
+          path: persisted.localPath || file.path,
+          storageReference: persisted.storedReference,
+          storageMode: 's3',
+        });
+      }
+      return persistedFiles;
+    } catch (error) {
+      const cleanupResults = await Promise.allSettled([
+        ...persistedFiles.map((file) => deleteStoredFile(file.storageReference, kind)),
+        ...files.map((file: any) => file?.path ? fsPromises.rm(file.path, { force: true }) : Promise.resolve()),
+      ]);
+      cleanupResults.forEach((result) => {
+        if (result.status === 'rejected') console.warn('Failed to clean partial uploaded file:', result.reason);
+      });
+      throw error;
+    }
+  };
+
   const handleJustificationUpload = (req: any, res: any, next: any) => {
-    upload.array('files', 5)(req, res, (err: any) => {
+    upload.array('files', 5)(req, res, async (err: any) => {
       if (!err) {
         const uploadedFiles = Array.isArray(req.files) ? req.files : [];
         console.log('📎 Absence justification upload request', {
@@ -977,13 +1015,18 @@ export async function createApp() {
           totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
         });
 
-        req.justificationFiles = uploadedFiles;
+        try {
+          req.justificationFiles = await persistFilesToConfiguredStorage(uploadedFiles, 'absence-justifications');
+        } catch (storageError: any) {
+          console.error('Failed to persist absence justification upload:', storageError?.message || storageError);
+          return res.status(503).json({ error: 'File storage is temporarily unavailable' });
+        }
         return next();
       }
 
       if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
         console.warn('⚠️ Expected files[] field not found; trying legacy single file field', { message: err.message });
-        return upload.single('file')(req, res, (legacyErr: any) => {
+        return upload.single('file')(req, res, async (legacyErr: any) => {
           if (legacyErr) {
             console.error('❌ Multer error for absence justification upload:', legacyErr);
             return res.status(400).json({ error: legacyErr.message || 'Invalid file upload' });
@@ -998,7 +1041,12 @@ export async function createApp() {
             totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
           });
 
-          req.justificationFiles = uploadedFiles;
+          try {
+            req.justificationFiles = await persistFilesToConfiguredStorage(uploadedFiles, 'absence-justifications');
+          } catch (storageError: any) {
+            console.error('Failed to persist absence justification upload:', storageError?.message || storageError);
+            return res.status(503).json({ error: 'File storage is temporarily unavailable' });
+          }
           return next();
         });
       }
@@ -1044,27 +1092,12 @@ export async function createApp() {
         .where(eq(notificationAttachments.id, attachmentId));
       if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
 
-      const safeFileName = path.basename(String(attachment.filePath));
-      const absoluteFilePath = path.resolve(notificationUploadStorageDir, safeFileName);
-      const storageRoot = path.resolve(notificationUploadStorageDir) + path.sep;
-      if (!absoluteFilePath.startsWith(storageRoot)) {
+      const storedReference = String(attachment.filePath || '');
+      const routed = await streamStoredFileToResponse(storedReference, 'notification-attachments', attachment.fileName, attachment.mimeType, res as any);
+      if (!routed) {
         return res.status(404).json({ error: 'Attachment file not found on disk' });
       }
-
-      try {
-        await fsPromises.access(absoluteFilePath);
-      } catch {
-        return res.status(404).json({ error: 'Attachment file not found on disk' });
-      }
-
-      return res.sendFile(absoluteFilePath, {
-        headers: { 'Content-Type': attachment.mimeType },
-      }, (sendError: any) => {
-        if (sendError && !res.headersSent) {
-          console.error('Failed to send internal notification attachment:', sendError);
-          res.status(500).json({ error: 'Failed to send attachment file' });
-        }
-      });
+      return undefined;
     } catch (err: any) {
       console.error('Failed to serve internal notification attachment:', err?.message || err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -1097,7 +1130,7 @@ export async function createApp() {
   });
 
   const handleNotificationUpload = (req: any, res: any, next: any) => {
-    notificationUpload.array('files', 5)(req, res, (err: any) => {
+    notificationUpload.array('files', 5)(req, res, async (err: any) => {
       if (!err) {
         const uploadedFiles = Array.isArray(req.files) ? req.files : [];
         console.log('📎 Notification attachment upload request', {
@@ -1107,13 +1140,18 @@ export async function createApp() {
           fileNames: uploadedFiles.map((f: any) => f?.originalname || '(unknown)'),
           totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
         });
-        req.notificationFiles = uploadedFiles;
+        try {
+          req.notificationFiles = await persistFilesToConfiguredStorage(uploadedFiles, 'notification-attachments');
+        } catch (storageError: any) {
+          console.error('Failed to persist notification attachment upload:', storageError?.message || storageError);
+          return res.status(503).json({ error: 'File storage is temporarily unavailable' });
+        }
         return next();
       }
 
       if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
         console.warn('⚠️ Expected files[] field not found for notification upload; trying legacy single file field', { message: err.message });
-        return notificationUpload.single('file')(req, res, (legacyErr: any) => {
+        return notificationUpload.single('file')(req, res, async (legacyErr: any) => {
           if (legacyErr) {
             void cleanupUploadedNotificationFiles(Array.isArray(req.files) ? req.files : req.file ? [req.file] : [])
               .finally(() => {
@@ -1123,7 +1161,12 @@ export async function createApp() {
             return;
           }
           const uploadedFiles = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
-          req.notificationFiles = uploadedFiles;
+          try {
+            req.notificationFiles = await persistFilesToConfiguredStorage(uploadedFiles, 'notification-attachments');
+          } catch (storageError: any) {
+            console.error('Failed to persist notification attachment upload:', storageError?.message || storageError);
+            return res.status(503).json({ error: 'File storage is temporarily unavailable' });
+          }
           return next();
         });
       }
@@ -1136,11 +1179,15 @@ export async function createApp() {
     });
   };
 
-  const cleanupUploadedNotificationFiles = async (uploadedFiles: any[] = []) => {
+  const cleanupUploadedNotificationFiles = async (uploadedFiles: any[] = [], kind: 'absence-justifications' | 'notification-attachments' = 'notification-attachments') => {
     if (!Array.isArray(uploadedFiles) || uploadedFiles.length === 0) return;
 
-    await Promise.allSettled(
+    const cleanupResults = await Promise.allSettled(
       uploadedFiles.map(async (file: any) => {
+        if (file?.storageMode === 's3' && file.storageReference) {
+          await deleteStoredFile(file.storageReference, kind);
+          return;
+        }
         if (!file || !file.path) return;
         try {
           await fsPromises.rm(file.path, { force: true });
@@ -1152,6 +1199,9 @@ export async function createApp() {
         }
       })
     );
+    cleanupResults.forEach((result) => {
+      if (result.status === 'rejected') console.warn('Failed to clean uploaded notification file:', result.reason);
+    });
   };
 
   // Global debug middleware for request/response tracing
@@ -8449,7 +8499,11 @@ export async function createApp() {
     }
   };
   const cleanupUploadedJustificationFiles = async (files: Array<{ path?: string }>) => {
-    await Promise.all(files.map((file) => file.path
+    await Promise.all(files.map((file: any) => file?.storageMode === 's3' && file.storageReference
+      ? deleteStoredFile(file.storageReference, 'absence-justifications').catch((error: any) => {
+        console.error('Failed to remove rejected S3 justification upload:', error?.message || error);
+      })
+      : file.path
       ? fsPromises.unlink(file.path).catch((error: any) => {
         if (error?.code !== 'ENOENT') console.error('Failed to remove rejected justification upload:', error?.message || error);
       })
@@ -8709,10 +8763,17 @@ export async function createApp() {
         return respondJustificationAlreadyRejected(res);
       }
 
-      const safeName = uploadedFile.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storedFileName = `${Date.now()}-${crypto.randomBytes(16).toString('hex')}-${safeName}`;
-      const storedFilePath = path.join(uploadStorageDir, storedFileName);
-      await fsPromises.writeFile(storedFilePath, uploadedFile.buffer);
+      const persistedUpload = await persistUploadedFile(
+        {
+          originalname: uploadedFile.originalname,
+          filename: uploadedFile.originalname,
+          buffer: uploadedFile.buffer,
+          mimetype: uploadedFile.mimetype,
+          size: uploadedFile.size,
+        },
+        'absence-justifications',
+      );
+      const storedFileName = persistedUpload.storedReference;
       let persisted = false;
 
       try {
@@ -8728,7 +8789,9 @@ export async function createApp() {
           const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
             .from(absences)
             .where(eq(absences.id, absenceId));
-          await fsPromises.unlink(storedFilePath).catch(() => undefined);
+          await deleteStoredFile(storedFileName, 'absence-justifications').catch((cleanupError) => {
+            console.warn('Failed to clean unreferenced internal justification upload:', cleanupError);
+          });
           if (latestAbsence?.justificationStatus === 'REJECTED') {
             return respondJustificationAlreadyRejected(res);
           }
@@ -8768,7 +8831,9 @@ export async function createApp() {
         });
       } catch (error) {
         if (!persisted) {
-          await fsPromises.unlink(storedFilePath).catch(() => undefined);
+          await deleteStoredFile(storedFileName, 'absence-justifications').catch((cleanupError) => {
+            console.warn('Failed to clean unreferenced internal justification upload:', cleanupError);
+          });
         }
         throw error;
       }
@@ -8779,6 +8844,10 @@ export async function createApp() {
   });
 
   app.post('/api/absences/:id/justifications', requireAuth, requireParentJustificationActor, handleJustificationUpload, async (req: AuthRequest, res) => {
+    const uploadedFiles = Array.isArray((req as any).justificationFiles)
+      ? (req as any).justificationFiles as any[]
+      : [];
+    let justificationRowsCommitted = false;
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const id = parseInt(req.params.id, 10);
@@ -8793,9 +8862,6 @@ export async function createApp() {
         return res.status(400).json({ error: 'Please specify a reason for justification' });
       }
 
-      const uploadedFiles = Array.isArray((req as any).justificationFiles)
-        ? (req as any).justificationFiles as any[]
-        : [];
       const fileList = uploadedFiles.length > 0 ? uploadedFiles : [];
       if (fileList.length === 0) {
         return res.status(400).json({ error: 'Please upload at least one justification file' });
@@ -8873,6 +8939,7 @@ export async function createApp() {
           uploadedBy: req.user!.id!,
         }))
       ).returning();
+      justificationRowsCommitted = inserted.length > 0;
 
       const auditText = fileList.map((file: any) => file.originalname).join(', ');
       await logAuditEvent(
@@ -8893,6 +8960,10 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Failed to upload absence justification:', err);
       res.status(500).json({ error: 'Internal server error' });
+    } finally {
+      if (!justificationRowsCommitted) {
+        await cleanupUploadedJustificationFiles(uploadedFiles);
+      }
     }
   });
 
@@ -8946,9 +9017,9 @@ export async function createApp() {
         return res.status(404).json({ error: 'No justification file found' });
       }
 
-      const safeFileName = path.basename(String(justification.filePath));
-      const absoluteFilePath = await resolveAbsenceJustificationFilePath(safeFileName);
-      if (!absoluteFilePath) {
+      const safeFileName = String(justification.filePath || '');
+      const sent = await streamStoredFileToResponse(safeFileName, 'absence-justifications', justification.fileName, justification.mimeType || 'application/octet-stream', res as any);
+      if (!sent) {
         console.warn('[uploads] absence justification file missing during download', {
           absenceId: id,
           fileName: safeFileName,
@@ -8956,13 +9027,7 @@ export async function createApp() {
         });
         return res.status(404).json({ error: 'Justification file not found on disk' });
       }
-
-      res.download(absoluteFilePath, justification.fileName, (downloadErr) => {
-        if (downloadErr && !res.headersSent) {
-          console.error('Failed to send justification download:', downloadErr);
-          res.status(500).json({ error: 'Failed to send justification file' });
-        }
-      });
+      return undefined;
     } catch (err: any) {
       console.error('Failed to download justification file:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -11155,20 +11220,12 @@ if (uniqueParentIds.length > 0) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const safeFileName = path.basename(String(attachment.filePath));
-      const absoluteFilePath = path.join(notificationUploadStorageDir, safeFileName);
-      try {
-        await fsPromises.access(absoluteFilePath);
-      } catch {
+      const storedReference = String(attachment.filePath || '');
+      const sent = await streamStoredFileToResponse(storedReference, 'notification-attachments', attachment.fileName, attachment.mimeType || 'application/octet-stream', res as any);
+      if (!sent) {
         return res.status(404).json({ error: 'Attachment file not found on disk' });
       }
-
-      res.download(absoluteFilePath, attachment.fileName, (downloadErr) => {
-        if (downloadErr && !res.headersSent) {
-          console.error('Failed to send notification attachment download:', downloadErr);
-          res.status(500).json({ error: 'Failed to send attachment file' });
-        }
-      });
+      return undefined;
     } catch (err: any) {
       console.error('Failed to download notification attachment:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -11225,12 +11282,15 @@ if (uniqueParentIds.length > 0) {
       if (!title || !body || !type) return res.status(400).json({ error: 'Missing keys' });
 
       const uploadedFiles = Array.isArray((req as any).notificationFiles) ? (req as any).notificationFiles as any[] : [];
+      let notificationAttachmentsCommitted = false;
 
       const cleanupAndRethrow = async (err: any) => {
-        try {
-          await cleanupUploadedNotificationFiles(uploadedFiles);
-        } catch (cleanupErr) {
-          console.warn('Notification attachment cleanup failed after DB error:', cleanupErr);
+        if (!notificationAttachmentsCommitted) {
+          try {
+            await cleanupUploadedNotificationFiles(uploadedFiles);
+          } catch (cleanupErr) {
+            console.warn('Notification attachment cleanup failed after DB error:', cleanupErr);
+          }
         }
         throw err;
       };
@@ -11331,6 +11391,7 @@ if (uniqueParentIds.length > 0) {
               mimeType: notificationAttachments.mimeType,
               fileSize: notificationAttachments.fileSize,
             });
+            notificationAttachmentsCommitted = insertedAttachments.length > 0;
 
             notificationAttachmentMetadata = insertedAttachments.map((attachment) => ({
               attachmentId: attachment.id,
@@ -11369,6 +11430,9 @@ if (uniqueParentIds.length > 0) {
         await cleanupAndRethrow(err);
       }
 
+      if (!notificationAttachmentsCommitted) {
+        await cleanupUploadedNotificationFiles(uploadedFiles);
+      }
       res.json({ success: true, message: `Notification successfully routed to ${targetUserIds.length} users.` });
   } catch (err: any) {
     console.error("❌ ERREUR ENVOI INFORMATION :", err);

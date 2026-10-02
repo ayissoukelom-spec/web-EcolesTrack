@@ -2,6 +2,11 @@ node_modules/
 build/
 dist/
 coverage/
+uploads/
+uploads/**
+*.tmp
+*.temp
+*.cache
 .DS_Store
 *.log
 .env*

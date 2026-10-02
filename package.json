@@ -2,6 +2,9 @@
   "name": "react-example",
   "private": true,
   "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "scripts": {
     "dev": "set \"NODE_ENV=development\"&& tsx server.ts",
@@ -16,6 +19,7 @@
     "fix:parents": "tsx scripts/fix_old_parents.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1145.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
