@@ -30,6 +30,7 @@ import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { handleLocalLogin } from './src/lib/localLogin.ts';
+import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
@@ -1521,7 +1522,7 @@ export async function createApp() {
       let actor = await resolveActor(req);
       if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create request', {
         actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role, schoolId: actor.schoolId, email: actor.email } : null,
-        body: req.body,
+        bodyKeys: Object.keys(req.body || {}),
       });
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
@@ -2461,7 +2462,8 @@ export async function createApp() {
     try {
       const { email, currentPassword, newPassword } = req.body;
       if (!email || !currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
-      if (newPassword === '123456') return res.status(400).json({ error: 'Le mot de passe ne peut pas être le mot de passe par défaut' });
+      const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
+      if (passwordPolicyError) return res.status(400).json({ error: passwordPolicyError });
 
       const normalizedEmail = String(email).trim().toLowerCase();
       const authenticatedEmail = req.user?.email ? String(req.user.email).trim().toLowerCase() : '';

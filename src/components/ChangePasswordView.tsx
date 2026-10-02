@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { User } from '../types.ts';
 import { apiFetch } from '../lib/api.ts';
+import { getNewPasswordPolicyError } from '../lib/passwordPolicy';
 import RequiredLabel from './RequiredLabel';
 import togoFlag from '../assets/flags/togo_drap.jpg';
 
@@ -19,6 +20,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const newPasswordPolicyError = newPassword ? getNewPasswordPolicyError(newPassword) : null;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -39,8 +41,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
       return;
     }
 
-    if (newPassword === '123456') {
-      setError('Le mot de passe ne peut pas être le mot de passe par défaut');
+    if (newPasswordPolicyError) {
       return;
     }
 
@@ -119,7 +120,10 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
               className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               type={showNewPassword ? 'text' : 'password'}
               value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
+              onChange={(e) => {
+                setNewPassword(e.target.value);
+                setError(null);
+              }}
               required
             />
             <button
@@ -142,6 +146,8 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
               )}
             </button>
           </div>
+          <p className="mt-2 text-xs text-slate-400">8 caractères minimum, au moins une lettre majuscule et un chiffre.</p>
+          {newPasswordPolicyError && <p role="alert" className="mt-1 text-sm text-rose-400">{newPasswordPolicyError}</p>}
         </label>
         <label className="block text-sm mb-4">
           <RequiredLabel label="Confirmer le nouveau mot de passe" required />

@@ -58,8 +58,27 @@ describe('E2E: create → force password change → update profile → re-login'
     expect(login.json.mustReset).toBeTruthy();
     const loginToken = login.json.token;
 
+    const rejectedPasswords = [
+      ['abcdef12', 'Le nouveau mot de passe doit contenir au moins une lettre majuscule.'],
+      ['Abcdefgh', 'Le nouveau mot de passe doit contenir au moins un chiffre.'],
+      ['Ab123', 'Le nouveau mot de passe doit contenir au moins 8 caractères.'],
+      ['12345678', 'Le nouveau mot de passe doit contenir au moins une lettre majuscule.'],
+      ['abcdefgh', 'Le nouveau mot de passe doit contenir au moins une lettre majuscule et au moins un chiffre.'],
+      ['123456', 'Le nouveau mot de passe ne peut pas être le mot de passe temporaire.'],
+      ['abc', 'Le nouveau mot de passe doit contenir au moins 8 caractères, au moins une lettre majuscule et au moins un chiffre.'],
+    ];
+    for (const [newPassword, error] of rejectedPasswords) {
+      const rejected = await post('/api/auth/change-password', {
+        email,
+        currentPassword: '123456',
+        newPassword,
+      }, { Authorization: `Bearer ${loginToken}` });
+      expect(rejected.status).toBe(400);
+      expect(rejected.json.error).toBe(error);
+    }
+
     // 3) Change password using change-password endpoint
-    const newPassword = 'E2EnewP@ss1234';
+    const newPassword = 'Abcd1234';
     const change = await post('/api/auth/change-password', { email, currentPassword: '123456', newPassword }, { Authorization: `Bearer ${loginToken}` });
     expect(change.status).toBe(200);
     expect(change.json).toHaveProperty('success');
@@ -76,6 +95,7 @@ describe('E2E: create → force password change → update profile → re-login'
     await post('/api/auth/logout', {}, { Authorization: `Bearer ${loginToken}` });
     const relogin = await post('/api/auth/local-login', { email, password: newPassword });
     expect(relogin.status).toBe(200);
+    expect(relogin.json.mustReset).toBe(false);
     expect(relogin.json).toHaveProperty('name');
     expect(relogin.json.name).toBe(updatedName);
   }, 20000);
