@@ -49,6 +49,7 @@ const FIXTURES = {
   ],
   schoolSubjects: [{ id: 1, schoolId: 20, subjectId: 901, status: 'approved', subjectTypeId: 12 }],
   teacherSubjects: [] as Array<{ teacherId: number; schoolId: number; subjectId: number }>,
+  teacherClassSubjects: [] as Array<{ id: number; teacherId: number; schoolId: number; classId: number; subjectId: number; isActive: boolean }>,
   parents: [
     { id: 1, userId: 6, studentId: 11, schoolId: 10 },
     { id: 2, userId: 7, studentId: 11, schoolId: 10 },
@@ -60,8 +61,8 @@ const FIXTURES = {
     { id: 14, schoolId: 10, classId: 5, firstName: 'Global', lastName: 'Unapproved', birthDate: '2010-01-01', gender: 'female', parentId: null, schoolAdminId: null, enrolledAt: '2025-09-01T00:00:00Z' },
   ],
   classTeachers: [
-    { classId: 1, teacherId: 77 },
-    { classId: 1, teacherId: 100 },
+    { classId: 1, teacherId: 77, schoolId: 10 },
+    { classId: 1, teacherId: 100, schoolId: 10 },
   ],
   homeroomAssignments: [] as Array<{ id: number; schoolId: number; classId: number; teacherId: number; name?: string; schoolName?: string; yearName?: string; levelName?: string }>,
   schoolClasses: [
@@ -385,6 +386,7 @@ function createMockDb() {
       if (lower.includes('parents')) return 'parents';
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
+      if (lower.includes('teacherclasssubjects') || lower.includes('teacher_class_subjects')) return 'teacherClassSubjects';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
       if (lower.includes('absence_declarations') || lower.includes('absencedeclarations')) return 'absenceDeclarations';
@@ -402,6 +404,7 @@ function createMockDb() {
     if (table && typeof table === 'object') {
       const drizzleName = table[Symbol.for('drizzle:Name')];
       if (drizzleName === 'class_teachers') return 'classTeachers';
+      if (drizzleName === 'teacher_class_subjects') return 'teacherClassSubjects';
       if (drizzleName === 'evaluations') return 'evaluations';
       if (drizzleName === 'absence_declarations') return 'absenceDeclarations';
       if (drizzleName === 'subjects') return 'subjects';
@@ -412,6 +415,7 @@ function createMockDb() {
       if (keys.includes('uid') && keys.includes('email') && keys.includes('role')) return 'users';
       if (keys.includes('actoruserid') && keys.includes('resourceid')) return 'auditEvents';
       if (keys.includes('userid') && keys.includes('passwordhash')) return 'localAuths';
+      if (keys.includes('teacherid') && keys.includes('schoolid') && keys.includes('classid') && keys.includes('subjectid') && keys.includes('isactive')) return 'teacherClassSubjects';
       if (keys.includes('userid') && keys.includes('schoolid') && keys.includes('role') && keys.includes('isactive')) return 'userSchools';
       if (keys.includes('schoolid') && keys.includes('classid') && keys.includes('teacherid')) return 'homeroomAssignments';
       if (keys.includes('schoolid') && keys.includes('isactive') && keys.includes('name')) return 'academicYears';
@@ -451,6 +455,7 @@ function createMockDb() {
       if (lower.includes('parents')) return 'parents';
       if (lower.includes('students')) return 'students';
       if (lower.includes('classesteachers') || lower.includes('classteachers')) return 'classTeachers';
+      if (normalizedName.includes('teacherclasssubjects')) return 'teacherClassSubjects';
       if (lower.includes('schoolclasses')) return 'schoolClasses';
       if (lower.includes('absences')) return 'absences';
       if (normalizedName.includes('evaluations')) return 'evaluations';
@@ -482,6 +487,7 @@ function createMockDb() {
       : tableName === 'subjectTypes' ? FIXTURES.subjectTypes
       : tableName === 'schoolSubjects' ? FIXTURES.schoolSubjects
       : tableName === 'teacherSubjects' ? FIXTURES.teacherSubjects
+      : tableName === 'teacherClassSubjects' ? FIXTURES.teacherClassSubjects
       : tableName === 'classTeachers' ? FIXTURES.classTeachers
       : tableName === 'schoolClasses' ? FIXTURES.schoolClasses
       : tableName === 'absences' ? FIXTURES.absences
@@ -646,6 +652,14 @@ function createMockDb() {
 
       const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
+        if (resolveTableName(builder._table) === 'grades' && selectedAlias === 'subject') {
+          const evaluation = FIXTURES.evaluations.find((row: any) => Number(row.id) === Number(baseRow.evaluationId));
+          const subject = FIXTURES.subjects.find((row: any) => Number(row.id) === Number(evaluation?.subjectId));
+          return subject?.name ?? evaluation?.subject ?? null;
+        }
+        if (baseRow._joinedClass && selectedAlias === 'classSchoolId') return baseRow._joinedClass.schoolId ?? null;
+        if (selectedAlias === 'isApprovedForSchool') return baseRow._joinedSchoolClass != null;
+        if (selectedAlias === 'schoolClassStatus') return baseRow._joinedSchoolClass?.status ?? null;
         if (baseRow._currentStudent !== undefined) {
           const studentFields: Record<string, string> = {
             studentId: 'id',
@@ -698,8 +712,17 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
         const hasParentStudentJoin = fromName === 'parents'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
+        const hasClassTeachersClassJoin = fromName === 'classTeachers'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'classes');
+        const hasHomeroomClassJoin = fromName === 'homeroomAssignments'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'classes');
+        const hasAbsenceStudentJoin = fromName === 'absences'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const baseConditions = { ...conditions };
         if (hasStudentParentJoin) delete baseConditions.userId;
+        if (hasClassTeachersClassJoin) delete baseConditions.schoolId;
+        if (hasHomeroomClassJoin) delete baseConditions.schoolId;
+        if (hasAbsenceStudentJoin) delete baseConditions.schoolId;
         const hasSchoolClassesJoin = fromName === 'classes'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolClasses');
         if (hasSchoolClassesJoin) delete baseConditions.schoolId;
@@ -707,6 +730,52 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
         let rows = filterTableRows(builder._table, baseConditions, builder._cond);
+
+        if (hasAbsenceStudentJoin && conditions.schoolId != null) {
+          rows = rows.filter((absence: any) => {
+            const student = FIXTURES.students.find((row: any) => Number(row.id) === Number(absence.studentId));
+            return Number(student?.schoolId) === Number(conditions.schoolId);
+          });
+        }
+
+        const boundColumnValue = (condition: any, tableName: string, columnName: string) => {
+          if (!condition) return undefined;
+          const query = new PgDialect().sqlToQuery(condition);
+          const match = new RegExp(`"${tableName}"\\."${columnName}"\\s*=\\s*\\$(\\d+)`, 'i').exec(query.sql);
+          return match ? query.params[Number(match[1]) - 1] : undefined;
+        };
+
+        if (hasClassTeachersClassJoin || hasHomeroomClassJoin) {
+          const relationSchoolId = hasHomeroomClassJoin
+            ? boundColumnValue(builder._cond, 'class_homeroom_assignments', 'school_id')
+            : undefined;
+          const classSchoolId = boundColumnValue(builder._cond, 'classes', 'school_id');
+          const schoolClassJoin = builder._joins.find((join: any) => resolveTableName(join.table) === 'schoolClasses');
+          const approvedSchoolId = schoolClassJoin
+            ? boundColumnValue(schoolClassJoin.cond, 'school_classes', 'school_id') ?? relationSchoolId
+            : relationSchoolId;
+          const approvedStatus = schoolClassJoin
+            ? boundColumnValue(schoolClassJoin.cond, 'school_classes', 'status')
+            : undefined;
+
+          rows = rows.flatMap((assignment: any) => {
+            if (relationSchoolId != null && Number(assignment.schoolId) !== Number(relationSchoolId)) return [];
+            const joinedClass = FIXTURES.classes.find((klass: any) => Number(klass.id) === Number(assignment.classId));
+            if (!joinedClass) return [];
+            const joinedSchoolClass = approvedSchoolId == null
+              ? null
+              : FIXTURES.schoolClasses.find((schoolClass: any) => (
+                Number(schoolClass.classId) === Number(joinedClass.id)
+                && Number(schoolClass.schoolId) === Number(approvedSchoolId)
+                && (approvedStatus == null || schoolClass.status === approvedStatus)
+              )) ?? null;
+            const isApprovedGlobalHomeroomClass = hasHomeroomClassJoin
+              && joinedClass.schoolId == null
+              && joinedSchoolClass?.status === 'approved';
+            if (classSchoolId != null && Number(joinedClass.schoolId) !== Number(classSchoolId) && !isApprovedGlobalHomeroomClass) return [];
+            return [{ ...assignment, _joinedClass: joinedClass, _joinedSchoolClass: joinedSchoolClass }];
+          });
+        }
 
         if (hasSchoolSubjectsJoin) {
           const joinConditions = builder._joins
@@ -913,6 +982,12 @@ function createMockDb() {
             if (tableName === 'classTeachers') {
               FIXTURES.classTeachers.push(obj as any);
               return [obj];
+            }
+            if (tableName === 'teacherClassSubjects') {
+              const nextId = FIXTURES.teacherClassSubjects.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, ...obj };
+              FIXTURES.teacherClassSubjects.push(row as any);
+              return [row];
             }
             if (tableName === 'teachers') {
               const nextId = FIXTURES.teachers.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
@@ -1671,7 +1746,37 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.map((item: any) => item.id)).not.toContain(4);
   });
 
+  it('teacher sees only their own private teacher profile when sharing a class', async () => {
+    const res = await request(app)
+      .get('/api/teachers')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((teacher: any) => teacher.id)).toEqual([77]);
+    expect(res.body.some((teacher: any) => teacher.id === 100)).toBe(false);
+  });
+
+  it('teacher cannot use another-school class assignment to access parents of an approved global class', async () => {
+    FIXTURES.classes.find((klass: any) => klass.id === 1)!.schoolId = null;
+    FIXTURES.schoolClasses.push({ id: 502, classId: 1, schoolId: 10, status: 'approved' } as any);
+    FIXTURES.classTeachers.splice(0, FIXTURES.classTeachers.length,
+      { classId: 1, teacherId: 77, schoolId: 20 },
+    );
+    FIXTURES.userSchools.push({ userId: 3, schoolId: 20, role: 'teacher', isActive: true });
+
+    const res = await request(app)
+      .get('/api/parents')
+      .set('Authorization', 'Bearer token-teacher');
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((parent: any) => parent.id)).not.toContain(1);
+    expect(res.body).toHaveLength(0);
+  });
+
   it('3h1. teacher sees absences only for their authorized student classes', async () => {
+    FIXTURES.teacherClassSubjects.push({ id: 101, teacherId: 77, schoolId: 10, classId: 1, subjectId: 901, isActive: true });
+    FIXTURES.absences[0].teachingAssignmentId = 101;
+
     const res = await request(app)
       .get('/api/absences')
       .set('Authorization', 'Bearer token-teacher');
@@ -3087,10 +3192,10 @@ describe('E2E security: auth & privilege checks', () => {
       { id: 33, schoolId: 20, classId: 3, firstName: 'Foreign', lastName: 'Student', isActive: true },
     );
     FIXTURES.evaluations.push(
-      { id: 101, classId: 1, teacherId: 77, subject: 'Math', title: 'Pedagogical class' },
-      { id: 102, classId: 2, teacherId: 88, subject: 'Science', title: 'Homeroom class' },
-      { id: 103, classId: 5, teacherId: 88, subject: 'Science', title: 'Unassigned same-school class' },
-      { id: 104, classId: 3, teacherId: 88, subject: 'Science', title: 'Foreign-school class' },
+      { id: 101, classId: 1, schoolId: 10, teacherId: 77, subject: 'Math', title: 'Pedagogical class' },
+      { id: 102, classId: 2, schoolId: 10, teacherId: 88, subject: 'Science', title: 'Homeroom class' },
+      { id: 103, classId: 5, schoolId: 10, teacherId: 88, subject: 'Science', title: 'Unassigned same-school class' },
+      { id: 104, classId: 3, schoolId: 20, teacherId: 88, subject: 'Science', title: 'Foreign-school class' },
     );
     FIXTURES.grades.push(
       { id: 201, evaluationId: 101, classId: 1, schoolId: 10, studentId: 11, score: '12' },
@@ -3136,7 +3241,7 @@ describe('E2E security: auth & privilege checks', () => {
     const globalClass = FIXTURES.classes.find((klass: any) => klass.id === 4);
     if (globalClass) globalClass.teacherId = 88;
     FIXTURES.homeroomAssignments.push({ id: 1, classId: 1, schoolId: 10, teacherId: 100 } as any);
-    FIXTURES.classTeachers.push({ classId: 4, teacherId: 77 } as any);
+    FIXTURES.classTeachers.push({ classId: 4, teacherId: 77, schoolId: 10 } as any);
     FIXTURES.users.push({ id: 13, uid: 'teacher-school-20', email: 'teacher20@x.test', name: 'Teacher20', role: 'teacher', schoolId: 20, isDeleted: false });
     FIXTURES.teachers.push({ id: 101, userId: 13, schoolId: 20, phone: null, specialization: null });
     FIXTURES.schoolClasses.push({ id: 502, classId: 4, schoolId: 20, status: 'approved' } as any);
@@ -3299,8 +3404,8 @@ describe('E2E security: auth & privilege checks', () => {
       .set('x-simulated-email', 'admin-noschool@x.test')
       .send({ teacherId: null });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 3, teacherId: null });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: 'School admin school context is required' });
   });
 
   it('18. school_admin without schoolId cannot delete a class', async () => {
@@ -3335,14 +3440,22 @@ describe('E2E security: auth & privilege checks', () => {
       expect(res.body).toMatchObject({ id: 1, teacherId: 88 });
     });
 
-    it('school_admin can update a globally approved class for their school', async () => {
-      const res = await request(app)
+    it('school_admin assigns a titular to a globally approved class through the school-scoped endpoint', async () => {
+      const genericUpdate = await request(app)
         .put('/api/classes/4')
         .set('Authorization', 'Bearer token-school')
         .send({ teacherId: 88 });
 
+      expect(genericUpdate.status).toBe(400);
+      expect(genericUpdate.body).toMatchObject({ error: 'Use the school-scoped homeroom assignment endpoint for a global class' });
+
+      const res = await request(app)
+        .put('/api/schools/10/classes/4/homeroom')
+        .set('Authorization', 'Bearer token-school')
+        .send({ teacherId: 88 });
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ id: 4, teacherId: 88 });
+      expect(res.body).toMatchObject({ classId: 4, schoolId: 10, teacherId: 88 });
+      expect(FIXTURES.homeroomAssignments).toContainEqual(expect.objectContaining({ schoolId: 10, classId: 4, teacherId: 88 }));
     });
 
     it('school_admin cannot update a globally unapproved class for their school', async () => {

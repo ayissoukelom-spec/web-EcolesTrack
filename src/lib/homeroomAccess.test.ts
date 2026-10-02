@@ -4,7 +4,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 const mockState = vi.hoisted(() => ({
   teacher: { id: 5, schoolId: 10, userId: 50 } as { id: number; schoolId: number; userId: number } | undefined,
   homeroomRows: [] as Array<{ classId: number; schoolId: number; teacherId: number; classSchoolId: number | null; schoolClassStatus: string }>,
-  teachingRows: [] as Array<{ classId: number; schoolId: number | null; teacherId: number }>,
+  teachingRows: [] as Array<{ classId: number; schoolId: number | null; teacherId: number; classSchoolId?: number | null }>,
 }));
 
 const mockDb = vi.hoisted(() => ({
@@ -19,7 +19,16 @@ const mockDb = vi.hoisted(() => ({
         if (table === classTeachers) builder._rows = mockState.teachingRows;
         return builder;
       },
-      innerJoin() { return builder; },
+      innerJoin(table: any) {
+        if (builder.table === classTeachers && table === classes) {
+          builder._rows = builder._rows.map((row: any) => ({
+            ...row,
+            assignmentSchoolId: row.schoolId,
+            schoolId: row.classSchoolId ?? null,
+          }));
+        }
+        return builder;
+      },
       leftJoin() { return builder; },
       where(condition: any) {
         if (condition && [teachers, classHomeroomAssignments, classTeachers].includes(builder.table)) {
@@ -31,8 +40,8 @@ const mockDb = vi.hoisted(() => ({
             const [teacherId, schoolId] = query.params;
             builder._rows = builder._rows.filter((assignment: any) => assignment.teacherId === teacherId && assignment.schoolId === schoolId);
           } else {
-            const [teacherId] = query.params;
-            builder._rows = builder._rows.filter((assignment: any) => assignment.teacherId === teacherId);
+            const [teacherId, schoolId] = query.params;
+            builder._rows = builder._rows.filter((assignment: any) => assignment.teacherId === teacherId && assignment.assignmentSchoolId === schoolId);
           }
         }
         return builder;
@@ -45,7 +54,7 @@ const mockDb = vi.hoisted(() => ({
 
 vi.mock('../db/index.ts', () => ({ db: mockDb }));
 
-import { classHomeroomAssignments, classTeachers, teachers } from '../db/schema.ts';
+import { classHomeroomAssignments, classTeachers, classes, teachers } from '../db/schema.ts';
 import { getTeacherHomeroomClassIds, getTeacherReadableClassIds, getTeacherHomeroomScopes } from './homeroomAccess.ts';
 
 describe('homeroom access scope', () => {
@@ -55,7 +64,11 @@ describe('homeroom access scope', () => {
       { classId: 21, schoolId: 10, teacherId: 5, classSchoolId: 10, schoolClassStatus: 'approved' },
       { classId: 22, schoolId: 10, teacherId: 5, classSchoolId: null, schoolClassStatus: 'approved' },
     ];
-    mockState.teachingRows = [{ classId: 30, schoolId: 10, teacherId: 5 }];
+    mockState.teachingRows = [
+      { classId: 30, schoolId: 10, teacherId: 5, classSchoolId: 10 },
+      { classId: 31, schoolId: 20, teacherId: 5, classSchoolId: 10 },
+      { classId: 32, schoolId: null, teacherId: 5, classSchoolId: 10 },
+    ];
   });
 
   it('resolves multiple homeroom classes only for the authenticated teacher school', async () => {
@@ -69,5 +82,13 @@ describe('homeroom access scope', () => {
   it('keeps homeroom reading separate from pedagogical class assignments', async () => {
     expect(await getTeacherReadableClassIds({ id: 50, role: 'teacher', schoolId: 10 })).toEqual([30, 21, 22]);
     expect(await getTeacherReadableClassIds({ id: 50, role: 'teacher', schoolId: 20 })).toEqual([]);
+  });
+
+  it('does not include local classes through foreign or schoolless class-teacher assignments', async () => {
+    const classIds = await getTeacherReadableClassIds({ id: 50, role: 'teacher', schoolId: 10 });
+
+    expect(classIds).toContain(30);
+    expect(classIds).not.toContain(31);
+    expect(classIds).not.toContain(32);
   });
 });

@@ -11,7 +11,9 @@ export function getTeacherClassIdSet(
 
   return assignments
     .filter((assignment) => {
-      const assignmentSchoolId = assignment.assignmentSchoolId ?? assignment.schoolId ?? currentSchoolId;
+      const assignmentSchoolId = assignment.assignmentSchoolId !== undefined
+        ? assignment.assignmentSchoolId
+        : assignment.schoolId ?? currentSchoolId;
       if (assignmentSchoolId !== currentSchoolId) return false;
       if (assignment.schoolId != null) return assignment.schoolId === currentSchoolId;
       return assignment.isApprovedForSchool === true;

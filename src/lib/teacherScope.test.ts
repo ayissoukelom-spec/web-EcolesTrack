@@ -20,6 +20,7 @@ describe('getTeacherClassIdSet', () => {
       { classId: 70, schoolId: null, assignmentSchoolId: 7, isApprovedForSchool: false },
       { classId: 71, schoolId: null, assignmentSchoolId: 8, isApprovedForSchool: true },
       { classId: 72, schoolId: null },
+      { classId: 73, schoolId: 7, assignmentSchoolId: null, isApprovedForSchool: true },
     ], 7)).toEqual([69]);
   });
 

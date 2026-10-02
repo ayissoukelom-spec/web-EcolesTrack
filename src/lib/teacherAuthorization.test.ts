@@ -8,24 +8,17 @@ const mockState = vi.hoisted(() => ({
     teacherId: number;
     classId: number;
     schoolId: number | null;
-    assignmentSchoolId?: number | null;
     classSchoolId?: number | null;
     isApprovedForSchool?: boolean;
     approvedForSchoolIds?: number[];
   }>,
-  teacherSubjects: [] as Array<{ teacherId: number; subjectId: number; schoolId: number }>,
+  teacherSubjects: [] as Array<{ teacherId: number; subjectId: number; schoolId: number | null; subjectSchoolId?: number | null; approvedForSchoolIds?: number[] }> ,
   userSchools: [] as Array<{ userId: number; schoolId: number; role: string; isActive: boolean }>,
   homeroomScopes: [] as Array<{ classId: number; schoolId: number; teacherId: number }>,
 }));
 
 const mockDb = vi.hoisted(() => ({
   select: vi.fn((projection?: any) => {
-    if (Object.values(projection ?? {}).includes(classTeachers.schoolId)) {
-      throw new Error('class_teachers.school_id does not exist');
-    }
-    if (Object.values(projection ?? {}).includes(teacherSubjects.schoolId)) {
-      throw new Error('teacher_subjects.school_id does not exist');
-    }
     const builder: any = {
       _rows: [] as any[],
       table: null as any,
@@ -48,13 +41,13 @@ const mockDb = vi.hoisted(() => ({
           builder._rows = builder._rows.filter((row: any) => row.userId === userId);
         } else if (builder.table === classTeachers) {
           const teacherId = params[0];
-          if (query.sql.includes('"class_teachers"."school_id"')) throw new Error('class_teachers.school_id does not exist');
-          builder._rows = builder._rows.filter((row: any) => row.teacherId === teacherId);
+          const schoolId = params[1];
+          builder._rows = builder._rows.filter((row: any) => row.teacherId === teacherId && row.schoolId === schoolId);
         } else if (builder.table === teacherSubjects) {
           const teacherId = params[0];
           const schoolId = params[1];
-          if (query.sql.includes('"teacher_subjects"."school_id"')) throw new Error('teacher_subjects.school_id does not exist');
           builder._rows = builder._rows.filter((row: any) => row.teacherId === teacherId
+            && row.schoolId === schoolId
             && (row.subjectSchoolId === schoolId || row.isApprovedForSchool === true));
         } else if (builder.table === userSchools) {
           const userId = params[0];
@@ -66,9 +59,13 @@ const mockDb = vi.hoisted(() => ({
       },
       innerJoin(table: any) {
         if (builder.table === classTeachers && table === classes) {
-          builder._rows = builder._rows.map((row: any) => ({ ...row, classSchoolId: row.classSchoolId ?? row.schoolId }));
+          builder._rows = builder._rows.map((row: any) => ({
+            ...row,
+            assignmentSchoolId: row.schoolId,
+            classSchoolId: row.classSchoolId ?? null,
+          }));
         } else if (builder.table === teacherSubjects && table === subjects) {
-          builder._rows = builder._rows.map((row: any) => ({ ...row, subjectSchoolId: row.subjectSchoolId ?? row.schoolId }));
+          builder._rows = builder._rows.map((row: any) => ({ ...row, subjectSchoolId: row.subjectSchoolId ?? null }));
         }
         return builder;
       },
@@ -116,13 +113,13 @@ describe('teacherAuthorization scope rules', () => {
       { id: 20, userId: 200, schoolId: 2, specialization: 'Histoire' },
     ];
     mockState.classAssignments = [
-      { teacherId: 10, classId: 101, schoolId: 1, assignmentSchoolId: 1, classSchoolId: 1, isApprovedForSchool: true },
-      { teacherId: 10, classId: 102, schoolId: 2, assignmentSchoolId: 2, classSchoolId: 2, isApprovedForSchool: true },
-      { teacherId: 10, classId: 999, schoolId: null, assignmentSchoolId: 1, classSchoolId: null, isApprovedForSchool: true },
+      { teacherId: 10, classId: 101, schoolId: 1, classSchoolId: 1, isApprovedForSchool: true },
+      { teacherId: 10, classId: 102, schoolId: 2, classSchoolId: 2, isApprovedForSchool: true },
+      { teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [1] },
     ];
     mockState.teacherSubjects = [
-      { teacherId: 10, subjectId: 501, schoolId: 1 },
-      { teacherId: 10, subjectId: 601, schoolId: 2 },
+      { teacherId: 10, subjectId: 501, schoolId: 1, subjectSchoolId: 1 },
+      { teacherId: 10, subjectId: 601, schoolId: 2, subjectSchoolId: 2 },
     ];
     mockState.userSchools = [
       { userId: 100, schoolId: 1, role: 'teacher', isActive: true },
@@ -153,30 +150,45 @@ describe('teacherAuthorization scope rules', () => {
   });
 
   it('4. rejects a subject owned by school B', async () => {
-    mockState.teacherSubjects = [{ teacherId: 10, subjectId: 601, schoolId: 2 }];
+    mockState.teacherSubjects = [{ teacherId: 10, subjectId: 601, schoolId: 2, subjectSchoolId: 2 }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.subjectIds.has(601)).toBe(false);
   });
 
+  it('4a. rejects a school A subject assignment in a school B teacher context', async () => {
+    mockState.teacherSubjects = [{
+      teacherId: 10,
+      subjectId: 601,
+      schoolId: 1,
+      subjectSchoolId: 2,
+      approvedForSchoolIds: [2],
+    }];
+
+    const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 2 });
+
+    expect(scope).not.toBeNull();
+    expect(scope!.subjectIds.has(601)).toBe(false);
+  });
+
   it('5. rejects a global class that is not approved for the active school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: null, assignmentSchoolId: 1, classSchoolId: null, isApprovedForSchool: false }];
+    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [] }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(false);
   });
 
   it('6. accepts a global class when it is approved for the active school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: null, assignmentSchoolId: 1, classSchoolId: null, isApprovedForSchool: true }];
+    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [1] }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(true);
   });
 
-  it('6a. rejects the same global class in school B when it is approved only for A', async () => {
+  it('6a. rejects a school A assignment to a global class in a school B teacher context', async () => {
     mockState.classAssignments = [{
       teacherId: 10,
       classId: 999,
-      schoolId: null,
+      schoolId: 1,
       classSchoolId: null,
-      approvedForSchoolIds: [1],
+      approvedForSchoolIds: [2],
     }];
 
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 2 });
@@ -186,7 +198,7 @@ describe('teacherAuthorization scope rules', () => {
   });
 
   it('7. rejects a global class approved only for another school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: null, assignmentSchoolId: 1, classSchoolId: null, isApprovedForSchool: false }];
+    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [] }];
     mockState.teachers = [{ id: 10, userId: 100, schoolId: 1, specialization: 'Physique' }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(false);
@@ -217,9 +229,15 @@ describe('teacherAuthorization scope rules', () => {
   });
 
   it('10. titular adds only homeroomClassIds to the read scope', async () => {
-    mockState.homeroomScopes = [{ classId: 202, schoolId: 1, teacherId: 10 }];
+    mockState.homeroomScopes = [
+      { classId: 202, schoolId: 1, teacherId: 10 },
+      { classId: 203, schoolId: 1, teacherId: 20 },
+      { classId: 204, schoolId: 2, teacherId: 10 },
+    ];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.homeroomClassIds.has(202)).toBe(true);
+    expect(scope!.homeroomClassIds.has(203)).toBe(false);
+    expect(scope!.homeroomClassIds.has(204)).toBe(false);
     expect(scope!.teachingClassIds.has(202)).toBe(false);
   });
 

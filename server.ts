@@ -479,37 +479,11 @@ async function getTeacherReadableScopedClassIds(actor: AuthRequest['user'] & { s
 async function getTeacherTeachingAssignmentContext(actor: ResolvedActor) {
   const scope = await getTeacherAuthorizationScope(actor as any);
   if (!scope) return null;
-  let assignments = await db.select().from(teacherClassSubjects).where(and(
+  const assignments = await db.select().from(teacherClassSubjects).where(and(
     eq(teacherClassSubjects.teacherId, scope.teacherId),
     eq(teacherClassSubjects.schoolId, scope.schoolId),
     eq(teacherClassSubjects.isActive, true),
   ));
-
-  if (assignments.length === 0) {
-    const classAssignmentRows = await db.select({
-      id: classTeachers.classId,
-      classId: classTeachers.classId,
-      teacherId: classTeachers.teacherId,
-      schoolId: classes.schoolId,
-      isActive: sql<boolean>`true`,
-    })
-      .from(classTeachers)
-      .innerJoin(classes, eq(classes.id, classTeachers.classId))
-      .where(and(
-        eq(classTeachers.teacherId, scope.teacherId),
-        eq(classes.schoolId, scope.schoolId),
-      ));
-
-    assignments = classAssignmentRows.map((assignment) => ({
-      id: assignment.classId,
-      teacherId: assignment.teacherId,
-      schoolId: scope.schoolId,
-      classId: assignment.classId,
-      subjectId: null,
-      isActive: true,
-    })) as any[];
-  }
-
   return { ...scope, assignments };
 }
 
@@ -6240,13 +6214,13 @@ export async function createApp() {
         const teacherId = teacherRow[0]?.id ?? null;
         if (teacherId == null) return res.json([]);
 
-        const teacherAssignments = await db.select().from(classTeachers);
-        const teacherClassIds = Array.from(new Set(
-          teacherAssignments
-            .filter((row: any) => Number(row.teacherId) === Number(teacherId))
-            .map((row: any) => Number(row.classId))
-            .filter((id) => Number.isInteger(id)),
+        const teacherAssignments = await db.select({ classId: classTeachers.classId }).from(classTeachers).where(and(
+          eq(classTeachers.teacherId, teacherId),
+          eq(classTeachers.schoolId, actor.schoolId),
         ));
+        const teacherClassIds = Array.from(new Set(teacherAssignments
+          .map((row: any) => Number(row.classId))
+          .filter((id) => Number.isInteger(id))));
         const classRows = await db.select().from(classes);
         const sameSchoolTeacherClassIds = classRows
           .filter((row: any) => Number(row.schoolId) === Number(actor.schoolId) && teacherClassIds.includes(Number(row.id)))
@@ -8155,16 +8129,16 @@ export async function createApp() {
           if (actor.schoolId == null) return res.json([]);
           const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
           const assignmentIds = assignmentContext?.assignments.map((assignment) => assignment.id) ?? [];
-          const teacherClassIds = (await db.select().from(classTeachers))
-            .filter((row: any) => Number(row.teacherId) === Number(assignmentContext?.teacherId ?? 0))
-            .map((row: any) => Number(row.classId))
-            .filter((id) => Number.isInteger(id));
-          const classRows = await db.select().from(classes);
+          const teacherClassIds = assignmentContext
+            ? (await db.select({ classId: classTeachers.classId }).from(classTeachers).where(and(
+              eq(classTeachers.teacherId, assignmentContext.teacherId),
+              eq(classTeachers.schoolId, actor.schoolId),
+            )))
+              .map((row: any) => Number(row.classId))
+              .filter((id) => Number.isInteger(id))
+            : [];
           const permittedAbsenceClassIds = Array.from(new Set([
             ...teacherClassIds,
-            ...classRows
-              .filter((row: any) => Number(row.schoolId) === Number(actor.schoolId) && teacherClassIds.includes(Number(row.id)))
-              .map((row: any) => Number(row.id)),
             ...(assignmentContext?.assignments ?? []).map((assignment) => assignment.classId).filter((id): id is number => Number.isInteger(id)),
           ]));
           if (permittedAbsenceClassIds.length === 0) return res.json([]);
@@ -10295,6 +10269,7 @@ if (uniqueParentIds.length > 0) {
           id: grades.id,
           evaluationId: grades.evaluationId,
           classId: evaluations.classId,
+          evaluationSchoolId: evaluations.schoolId,
           evaluationTitle: evaluations.title,
           evaluationDate: evaluations.date,
           subjectId: evaluations.subjectId,

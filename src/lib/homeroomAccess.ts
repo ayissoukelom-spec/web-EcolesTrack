@@ -78,6 +78,7 @@ export async function getTeacherReadableClassIds(actor: HomeroomActor): Promise<
 
   const assignments = await db.select({
     classId: classTeachers.classId,
+    assignmentSchoolId: classTeachers.schoolId,
     schoolId: classes.schoolId,
     isApprovedForSchool: schoolClasses.id,
   })
@@ -88,11 +89,14 @@ export async function getTeacherReadableClassIds(actor: HomeroomActor): Promise<
       eq(schoolClasses.schoolId, actor.schoolId),
       eq(schoolClasses.status, 'approved'),
     ))
-    .where(eq(classTeachers.teacherId, teacherId));
+    .where(and(
+      eq(classTeachers.teacherId, teacherId),
+      eq(classTeachers.schoolId, actor.schoolId),
+    ));
   const teachingClassIds = getTeacherClassIdSet(assignments.map((assignment) => ({
     classId: assignment.classId,
     schoolId: assignment.schoolId,
-    assignmentSchoolId: actor.schoolId,
+    assignmentSchoolId: assignment.assignmentSchoolId,
     isApprovedForSchool: assignment.isApprovedForSchool != null,
   })), actor.schoolId);
   const homeroomClassIds = await getTeacherHomeroomClassIds(actor);

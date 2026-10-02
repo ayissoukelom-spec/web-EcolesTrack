@@ -43,6 +43,7 @@ export async function getTeacherAuthorizationScope(actor: HomeroomActor): Promis
 
   const assignmentRows = await db.select({
     classId: classTeachers.classId,
+    assignmentSchoolId: classTeachers.schoolId,
     classSchoolId: classes.schoolId,
     isApprovedForSchool: sql<boolean>`${schoolClasses.id} IS NOT NULL`,
   }).from(classTeachers)
@@ -52,12 +53,15 @@ export async function getTeacherAuthorizationScope(actor: HomeroomActor): Promis
       eq(schoolClasses.schoolId, actor.schoolId),
       eq(schoolClasses.status, 'approved'),
     ))
-    .where(eq(classTeachers.teacherId, teacher.id));
+    .where(and(
+      eq(classTeachers.teacherId, teacher.id),
+      eq(classTeachers.schoolId, actor.schoolId),
+    ));
 
   const teachingClassIds = new Set(getTeacherClassIdSet(assignmentRows.map((row) => ({
     classId: row.classId,
     schoolId: row.classSchoolId,
-    assignmentSchoolId: actor.schoolId,
+    assignmentSchoolId: row.assignmentSchoolId,
     isApprovedForSchool: row.isApprovedForSchool,
   })), actor.schoolId));
   const homeroomScopes = await getTeacherHomeroomScopes(actor);
@@ -72,6 +76,7 @@ export async function getTeacherAuthorizationScope(actor: HomeroomActor): Promis
     ))
     .where(and(
       eq(teacherSubjects.teacherId, teacher.id),
+      eq(teacherSubjects.schoolId, actor.schoolId),
       or(
         eq(subjects.schoolId, actor.schoolId),
         isNotNull(schoolSubjects.id),
