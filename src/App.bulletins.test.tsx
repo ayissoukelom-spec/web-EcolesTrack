@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.tsx';
 import { AuthProvider } from './contexts/AuthContext.tsx';
@@ -71,12 +71,14 @@ vi.mock('./components/DashboardView.tsx', () => ({ default: () => <div>Dashboard
 vi.mock('./components/AdminView.tsx', () => ({ default: () => <div>AdminView</div> }));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./components/AbsenceView.tsx', () => ({
-  default: ({ pendingReviewOnly, onReviewAbsence }: {
+  default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence }: {
+    absencesList?: Array<{ id: number }>;
     pendingReviewOnly?: boolean;
     onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
   }) => (
     <>
       <div>{pendingReviewOnly ? 'PendingReviewView' : 'AbsenceView'}</div>
+      <div data-testid="mock-absence-ids">{absencesList.map((absence) => absence.id).join(',')}</div>
       {pendingReviewOnly && (
         <>
           <button onClick={() => onReviewAbsence?.(30, 'APPROVED')}>Mock approve pending</button>
@@ -526,6 +528,69 @@ describe('App bulletin navigation', () => {
       const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/dashboard/summary').length;
       expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
     });
+  });
+
+  it('keeps an older full-list absence while the limited dashboard summary refreshes', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+
+    const olderAbsence = { id: 1, studentName: 'Absence ancienne' };
+    const recentFive = Array.from({ length: 5 }, (_, index) => ({ id: 20 + index }));
+    let deferNextFullResponse = false;
+    let resolveDeferredFullResponse: ((absences: any[]) => void) | undefined;
+
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/dashboard/summary') {
+        return Promise.resolve({
+          absenceStatusCounts: { justified: 0, unjustified: 0, pending: 1 },
+          recentAbsences: recentFive,
+        });
+      }
+      if (url === '/api/absences') {
+        if (deferNextFullResponse) {
+          deferNextFullResponse = false;
+          return new Promise((resolve) => {
+            resolveDeferredFullResponse = resolve;
+          });
+        }
+        return Promise.resolve([olderAbsence, ...recentFive]);
+      }
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers' || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades' || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    const absenceNavigation = (await screen.findAllByTestId('sidebar-nav-absences'))[0];
+    fireEvent.click(absenceNavigation);
+    await waitFor(() => expect(screen.getByTestId('mock-absence-ids')).toHaveTextContent(/^1,/));
+
+    deferNextFullResponse = true;
+    resolveDeferredFullResponse = undefined;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(resolveDeferredFullResponse).toBeTypeOf('function'));
+
+    expect(screen.getByTestId('mock-absence-ids')).toHaveTextContent(/^1,/);
+    expect(recentFive.some((absence) => absence.id === olderAbsence.id)).toBe(false);
+
+    await act(async () => {
+      resolveDeferredFullResponse?.([olderAbsence, ...recentFive]);
+    });
+    await waitFor(() => expect(screen.getByTestId('mock-absence-ids')).toHaveTextContent(/^1,/));
+
+    deferNextFullResponse = true;
+    resolveDeferredFullResponse = undefined;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(resolveDeferredFullResponse).toBeTypeOf('function'));
+    await act(async () => {
+      resolveDeferredFullResponse?.([...recentFive]);
+    });
+
+    await waitFor(() => expect(screen.getByTestId('mock-absence-ids').textContent).toBe('20,21,22,23,24'));
   });
 
   it.each([

@@ -27,6 +27,7 @@ import {
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
 import { useLateArrivals } from './hooks/useLateArrivals.ts';
+import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
@@ -116,6 +117,7 @@ export default function App() {
     });
   };
   const [absencesList, setAbsencesList] = useState<any[]>([]);
+  const absenceRefreshSequenceRef = useRef(createAbsenceRefreshSequence());
   const [absenceDeclarationsList, setAbsenceDeclarationsList] = useState<AbsenceDeclaration[]>([]);
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
@@ -207,6 +209,7 @@ export default function App() {
 
   // Authenticate & Fetch data on load and whenever simulation role changes
   const fetchAllData = async (showSpinner = true) => {
+    const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
     if (showSpinner) setIsSyncing(true);
     setErrorMsg(null);
     try {
@@ -231,10 +234,7 @@ export default function App() {
           }));
         }
         if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
-        if ('recentAbsences' in summary) {
-          setSummaryRecentAbsences(summary.recentAbsences);
-          setAbsencesList(summary.recentAbsences);
-        }
+        if ('recentAbsences' in summary) setSummaryRecentAbsences(summary.recentAbsences);
         if (Array.isArray((summary as any).chartData)) {
           setChartData((summary as any).chartData);
         } else {
@@ -327,7 +327,9 @@ export default function App() {
       setStudentsList(normalizedStudents);
 
       if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
-      if (Array.isArray(map['/api/absences'])) setAbsencesList(map['/api/absences']);
+      if (Array.isArray(map['/api/absences']) && absenceRefreshSequenceRef.current.isLatest(absenceRefreshRequestId)) {
+        setAbsencesList(map['/api/absences']);
+      }
       if (Array.isArray(map['/api/absence-declarations'])) setAbsenceDeclarationsList(map['/api/absence-declarations']);
       if (Array.isArray(map['/api/late-arrivals'])) setLateArrivals(map['/api/late-arrivals']);
       if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
