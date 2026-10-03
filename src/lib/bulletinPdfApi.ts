@@ -735,6 +735,73 @@ export const resolvePrincipalTitle = (
   return gender === 'F' ? 'La Directrice' : 'Le Directeur';
 };
 
+export const resolvePrincipalBoxWidth = (pageWidth: number, rightMargin: number, centerX: number): number => (
+  Math.max(0, 2 * (pageWidth - rightMargin - centerX))
+);
+
+export const fitPrincipalNameToWidth = (
+  value: string,
+  font: any,
+  maxWidth: number,
+  initialFontSize = 10,
+  minFontSize = 8,
+  structuredName?: { lastName?: string | null; firstNames?: string | null },
+): { text: string; fontSize: number; textWidth: number } => {
+  const safeName = sanitizePdfText(value).trim();
+  const normalizeVisibleTokens = (input: string) => sanitizePdfText(input).split(/\s+/).filter(Boolean);
+  const getInitials = (token: string) => token
+    .split(/[-'’]/)
+    .filter(Boolean)
+    .map((part) => `${Array.from(part)[0]?.toLocaleUpperCase('fr-FR') || ''}.`)
+    .join('-');
+
+  const lastName = structuredName?.lastName ? sanitizePdfText(structuredName.lastName).trim() : normalizeVisibleTokens(safeName)[0] ?? '';
+  const firstNames = structuredName?.firstNames
+    ? normalizeVisibleTokens(structuredName.firstNames)
+    : normalizeVisibleTokens(safeName).slice(1);
+
+  const buildName = (givenNames: string[]) => {
+    if (!lastName) return safeName;
+    if (givenNames.length === 0) return lastName;
+    const [firstGivenName, ...rest] = givenNames;
+    return [lastName, firstGivenName, ...rest.map((part) => getInitials(part))].filter(Boolean).join(' ');
+  };
+
+  const fitAtAnySize = (candidate: string) => {
+    for (let fontSize = initialFontSize; fontSize >= minFontSize; fontSize = Math.max(minFontSize, Number((fontSize - 0.25).toFixed(2)))) {
+      const textWidth = font.widthOfTextAtSize(candidate, fontSize);
+      if (textWidth <= maxWidth) return { text: candidate, fontSize, textWidth };
+      if (fontSize === minFontSize) break;
+    }
+    return null;
+  };
+
+  const fullNameLayout = fitAtAnySize(safeName);
+  if (fullNameLayout) return fullNameLayout;
+
+  const ellipsis = '...';
+  const abbreviatedName = buildName(firstNames.length > 0 ? firstNames : []);
+  const abbreviatedLayout = abbreviatedName !== safeName ? fitAtAnySize(abbreviatedName) : null;
+  if (abbreviatedLayout) return abbreviatedLayout;
+
+  if (lastName) {
+    const fallbackCandidate = firstNames.length > 0 ? `${lastName} ${firstNames[0]}` : lastName;
+    const fallbackText = `${fallbackCandidate}${ellipsis}`;
+    const fallbackWidth = font.widthOfTextAtSize(fallbackText, minFontSize);
+    if (fallbackWidth <= maxWidth) return { text: fallbackText, fontSize: minFontSize, textWidth: fallbackWidth };
+  }
+
+  const characters = Array.from(safeName);
+  while (characters.length > 0) {
+    const text = `${characters.join('').trimEnd()}${ellipsis}`;
+    const textWidth = font.widthOfTextAtSize(text, minFontSize);
+    if (textWidth <= maxWidth) return { text, fontSize: minFontSize, textWidth };
+    characters.pop();
+  }
+
+  return { text: ellipsis, fontSize: minFontSize, textWidth: font.widthOfTextAtSize(ellipsis, minFontSize) };
+};
+
 export const resolveSchoolHasLycee = (
   configuredCycles: Array<{ code: string; isActive: boolean }>,
 ): boolean => configuredCycles.some((cycle) => cycle.code === 'lycee' && cycle.isActive);
@@ -2846,8 +2913,10 @@ export const createBulletinPdfDocument = async (
     const principalBoxPaddingX = 16;
     const principalBoxPaddingY = 8;
     const principalNameDisplay = data.principalName?.trim() ? sanitizePdfText(data.principalName) : null;
-    const principalNameWidth = principalNameDisplay ? fontBold.widthOfTextAtSize(principalNameDisplay, principalNameFontSize) : 0;
-    const principalBoxWidth = Math.max(principalLabelWidth, principalNameWidth) + principalBoxPaddingX * 2;
+    const principalBoxWidth = resolvePrincipalBoxWidth(page.getWidth(), margin, principalNameX);
+    const principalNameLayout = principalNameDisplay
+      ? fitPrincipalNameToWidth(principalNameDisplay, fontBold, principalBoxWidth - principalBoxPaddingX * 2, principalNameFontSize)
+      : null;
     const principalBoxLeft = principalNameX - principalBoxWidth / 2;
     const principalBoxTop = principalLabelY + principalLabelHeight + principalBoxPaddingY;
     const principalBoxBottom = principalNameY - principalNameHeight - principalBoxPaddingY;
@@ -2862,11 +2931,11 @@ export const createBulletinPdfDocument = async (
       },
     );
     drawText(page, principalLabel, principalLabelX - principalLabelWidth / 2, principalLabelY, principalLabelFontSize, text, fontBold);
-    if (principalNameDisplay) {
-      drawText(page, principalNameDisplay, principalNameX - principalNameWidth / 2, principalNameY, principalNameFontSize, text, fontBold);
+    if (principalNameLayout) {
+      drawText(page, principalNameLayout.text, principalNameX - principalNameLayout.textWidth / 2, principalNameY, principalNameLayout.fontSize, text, fontBold);
       page.drawLine({
-        start: { x: principalNameX - principalNameWidth / 2, y: principalNameY - 2 },
-        end: { x: principalNameX + principalNameWidth / 2, y: principalNameY - 2 },
+        start: { x: principalNameX - principalNameLayout.textWidth / 2, y: principalNameY - 2 },
+        end: { x: principalNameX + principalNameLayout.textWidth / 2, y: principalNameY - 2 },
         color: text,
         thickness: 0.7,
       });

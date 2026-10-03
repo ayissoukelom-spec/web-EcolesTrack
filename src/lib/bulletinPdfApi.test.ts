@@ -1,6 +1,6 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
@@ -25,6 +25,8 @@ import {
   formatPromotionDecisionForPdf,
   getSubjectDisplayName,
   resolvePdfSubjectDisplayInfo,
+  fitPrincipalNameToWidth,
+  resolvePrincipalBoxWidth,
   resolveBulletinClassTeacher,
   type BulletinPdfActor,
   type BulletinPdfData,
@@ -579,6 +581,98 @@ describe('résolution du titulaire de classe pour le PDF', () => {
 
     expect((await renderPdfWithTeacher(schoolClassTeacher))).toContain('Titulaire historique');
     expect((await renderPdfWithTeacher(missingGlobalTeacher))).toContain('Aucun');
+  });
+});
+
+describe('largeur fixe du rectangle du proviseur', () => {
+  const createPrincipalLayout = async (name: string, structuredName?: { lastName?: string | null; firstNames?: string | null }) => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const pageWidth = 595.28;
+    const margin = 16;
+    const principalNameX = pageWidth - margin - 80;
+    const boxWidth = resolvePrincipalBoxWidth(pageWidth, margin, principalNameX);
+    const horizontalPadding = 16;
+    const textLayout = fitPrincipalNameToWidth(name, font, boxWidth - horizontalPadding * 2, 10, 8, structuredName);
+    return { boxWidth, textMaxWidth: boxWidth - horizontalPadding * 2, textLayout };
+  };
+
+  it('keeps the family name intact and preserves the first given name when structured data is provided', async () => {
+    const layout = await createPrincipalLayout('AYISSOU Koffi', { lastName: 'AYISSOU', firstNames: 'Koffi' });
+
+    expect(layout.textLayout.text).toBe('AYISSOU Koffi');
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+    expect(layout.textLayout.text.startsWith('AYISSOU')).toBe(true);
+  });
+
+  it('keeps the full family name and additional given names when they fit within the fixed width', async () => {
+    const layout = await createPrincipalLayout('AYISSOU Koffi Albert', { lastName: 'AYISSOU', firstNames: 'Koffi Albert' });
+
+    expect(layout.textLayout.text).toBe('AYISSOU Koffi Albert');
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+    expect(layout.textLayout.text.startsWith('AYISSOU')).toBe(true);
+  });
+
+  it('abbreviates only the extra given names while keeping the family name complete', async () => {
+    const layout = await createPrincipalLayout('AYISSOU Koffi Albert Emmanuel François', { lastName: 'AYISSOU', firstNames: 'Koffi Albert Emmanuel François' });
+
+    expect(layout.textLayout.text).toMatch(/^AYISSOU Koffi A\. E\. F\.$|^AYISSOU Koffi A\. E\. F\. /);
+    expect(layout.textLayout.text.startsWith('AYISSOU')).toBe(true);
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('never abbreviates a long family name even when additional given names are shortened', async () => {
+    const layout = await createPrincipalLayout('NOMDEFAMILLELONG Koffi Albert Emmanuel', { lastName: 'NOMDEFAMILLELONG', firstNames: 'Koffi Albert Emmanuel' });
+
+    expect(layout.textLayout.text.startsWith('NOMDEFAMILLELONG')).toBe(true);
+    expect(layout.textLayout.text.includes('NOMDEFAMILLELONG')).toBe(true);
+    expect(layout.textLayout.text).toContain('Koffi');
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('keeps a short name unchanged at the original size', async () => {
+    const layout = await createPrincipalLayout('Koffi Amouzou');
+
+    expect(layout.boxWidth).toBe(160);
+    expect(layout.textLayout.text).toBe('Koffi Amouzou');
+    expect(layout.textLayout.fontSize).toBe(10);
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('reduces font size before abbreviating a long name', async () => {
+    const layout = await createPrincipalLayout('Koffi Albert Emmanuel NOM');
+
+    expect(layout.boxWidth).toBe(160);
+    expect(layout.textLayout.text).toBe('Koffi Albert Emmanuel NOM');
+    expect(layout.textLayout.fontSize).toBeLessThan(10);
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('abbreviates only the additional given names while keeping the family name and first given name intact', async () => {
+    const layout = await createPrincipalLayout('Koffi Albert Emmanuel Prosper Athanase NOM');
+
+    expect(layout.boxWidth).toBe(160);
+    expect(layout.textLayout.text).toBe('Koffi Albert E. P. A. N.');
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('preserves accents and hyphens when the full name fits', async () => {
+    const layout = await createPrincipalLayout('Koffi-Jean Amouzou');
+
+    expect(layout.boxWidth).toBe(160);
+    expect(layout.textLayout.text).toBe('Koffi-Jean Amouzou');
+    expect(layout.textLayout.textWidth).toBeLessThanOrEqual(layout.textMaxWidth);
+  });
+
+  it('keeps the same box width and bounds an extremely long indivisible name', async () => {
+    const first = await createPrincipalLayout('NOMEXTREMEMENTLONG'.repeat(8));
+    const second = await createPrincipalLayout('Koffi Albert Emmanuel Prosper Athanase NOM-COMPOSE-EXTREMEMENT-LONG'.repeat(3));
+
+    expect(first.boxWidth).toBe(160);
+    expect(second.boxWidth).toBe(first.boxWidth);
+    expect(first.textLayout.text).toMatch(/\.\.\.$/);
+    expect(first.textLayout.textWidth).toBeLessThanOrEqual(first.textMaxWidth);
+    expect(second.textLayout.textWidth).toBeLessThanOrEqual(second.textMaxWidth);
   });
 });
 
