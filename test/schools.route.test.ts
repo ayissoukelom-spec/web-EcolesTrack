@@ -20,7 +20,7 @@ const mockState = {
   schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
   lastSchoolUpdate: null as Record<string, any> | null,
   schoolUpdateError: null as Error | null,
-  classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
+  classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null; cycleId?: number | null; cycleCode?: string | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
   schoolTerms: [] as Array<Record<string, any>>,
   cycles: [
@@ -58,6 +58,11 @@ const extractConditionPairs = (condition: any, pairs: Array<{ column: string; va
   return pairs;
 };
 
+const conditionContainsOr = (condition: any): boolean => (condition?.queryChunks ?? []).some((chunk: any) => (
+  chunk?.value?.some?.((part: any) => typeof part === 'string' && part.includes(' or '))
+  || conditionContainsOr(chunk)
+));
+
 const createBuilder = () => {
   const builder: any = {
     table: null as any,
@@ -68,6 +73,10 @@ const createBuilder = () => {
       return builder;
     },
     innerJoin(table: any) {
+      builder.joins.push(table);
+      return builder;
+    },
+    leftJoin(table: any) {
       builder.joins.push(table);
       return builder;
     },
@@ -109,7 +118,19 @@ const createBuilder = () => {
             ? mockState.periodApprovals
             : mockState.cycles;
         const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
-        return Promise.resolve(rows.filter((row: any) => conditions.every((entry: any) => row[entry.column] === entry.value))).then(resolve);
+        const hasOrCondition = builder.conditions.some(conditionContainsOr);
+        return Promise.resolve(rows.filter((row: any) => {
+          const schoolCondition = builder.table === schoolTerms
+            ? conditions.find((entry: any) => entry.column === 'schoolId')
+            : undefined;
+          return conditions
+            .filter((entry: any) => entry !== schoolCondition)
+            .every((entry: any) => row[entry.column] === entry.value)
+            && (!schoolCondition
+              || (hasOrCondition
+                ? row.schoolId == null || row.schoolId === schoolCondition.value
+                : row.schoolId === schoolCondition.value));
+        })).then(resolve);
       }
       if (builder.table === schoolCycles) {
         const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
@@ -585,6 +606,57 @@ describe('POST /api/schools', () => {
   });
 
   describe('school-term catalogue permissions', () => {
+    it('lists global and selected-school periods for the super admin, excluding other schools and years', async () => {
+      mockState.classes = [{
+        id: 10,
+        name: '6e A',
+        schoolId: 1,
+        academicYearId: 1,
+        cycleId: 1,
+        cycleCode: 'college',
+      }];
+      mockState.schoolTerms = [
+        { id: 20, schoolId: null, academicYearId: 1, name: 'Trimestre global', periodType: 'trimester', isActive: true },
+        { id: 21, schoolId: 1, academicYearId: 1, name: 'Trimestre école A', periodType: 'trimester', isActive: true },
+        { id: 22, schoolId: 2, academicYearId: 1, name: 'Trimestre école B', periodType: 'trimester', isActive: true },
+        { id: 23, schoolId: null, academicYearId: 2, name: 'Trimestre année suivante', periodType: 'trimester', isActive: true },
+      ];
+      mockState.schoolCycles = [{ id: 1, schoolId: 1, cycleId: 1, isActive: true }];
+      mockState.periodApprovals = [{ id: 1, schoolId: 1, periodType: 'trimester', status: 'approved' }];
+
+      const response = await request(app)
+        .get('/api/school-terms?schoolId=1&classId=10&academicYearId=1&availableOnly=true')
+        .expect(200);
+
+      expect(response.body.map((term: any) => term.id)).toEqual([20, 21]);
+    });
+
+    it('keeps school-admin available periods limited to their school and global periods', async () => {
+      mockState.users[0].role = 'school_admin';
+      mockState.users[0].schoolId = 1;
+      mockState.classes = [{
+        id: 10,
+        name: '6e A',
+        schoolId: 1,
+        academicYearId: 1,
+        cycleId: 1,
+        cycleCode: 'college',
+      }];
+      mockState.schoolTerms = [
+        { id: 20, schoolId: null, academicYearId: 1, name: 'Trimestre global', periodType: 'trimester', isActive: true },
+        { id: 21, schoolId: 1, academicYearId: 1, name: 'Trimestre école A', periodType: 'trimester', isActive: true },
+        { id: 22, schoolId: 2, academicYearId: 1, name: 'Trimestre école B', periodType: 'trimester', isActive: true },
+      ];
+      mockState.schoolCycles = [{ id: 1, schoolId: 1, cycleId: 1, isActive: true }];
+      mockState.periodApprovals = [{ id: 1, schoolId: 1, periodType: 'trimester', status: 'approved' }];
+
+      const response = await request(app)
+        .get('/api/school-terms?schoolId=2&classId=10&academicYearId=1&availableOnly=true')
+        .expect(200);
+
+      expect(response.body.map((term: any) => term.id)).toEqual([20, 21]);
+    });
+
     it('allows only the Super Admin to create a global period', async () => {
       mockState.users[0].role = 'school_admin';
       mockState.users[0].schoolId = 1;

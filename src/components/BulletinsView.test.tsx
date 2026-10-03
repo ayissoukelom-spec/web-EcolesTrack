@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BulletinsView from './BulletinsView';
 import ParentNotesView from './ParentNotesView';
+import { apiFetch } from '../lib/api.ts';
 
 vi.mock('../contexts/AuthContext.tsx', () => ({
   useAuth: () => ({
@@ -70,6 +71,16 @@ describe('BulletinsView', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(apiFetch).mockReset().mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/school-terms') {
+        return [{ id: 7, name: 'Trimestre 1', startDate: '2026-01-01', endDate: '2026-12-31' }] as any;
+      }
+      if (endpoint.startsWith('/api/school-terms?')) return [{ id: 7 }] as any;
+      if (endpoint === '/api/classes?schoolId=1') {
+        return [{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }] as any;
+      }
+      return [] as any;
+    });
   });
 
   it('keeps all schools visible to super_admin even when a school has no class yet', () => {
@@ -93,10 +104,48 @@ describe('BulletinsView', () => {
     expect(schoolSelect).toHaveTextContent('École sans classe');
   });
 
+  it('loads available school periods with the selected class academic year', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/school-terms') {
+        return [{ id: 20, name: 'Trimestre global' }] as any;
+      }
+      if (endpoint.startsWith('/api/school-terms?')) {
+        const params = new URLSearchParams(endpoint.split('?')[1]);
+        expect(params.get('schoolId')).toBe('1');
+        expect(params.get('classId')).toBe('10');
+        expect(params.get('academicYearId')).toBe('4');
+        expect(params.get('availableOnly')).toBe('true');
+        return [{ id: 20 }] as any;
+      }
+      if (endpoint === '/api/classes?schoolId=1') {
+        return [{ id: 10, schoolId: 1, academicYearId: 4, name: '6A' }] as any;
+      }
+      return [] as any;
+    });
+
+    render(
+      <BulletinsView
+        schoolsList={[{ id: 1, name: 'École A' }]}
+        classesList={[]}
+        studentsList={[{ id: 30, schoolId: 1, classId: 10, className: '6A', firstName: 'Alice', lastName: 'Dupont' }]}
+        evaluationsList={[]}
+        gradesList={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('6A'));
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('combobox')[3]).toHaveTextContent('Trimestre global');
+    });
+  });
+
   it('shows the missing-composition message and disables both generation actions', async () => {
     render(
       <BulletinsView
-        schoolsList={[]}
+        schoolsList={[{ id: 1, name: 'École A' }]}
         classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }]}
         studentsList={[{ id: 1, schoolId: 1, classId: 10, className: '2nde CD', firstName: 'Alice', lastName: 'Dupont' }]}
         evaluationsList={[
@@ -106,6 +155,8 @@ describe('BulletinsView', () => {
       />,
     );
 
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('2nde CD'));
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Mathématiques');
@@ -116,7 +167,7 @@ describe('BulletinsView', () => {
   it('allows generation with excluded exercises when every selected subject has a composition', async () => {
     render(
       <BulletinsView
-        schoolsList={[]}
+        schoolsList={[{ id: 1, name: 'École A' }]}
         classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }]}
         studentsList={[{ id: 1, schoolId: 1, classId: 10, className: '2nde CD', firstName: 'Alice', lastName: 'Dupont' }]}
         evaluationsList={[
@@ -127,6 +178,8 @@ describe('BulletinsView', () => {
       />,
     );
 
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('2nde CD'));
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
 
     await waitFor(() => {

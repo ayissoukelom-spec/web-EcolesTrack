@@ -110,6 +110,50 @@ describe('registerBulletinGenerateRoute', () => {
     }
   });
 
+  it('refuses an unavailable or incompatible period before generating an individual bulletin', async () => {
+    const app = express();
+    app.use(express.json());
+    const queryResults = [
+      [{ classId: 53, schoolId: 25 }],
+      [{ id: 53, academicYearId: 4, schoolId: null }],
+      [{ id: 2, academicYearId: 4 }],
+    ];
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve(queryResults.shift() || []) }),
+    } as any));
+    const generateHandler = vi.fn();
+    isApprovedClassForSchoolMock.mockResolvedValue(true);
+
+    try {
+      registerBulletinGenerateRoute(app, {
+        resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: null }),
+        verifyMiddleware: ((req: any, _res: any, next: any) => {
+          req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin' };
+          next();
+        }) as any,
+        accessMiddleware: ((_req: any, _res: any, next: any) => next()) as any,
+        resolveAvailableTerm: async () => ({ error: 'Selected term is not compatible with the class cycle' }),
+        generateHandler,
+      });
+
+      await new Promise<void>((resolve) => {
+        activeServer = app.listen(0, () => resolve());
+      });
+      const address = activeServer.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const response = await fetch(`http://127.0.0.1:${port}/api/bulletins/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: 10, termId: 2 }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(generateHandler).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+
   it('persists the individual bulletin scope version and downloads that bulletin for its school admin', async () => {
     const app = express();
     app.use(express.json());

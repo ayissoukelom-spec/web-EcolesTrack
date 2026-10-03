@@ -191,10 +191,20 @@ export default function BulletinsView({
     let cancelled = false;
     (async () => {
       try {
+        const selectedClass = generateClasses.find((klass) => String(klass.id) === generateClassId);
+        const academicYearId = Number(selectedClass?.academicYearId);
+        const hasAcademicYear = Number.isInteger(academicYearId) && academicYearId > 0;
+        const availableTermsParams = new URLSearchParams({
+          schoolId: String(Number(generateSchoolId)),
+          classId: String(Number(generateClassId)),
+          availableOnly: 'true',
+        });
+        if (hasAcademicYear) availableTermsParams.set('academicYearId', String(academicYearId));
+
         const [list, availableList] = await Promise.all([
           apiFetch('/api/school-terms'),
-          generateSchoolId && generateClassId
-            ? apiFetch(`/api/school-terms?schoolId=${Number(generateSchoolId)}&classId=${Number(generateClassId)}&availableOnly=true`)
+          generateSchoolId && generateClassId && hasAcademicYear
+            ? apiFetch(`/api/school-terms?${availableTermsParams.toString()}`)
             : Promise.resolve([]),
         ]);
         if (cancelled) return;
@@ -212,7 +222,7 @@ export default function BulletinsView({
       }
     })();
     return () => { cancelled = true; };
-  }, [generateClassId, generateSchoolId]);
+  }, [generateClassId, generateClasses, generateSchoolId]);
 
   const termOptions = useMemo<BulletinTermOption[]>(() => {
     return termsFromApi

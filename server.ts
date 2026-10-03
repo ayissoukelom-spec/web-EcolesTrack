@@ -4405,6 +4405,12 @@ export async function createApp() {
           ));
         } else if (globalOnly) {
           rows = await db.select().from(schoolTerms).where(sql`${schoolTerms.schoolId} IS NULL`);
+        } else if (availableOnly && schoolIdParam != null) {
+          const conditions = [
+            or(sql`${schoolTerms.schoolId} IS NULL`, eq(schoolTerms.schoolId, schoolIdParam)),
+          ];
+          if (academicYearId != null) conditions.push(eq(schoolTerms.academicYearId, academicYearId));
+          rows = await db.select().from(schoolTerms).where(and(...conditions));
         } else if (academicYearId != null) {
           rows = await db.select().from(schoolTerms).where(eq(schoolTerms.academicYearId, academicYearId));
         } else if (schoolIdParam != null) {
