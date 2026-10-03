@@ -677,7 +677,7 @@ export default function App() {
     }
   };
 
-  const handleAddParent = async (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => {
+  const handleAddParent = async (data: { name: string; email?: string | null; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => {
     try {
       const created = await apiFetch('/api/parents', {
         method: 'POST',

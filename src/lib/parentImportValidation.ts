@@ -52,8 +52,7 @@ export function validateParentImportRow(
     errors.push('name est obligatoire');
     errors.push('Nom et Prénoms sont obligatoires');
   }
-  if (!email) errors.push('email est obligatoire');
-  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('email doit être valide');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('email doit être valide');
   if (!phone) errors.push('phone est obligatoire');
   else if (phonePrefix === '+228' && phone.length !== 8) errors.push('phone doit contenir 8 chiffres pour +228');
   else if (phonePrefix !== '+228' && (phone.length < 1 || phone.length > 20)) errors.push('phone doit contenir entre 1 et 20 chiffres');

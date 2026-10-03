@@ -1529,7 +1529,8 @@ export async function createApp() {
       const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, password, classIds, teachingAssignments, studentId } = req.body;
       if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
       const normalizedEmail = normalizeEmail(email);
-      if (!normalizedEmail || !role) return res.status(400).json({ error: 'Missing required fields: email and role' });
+      if (!role) return res.status(400).json({ error: 'Missing required field: role' });
+      if (role !== 'parent' && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
       if (role === 'teacher' && (!String(lastName ?? '').trim() || !String(firstNames ?? '').trim())) {
         return res.status(400).json({ error: 'Missing required fields: lastName and firstNames' });
       }
@@ -1874,7 +1875,8 @@ export async function createApp() {
       const { email, name, lastName, firstNames, role, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
-      if (!email || !role) return res.status(400).json({ error: 'Missing required fields: email and role' });
+      if (!role) return res.status(400).json({ error: 'Missing required field: role' });
+      if (role !== 'parent' && !email) return res.status(400).json({ error: 'Missing required field: email' });
       if (role === 'teacher' && ((lastName && !firstNames) || (firstNames && !lastName))) {
         return res.status(400).json({ error: 'lastName and firstNames must be provided together' });
       }
@@ -1974,16 +1976,22 @@ export async function createApp() {
       // - Exclude the user being updated (id != ${id})
       // - For super_admin: globally unique
       // - For others: unique per school
-      if (email !== targetUser.email) {
-        // Email is being changed, check if new email is available
-        const normalizedEmail = email.trim().toLowerCase();
-        
+      const normalizedIncomingEmail = normalizeEmail(email);
+      const emailChanged = normalizedIncomingEmail !== normalizeEmail(targetUser.email);
+      if (emailChanged) {
+        if (role !== 'parent' && !normalizedIncomingEmail) {
+          return res.status(400).json({ error: 'Missing required field: email' });
+        }
+
         let emailConflicts: any[] = [];
-        if (targetUser.role === 'super_admin' || role === 'super_admin') {
+        if (normalizedIncomingEmail == null) {
+          // Parent accounts may intentionally have no email; skip duplicate checks.
+          emailConflicts = [];
+        } else if (targetUser.role === 'super_admin' || role === 'super_admin') {
           // Super admin emails are globally unique
           emailConflicts = await db.select().from(users).where(
             and(
-              eq(sql`LOWER(${users.email})`, normalizedEmail),
+              eq(sql`LOWER(${users.email})`, normalizedIncomingEmail),
               sql`${users.id} != ${id}`
             )
           );
@@ -1993,7 +2001,7 @@ export async function createApp() {
           if (schoolForCheck != null) {
             emailConflicts = await db.select().from(users).where(
               and(
-                eq(sql`LOWER(${users.email})`, normalizedEmail),
+                eq(sql`LOWER(${users.email})`, normalizedIncomingEmail),
                 eq(users.schoolId, schoolForCheck),
                 sql`${users.id} != ${id}`
               )
@@ -2010,7 +2018,7 @@ export async function createApp() {
         }
       }
 
-      const updatedValues: any = { email, name: teacherDisplayName, role, gender: gender ?? null };
+      const updatedValues: any = { email: normalizedIncomingEmail, name: teacherDisplayName, role, gender: gender ?? null };
       if (role === 'teacher' && lastName && firstNames) {
         updatedValues.lastName = String(lastName).trim();
         updatedValues.firstNames = String(firstNames).trim();
@@ -6375,7 +6383,7 @@ export async function createApp() {
       console.debug('[api/parents POST] body received:', req.body);
           const { name, email, phone, address, schoolId, studentId, gender } = req.body;
           const normalizedEmail = normalizeEmail(email);
-          if (!name || !normalizedEmail) return res.status(400).json({ error: 'Name and Email are required' });
+          if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required' });
 
           // Load user and validate school permission
           const actor = await resolveActor(req);

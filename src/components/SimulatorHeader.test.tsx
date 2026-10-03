@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SimulatorHeader from './SimulatorHeader';
 
@@ -72,11 +72,20 @@ function renderHeader() {
   );
 }
 
-function openCreateTeacherAccount() {
+function openCreateAccount() {
   const profileButton = document.getElementById('btn-sim-profile');
   if (!profileButton) throw new Error('Bouton profil absent');
   fireEvent.click(profileButton);
   fireEvent.click(screen.getByRole('button', { name: /Créer un compte/ }));
+}
+
+function selectAccountRole(role: string) {
+  const roleSelect = screen.getAllByRole('combobox').find((element) => (
+    element instanceof HTMLSelectElement
+    && Array.from(element.options).some((option) => option.value === role)
+  ));
+  if (!roleSelect) throw new Error(`Rôle ${role} absent du formulaire`);
+  fireEvent.change(roleSelect, { target: { value: role } });
 }
 
 function selectSchool(schoolId: number) {
@@ -130,7 +139,7 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
       ],
     });
     renderHeader();
-    openCreateTeacherAccount();
+    openCreateAccount();
     selectSchool(25);
 
     expect(await screen.findAllByRole('checkbox', { name: 'Mathématiques' })).toHaveLength(1);
@@ -139,7 +148,7 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
   it('requests and displays only the selected school approved subjects', async () => {
     const requests = mockApi();
     renderHeader();
-    openCreateTeacherAccount();
+    openCreateAccount();
     selectSchool(25);
 
     expect(await screen.findByRole('checkbox', { name: 'Français' })).toBeTruthy();
@@ -151,7 +160,7 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
   it('removes selected subjects unavailable after changing schools', async () => {
     mockApi();
     renderHeader();
-    openCreateTeacherAccount();
+    openCreateAccount();
     selectSchool(25);
 
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
@@ -172,7 +181,7 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
       ],
     });
     renderHeader();
-    openCreateTeacherAccount();
+    openCreateAccount();
     selectSchool(25);
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
     await selectTestClass();
@@ -183,5 +192,74 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
     const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
     const payload = JSON.parse(String(createRequest?.init?.body));
     expect(payload).toMatchObject({ role: 'teacher', schoolId: 25, subjectIds: [501] });
+  });
+
+  it('creates a parent without an email and sends null in the payload', async () => {
+    const requests = mockApi();
+    renderHeader();
+    openCreateAccount();
+    selectAccountRole('parent');
+
+    const emailLabel = screen.getByText('Email').closest('label');
+    expect(emailLabel).toBeTruthy();
+    expect(within(emailLabel as HTMLElement).queryByText('*')).toBeNull();
+
+    selectSchool(25);
+    const parentTypeSelect = screen.getAllByRole('combobox').find((element) => (
+      element instanceof HTMLSelectElement
+      && Array.from(element.options).some((option) => option.value === 'pere')
+    ));
+    if (!parentTypeSelect) throw new Error('Sélecteur du lien parental absent');
+    fireEvent.change(parentTypeSelect, { target: { value: 'pere' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload).toMatchObject({ role: 'parent', schoolId: 25, email: null });
+    expect(screen.queryByText('L’email est requis')).toBeNull();
+  });
+
+  it('creates a parent when an email is provided', async () => {
+    const requests = mockApi();
+    renderHeader();
+    openCreateAccount();
+    selectAccountRole('parent');
+    selectSchool(25);
+
+    const parentTypeSelect = screen.getAllByRole('combobox').find((element) => (
+      element instanceof HTMLSelectElement
+      && Array.from(element.options).some((option) => option.value === 'pere')
+    ));
+    if (!parentTypeSelect) throw new Error('Sélecteur du lien parental absent');
+    fireEvent.change(parentTypeSelect, { target: { value: 'pere' } });
+    fireEvent.change(screen.getByPlaceholderText('email@exemple.fr'), { target: { value: 'parent@example.test' } });
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload).toMatchObject({ role: 'parent', email: 'parent@example.test' });
+  });
+
+  it.each([
+    ['teacher', 'Enseignant'],
+    ['school_admin', 'Administrateur'],
+  ])('%s still requires an email and displays the required marker', async (role) => {
+    const requests = mockApi();
+    renderHeader();
+    openCreateAccount();
+    selectAccountRole(role);
+
+    const emailLabel = screen.getByText('Email').closest('label');
+    expect(emailLabel).toBeTruthy();
+    expect(within(emailLabel as HTMLElement).getByText('*')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    expect(await screen.findByText('L’email est requis')).toBeTruthy();
+    expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(false);
   });
 });

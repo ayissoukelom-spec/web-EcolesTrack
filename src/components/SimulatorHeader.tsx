@@ -171,6 +171,7 @@ export default function SimulatorHeader({
   const [createPassword, setCreatePassword] = useState('123456');
   const [createPasswordConfirm, setCreatePasswordConfirm] = useState('123456');
   const [createRole, setCreateRole] = useState('teacher');
+  const emailRequired = createRole !== 'parent';
   const [createGender, setCreateGender] = useState('');
   const [createParentType, setCreateParentType] = useState('');
   const [createSchoolId, setCreateSchoolId] = useState('');
@@ -913,7 +914,7 @@ export default function SimulatorHeader({
 
               <div>
                 <label className="block text-xs">
-                  <RequiredLabel label="Email" required />
+                  <RequiredLabel label="Email" required={emailRequired} />
                 </label>
                 <input className="w-full p-2 border rounded" value={createEmail} onChange={(e) => setCreateEmail(e.target.value)} placeholder="email@exemple.fr" />
               </div>
@@ -1111,7 +1112,7 @@ export default function SimulatorHeader({
                       return;
                     }
                   }
-                  if (!createEmail) {
+                  if (emailRequired && !createEmail) {
                     setCreateError('L’email est requis');
                     return;
                   }
@@ -1190,7 +1191,7 @@ export default function SimulatorHeader({
                         .map((subject) => String(subject.name || '').trim())
                     : createSpecializations;
                   const payload: any = {
-                    email: createEmail,
+                    email: createRole === 'parent' ? createEmail.trim() || null : createEmail,
                     name,
                     role: createRole,
                     phone: `${createPhonePrefix}${createPhone}`,

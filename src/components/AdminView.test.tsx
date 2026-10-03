@@ -374,6 +374,7 @@ describe('AdminView create-user teacher form', () => {
     const parents: Parent[] = [
       { id: 55, userId: 6, name: 'Awa Mensah', email: 'awa@gmail.com', phone: '+228 90000000', schoolId: 1 },
       { id: 56, userId: 7, name: 'Kossi Doe', email: 'kossi@example.com', phone: '+228 90000001', schoolId: 1 },
+      { id: 57, userId: 8, name: 'Parent sans email', email: null, phone: '+228 90000002', schoolId: 1 },
     ];
 
     renderWithAuth(
@@ -399,19 +400,22 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
-    expect(screen.getByText('Effectif total : 2 parents')).toBeTruthy();
+    expect(screen.getByText('Effectif total : 3 parents')).toBeTruthy();
     expect(screen.getByText('Awa Mensah')).toBeTruthy();
     expect(screen.getByText('Kossi Doe')).toBeTruthy();
+    expect(screen.getByText('Parent sans email')).toBeTruthy();
 
     const emailSearch = screen.getByLabelText(/Rechercher par email/i);
     fireEvent.change(emailSearch, { target: { value: 'AWA@GMAIL.COM' } });
-    expect(screen.getByText('Effectif total : 2 parents')).toBeTruthy();
+    expect(screen.getByText('Effectif total : 3 parents')).toBeTruthy();
     expect(screen.getByText('Awa Mensah')).toBeTruthy();
     expect(screen.queryByText('Kossi Doe')).toBeNull();
+    expect(screen.queryByText('Parent sans email')).toBeNull();
 
     fireEvent.change(emailSearch, { target: { value: 'absent@example.com' } });
     expect(screen.queryByText('Awa Mensah')).toBeNull();
     expect(screen.queryByText('Kossi Doe')).toBeNull();
+    expect(screen.queryByText('Parent sans email')).toBeNull();
   });
 
   it('preserves the parent country calling code when editing a stored international number', async () => {

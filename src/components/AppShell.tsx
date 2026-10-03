@@ -254,7 +254,7 @@ export default function AppShell() {
     return created;
   };
 
-  const handleAddParent = async (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => {
+  const handleAddParent = async (data: { name: string; email?: string | null; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => {
     const created = await apiFetch('/api/parents', { method: 'POST', body: JSON.stringify(data) });
     const parents = await apiFetch('/api/parents');
     setParentsList(parents);

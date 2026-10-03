@@ -2265,6 +2265,26 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body).toMatchObject({ email: 'newparent@x.test', name: 'New Parent', schoolId: 10 });
   });
 
+  it('3k-bis. school_admin can create a parent without an email via POST /api/parents', async () => {
+    const res = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Parent Sans Email', phone: '+22998765433', address: 'Rue Sans Email', schoolId: 10 });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ email: null, name: 'Parent Sans Email', schoolId: 10 });
+  });
+
+  it('3k-ter. school_admin can create a parent without an email via POST /api/admin/users', async () => {
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid: 'parent-no-email-2', name: 'Parent sans email admin', role: 'parent', phone: '+22998765434', schoolId: 10 });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ email: null, name: 'Parent sans email admin', role: 'parent', schoolId: 10 });
+  });
+
   it('3l. parent cannot create a parent via POST /api/parents', async () => {
     const res = await request(app)
       .post('/api/parents')

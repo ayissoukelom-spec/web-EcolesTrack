@@ -85,7 +85,7 @@ export interface Subject {
 export interface User {
   id: number;
   uid: string;
-  email: string;
+  email: string | null;
   name: string;
   lastName?: string | null;
   firstNames?: string | null;
@@ -137,7 +137,7 @@ export interface Parent {
   id: number;
   userId: number;
   name: string;
-  email: string;
+  email?: string | null;
   phone?: string;
   address?: string;
   firstName?: string;

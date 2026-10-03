@@ -2500,7 +2500,7 @@ export default function AdminView({
   const filteredParentsList = parentsList.filter((p) =>
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
     (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
-    p.email.toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
+    (p.email ?? '').toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
     filterBySearch(p.name)
   );
 

@@ -112,7 +112,7 @@ export const schoolTerms = pgTable('school_terms', {
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   uid: text('uid').notNull().unique(), // Firebase UID
-  email: text('email').notNull().unique(),
+  email: text('email').unique(),
   name: text('name').notNull(),
   lastName: text('last_name'),
   firstNames: text('first_name'),

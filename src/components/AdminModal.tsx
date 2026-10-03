@@ -965,9 +965,9 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      <RequiredLabel label="Email de communication" required />
+                      Email de communication
                     </label>
-                    <input required type="email" value={newParentForm.email} onChange={e => setNewParentForm({...newParentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                    <input type="email" value={newParentForm.email} onChange={e => setNewParentForm({...newParentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
@@ -1417,9 +1417,9 @@ export default function AdminModal(props: any) {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                  <RequiredLabel label="Email de communication" required />
+                  Email de communication
                 </label>
-                <input required type="email" value={parentForm.email} onChange={e => setParentForm({...parentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
+                <input type="email" value={parentForm.email} onChange={e => setParentForm({...parentForm, email: e.target.value})} placeholder="valerie@damidot.com" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
