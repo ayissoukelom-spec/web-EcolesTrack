@@ -60,6 +60,26 @@ export default function AdminModal(props: any) {
     subjectGroups = [],
   } = props;
   const { fieldErrors, setFieldErrors } = props;
+  const [isSubmittingSchool, setIsSubmittingSchool] = useState(false);
+  const schoolSubmissionInProgress = React.useRef(false);
+
+  const handleModalSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    if (activeTab !== 'schools') {
+      await handleFormSubmit(event);
+      return;
+    }
+    event.preventDefault();
+    if (schoolSubmissionInProgress.current) return;
+
+    schoolSubmissionInProgress.current = true;
+    setIsSubmittingSchool(true);
+    try {
+      await handleFormSubmit(event);
+    } finally {
+      schoolSubmissionInProgress.current = false;
+      setIsSubmittingSchool(false);
+    }
+  };
 
   const clearFieldError = (field: string) => {
     if (!setFieldErrors) return;
@@ -448,7 +468,7 @@ export default function AdminModal(props: any) {
       contentClassName="max-w-3xl"
       ariaLabel="Formulaire d'administration"
     >
-      <form onSubmit={handleFormSubmit} noValidate className="space-y-3 overflow-auto max-h-[80vh]">
+      <form onSubmit={handleModalSubmit} noValidate className="space-y-3 overflow-auto max-h-[80vh]">
           {/* Form 1: SCHOOL */}
           {activeTab === 'schools' && (
             <div className="space-y-3">
@@ -1481,8 +1501,11 @@ export default function AdminModal(props: any) {
           )}
 
           <div className="flex justify-end gap-2 pt-4">
-            <button type="button" onClick={() => onClose && onClose()} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer">Annuler</button>
-            <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md inline-flex items-center gap-1 cursor-pointer">Enregistrer</button>
+            <button type="button" onClick={() => onClose && onClose()} disabled={isSubmittingSchool} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">Annuler</button>
+            <button type="submit" disabled={activeTab === 'schools' && isSubmittingSchool} aria-busy={activeTab === 'schools' && isSubmittingSchool} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md inline-flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-70">
+              {activeTab === 'schools' && isSubmittingSchool && <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />}
+              {activeTab === 'schools' && isSubmittingSchool ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
           </div>
         </form>
     </ModalSurface>
