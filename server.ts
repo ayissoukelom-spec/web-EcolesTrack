@@ -3594,15 +3594,28 @@ export async function createApp() {
       // lazy-import xlsx so server starts even if dependency not installed yet
       const XLSX = await import('xlsx');
       const rows = [
-        // Headers: prefer both IDs and helpful parent contact fields for convenience
-        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'],
-        // Example rows
-        ['Lucas', 'Dubois', '2008-04-12', 1, 1, 1, 'Marie Dubois', 'marie.dubois@example.com', '90000001', 1, '', 2, 1, 'Masculin'],
-        ['Chloe', 'Dubois', '2010-09-25', 1, 1, 1, 'Paul Dubois', 'paul.dubois@example.com', '90000002', 1, '', 3, 1, 'Féminin'],
+        ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhonePrefix', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'],
+        ['Lucas', 'Dubois', '2008-04-12', 1, 1, '', 'Marie Dubois', 'marie.dubois@example.com', '+228', '90000001', 1, '', 2, 1, 'Masculin'],
+        ['Chloe', 'Dubois', '2010-09-25', 1, 1, '', 'Paul Dubois', '', '', '+22890000002', 1, '', 3, 1, 'Féminin'],
       ];
       const ws = XLSX.utils.aoa_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'students');
+      const instructions = [
+        ['Identification du parent'],
+        ['Renseigner au moins une des colonnes parentId, parentPhone ou parentEmail.'],
+        ['parentId est l’identifiant du profil parents.id. parentEmail reste accepté pour les anciens fichiers.'],
+        ['Pour un numéro local, saisir le préfixe dans parentPhonePrefix et le numéro local dans parentPhone.'],
+        ['Pour un numéro complet, laisser parentPhonePrefix vide et saisir le numéro dans parentPhone.'],
+        ['Exemples', 'parentPhonePrefix', 'parentPhone', 'Résultat canonique'],
+        ['Numéro local', '228', '90121212', '+22890121212'],
+        ['Numéro local', '+228', '90121212', '+22890121212'],
+        ['Numéro complet', '', '+22890121212', '+22890121212'],
+        ['Numéro complet', '', '0022890121212', '+22890121212'],
+        ['Numéro complet', '', '228 90121212', '+22890121212'],
+        ['En cas de parent introuvable, ambigu ou de clés contradictoires, la ligne est rejetée.'],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), 'instructions');
       const buf: ArrayBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="students_template.xlsx"');
@@ -3643,6 +3656,13 @@ export async function createApp() {
       const parentEmails = Array.from(new Set(payload
         .map((p: any) => normalizeEmail(p.parentEmail))
         .filter((email): email is string => Boolean(email))));
+      const parentPhoneInputs = payload.map((p: any) => ({
+        phone: typeof p.parentPhone === 'string' ? p.parentPhone.trim() : '',
+        prefix: typeof p.parentPhonePrefix === 'string' ? p.parentPhonePrefix.trim() : '',
+      }));
+      const canonicalParentPhones = parentPhoneInputs
+        .map(({ phone, prefix }) => phone ? canonicalizeUserPhone(phone, prefix || undefined) : null)
+        .filter((phone): phone is string => Boolean(phone));
 
       if (userRecord.role === 'school_admin' && userRecord.schoolId) {
         schoolIds.push(userRecord.schoolId);
@@ -3650,24 +3670,30 @@ export async function createApp() {
 
       const existingSchoolRows = schoolIds.length > 0 ? await db.select().from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
       const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
-      const parentLookupRows = parentIds.length > 0 || parentEmails.length > 0
+      const parentLookupRows = parentIds.length > 0 || parentEmails.length > 0 || canonicalParentPhones.length > 0
         ? await db.select({ id: parents.id, userId: parents.userId, schoolId: parents.schoolId }).from(parents)
         : [];
       const existingParentRows = parentLookupRows;
-      const emailParentRows = parentLookupRows;
-      const emailParentUserIds = Array.from(new Set(emailParentRows.map((parent: any) => parent.userId).filter(Boolean)));
-      const emailParentUsers = emailParentUserIds.length > 0
-        ? await db.select({ id: users.id, email: users.email }).from(users)
+      const contactParentRows = parentLookupRows;
+      const contactParentUserIds = Array.from(new Set(contactParentRows.map((parent: any) => parent.userId).filter(Boolean)));
+      const contactParentUsers = contactParentUserIds.length > 0
+        ? await db.select({ id: users.id, email: users.email, phone: users.phone }).from(users)
         : [];
       const parentEmailById = new Map<number, string>();
       const userEmailById = new Map<number, string>();
-      for (const user of emailParentUsers) {
+      const parentPhoneById = new Map<number, string>();
+      const userPhoneById = new Map<number, string>();
+      for (const user of contactParentUsers) {
         const normalizedEmail = normalizeEmail(user.email);
         if (normalizedEmail) userEmailById.set(Number(user.id), normalizedEmail);
+        const canonicalPhone = canonicalizeUserPhone(user.phone);
+        if (canonicalPhone) userPhoneById.set(Number(user.id), canonicalPhone);
       }
-      for (const parent of emailParentRows) {
+      for (const parent of contactParentRows) {
         const normalizedEmail = userEmailById.get(Number(parent.userId));
         if (normalizedEmail) parentEmailById.set(Number(parent.id), normalizedEmail);
+        const canonicalPhone = userPhoneById.get(Number(parent.userId));
+        if (canonicalPhone) parentPhoneById.set(Number(parent.id), canonicalPhone);
       }
 
       const existingSchoolIds = new Set(existingSchoolRows.map((r: any) => r.id));
@@ -3684,6 +3710,7 @@ export async function createApp() {
       const inserted: any[] = [];
       const errors: any[] = [];
       const parentEmailResolutionCache = new Map<number, Map<string, { parent: any }[]>>();
+      const parentPhoneResolutionCache = new Map<number, Map<string, { parent: any }[]>>();
 
       const resolveParentsByEmail = async (email: string, schoolId: number) => {
         let schoolCache = parentEmailResolutionCache.get(schoolId);
@@ -3694,7 +3721,7 @@ export async function createApp() {
         const cached = schoolCache.get(email);
         if (cached) return cached;
 
-        const candidates = emailParentRows.filter((parent: any) => parentEmailById.get(Number(parent.id)) === email);
+        const candidates = contactParentRows.filter((parent: any) => parentEmailById.get(Number(parent.id)) === email);
         const authorizedCandidates: { parent: any }[] = [];
         for (const parent of candidates) {
           if (parent.schoolId === schoolId || await ensureUserSchoolMembership(parent.userId, schoolId, 'parent')) {
@@ -3703,6 +3730,25 @@ export async function createApp() {
         }
         schoolCache.set(email, authorizedCandidates);
         return schoolCache.get(email) || [];
+      };
+      const resolveParentsByPhone = async (phone: string, schoolId: number) => {
+        let schoolCache = parentPhoneResolutionCache.get(schoolId);
+        if (!schoolCache) {
+          schoolCache = new Map();
+          parentPhoneResolutionCache.set(schoolId, schoolCache);
+        }
+        const cached = schoolCache.get(phone);
+        if (cached) return cached;
+
+        const candidates = contactParentRows.filter((parent: any) => parentPhoneById.get(Number(parent.id)) === phone);
+        const authorizedCandidates: { parent: any }[] = [];
+        for (const parent of candidates) {
+          if (parent.schoolId === schoolId || await ensureUserSchoolMembership(parent.userId, schoolId, 'parent')) {
+            authorizedCandidates.push({ parent });
+          }
+        }
+        schoolCache.set(phone, authorizedCandidates);
+        return schoolCache.get(phone) || [];
       };
 
       for (let i = 0; i < payload.length; i++) {
@@ -3722,6 +3768,11 @@ export async function createApp() {
         const classId = s.classId ? parseInt(s.classId) : null;
         const hasParentId = s.parentId !== undefined && s.parentId !== null && String(s.parentId).trim() !== '';
         const parentIdText = hasParentId ? String(s.parentId).trim() : '';
+        const hasParentPhone = s.parentPhone !== undefined && s.parentPhone !== null && String(s.parentPhone).trim() !== '';
+        const normalizedParentPhone = hasParentPhone
+          ? canonicalizeUserPhone(String(s.parentPhone), typeof s.parentPhonePrefix === 'string' ? s.parentPhonePrefix : undefined)
+          : null;
+        const hasParentEmail = s.parentEmail !== undefined && s.parentEmail !== null && String(s.parentEmail).trim() !== '';
         const normalizedParentEmail = normalizeEmail(s.parentEmail);
         let parentId = hasParentId ? Number(parentIdText) : null;
         const gender = s.gender != null && s.gender !== '' ? String(s.gender).trim() : null;
@@ -3751,21 +3802,79 @@ export async function createApp() {
           errors.push({ row: i, reason: `Invalid parentId: ${parentIdText}`, data: s });
           continue;
         }
-        const parentEmailProvided = normalizedParentEmail !== null;
-        if (!parentId && parentEmailProvided) {
-          const matches = await resolveParentsByEmail(normalizedParentEmail, schoolId);
-          if (matches.length === 0) {
-            errors.push({ row: i, reason: `Parent introuvable pour l'email ${normalizedParentEmail} dans cet établissement`, data: s });
-            continue;
-          }
-          if (matches.length > 1) {
-            errors.push({ row: i, reason: `Plusieurs parents correspondent à l'email ${normalizedParentEmail}`, data: s });
-            continue;
-          }
-          parentId = Number(matches[0].parent.id);
+        if (!hasParentId && !hasParentPhone && !hasParentEmail) {
+          errors.push({ row: i, reason: 'Parent non identifiable : fournissez parentId, parentPhone ou parentEmail', data: s });
+          continue;
+        }
+        if (hasParentPhone && !normalizedParentPhone) {
+          errors.push({ row: i, reason: 'parentPhone invalide ou impossible à normaliser', data: s });
+          continue;
+        }
+        if (hasParentEmail && !normalizedParentEmail) {
+          errors.push({ row: i, reason: 'parentEmail invalide', data: s });
+          continue;
+        }
+        const parentLookupSchoolId = schoolId;
+        if (!parentLookupSchoolId) {
+          errors.push({ row: i, reason: 'Établissement invalide pour rechercher le parent', data: s });
+          continue;
         }
 
-        if (!parentId || !existingParentIds.has(parentId) && !emailParentRows.some((parent: any) => parent.id === parentId)) {
+        const requestedParentRow = hasParentId
+          ? existingParentRows.find((parent: any) => Number(parent.id) === parentId)
+          : null;
+        if (hasParentId && !requestedParentRow) {
+          errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
+          continue;
+        }
+
+        const phoneMatches = normalizedParentPhone
+          ? await resolveParentsByPhone(normalizedParentPhone, parentLookupSchoolId)
+          : [];
+        const emailMatches = normalizedParentEmail
+          ? await resolveParentsByEmail(normalizedParentEmail, parentLookupSchoolId)
+          : [];
+        const resolveContactMatch = (matches: { parent: any }[], contact: string, kind: 'phone' | 'email') => {
+          if (matches.length === 0) {
+            return { error: kind === 'phone'
+              ? `Parent introuvable pour le téléphone ${contact} dans cet établissement`
+              : `Parent introuvable pour l'email ${contact} dans cet établissement` };
+          }
+          if (matches.length > 1) {
+            return { error: kind === 'phone'
+              ? `Plusieurs parents correspondent au téléphone ${contact}`
+              : `Plusieurs parents correspondent à l'email ${contact}` };
+          }
+          return { parent: matches[0].parent };
+        };
+
+        if (normalizedParentPhone) {
+          const result = resolveContactMatch(phoneMatches, normalizedParentPhone, 'phone');
+          if ('error' in result) {
+            errors.push({ row: i, reason: result.error, data: s });
+            continue;
+          }
+          if (hasParentId && Number(result.parent.id) !== Number(parentId)) {
+            errors.push({ row: i, reason: 'Le parentId fourni ne correspond pas au parentPhone fourni', data: s });
+            continue;
+          }
+          if (!hasParentId) parentId = Number(result.parent.id);
+        }
+        if (normalizedParentEmail) {
+          const result = resolveContactMatch(emailMatches, normalizedParentEmail, 'email');
+          if ('error' in result) {
+            errors.push({ row: i, reason: result.error, data: s });
+            continue;
+          }
+          if (parentId !== null && Number(result.parent.id) !== Number(parentId)) {
+            errors.push({ row: i, reason: hasParentId
+              ? 'Le parentId fourni ne correspond pas au parentEmail fourni'
+              : 'Le parentPhone fourni ne correspond pas au parentEmail fourni', data: s });
+            continue;
+          }
+          if (!hasParentId && !normalizedParentPhone) parentId = Number(result.parent.id);
+        }
+        if (!parentId || !existingParentIds.has(parentId)) {
           errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
           continue;
         }
@@ -3792,7 +3901,7 @@ export async function createApp() {
         }
 
         const parentRow = existingParentRows.find((p: any) => p.id === parentId);
-        const resolvedParentRow = parentRow || emailParentRows.find((p: any) => p.id === parentId);
+        const resolvedParentRow = parentRow || contactParentRows.find((p: any) => p.id === parentId);
         if (!resolvedParentRow) {
           errors.push({ row: i, reason: `Parent not found: ${parentId}`, data: s });
           continue;
@@ -3804,7 +3913,7 @@ export async function createApp() {
             continue;
           }
         }
-        if (parentEmailProvided && parentEmailById.get(Number(resolvedParentRow.id)) !== normalizedParentEmail) {
+        if (normalizedParentEmail && parentEmailById.get(Number(resolvedParentRow.id)) !== normalizedParentEmail) {
           errors.push({ row: i, reason: 'Le parentId fourni ne correspond pas au parentEmail fourni', data: s });
           continue;
         }

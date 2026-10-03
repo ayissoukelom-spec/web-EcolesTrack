@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { isValidStudentGender, normalizeFirstName, normalizeStudentGender } from './studentImport.ts';
+import { canonicalizeStudentParentPhone, getStudentImportHeaders, isValidStudentGender, normalizeFirstName, normalizeStudentGender } from './studentImport.ts';
+
+describe('student import parent phone', () => {
+  it.each([
+    ['22890121212', undefined],
+    ['228 90121212', undefined],
+    ['0022890121212', undefined],
+    ['00228 90121212', undefined],
+    ['+22890121212', undefined],
+    ['+228 90121212', undefined],
+    ['90121212', '228'],
+    ['90121212', '+228'],
+    ['90121212', '00228'],
+  ])('canonicalizes %s with prefix %s without duplicating the country code', (phone, prefix) => {
+    expect(canonicalizeStudentParentPhone(phone, prefix)).toBe('+22890121212');
+    expect(canonicalizeStudentParentPhone(phone, prefix)).not.toBe('+22822890121212');
+  });
+
+  it('keeps both legacy parent identifiers and the separated phone prefix columns', () => {
+    expect(getStudentImportHeaders()).toContain('parentId');
+    expect(getStudentImportHeaders()).toContain('parentEmail');
+    expect(getStudentImportHeaders()).toContain('parentPhonePrefix');
+    expect(getStudentImportHeaders()).toContain('parentPhone');
+  });
+});
 
 describe('student gender validation', () => {
   it('rejects missing or empty gender values', () => {

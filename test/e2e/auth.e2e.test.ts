@@ -16,9 +16,9 @@ const FIXTURES = {
     { id: 3, uid: 'teacher-uid', email: 'teacher@school.test', name: 'Teacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 4, uid: 'other-teacher-uid', email: 'otherteacher@school.test', name: 'OtherTeacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 5, uid: 'no-school-teacher-uid', email: 'noschool@x.test', name: 'NoSchool', role: 'teacher', schoolId: null, isDeleted: false },
-    { id: 6, uid: 'sim-parent', email: 'parent@x.test', name: 'Parent', role: 'parent', schoolId: 10, isDeleted: false },
-    { id: 7, uid: 'sim-parent-no-school', email: 'parent-noschool@x.test', name: 'ParentNoSchool', role: 'parent', schoolId: null, isDeleted: false },
-    { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
+    { id: 6, uid: 'sim-parent', email: 'parent@x.test', phone: '+22890000001', name: 'Parent', role: 'parent', schoolId: 10, isDeleted: false },
+    { id: 7, uid: 'sim-parent-no-school', email: 'parent-noschool@x.test', phone: '+22890000002', name: 'ParentNoSchool', role: 'parent', schoolId: null, isDeleted: false },
+    { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', phone: '+22890000003', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
     { id: 10, uid: 'teacher-sim', email: 'teacher@x.test', name: 'TeacherSim', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 11, uid: 'other-school-admin-uid', email: 'other-admin@x.test', name: 'OtherSchoolAdmin', role: 'school_admin', schoolId: 20, isDeleted: false },
@@ -2715,10 +2715,10 @@ describe('E2E security: auth & privilege checks', () => {
       expect(res.body.errors[0].error || res.body.errors[0].reason).toContain('Parent introuvable');
     });
 
-    it('rejects a row with neither parentId nor parentEmail', async () => {
+    it('rejects a row with no parent identifier', async () => {
       const res = await importStudents([studentRow()]);
       expect(res.body.insertedCount).toBe(0);
-      expect(res.body.errors[0].reason).toContain('Invalid or missing parentId');
+      expect(res.body.errors[0].reason).toContain('Parent non identifiable');
     });
 
     it('accepts matching parentId and parentEmail', async () => {
@@ -2731,6 +2731,85 @@ describe('E2E security: auth & privilege checks', () => {
       const res = await importStudents([studentRow({ parentId: 1, parentEmail: 'parent-query@x.test' })]);
       expect(res.body.insertedCount).toBe(0);
       expect(res.body.errors[0].reason).toContain('ne correspond pas');
+    });
+
+    it('resolves parentPhone to the persisted parents.id even when the parent has no email', async () => {
+      FIXTURES.users.find((user: any) => user.id === 6).email = null;
+      const res = await importStudents([studentRow({ parentPhonePrefix: '+228', parentPhone: '90000001' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+      expect(res.body.inserted[0].parentId).not.toBe('+22890000001');
+    });
+
+    it.each([
+      ['90000001', '228'],
+      ['90000001', '+228'],
+      ['+22890000001', ''],
+      ['0022890000001', ''],
+      ['228 90000001', ''],
+    ])('resolves canonical phone form %s with prefix %s', async (parentPhone, parentPhonePrefix) => {
+      const res = await importStudents([studentRow({ parentPhone, parentPhonePrefix })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('rejects a parentPhone that does not resolve to a parent in the school', async () => {
+      const res = await importStudents([studentRow({ parentPhone: '+22899999999' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Parent introuvable pour le téléphone');
+      expect(res.body.inserted).toEqual([]);
+    });
+
+    it('rejects an ambiguous parentPhone without selecting an arbitrary parent', async () => {
+      FIXTURES.users.push({ id: 21, uid: 'duplicate-phone-parent', email: 'duplicate-phone@x.test', phone: '+22890000001', name: 'Duplicate Phone Parent', role: 'parent', schoolId: 10, isDeleted: false });
+      FIXTURES.parents.push({ id: 5, userId: 21, studentId: null, schoolId: 10 });
+      const res = await importStudents([studentRow({ parentPhone: '+22890000001' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Plusieurs parents correspondent au téléphone');
+      expect(res.body.inserted).toEqual([]);
+    });
+
+    it('rejects a parentId and parentPhone mismatch', async () => {
+      const res = await importStudents([studentRow({ parentId: 1, parentPhone: '+22890000002' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('parentId fourni ne correspond pas au parentPhone');
+    });
+
+    it('accepts a parentId and parentPhone that identify the same parent', async () => {
+      const res = await importStudents([studentRow({ parentId: 1, parentPhone: '0022890000001' })]);
+      expect(res.body.insertedCount).toBe(1);
+      expect(res.body.inserted[0].parentId).toBe(1);
+    });
+
+    it('rejects a parentPhone and parentEmail mismatch', async () => {
+      const res = await importStudents([studentRow({ parentPhone: '+22890000001', parentEmail: 'parent-noschool@x.test' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('parentPhone fourni ne correspond pas au parentEmail');
+    });
+
+    it('rejects a parentPhone that is not accessible from the requested school', async () => {
+      FIXTURES.users.push({ id: 20, uid: 'other-school-phone-parent', email: 'other-school-phone@x.test', phone: '+22890000020', name: 'Other School Parent', role: 'parent', schoolId: 20, isDeleted: false });
+      FIXTURES.parents.push({ id: 4, userId: 20, studentId: null, schoolId: 20 });
+      const res = await importStudents([studentRow({ parentPhone: '+22890000020' })]);
+      expect(res.body.insertedCount).toBe(0);
+      expect(res.body.errors[0].reason).toContain('Parent introuvable pour le téléphone');
+    });
+
+    it('includes phone matching columns and instructions in the student template', async () => {
+      const res = await request(app).get('/api/students/template').buffer(true).parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+      expect(res.status).toBe(200);
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(res.body, { type: 'buffer' });
+      expect(workbook.SheetNames).toContain('instructions');
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets.students!, { header: 1 });
+      expect(rows[0]).toContain('parentPhonePrefix');
+      expect(rows[0]).toContain('parentPhone');
+      const instructions = XLSX.utils.sheet_to_json(workbook.Sheets.instructions!, { header: 1 });
+      expect(instructions.flat().join(' ')).toContain('+22890121212');
     });
 
     it('rejects a parent from another school even when the email matches', async () => {

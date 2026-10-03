@@ -34,6 +34,7 @@ import ModalSurface from './ModalSurface';
 import TeachingAssignmentsEditor, { type TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
 import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
 import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
+import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 
 const validateRecords = (records: any[]) => {
@@ -61,10 +62,17 @@ const validateRecords = (records: any[]) => {
         const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRe.test(String(r.parentEmail))) errs.push('parentEmail invalide');
       }
+      const hasParentId = r.parentId !== undefined && String(r.parentId).trim() !== '';
+      const hasParentEmail = typeof r.parentEmail === 'string' && r.parentEmail.trim() !== '';
+      const hasParentPhone = typeof r.parentPhone === 'string' && r.parentPhone.trim() !== '';
+      if (!hasParentId && !hasParentEmail && !hasParentPhone) {
+        errs.push('parentId, parentPhone ou parentEmail est requis pour identifier le parent');
+      }
       // phone
       if (r.parentPhone && String(r.parentPhone).trim() !== '') {
-        const digits = String(r.parentPhone).replace(/\D/g, '');
-        if (digits.length !== 8) errs.push('parentPhone doit contenir 8 chiffres');
+        if (!canonicalizeStudentParentPhone(r.parentPhone, r.parentPhonePrefix)) {
+          errs.push('parentPhone invalide');
+        }
       }
       if (r.studentStatus && !isStudentAcademicYearStatus(String(r.studentStatus).trim())) {
         errs.push('studentStatus invalide');
@@ -130,8 +138,10 @@ const getCompleteTeachingAssignments = (assignments: TeachingAssignmentDraft[]) 
       }
       // normalize emails
       if (out.parentEmail) out.parentEmail = String(out.parentEmail).trim().toLowerCase();
-      // normalize phone digits
-      if (out.parentPhone) out.parentPhone = String(out.parentPhone).replace(/\D/g, '');
+      // Keep the preview and submitted value in the same canonical form as the backend.
+      if (out.parentPhone) {
+        out.parentPhone = canonicalizeStudentParentPhone(out.parentPhone, out.parentPhonePrefix) || out.parentPhone;
+      }
       // numeric ids to numbers where appropriate
       ['schoolId','classId','parentId','academicYearId','teacherId','schoolAdminId'].forEach((f) => {
         if (out[f] !== undefined && out[f] !== '') {
@@ -2109,9 +2119,12 @@ export default function AdminView({
           setShowImportDetails(true);
           return;
         }
-        const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'academicYearId', 'schoolAdminId', 'gender'];
+        const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'academicYearId', 'schoolAdminId', 'gender'];
         const present = Object.keys(records[0] || {}).map((k) => String(k).trim());
         const missing = required.filter((r) => !present.includes(r));
+        if (!['parentId', 'parentEmail', 'parentPhone'].some((field) => present.includes(field))) {
+          missing.push('parentId, parentEmail ou parentPhone');
+        }
         if (missing.length > 0) {
           setImportErrorsList([`Colonnes obligatoires manquantes dans le template : ${missing.join(', ')}`]);
           setImportPreviewRecords(records.slice(0, 20));
@@ -2163,9 +2176,12 @@ export default function AdminView({
             setImportRowErrors(null);
             setShowImportDetails(true);
           } else {
-            const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'academicYearId', 'schoolAdminId', 'gender'];
+            const required = ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'academicYearId', 'schoolAdminId', 'gender'];
             const present = Object.keys(records[0] || {}).map((k) => String(k).trim());
             const missing = required.filter((r) => !present.includes(r));
+            if (!['parentId', 'parentEmail', 'parentPhone'].some((field) => present.includes(field))) {
+              missing.push('parentId, parentEmail ou parentPhone');
+            }
             if (missing.length > 0) {
               setValidImportRecords(null);
               setImportErrorsList([`Colonnes obligatoires manquantes dans le template : ${missing.join(', ')}`]);

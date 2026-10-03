@@ -1,5 +1,13 @@
+import { canonicalizeUserPhone } from './phoneCanonicalization';
+
 export function getStudentImportHeaders() {
-  return ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'];
+  return ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhonePrefix', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'];
+}
+
+export function canonicalizeStudentParentPhone(phone: unknown, phonePrefix?: unknown): string | null {
+  if (typeof phone !== 'string' || !phone.trim()) return null;
+  const prefix = typeof phonePrefix === 'string' ? phonePrefix.trim() : '';
+  return canonicalizeUserPhone(phone, prefix || undefined);
 }
 
 export function normalizeFirstName(value: string | null | undefined): string {
