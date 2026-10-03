@@ -25,6 +25,7 @@ import {
   formatPromotionDecisionForPdf,
   getSubjectDisplayName,
   resolvePdfSubjectDisplayInfo,
+  resolveBulletinClassTeacher,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -537,6 +538,47 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(text).toContain('MASSEDA');
     expect(text).not.toContain(staleName);
     expect(text).not.toContain('Ancien nom');
+  });
+});
+
+describe('résolution du titulaire de classe pour le PDF', () => {
+  const schoolAssignments = [
+    { schoolId: 10, classId: 4, name: 'Titulaire Ecole A', lastName: null, firstNames: null },
+    { schoolId: 20, classId: 4, name: 'Titulaire Ecole B', lastName: null, firstNames: null },
+  ];
+
+  const renderPdfWithTeacher = async (teacher: ReturnType<typeof resolveBulletinClassTeacher>) => {
+    const bytes = await createBulletinPdfDocument({ ...snapshotData, ...{
+      classTeacherName: teacher.name,
+      classTeacherLastName: teacher.lastName,
+      classTeacherFirstNames: teacher.firstNames,
+    } });
+    return normalizePdfTextForAssertion(extractPdfText(bytes));
+  };
+
+  it('uses the class and bulletin school assignment for global classes', async () => {
+    const teacherA = resolveBulletinClassTeacher(null, 4, 10, {
+      name: null,
+      lastName: null,
+      firstNames: null,
+    }, schoolAssignments);
+    const teacherB = resolveBulletinClassTeacher(null, 4, 20, {
+      name: null,
+      lastName: null,
+      firstNames: null,
+    }, schoolAssignments);
+
+    expect((await renderPdfWithTeacher(teacherA))).toContain('Titulaire Ecole A');
+    expect((await renderPdfWithTeacher(teacherB))).toContain('Titulaire Ecole B');
+  });
+
+  it('uses the existing school-owned class teacher and falls back to Aucun without a global assignment', async () => {
+    const legacyTeacher = { name: 'Titulaire historique', lastName: null, firstNames: null };
+    const schoolClassTeacher = resolveBulletinClassTeacher(10, 4, 10, legacyTeacher, []);
+    const missingGlobalTeacher = resolveBulletinClassTeacher(null, 4, 30, legacyTeacher, schoolAssignments);
+
+    expect((await renderPdfWithTeacher(schoolClassTeacher))).toContain('Titulaire historique');
+    expect((await renderPdfWithTeacher(missingGlobalTeacher))).toContain('Aucun');
   });
 });
 

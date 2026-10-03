@@ -13,6 +13,7 @@ import {
   bulletinLines,
   bulletins,
   classes,
+  classHomeroomAssignments,
   classProgressions,
   classSuccessions,
   classExamConfigurations,
@@ -738,6 +739,35 @@ export const resolveSchoolHasLycee = (
   configuredCycles: Array<{ code: string; isActive: boolean }>,
 ): boolean => configuredCycles.some((cycle) => cycle.code === 'lycee' && cycle.isActive);
 
+type BulletinClassTeacher = {
+  name: string | null;
+  lastName: string | null;
+  firstNames: string | null;
+};
+
+type SchoolHomeroomTeacher = BulletinClassTeacher & {
+  schoolId: number;
+  classId: number;
+};
+
+export const resolveBulletinClassTeacher = (
+  classSchoolId: number | null,
+  classId: number,
+  studentSchoolId: number | null,
+  legacyTeacher: BulletinClassTeacher,
+  schoolHomeroomTeachers: SchoolHomeroomTeacher[],
+): BulletinClassTeacher => {
+  if (classSchoolId != null) return legacyTeacher;
+  if (studentSchoolId == null) return { name: null, lastName: null, firstNames: null };
+
+  const assignment = schoolHomeroomTeachers.find((teacher) => (
+    teacher.classId === classId && teacher.schoolId === studentSchoolId
+  ));
+  return assignment
+    ? { name: assignment.name, lastName: assignment.lastName, firstNames: assignment.firstNames }
+    : { name: null, lastName: null, firstNames: null };
+};
+
 const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId: number) => {
   const [header] = await db
     .select({
@@ -833,6 +863,39 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
   if (!header) return null;
   if (actor.role !== 'super_admin' && header.classSchoolId == null && header.schoolScopeVersion < 1) return null;
 
+  const schoolHomeroomTeachers = header.classSchoolId == null && header.studentSchoolId != null
+    ? await db.select({
+      schoolId: classHomeroomAssignments.schoolId,
+      classId: classHomeroomAssignments.classId,
+      name: users.name,
+      lastName: users.lastName,
+      firstNames: users.firstNames,
+    })
+      .from(classHomeroomAssignments)
+      .innerJoin(teachers, eq(teachers.id, classHomeroomAssignments.teacherId))
+      .innerJoin(users, eq(users.id, teachers.userId))
+      .where(and(
+        eq(classHomeroomAssignments.schoolId, header.studentSchoolId),
+        eq(classHomeroomAssignments.classId, header.classId),
+      ))
+    : [];
+  const classTeacher = resolveBulletinClassTeacher(
+    header.classSchoolId,
+    header.classId,
+    header.studentSchoolId,
+    {
+      name: header.classTeacherName,
+      lastName: header.classTeacherLastName,
+      firstNames: header.classTeacherFirstNames,
+    },
+    schoolHomeroomTeachers,
+  );
+  const resolvedHeader = { ...header, ...{
+    classTeacherName: classTeacher.name,
+    classTeacherLastName: classTeacher.lastName,
+    classTeacherFirstNames: classTeacher.firstNames,
+  } };
+
   const configuredSchoolCycles = await db.select({
     code: cycles.code,
     isActive: schoolCycles.isActive,
@@ -845,22 +908,22 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
   const activeClassStudentRows = await getActiveStudentsForClassScope([header.classId], header.studentSchoolId);
   const classStudentCount = activeClassStudentRows.length;
 
-  if (actor.role === 'super_admin') return { ...header, classStudentCount, schoolHasLycee };
+  if (actor.role === 'super_admin') return { ...resolvedHeader, classStudentCount, schoolHasLycee };
 
   if (actor.role === 'teacher') {
     const authorizedStudentIds = await studentAccess.getAuthorizedStudentIds(actor as any);
     if (authorizedStudentIds.length === 0 || !authorizedStudentIds.includes(header.studentId)) return null;
-    return { ...header, classStudentCount, schoolHasLycee };
+    return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
 
   if (actor.role === 'school_admin') {
     if (actor.schoolId == null || header.studentSchoolId !== actor.schoolId) return null;
-    return { ...header, classStudentCount, schoolHasLycee };
+    return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
 
   if (actor.role === 'parent') {
     if (!actor.id || header.parentUserId !== actor.id) return null;
-    return { ...header, classStudentCount, schoolHasLycee };
+    return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
 
   return null;
