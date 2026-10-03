@@ -98,7 +98,7 @@ import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfig
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
 import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
-import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, resolveStoredLocalPath, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
+import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 
 // When true, allow verbose/debug logs that may include sensitive user data.
 const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
@@ -952,7 +952,9 @@ export async function createApp() {
     });
   }
   await fsPromises.mkdir(notificationUploadStorageDir, { recursive: true });
-  await fsPromises.mkdir(schoolLogoUploadStorageDir, { recursive: true });
+  if (storageConfig.mode === 'local') {
+    await fsPromises.mkdir(schoolLogoUploadStorageDir, { recursive: true });
+  }
 
   if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
     try {
@@ -985,15 +987,7 @@ export async function createApp() {
   });
 
   const schoolLogoUpload = multer({
-    storage: multer.diskStorage({
-      destination: schoolLogoUploadStorageDir,
-      filename: (req, file, cb) => {
-        const schoolId = String(req.params.id || 'school');
-        const extension = path.extname(file.originalname).toLowerCase();
-        const randomSuffix = crypto.randomBytes(16).toString('hex');
-        cb(null, `school-${schoolId}-${Date.now()}-${randomSuffix}${extension}`);
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: SCHOOL_LOGO_MAX_SIZE },
     fileFilter: (_req, file, cb) => {
       if (!isSupportedSchoolLogo(file)) {
@@ -3518,22 +3512,39 @@ export async function createApp() {
       const uploadedFile = (req as any).file as Express.Multer.File | undefined;
       if (!uploadedFile) return res.status(400).json({ error: 'A PNG or JPG/JPEG logo file is required' });
 
-      const logoPath = buildSchoolLogoRelativePath(uploadedFile.filename);
+      let newLogoPath: string | null = null;
       try {
+        const persistedLogo = await persistUploadedFile({
+          originalname: uploadedFile.originalname,
+          buffer: uploadedFile.buffer,
+          mimetype: uploadedFile.mimetype,
+          size: uploadedFile.size,
+        }, 'school-logos');
+        newLogoPath = buildSchoolLogoRelativePath(persistedLogo.storedReference);
+
         const [updatedSchool] = await db.update(schools)
-          .set({ logoPath })
+          .set({ logoPath: newLogoPath })
           .where(eq(schools.id, id))
           .returning();
 
-        if (existingSchool.logoPath) {
-          const oldFileName = path.basename(existingSchool.logoPath);
-          await fsPromises.unlink(path.join(schoolLogoUploadStorageDir, oldFileName)).catch(() => undefined);
+        if (!updatedSchool) {
+          throw new Error('School logo reference was not updated.');
+        }
+
+        if (existingSchool.logoPath && existingSchool.logoPath !== newLogoPath) {
+          await deleteStoredFile(existingSchool.logoPath, 'school-logos').catch((cleanupError: any) => {
+            console.warn('Failed to remove replaced school logo:', cleanupError?.message || cleanupError);
+          });
         }
 
         await logAuditEvent(actor, 'update', 'school_logo', id, id, `Updated school logo for school ${id}`);
         return res.status(200).json({ id: updatedSchool.id, logoPath: updatedSchool.logoPath });
       } catch (error) {
-        await fsPromises.unlink(path.join(schoolLogoUploadStorageDir, uploadedFile.filename)).catch(() => undefined);
+        if (newLogoPath) {
+          await deleteStoredFile(newLogoPath, 'school-logos').catch((cleanupError: any) => {
+            console.warn('Failed to clean unreferenced school logo after upload failure:', cleanupError?.message || cleanupError);
+          });
+        }
         throw error;
       }
     } catch (err: any) {
@@ -3555,8 +3566,15 @@ export async function createApp() {
       if (actor.role !== 'super_admin' && actor.schoolId !== school.schoolId) return res.status(403).json({ error: 'Forbidden' });
       if (!school.logoPath) return res.status(404).json({ error: 'No school logo configured' });
 
-      const logoFileName = path.basename(school.logoPath);
-      return res.sendFile(logoFileName, { root: schoolLogoUploadStorageDir });
+      const logoFileName = sanitizeFileName(path.basename(school.logoPath));
+      const logoContent = await readStoredFile('school-logos', school.logoPath);
+      if (!logoContent) return res.status(404).json({ error: 'School logo file not found' });
+      const extension = path.extname(logoFileName).toLowerCase();
+      const contentType = extension === '.png' ? 'image/png' : 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${logoFileName}"`);
+      res.setHeader('Cache-Control', 'private, no-cache');
+      return res.send(logoContent);
     } catch (err: any) {
       console.error('Failed to retrieve school logo:', err);
       return res.status(500).json({ error: 'Failed to retrieve school logo' });

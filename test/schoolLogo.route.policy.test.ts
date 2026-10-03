@@ -30,7 +30,9 @@ describe('school logo infrastructure', () => {
     expect(server).toContain("app.get('/api/schools/:id/logo'");
     expect(server).toContain("if (actor.role !== 'super_admin' && actor.role !== 'school_admin')");
     expect(server).toContain("if (actor.role === 'school_admin' && actor.schoolId !== id)");
-    expect(server).toContain("path.join(process.cwd(), 'uploads', 'school-logos')");
+    expect(server).toContain("path.join(storageConfig.localRoot, 'school-logos')");
+    expect(server).toContain("persistUploadedFile({");
+    expect(server).toContain("readStoredFile('school-logos', school.logoPath)");
     expect(pdf).toContain('logoPath: schools.logoPath');
     expect(pdf).toContain('logoPath: header.school.logoPath ?? null');
     expect(server).not.toContain("src/assets/logo.png");

@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { schools, academicYears, users, subjects, classes, schoolClasses, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals } from '../src/db/schema.ts';
+
+const schoolLogoS3 = vi.hoisted(() => ({
+  send: vi.fn(),
+  objects: new Map<string, Buffer>(),
+}));
 
 const mockState = {
   users: [
@@ -11,6 +19,7 @@ const mockState = {
   ],
   schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
   lastSchoolUpdate: null as Record<string, any> | null,
+  schoolUpdateError: null as Error | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
   schoolTerms: [] as Array<Record<string, any>>,
@@ -211,14 +220,19 @@ const mockDb = {
         }
         if (table === schools) {
           mockState.lastSchoolUpdate = values;
-          mockState.schools = mockState.schools.map((item) => (item.id === values.id || (values.id == null && item.id === 1) ? { ...item, ...values } : item));
+          if (!mockState.schoolUpdateError) {
+            mockState.schools = mockState.schools.map((item) => (item.id === values.id || (values.id == null && item.id === 1) ? { ...item, ...values } : item));
+          }
         }
         const result = [{ id: 1, ...values }];
         return {
           then(resolve: (value: any) => void) {
             return Promise.resolve(result).then(resolve);
           },
-          returning: async () => result,
+          returning: async () => {
+            if (table === schools && mockState.schoolUpdateError) throw mockState.schoolUpdateError;
+            return result;
+          },
         };
       },
     }),
@@ -235,6 +249,17 @@ const mockDb = {
   }),
   execute: async (_sql: any) => [],
 };
+
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    send(command: any) {
+      return schoolLogoS3.send(command);
+    }
+  },
+  DeleteObjectCommand: class { constructor(public input: any) {} },
+  GetObjectCommand: class { constructor(public input: any) {} },
+  PutObjectCommand: class { constructor(public input: any) {} },
+}));
 
 vi.mock('../src/db/index.ts', () => ({ db: mockDb }));
 vi.mock('../src/db', () => ({ db: mockDb }));
@@ -278,6 +303,8 @@ vi.mock('src/middleware/auth', async () => {
 
 describe('POST /api/schools', () => {
   let app: any;
+  const storageEnvKeys = ['NODE_ENV', 'FILE_STORAGE_PROVIDER', 'UPLOADS_DIR', 'S3_BUCKET', 'S3_REGION', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const;
+  const originalStorageEnv = Object.fromEntries(storageEnvKeys.map((key) => [key, process.env[key]]));
 
   beforeAll(async () => {
     const serverModule = await import('../server.ts');
@@ -285,6 +312,33 @@ describe('POST /api/schools', () => {
   });
 
   beforeEach(() => {
+    for (const key of storageEnvKeys) {
+      const original = originalStorageEnv[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+    process.env.NODE_ENV = 'test';
+    schoolLogoS3.objects.clear();
+    schoolLogoS3.send.mockReset();
+    schoolLogoS3.send.mockImplementation(async (command: any) => {
+      const commandName = command.constructor.name;
+      const { Bucket, Key, Body } = command.input;
+      const objectKey = `${Bucket}/${Key}`;
+      if (commandName === 'PutObjectCommand') {
+        schoolLogoS3.objects.set(objectKey, Buffer.from(Body));
+        return {};
+      }
+      if (commandName === 'GetObjectCommand') {
+        const body = schoolLogoS3.objects.get(objectKey);
+        if (!body) throw Object.assign(new Error('missing object'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });
+        return { Body: { transformToByteArray: async () => new Uint8Array(body) }, ContentType: 'image/png' };
+      }
+      if (commandName === 'DeleteObjectCommand') {
+        schoolLogoS3.objects.delete(objectKey);
+        return {};
+      }
+      throw new Error(`Unexpected S3 command: ${commandName}`);
+    });
     mockState.users = [
       { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'super_admin', schoolId: null },
     ];
@@ -293,6 +347,7 @@ describe('POST /api/schools', () => {
     ];
     mockState.schools = [];
     mockState.lastSchoolUpdate = null;
+    mockState.schoolUpdateError = null;
     mockState.classes = [];
     mockState.schoolClasses = [];
     mockState.schoolTerms = [];
@@ -399,6 +454,93 @@ describe('POST /api/schools', () => {
       .expect(200);
 
     expect(mockState.schools[0].logoPath).toBe('school-logos/new-logo.png');
+  });
+
+  it('uploads, reads, and replaces school logos in S3 without losing the old reference before replacement', async () => {
+    process.env.FILE_STORAGE_PROVIDER = 's3';
+    process.env.S3_BUCKET = 'school-logo-test';
+    process.env.S3_REGION = 'eu-west-1';
+    mockState.schools = [{ id: 1, name: 'École du Lac', logoPath: 'school-logos/old-logo.png' }];
+    schoolLogoS3.objects.set('school-logo-test/school-logos/old-logo.png', Buffer.from('old logo'));
+
+    const firstUpload = await request(app)
+      .post('/api/schools/1/logo')
+      .attach('logo', Buffer.from('first png logo'), { filename: 'logo.png', contentType: 'image/png' })
+      .expect(200);
+
+    expect(firstUpload.body.logoPath).toMatch(/^school-logos\/\d+-[a-f0-9]{16}-logo\.png$/);
+    const firstReference = firstUpload.body.logoPath;
+    expect(mockState.schools[0].logoPath).toBe(firstReference);
+    expect(schoolLogoS3.objects.has(`school-logo-test/${firstReference}`)).toBe(true);
+    expect(schoolLogoS3.objects.has('school-logo-test/school-logos/old-logo.png')).toBe(false);
+
+    const logoResponse = await request(app).get('/api/schools/1/logo').expect(200);
+    expect(logoResponse.headers['content-type']).toContain('image/png');
+    expect(logoResponse.headers['cache-control']).toBe('private, no-cache');
+    expect(logoResponse.body).toEqual(Buffer.from('first png logo'));
+
+    const secondUpload = await request(app)
+      .post('/api/schools/1/logo')
+      .attach('logo', Buffer.from('replacement logo'), { filename: 'replacement.png', contentType: 'image/png' })
+      .expect(200);
+
+    expect(mockState.schools[0].logoPath).toBe(secondUpload.body.logoPath);
+    expect(schoolLogoS3.objects.has(`school-logo-test/${firstReference}`)).toBe(false);
+    expect(schoolLogoS3.objects.has(`school-logo-test/${secondUpload.body.logoPath}`)).toBe(true);
+  });
+
+  it('leaves the existing school logo reference intact when the S3 upload fails', async () => {
+    process.env.FILE_STORAGE_PROVIDER = 's3';
+    process.env.S3_BUCKET = 'school-logo-test';
+    process.env.S3_REGION = 'eu-west-1';
+    mockState.schools = [{ id: 1, name: 'École du Lac', logoPath: 'school-logos/old-logo.png' }];
+    schoolLogoS3.send.mockRejectedValueOnce(new Error('S3 unavailable'));
+
+    await request(app)
+      .post('/api/schools/1/logo')
+      .attach('logo', Buffer.from('new logo'), { filename: 'logo.png', contentType: 'image/png' })
+      .expect(500);
+
+    expect(mockState.schools[0].logoPath).toBe('school-logos/old-logo.png');
+    expect(schoolLogoS3.objects.has('school-logo-test/school-logos/old-logo.png')).toBe(false);
+  });
+
+  it('cleans the newly uploaded S3 logo and preserves the DB reference when the school update fails', async () => {
+    process.env.FILE_STORAGE_PROVIDER = 's3';
+    process.env.S3_BUCKET = 'school-logo-test';
+    process.env.S3_REGION = 'eu-west-1';
+    mockState.schools = [{ id: 1, name: 'École du Lac', logoPath: 'school-logos/old-logo.png' }];
+    mockState.schoolUpdateError = new Error('Database unavailable');
+
+    await request(app)
+      .post('/api/schools/1/logo')
+      .attach('logo', Buffer.from('new logo'), { filename: 'logo.png', contentType: 'image/png' })
+      .expect(500);
+
+    expect(mockState.schools[0].logoPath).toBe('school-logos/old-logo.png');
+    expect(schoolLogoS3.objects.size).toBe(0);
+  });
+
+  it('keeps local logo storage and access control behavior', async () => {
+    const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ecoletrack-school-logo-'));
+    process.env.FILE_STORAGE_PROVIDER = 'local';
+    process.env.UPLOADS_DIR = localRoot;
+    mockState.schools = [{ id: 1, name: 'École du Lac', logoPath: null }];
+
+    try {
+      const upload = await request(app)
+        .post('/api/schools/1/logo')
+        .attach('logo', Buffer.from('local logo'), { filename: 'logo.png', contentType: 'image/png' })
+        .expect(200);
+      expect(upload.body.logoPath).toMatch(/^school-logos\/\d+-[a-f0-9]{16}-logo\.png$/);
+      expect(await fs.readFile(path.join(localRoot, upload.body.logoPath), 'utf8')).toBe('local logo');
+      expect((await request(app).get('/api/schools/1/logo').expect(200)).body).toEqual(Buffer.from('local logo'));
+
+      mockState.users[0] = { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'school_admin', schoolId: 2 };
+      await request(app).get('/api/schools/1/logo').expect(403);
+    } finally {
+      await fs.rm(localRoot, { recursive: true, force: true });
+    }
   });
 
   it('reuses an existing global class instead of creating a duplicate class row', async () => {

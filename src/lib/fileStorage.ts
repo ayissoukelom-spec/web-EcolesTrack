@@ -130,8 +130,15 @@ function isSafeObjectKey(reference: string, kind: FileStorageKind): boolean {
   return !fileName.includes('/') && isSafeRelativeReference(fileName, kind);
 }
 
+function normalizeStoredReference(reference: string, kind: FileStorageKind): string {
+  const normalized = reference.trim().replace(/\\/g, '/');
+  if (normalized.startsWith(`/uploads/${kind}/`)) return normalized.slice(1);
+  if (normalized.startsWith(`/${kind}/`)) return normalized.slice(1);
+  return normalized;
+}
+
 export async function resolveStoredLocalPath(kind: FileStorageKind, storedReference: string | null | undefined): Promise<string | null> {
-  const safeReference = typeof storedReference === 'string' ? storedReference.trim() : '';
+  const safeReference = typeof storedReference === 'string' ? normalizeStoredReference(storedReference, kind) : '';
   if (!safeReference || !isSafeRelativeReference(safeReference, kind)) return null;
 
   const basename = safeReference.replace(/\\/g, '/').split('/').pop()!;
@@ -164,6 +171,49 @@ export function getS3Client(): S3Client | null {
       ? { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey }
       : undefined,
   });
+}
+
+export async function readStoredFile(
+  kind: FileStorageKind,
+  storedReference: string | null | undefined,
+): Promise<Buffer | null> {
+  const reference = typeof storedReference === 'string'
+    ? normalizeStoredReference(storedReference, kind)
+    : '';
+  if (!reference) return null;
+
+  const storage = getFileStorageConfig();
+  if (storage.mode === 's3' && isSafeObjectKey(reference, kind)) {
+    const client = getS3Client();
+    if (!client || !storage.bucket) {
+      throw new Error('S3 storage is not available for object retrieval.');
+    }
+
+    try {
+      const result = await client.send(new GetObjectCommand({
+        Bucket: storage.bucket,
+        Key: reference,
+      }));
+      if (!result.Body) return null;
+      if (typeof (result.Body as any).transformToByteArray === 'function') {
+        return Buffer.from(await (result.Body as any).transformToByteArray());
+      }
+      if (typeof (result.Body as any)[Symbol.asyncIterator] === 'function') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of result.Body as any) chunks.push(Buffer.from(chunk));
+        return Buffer.concat(chunks);
+      }
+      return Buffer.from(result.Body as Uint8Array);
+    } catch (error: any) {
+      const statusCode = error?.$metadata?.httpStatusCode;
+      if (statusCode !== 404 && error?.name !== 'NoSuchKey' && error?.name !== 'NotFound') {
+        throw error;
+      }
+    }
+  }
+
+  const localPath = await resolveStoredLocalPath(kind, reference);
+  return localPath ? fs.readFile(localPath) : null;
 }
 
 export async function persistUploadedFile(

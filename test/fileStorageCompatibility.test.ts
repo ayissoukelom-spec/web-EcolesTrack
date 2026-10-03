@@ -8,6 +8,7 @@ import {
   deleteStoredFile,
   getFileStorageConfig,
   persistUploadedFile,
+  readStoredFile,
   resolveStoredLocalPath,
   streamStoredFileToResponse,
 } from '../src/lib/fileStorage';
@@ -160,6 +161,33 @@ describe('file storage compatibility', () => {
       forcePathStyle: false,
       credentials: { accessKeyId: 'test-access', secretAccessKey: 'test-secret' },
     });
+  });
+
+  it('reads a stored S3 object and falls back to a legacy local logo when the key is absent', async () => {
+    configureS3();
+    const body = Buffer.from('school logo bytes');
+    s3Mocks.send.mockResolvedValueOnce({
+      Body: { transformToByteArray: async () => new Uint8Array(body) },
+      ContentType: 'image/png',
+    });
+
+    await expect(readStoredFile('school-logos', 'school-logos/school-1-logo.png')).resolves.toEqual(body);
+    expect(s3Mocks.send.mock.calls[0][0].input).toEqual({
+      Bucket: 'ecoletrack-test',
+      Key: 'school-logos/school-1-logo.png',
+    });
+
+    process.env.UPLOADS_DIR = tempRoot;
+    const legacyDir = path.join(tempRoot, 'school-logos');
+    await fs.mkdir(legacyDir, { recursive: true });
+    const legacyBody = Buffer.from('legacy local logo');
+    await fs.writeFile(path.join(legacyDir, 'legacy-logo.png'), legacyBody);
+    s3Mocks.send.mockRejectedValueOnce(Object.assign(new Error('missing'), {
+      name: 'NoSuchKey',
+      $metadata: { httpStatusCode: 404 },
+    }));
+
+    await expect(readStoredFile('school-logos', 'school-logos/legacy-logo.png')).resolves.toEqual(legacyBody);
   });
 
   it('downloads an S3 object and sets safe attachment headers', async () => {

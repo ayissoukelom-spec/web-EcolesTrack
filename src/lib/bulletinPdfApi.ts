@@ -1,7 +1,7 @@
 import type express from 'express';
 import { and, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db/index.ts';
 import { requireOwnership, requireRole, verifyToken } from '../middleware/auth.ts';
@@ -55,6 +55,7 @@ import studentAccess, { getActiveStudentsForClassScope } from './studentAccess';
 import { normalizeClassProgressionCode } from './classProgression';
 import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type ExamResultStatus } from './examDecision';
 import { selectPreferredClassExamConfiguration } from './classExamConfiguration';
+import { readStoredFile } from './fileStorage';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -1814,91 +1815,27 @@ export const createBulletinPdfDocument = async (
   const logoPath = data.school?.logoPath?.trim();
   if (logoPath) {
     try {
-      const rawLogoPath = logoPath.replace(/\\/g, '/');
-      const logoStorageDir = path.resolve(process.cwd(), 'uploads', 'school-logos');
-      const candidatePaths = new Set<string>();
-
-      const addCandidate = (candidate: string | undefined | null) => {
-        if (!candidate) return;
-        const cleaned = candidate.trim().replace(/\\/g, '/');
-        if (!cleaned) return;
-
-        const normalized = cleaned.startsWith('/') ? path.resolve(cleaned) : path.resolve(process.cwd(), cleaned);
-        candidatePaths.add(normalized);
-
-        const relativeCandidate = cleaned.replace(/^\.\//, '');
-        if (relativeCandidate.startsWith('uploads/')) {
-          candidatePaths.add(path.resolve(process.cwd(), relativeCandidate));
-        }
-        if (relativeCandidate.startsWith('school-logos/')) {
-          candidatePaths.add(path.resolve(process.cwd(), 'uploads', relativeCandidate));
-          candidatePaths.add(path.resolve(logoStorageDir, path.basename(relativeCandidate)));
-        }
-        candidatePaths.add(path.resolve(logoStorageDir, path.basename(cleaned)));
-      };
-
-      addCandidate(rawLogoPath);
-      addCandidate(path.basename(rawLogoPath));
-
-      const candidate = Array.from(candidatePaths)
-        .find((filePath) => (filePath === logoStorageDir || filePath.startsWith(`${logoStorageDir}${path.sep}`)) && !filePath.includes(`${path.sep}..${path.sep}`));
-
-      resolvedLogoPath = candidate ?? null;
-      const logoFilePath = resolvedLogoPath ?? path.resolve(logoStorageDir, path.basename(rawLogoPath));
-      const logoExtension = path.extname(logoFilePath).toLowerCase();
+      const normalizedLogoPath = logoPath.replace(/\\/g, '/');
+      const logoExtension = path.extname(normalizedLogoPath).toLowerCase();
       const isSupportedType = ['.png', '.jpg', '.jpeg'].includes(logoExtension);
-      const isInsideLogoStorage = logoFilePath === logoStorageDir || logoFilePath.startsWith(`${logoStorageDir}${path.sep}`);
+      if (!isSupportedType) throw new Error(`Unsupported school logo path: ${normalizedLogoPath}`);
 
-      let fileExists = false;
-      let fileSize = 0;
-      try {
-        const fileInfo = await stat(logoFilePath);
-        fileExists = fileInfo.isFile();
-        fileSize = fileInfo.size;
-      } catch (statErr) {
-        console.warn('[bulletinPdf] school logo file missing', {
-          rawLogoPath,
-          resolvedPath: logoFilePath,
-          extension: logoExtension,
-          isInsideLogoStorage,
-          fileExists: false,
-          error: statErr instanceof Error ? statErr.message : String(statErr),
-        });
-      }
-
-      if (!isInsideLogoStorage || !isSupportedType) {
-        throw new Error(`Unsupported school logo path: ${rawLogoPath}`);
-      }
-
-      if (!fileExists) {
-        throw new Error(`School logo file not found: ${logoFilePath}`);
-      }
-
-      console.warn('[bulletinPdf] school logo diagnostics', {
-        rawLogoPath,
-        resolvedPath: logoFilePath,
-        exists: fileExists,
-        extension: logoExtension,
-        size: fileSize,
-        isInsideLogoStorage,
-      });
-
-      const logoBytes = new Uint8Array(await readFile(logoFilePath));
+      const logoBytes = await readStoredFile('school-logos', normalizedLogoPath);
+      if (!logoBytes) throw new Error(`School logo file not found: ${normalizedLogoPath}`);
       logo = logoExtension === '.png'
-        ? await pdf.embedPng(logoBytes)
-        : await pdf.embedJpg(logoBytes);
+        ? await pdf.embedPng(new Uint8Array(logoBytes))
+        : await pdf.embedJpg(new Uint8Array(logoBytes));
 
       console.info('[bulletinPdf] LOGO_EMBEDDED_AND_DRAWN', {
-        rawLogoPath,
-        resolvedPath: logoFilePath,
+        rawLogoPath: normalizedLogoPath,
         extension: logoExtension,
         width: logo.width,
         height: logo.height,
+        size: logoBytes.length,
       });
     } catch (err) {
       console.warn('[bulletinPdf] school logo load failed', {
         rawLogoPath: logoPath,
-        resolvedPath: resolvedLogoPath,
         error: err instanceof Error ? err.message : String(err),
       });
     }

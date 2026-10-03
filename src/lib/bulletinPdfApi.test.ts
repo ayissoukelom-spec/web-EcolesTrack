@@ -1,5 +1,5 @@
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +34,21 @@ import {
   type BulletinPdfData,
   type BulletinPdfDataProvider,
 } from './bulletinPdfApi';
+
+const bulletinLogoS3 = vi.hoisted(() => ({
+  send: vi.fn(),
+}));
+
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    send(command: any) {
+      return bulletinLogoS3.send(command);
+    }
+  },
+  DeleteObjectCommand: class { constructor(public input: any) {} },
+  GetObjectCommand: class { constructor(public input: any) {} },
+  PutObjectCommand: class { constructor(public input: any) {} },
+}));
 import { resolveSubjectCoefficientFromPublishedComposition } from './bulletinService';
 import { calculateAnnualBulletinResults } from './bulletinSnapshotService';
 
@@ -855,6 +870,39 @@ describe('bulletin PDF API', () => {
 
       expect(countPdfImages(pdfBytes)).toBeGreaterThan(0);
     });
+  });
+
+  it('embarque un logo PNG lu depuis le stockage S3 configuré', async () => {
+    const envKeys = ['FILE_STORAGE_PROVIDER', 'S3_BUCKET', 'S3_REGION', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const;
+    const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    for (const key of envKeys) delete process.env[key];
+    process.env.FILE_STORAGE_PROVIDER = 's3';
+    process.env.S3_BUCKET = 'bulletin-logo-test';
+    process.env.S3_REGION = 'eu-west-1';
+    bulletinLogoS3.send.mockResolvedValue({
+      Body: { transformToByteArray: async () => new Uint8Array(Buffer.from(testPngBase64, 'base64')) },
+      ContentType: 'image/png',
+    });
+
+    try {
+      const pdfBytes = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: { ...snapshotData.school, logoPath: 'school-logos/remote-school-logo.png' },
+      });
+
+      expect(countPdfImages(pdfBytes)).toBeGreaterThan(0);
+      expect(bulletinLogoS3.send.mock.calls[0][0].input).toEqual({
+        Bucket: 'bulletin-logo-test',
+        Key: 'school-logos/remote-school-logo.png',
+      });
+    } finally {
+      bulletinLogoS3.send.mockReset();
+      for (const key of envKeys) {
+        const original = originalEnv[key];
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }
+    }
   });
 
   it('résout et embarque un logo stocké sous les formats réels de la base (school-logos/ et uploads/school-logos/)', async () => {
