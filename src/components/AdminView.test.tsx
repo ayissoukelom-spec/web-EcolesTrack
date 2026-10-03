@@ -8,6 +8,7 @@ import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from
 import * as XLSX from 'xlsx';
 
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
+const getPrimarySchoolPhoneInput = () => screen.getAllByPlaceholderText('90000000')[0] as HTMLInputElement;
 
 describe('AdminView create-user teacher form', () => {
   afterEach(() => {
@@ -1115,8 +1116,8 @@ describe('AdminView create-user teacher form', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect((await screen.findByRole('alert')).textContent).toContain('Veuillez sélectionner au moins une classe.');
     expect(onAddSchool).not.toHaveBeenCalled();
@@ -1160,9 +1161,9 @@ describe('AdminView create-user teacher form', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
     fireEvent.click(screen.getByLabelText('6ème'));
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect((await screen.findByRole('alert')).textContent).toContain('Veuillez sélectionner au moins une matière.');
     expect(onAddSchool).not.toHaveBeenCalled();
@@ -1208,10 +1209,10 @@ describe('AdminView create-user teacher form', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
     fireEvent.click(screen.getByLabelText('6ème'));
     fireEvent.click(screen.getByLabelText('Mathématiques'));
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
       name: 'École du Lac',
@@ -1263,7 +1264,7 @@ describe('AdminView create-user teacher form', () => {
 
     const editDialog = screen.getByRole('dialog', { name: /Modifier l'école/ });
     fireEvent.change(within(editDialog).getByPlaceholderText('C.S LE SAVOIR'), { target: { value: 'École du Lac Modifiée' } });
-    fireEvent.click(within(editDialog).getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.click(within(editDialog).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect(onUpdateSchool).toHaveBeenCalledWith(1, expect.objectContaining({
       name: 'École du Lac Modifiée',
@@ -1309,8 +1310,8 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect((await screen.findByRole('alert')).textContent).toContain("Le nom de l'établissement est requis.");
     expect(onAddSchool).not.toHaveBeenCalled();
@@ -1354,8 +1355,8 @@ describe('AdminView create-user teacher form', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '123' } });
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '123' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect((await screen.findByRole('alert')).textContent).toContain('Le numéro de téléphone doit contenir exactement 8 chiffres.');
     expect(onAddSchool).not.toHaveBeenCalled();
@@ -1401,7 +1402,7 @@ describe('AdminView create-user teacher form', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
-    fireEvent.change(screen.getByPlaceholderText('90000000'), { target: { value: '90000000' } });
+    fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
     fireEvent.click(screen.getByLabelText('6ème'));
 
     const subjectPanels = screen.getAllByText('Matières existantes');
@@ -1417,7 +1418,7 @@ describe('AdminView create-user teacher form', () => {
         fireEvent.click(within(section).getByLabelText('Mathématiques'));
       }
     }
-    fireEvent.click(screen.getByRole('button', { name: /Enregistrer/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
 
     expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({
       name: 'École du Lac',

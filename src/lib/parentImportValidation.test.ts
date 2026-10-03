@@ -18,11 +18,10 @@ describe('parentImportValidation', () => {
     expect(validateParentImportRow(validRow, { requireSchoolId: true }).errors).toEqual([]);
   });
 
-  it('reports missing required fields with field names', () => {
+  it('reports missing required non-email fields', () => {
     const result = validateParentImportRow({}, { requireSchoolId: true });
     expect(result.errors).toEqual(expect.arrayContaining([
       'name est obligatoire',
-      'email est obligatoire',
       'phone est obligatoire',
       'schoolId est obligatoire',
       'parentType doit être pere, mere ou tuteur',
@@ -33,8 +32,15 @@ describe('parentImportValidation', () => {
     const result = validateParentImportRow({ ...validRow, email: 'bad', phone: '123' }, { requireSchoolId: true });
     expect(result.errors).toEqual(expect.arrayContaining([
       'email doit être valide',
-      'phone doit contenir 8 chiffres pour +228',
+      'phone doit correspondre à un numéro togolais valide au format +228XXXXXXXX',
     ]));
+  });
+
+  it('accepts a parent with a valid phone and no email', () => {
+    const result = validateParentImportRow({ ...validRow, email: '' }, { requireSchoolId: true });
+    expect(result.errors).toEqual([]);
+    expect(result.normalized.email).toBe('');
+    expect(result.normalized.phone).toBe('+22890000000');
   });
 
   it('accepts optional address and legacy student reference columns', () => {
@@ -70,5 +76,34 @@ describe('parentImportValidation', () => {
   it('requires gender for a tutor', () => {
     const result = validateParentImportRow({ ...validRow, parentType: 'tuteur', gender: '' }, { requireSchoolId: true });
     expect(result.errors).toContain('gender est obligatoire pour un tuteur et doit être M ou F');
+  });
+
+  it.each([
+    ['22890121212', '+228'],
+    ['228 90121212', '+228'],
+    ['0022890121212', '+228'],
+    ['00228 90121212', '+228'],
+    ['+22890121212', '+228'],
+    ['+228 90121212', '+228'],
+    ['90121212', '228'],
+    ['90121212', '+228'],
+  ])('canonicalizes phone %s with prefix %s without adding a second country code', (phone, phonePrefix) => {
+    const result = validateParentImportRow({
+      ...validRow,
+      phone,
+      phonePrefix,
+    }, { requireSchoolId: true });
+
+    expect(result.errors).toEqual([]);
+    expect(result.normalized.phone).toBe('+22890121212');
+    expect(result.normalized.phone).not.toBe('+22822890121212');
+  });
+
+  it('rejects phone prefixes and complete phone numbers outside the Togo country code', () => {
+    const wrongPrefix = validateParentImportRow({ ...validRow, phonePrefix: '+229' }, { requireSchoolId: true });
+    const wrongNumber = validateParentImportRow({ ...validRow, phone: '+229 90121212' }, { requireSchoolId: true });
+
+    expect(wrongPrefix.errors).toContain('phone doit correspondre à un numéro togolais valide au format +228XXXXXXXX');
+    expect(wrongNumber.errors).toContain('phone doit correspondre à un numéro togolais valide au format +228XXXXXXXX');
   });
 });

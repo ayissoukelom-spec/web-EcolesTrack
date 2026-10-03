@@ -176,6 +176,7 @@ function createMockDb() {
             const value = chunk;
             if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
+            else if (normalizedLast === 'phone') result.phone = value;
             else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
             else if (/user.*id/.test(normalizedLast)) result.userId = value === null ? null : Number(value);
             else if (/student.*id/.test(normalizedLast)) {
@@ -223,6 +224,7 @@ function createMockDb() {
             if (/is_?active/.test(normalizedLast)) result.isActive = value;
             else if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
+            else if (normalizedLast === 'phone') result.phone = value;
             else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
             else if (/user.*id/.test(normalizedLast)) result.userId = value === null ? null : Number(value);
             else if (/student.*id/.test(normalizedLast)) {
@@ -308,6 +310,7 @@ function createMockDb() {
         if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
         if (leftStr.includes('uid') && rightIsPrimitive) result.uid = rawRight;
         if (leftStr.includes('email') && rightIsPrimitive) result.email = rawRight;
+        if (leftStr.includes('phone') && rightIsPrimitive) result.phone = rawRight;
         if (/school.*id/.test(leftStr)) {
           if (Array.isArray(rawRight)) result.schoolIds = rawRight.map((v: any) => Number(v)).filter((n: any) => !Number.isNaN(n));
           else if (rightIsPrimitive) result.schoolId = rawRight === null ? null : Number(rawRight);
@@ -544,6 +547,7 @@ function createMockDb() {
     return rows.filter((row) => {
       if (conditions.uid !== undefined && row.uid !== conditions.uid) return false;
       if (conditions.email !== undefined && String(row.email).toLowerCase() !== String(conditions.email).toLowerCase()) return false;
+      if (conditions.phone !== undefined && row.phone !== conditions.phone) return false;
       if (conditions.id !== undefined) {
         if (Array.isArray(conditions.id)) {
           if (!conditions.id.includes(Number(row.id))) return false;
@@ -995,6 +999,12 @@ function createMockDb() {
               FIXTURES.teachers.push(row as any);
               return [row];
             }
+            if (tableName === 'parents') {
+              const nextId = FIXTURES.parents.reduce((max: number, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
+              const row = { id: nextId, ...obj };
+              FIXTURES.parents.push(row as any);
+              return [row];
+            }
             if (tableName === 'teacherSubjects') {
               const rows = (Array.isArray(obj) ? obj : [obj]) as any[];
               FIXTURES.teacherSubjects.push(...rows);
@@ -1025,7 +1035,14 @@ function createMockDb() {
               FIXTURES.auditEvents.push(obj as any);
               return [obj];
             }
-            if (obj.uid && obj.email) {
+            if (obj.uid && obj.role && Object.prototype.hasOwnProperty.call(obj, 'email')) {
+              const phone = typeof obj.phone === 'string' ? obj.phone : '';
+              if (!/^\+[1-9][0-9]{1,14}$/.test(phone)) {
+                throw Object.assign(new Error('users.phone must contain a canonical phone'), { code: '23514', constraint: 'users_phone_canonical_check' });
+              }
+              if (FIXTURES.users.some((user: any) => user.phone === phone)) {
+                throw Object.assign(new Error('duplicate users.phone'), { code: '23505', constraint: 'users_phone_unique' });
+              }
               const newId = FIXTURES.users.length + 1;
               const row = { id: newId, ...obj };
               FIXTURES.users.push(row as any);
@@ -1423,7 +1440,7 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-super')
-      .send({ uid: 'surveillant-valid', email: 'surveillant-valid@x.test', name: 'Surveillant Valid', role: 'surveillant', schoolId: 20 });
+      .send({ uid: 'surveillant-valid', email: 'surveillant-valid@x.test', name: 'Surveillant Valid', role: 'surveillant', schoolId: 20, phone: '+22890000011' });
 
     expect(res.status).toBe(201);
     const created = FIXTURES.users.find((user) => user.uid === 'surveillant-valid');
@@ -1453,7 +1470,7 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-school')
-      .send({ uid: 'surveillant-school-default', email: 'surveillant-school-default@x.test', name: 'Surveillant School Default', role: 'surveillant' });
+      .send({ uid: 'surveillant-school-default', email: 'surveillant-school-default@x.test', name: 'Surveillant School Default', role: 'surveillant', phone: '+22890000012' });
 
     expect(res.status).toBe(201);
     const created = FIXTURES.users.find((user) => user.uid === 'surveillant-school-default');
@@ -1465,7 +1482,7 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-school')
-      .send({ uid: 'surveillant-school-explicit', email: 'surveillant-school-explicit@x.test', name: 'Surveillant School Explicit', role: 'surveillant', schoolId: 10 });
+      .send({ uid: 'surveillant-school-explicit', email: 'surveillant-school-explicit@x.test', name: 'Surveillant School Explicit', role: 'surveillant', schoolId: 10, phone: '+22890000013' });
 
     expect(res.status).toBe(201);
     const created = FIXTURES.users.find((user) => user.uid === 'surveillant-school-explicit');
@@ -2285,6 +2302,148 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body).toMatchObject({ email: null, name: 'Parent sans email admin', role: 'parent', schoolId: 10 });
   });
 
+  it('requires a valid phone when creating parents, teachers, and administrators', async () => {
+    const initialUserCount = FIXTURES.users.length;
+    const parent = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Parent Invalid Phone', email: 'parent-no-phone@x.test', phone: '123', address: 'Rue Test', schoolId: 10 });
+    const teacher = await request(app)
+      .post('/api/teachers')
+      .set('Authorization', 'Bearer token-school')
+      .send({ lastName: 'NoPhone', firstNames: 'Teacher', email: 'teacher-no-phone@x.test', specialization: 'Science', schoolId: 10 });
+    const admin = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: 'admin-no-phone@x.test', name: 'Admin Without Phone', role: 'school_admin', schoolId: 10, academicYearId: 1 });
+
+    expect(parent.status).toBe(400);
+    expect(teacher.status).toBe(400);
+    expect(admin.status).toBe(400);
+    expect(FIXTURES.users).toHaveLength(initialUserCount);
+  });
+
+  it('enforces canonical phone uniqueness across parents, administrators, and teachers', async () => {
+    const firstParent = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Parent Phone Owner', email: 'phone-owner@x.test', phone: '+229 98 76 54 32', schoolId: 10 });
+    expect(firstParent.status).toBe(201);
+
+    const duplicateParent = await request(app)
+      .post('/api/parents')
+      .set('Authorization', 'Bearer token-school')
+      .send({ name: 'Different Parent', email: 'different-parent@x.test', phone: '00229 98-76-54-32', schoolId: 10 });
+    expect(duplicateParent.status).toBe(409);
+    expect(duplicateParent.body.code).toBe('PHONE_ALREADY_IN_USE');
+
+    const duplicateParentOtherSchool = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: 'different-school-parent@x.test', name: 'Different School Parent', role: 'parent', schoolId: 20, phone: '+22998765432' });
+    expect(duplicateParentOtherSchool.status).toBe(409);
+
+    const duplicateAdmin = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: 'different-admin@x.test', name: 'Different Admin', role: 'school_admin', schoolId: 10, academicYearId: 1, phone: '+22998765432' });
+    expect(duplicateAdmin.status).toBe(409);
+
+    const duplicateTeacher = await request(app)
+      .post('/api/teachers')
+      .set('Authorization', 'Bearer token-school')
+      .send({ lastName: 'Different', firstNames: 'Teacher', email: 'different-teacher@x.test', phone: '0022998765432', specialization: 'Science', schoolId: 10 });
+    expect(duplicateTeacher.status).toBe(409);
+
+    const duplicateTeacherOtherSchool = await request(app)
+      .post('/api/teachers')
+      .set('Authorization', 'Bearer token-super')
+      .send({ lastName: 'Different', firstNames: 'School Teacher', email: 'different-school-teacher@x.test', phone: '+229 98 76 54 32', specialization: 'Science', schoolId: 20 });
+    expect(duplicateTeacherOtherSchool.status).toBe(409);
+  });
+
+  it('canonicalizes complete Togo phone numbers on direct parent creation endpoints', async () => {
+    const directParent = await request(app)
+      .post('/api/parents')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({ name: 'Direct Parent', email: 'direct-parent-phone@x.test', phone: '228 90 12 12 13', schoolId: 10 });
+    expect(directParent.status).toBe(201);
+    expect(directParent.body.phone).toBe('+22890121213');
+    expect((FIXTURES.parents as any[]).find((parent) => parent.userId === directParent.body.id)?.phone).toBe('+22890121213');
+
+    const adminCreatedParent = await request(app)
+      .post('/api/admin/users')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({ email: 'admin-parent-phone@x.test', name: 'Admin Parent', role: 'parent', schoolId: 20, phone: '00228 90 12 12 14' });
+    expect(adminCreatedParent.status).toBe(201);
+    expect(adminCreatedParent.body.phone).toBe('+22890121214');
+    expect((FIXTURES.parents as any[]).find((parent) => parent.userId === adminCreatedParent.body.id)?.phone).toBe('+22890121214');
+  });
+
+  it('does not provision a new user through register-or-login without a phone', async () => {
+    const uid = 'sim-parent-register-without-phone';
+    const res = await request(app)
+      .post('/api/auth/register-or-login')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', uid)
+      .set('x-simulated-email', 'register-no-phone@x.test')
+      .send();
+
+    expect(res.status).toBe(400);
+    expect(FIXTURES.users.some((user) => user.uid === uid)).toBe(false);
+  });
+
+  it('allows the existing account phone on update but rejects another account phone', async () => {
+    FIXTURES.users.push(
+      { id: 20, uid: 'phone-update-parent', email: null, name: 'Phone Parent', role: 'parent', schoolId: 10, phone: '+22890000041', isDeleted: false },
+      { id: 21, uid: 'phone-update-teacher', email: 'phone-teacher@x.test', name: 'Phone Teacher', role: 'teacher', schoolId: 10, phone: '+22990000042', isDeleted: false },
+    );
+    FIXTURES.parents.push({ id: 4, userId: 20, phone: '+228 90 00 00 41', address: '', schoolId: 10 });
+
+    const selfSamePhone = await request(app)
+      .put('/api/users/20')
+      .set('Authorization', 'Bearer token-super')
+      .send({ phone: '00228 90-00-00-41' });
+    expect(selfSamePhone.status).toBe(200);
+
+    const selfDifferentPhone = await request(app)
+      .put('/api/users/20')
+      .set('Authorization', 'Bearer token-super')
+      .send({ phone: '+229 90 00 00 42' });
+    expect(selfDifferentPhone.status).toBe(409);
+
+    const adminSamePhone = await request(app)
+      .put('/api/admin/users/20')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: null, name: 'Phone Parent', role: 'parent', schoolId: 10, phone: '+22890000041' });
+    expect(adminSamePhone.status).toBe(200);
+
+    const adminDifferentPhone = await request(app)
+      .put('/api/admin/users/20')
+      .set('Authorization', 'Bearer token-super')
+      .send({ email: null, name: 'Phone Parent', role: 'parent', schoolId: 10, phone: '+22990000042' });
+    expect(adminDifferentPhone.status).toBe(409);
+  });
+
+  it('lets only one concurrent parent creation claim a canonical phone', async () => {
+    const createParent = (uid: string, name: string, email: string, phone: string) => request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({ uid, name, email, role: 'parent', schoolId: 10, phone });
+
+    const responses = await Promise.all([
+      createParent('concurrent-parent-a', 'Concurrent Parent A', 'concurrent-a@x.test', '+228 90 00 00 51'),
+      createParent('concurrent-parent-b', 'Concurrent Parent B', 'concurrent-b@x.test', '00228 90000051'),
+    ]);
+
+    expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([201, 409]);
+    expect(FIXTURES.users.filter((user) => user.phone === '+22890000051')).toHaveLength(1);
+  });
+
   it('3l. parent cannot create a parent via POST /api/parents', async () => {
     const res = await request(app)
       .post('/api/parents')
@@ -2361,17 +2520,43 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.errors[0]).toMatchObject({ error: 'Cannot import parent for another school' });
   });
 
+  it('documents the parent phone formats in the Excel template', async () => {
+    const res = await request(app)
+      .get('/api/parents/template')
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+
+    expect(res.status).toBe(200);
+    const XLSX = await import('xlsx');
+    const workbook = XLSX.read(res.body, { type: 'buffer' });
+    expect(workbook.SheetNames).toEqual(['parents', 'Instructions']);
+    expect(XLSX.utils.sheet_to_json(workbook.Sheets.parents, { header: 1 })[0]).toEqual([
+      'Nom', 'Prénoms', 'email', 'phonePrefix', 'phone', 'address', 'schoolId', 'studentId',
+      'parentType', 'gender', 'studentIds', 'studentNames',
+    ]);
+    const instructions = XLSX.utils.sheet_to_json(workbook.Sheets.Instructions, { header: 1 }).flat().join(' ');
+    expect(instructions).toContain('Indicatif togolais 228, +228 ou 00228');
+    expect(instructions).toContain('+22890121212');
+    expect(instructions).toContain('aucun double indicatif');
+  });
+
   it('3o. school_admin can batch import parents for their own school via POST /api/parents/batch', async () => {
     FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, isActive: true, firstName: 'New', lastName: 'Student', parentId: null });
     const res = await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
-      .send([{ name: 'Local Parent', email: 'localparent@x.test', phonePrefix: '+228', phone: '90000000', parentType: 'mere', studentId: 15 }]);
+      .send([{ name: 'Local Parent', email: 'localparent@x.test', phonePrefix: '228', phone: '00228 90121212', parentType: 'mere', studentId: 15 }]);
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(1);
     expect(res.body.inserted[0].user.email).toBe('localparent@x.test');
     expect(res.body.inserted[0].user.schoolId).toBe(10);
+    expect(res.body.inserted[0].user.phone).toBe('+22890121212');
+    expect((FIXTURES.parents as any[]).find((parent) => parent.id === res.body.inserted[0].parentId)?.phone).toBe('+22890121212');
     expect(FIXTURES.students.find((student: any) => student.id === 15)?.parentId).toBe(res.body.inserted[0].parentId);
 
     const importedUserId = res.body.inserted[0].user.id;
@@ -2399,6 +2584,34 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(2);
     expect(res.body.errors).toEqual([]);
+  });
+
+  it('rejects duplicate canonical phones within the same parent import', async () => {
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([
+        { name: 'Import Parent A', email: 'import-phone-a@x.test', phonePrefix: '+228', phone: '90000030', parentType: 'mere' },
+        { name: 'Import Parent B', email: 'import-phone-b@x.test', phonePrefix: '+228', phone: '90000030', parentType: 'pere' },
+      ]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(1);
+    expect(res.body.errors).toHaveLength(1);
+    expect(res.body.errors[0].error).toContain('déjà utilisé par un autre compte');
+  });
+
+  it('rejects parent import when another user role already owns the phone', async () => {
+    FIXTURES.users.push({ id: 30, uid: 'phone-owner-teacher', email: 'phone-owner-teacher@x.test', name: 'Phone Owner Teacher', role: 'teacher', schoolId: 10, phone: '+22890000031', isDeleted: false });
+
+    const res = await request(app)
+      .post('/api/parents/batch')
+      .set('Authorization', 'Bearer token-school')
+      .send([{ name: 'Imported Parent', email: 'imported-parent@x.test', phonePrefix: '+228', phone: '90000031', parentType: 'mere' }]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.insertedCount).toBe(0);
+    expect(res.body.errors[0].error).toContain('déjà utilisé par un autre compte');
   });
 
   it('3o1. duplicate Parent email is rejected clearly during batch import', async () => {
@@ -2980,7 +3193,7 @@ describe('E2E security: auth & privilege checks', () => {
     const createRes = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-super')
-      .send({ email: 'created@x.test', name: 'Created', role: 'school_admin', schoolId: 10, academicYearId: 1 });
+      .send({ email: 'created@x.test', name: 'Created', role: 'school_admin', schoolId: 10, academicYearId: 1, phone: '+22890000014' });
     // Accept 201 or 400/409 if fixture constraints prevent creation
     expect([201, 400, 409]).toContain(createRes.status);
 
@@ -2995,7 +3208,7 @@ describe('E2E security: auth & privilege checks', () => {
     const createRes = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-super')
-      .send({ email: 'created@x.test', name: 'Created', role: 'school_admin', schoolId: 10, academicYearId: 1 });
+      .send({ email: 'created@x.test', name: 'Created', role: 'school_admin', schoolId: 10, academicYearId: 1, phone: '+22890000015' });
     expect([201, 400, 409]).toContain(createRes.status);
 
     const created = FIXTURES.users.find((u) => u.email === 'created@x.test');
@@ -3023,14 +3236,14 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+228 98765432',
       });
     expect(createRes.status).toBe(201);
-    expect(createRes.body).toMatchObject({ email: 'schoolphone@x.test', role: 'school_admin', phone: '+228 98765432' });
+    expect(createRes.body).toMatchObject({ email: 'schoolphone@x.test', role: 'school_admin', phone: '+22898765432' });
 
     const listRes = await request(app)
       .get('/api/simulation/users')
       .set('Authorization', 'Bearer token-super');
     expect(listRes.status).toBe(200);
     expect(Array.isArray(listRes.body)).toBe(true);
-    expect(listRes.body.some((u: any) => u.email === 'schoolphone@x.test' && u.phone === '+228 98765432')).toBe(true);
+    expect(listRes.body.some((u: any) => u.email === 'schoolphone@x.test' && u.phone === '+22898765432')).toBe(true);
   });
 
   it('creates a teacher with the selected class assignment immediately', async () => {

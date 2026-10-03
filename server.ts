@@ -29,7 +29,7 @@ import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
-import { handleLocalLogin } from './src/lib/localLogin.ts';
+import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts';
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
@@ -239,6 +239,36 @@ function isUsersEmailUniqueViolation(error: any) {
 
 function sendDuplicateEmailResponse(res: any) {
   return res.status(409).json({ error: DUPLICATE_EMAIL_ERROR.message, code: DUPLICATE_EMAIL_ERROR.code });
+}
+
+const DUPLICATE_PHONE_ERROR = {
+  code: 'PHONE_ALREADY_IN_USE',
+  message: 'Ce numéro de téléphone est déjà utilisé par un autre compte.',
+};
+
+function isUsersPhoneUniqueViolation(error: any) {
+  if (error?.code !== '23505' && error?.cause?.code !== '23505') return false;
+  const constraint = String(error?.constraint || error?.cause?.constraint || '').toLowerCase();
+  const detail = String(error?.detail || error?.cause?.detail || '').toLowerCase();
+  return constraint.includes('phone') || (detail.includes('users') && detail.includes('phone'));
+}
+
+function sendDuplicatePhoneResponse(res: any) {
+  return res.status(409).json({ error: DUPLICATE_PHONE_ERROR.message, code: DUPLICATE_PHONE_ERROR.code });
+}
+
+function sendInvalidPhoneResponse(res: any) {
+  return res.status(400).json({ error: 'Un numéro de téléphone valide est obligatoire.', code: 'PHONE_REQUIRED' });
+}
+
+async function findExistingUsersByPhone(phone: string, excludeUserId?: number) {
+  const canonicalPhone = canonicalizeUserPhone(phone);
+  if (!canonicalPhone) return [];
+
+  const matchingUsers = await db.select().from(users).where(eq(users.phone, canonicalPhone));
+  return matchingUsers.filter((row: any) => (
+    (excludeUserId == null || Number(row.id) !== excludeUserId)
+  ));
 }
 
 // Resolved actor shape used by business routes.
@@ -1650,6 +1680,11 @@ export async function createApp() {
         return sendDuplicateEmailResponse(res);
       }
 
+      const canonicalPhone = canonicalizeUserPhone(phone);
+      if (!canonicalPhone) return sendInvalidPhoneResponse(res);
+      const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
+      if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
+
       let requestedParentStudentId: number | undefined;
       let requestedParentStudent: { schoolId: number; isActive: boolean; parentId: number | null } | undefined;
       if (role === 'parent' && studentId != null && String(studentId).trim() !== '') {
@@ -1680,7 +1715,7 @@ export async function createApp() {
         schoolId: resolvedSchoolId,
         academicYearId,
         gender: gender ?? null,
-        phone: phone || null,
+        phone: canonicalPhone,
       }).returning();
       const createdUser = newUserRows[0];
 
@@ -1711,7 +1746,7 @@ export async function createApp() {
 
         const [createdParent] = await db.insert(parents).values({
           userId: createdUser.id,
-          phone: phone || '',
+          phone: canonicalPhone,
           address: '',
           studentId: parentStudentId || undefined,
           schoolId: parentSchoolId,
@@ -1841,7 +1876,7 @@ export async function createApp() {
       const responseBody: any = {
         ...createdUser,
         specialization: role === 'teacher' ? (teacherProfile?.specialization || null) : null,
-        phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? phone || '' : createdUser.phone ?? null,
+        phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? canonicalPhone : createdUser.phone ?? null,
       };
 
       if (role === 'teacher' && teacherProfile?.id) {
@@ -1859,6 +1894,7 @@ export async function createApp() {
       res.status(201).json(responseBody);
     } catch (err: any) {
       console.error('Error creating admin user:', err);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -2018,13 +2054,24 @@ export async function createApp() {
         }
       }
 
+      let canonicalPhoneForUpdate = canonicalizeUserPhone(targetUser.phone);
+      if (phone !== undefined) {
+        canonicalPhoneForUpdate = canonicalizeUserPhone(phone);
+        if (!canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
+        if (canonicalPhoneForUpdate !== canonicalizeUserPhone(targetUser.phone)) {
+          const phoneConflicts = await findExistingUsersByPhone(canonicalPhoneForUpdate, id);
+          if (phoneConflicts.length > 0) return sendDuplicatePhoneResponse(res);
+        }
+      }
+      if (role !== targetUser.role && !canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
+
       const updatedValues: any = { email: normalizedIncomingEmail, name: teacherDisplayName, role, gender: gender ?? null };
       if (role === 'teacher' && lastName && firstNames) {
         updatedValues.lastName = String(lastName).trim();
         updatedValues.firstNames = String(firstNames).trim();
       }
       if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
-      if (phone !== undefined) updatedValues.phone = phone || null;
+      if (phone !== undefined) updatedValues.phone = canonicalPhoneForUpdate;
       if (role === 'school_admin') {
         if (academicYearId == null) {
           return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
@@ -2059,11 +2106,14 @@ export async function createApp() {
         await db.delete(parents).where(eq(parents.userId, id));
         const existingTeacher = await db.select().from(teachers).where(eq(teachers.userId, id));
         let teacherProfileId: number | null = null;
+        const teacherPhone = phone !== undefined
+          ? canonicalPhoneForUpdate ?? ''
+          : existingTeacher[0]?.phone || canonicalPhoneForUpdate || '';
         if (existingTeacher.length > 0) {
           teacherProfileId = existingTeacher[0].id;
           // Update teachers.school_id only if a new schoolId was provided in the request
           if (parsedSchoolId !== undefined) {
-            await db.update(teachers).set({ schoolId: parsedSchoolId, phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
+            await db.update(teachers).set({ schoolId: parsedSchoolId, phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
             // Keep users.school_id in sync
             try {
               await db.update(users).set({ schoolId: parsedSchoolId ?? null }).where(eq(users.id, id));
@@ -2071,10 +2121,10 @@ export async function createApp() {
               console.warn('DIAG: failed to sync users.schoolId during admin update', { userId: id, parsedSchoolId, err: e?.message || e });
             }
           } else {
-            await db.update(teachers).set({ phone: phone || '', specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
+            await db.update(teachers).set({ phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
           }
         } else {
-          const [inserted] = await db.insert(teachers).values({ userId: id, schoolId: parsedSchoolId !== undefined ? parsedSchoolId : undefined, phone: phone || '', specialization: normalizeSpecialization(specialization) || null } as any).returning();
+          const [inserted] = await db.insert(teachers).values({ userId: id, schoolId: parsedSchoolId !== undefined ? parsedSchoolId : undefined, phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null } as any).returning();
           teacherProfileId = inserted?.id ?? null;
           // Also ensure users.school_id is set when creating teacher profile
           if (parsedSchoolId !== undefined) {
@@ -2146,7 +2196,7 @@ export async function createApp() {
         await db.delete(teachers).where(eq(teachers.userId, id));
         const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
         const parentValues: any = {
-          phone: phone || '',
+          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent[0]?.phone || canonicalPhoneForUpdate || '',
           address: typeof req.body.address === 'string' ? req.body.address : existingParent[0]?.address || '',
           schoolId: parsedSchoolId ?? existingParent[0]?.schoolId ?? targetUser.schoolId ?? null,
         };
@@ -2221,6 +2271,7 @@ export async function createApp() {
       }
     } catch (err: any) {
       console.error('Error updating admin user:', err);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -2370,7 +2421,16 @@ export async function createApp() {
         updatedFields.lastName = String(lastName).trim();
         updatedFields.firstNames = String(firstNames).trim();
       }
-      if (phone !== undefined) updatedFields.phone = phone || null;
+      let canonicalPhoneForUpdate: string | null = null;
+      if (phone !== undefined) {
+        canonicalPhoneForUpdate = canonicalizeUserPhone(phone);
+        if (!canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
+        if (canonicalPhoneForUpdate !== canonicalizeUserPhone(targetUser.phone)) {
+          const phoneConflicts = await findExistingUsersByPhone(canonicalPhoneForUpdate, id);
+          if (phoneConflicts.length > 0) return sendDuplicatePhoneResponse(res);
+        }
+        updatedFields.phone = canonicalPhoneForUpdate;
+      }
 
       if (SENSITIVE_LOG) console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
 
@@ -2384,7 +2444,7 @@ export async function createApp() {
       if (updatedUserCandidate && updatedUserCandidate.role === 'parent') {
         const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
         const parentValues: any = {
-          phone: typeof phone === 'string' ? phone : existingParent[0]?.phone || '',
+          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent[0]?.phone || canonicalizeUserPhone(updatedUserCandidate.phone) || '',
           address: typeof address === 'string' ? address : existingParent[0]?.address || '',
         };
         if (existingParent.length > 0) {
@@ -2404,6 +2464,7 @@ export async function createApp() {
       res.json(toUserDto(updatedUser));
     } catch (err: any) {
       console.error('Error in self-update user:', err);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -2727,12 +2788,18 @@ export async function createApp() {
         }
       }
 
+      const canonicalPhone = canonicalizeUserPhone(req.body?.phone ?? (req.user as any).phone);
+      if (!canonicalPhone) return sendInvalidPhoneResponse(res);
+      const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
+      if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
+
       const newUserResult = await db.insert(users).values({
         uid,
         email: email || 'user@schooltrack.fr',
         name: name || 'Nouvel Utilisateur',
         role: finalRole,
         schoolId: resolvedSchoolId,
+        phone: canonicalPhone,
       }).returning();
 
       const createdUser = newUserResult[0];
@@ -2741,7 +2808,7 @@ export async function createApp() {
       if (finalRole === 'parent') {
         await db.insert(parents).values({
           userId: createdUser.id,
-          phone: '',
+          phone: canonicalPhone,
           address: '',
         });
         if (resolvedSchoolId != null) {
@@ -2809,6 +2876,7 @@ export async function createApp() {
       return;
     } catch (err: any) {
       console.error('Error in register-or-login:', err);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       res.status(500).json({ error: 'Failed to register or login' });
     }
   });
@@ -6023,6 +6091,11 @@ export async function createApp() {
         return res.status(409).json({ error: 'User with same email already exists in this school' });
       }
 
+      const canonicalPhone = canonicalizeUserPhone(phone);
+      if (!canonicalPhone) return sendInvalidPhoneResponse(res);
+      const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
+      if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
+
       // Create User entry first (fake uid for simulation unless logged in on firebase auth)
       const fakeUid = `sim_teacher_${Date.now()}`;
       const userResult = await db.insert(users).values({
@@ -6033,6 +6106,7 @@ export async function createApp() {
         firstNames: String(firstNames).trim(),
         role: 'teacher',
         schoolId: parsedSchoolId,
+        phone: canonicalPhone,
         gender: gender ?? null,
       }).returning();
 
@@ -6146,6 +6220,7 @@ export async function createApp() {
       });
     } catch (err: any) {
       console.error('Error creating teacher profile:', err);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -6438,6 +6513,11 @@ export async function createApp() {
             return sendDuplicateEmailResponse(res);
           }
 
+          const canonicalPhone = canonicalizeUserPhone(phone);
+          if (!canonicalPhone) return sendInvalidPhoneResponse(res);
+          const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
+          if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
+
           const fakeUid = `sim_parent_${Date.now()}`;
           const userResult = await db.insert(users).values({
             uid: fakeUid,
@@ -6445,13 +6525,14 @@ export async function createApp() {
             name,
             role: 'parent',
             schoolId: effectiveSchoolId,
+            phone: canonicalPhone,
             gender: gender ?? null,
           }).returning();
 
           const createdUser = userResult[0];
           const parentResult = await db.insert(parents).values({
             userId: createdUser.id,
-            phone,
+            phone: canonicalPhone,
             address,
             studentId: parsedStudentId ?? null,
             schoolId: effectiveSchoolId ?? null,
@@ -6475,7 +6556,7 @@ export async function createApp() {
           res.status(201).json({
             ...createdUser,
             parentId: createdParent.id,
-            phone,
+            phone: canonicalPhone,
             address,
             studentId: createdParent.studentId,
             schoolId: createdParent.schoolId ?? null,
@@ -6483,6 +6564,7 @@ export async function createApp() {
         } catch (err: any) {
           console.error('Error recording parent info:', err);
           if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
+          if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
           res.status(500).json({ error: 'Internal server error' });
         }
       });
@@ -6509,8 +6591,17 @@ export async function createApp() {
         const cellRef = XLSX.utils.encode_cell({ r: 0, c: index });
         worksheet[cellRef] = { ...worksheet[cellRef], s: headerStyle };
       });
+      const instructions = XLSX.utils.aoa_to_sheet([
+        ['Colonne', 'Format attendu', 'Exemple'],
+        ['phonePrefix', 'Indicatif togolais 228, +228 ou 00228. Facultatif : +228 est utilisé par défaut.', '228'],
+        ['phone', '8 chiffres locaux, ou numéro complet +228..., 00228... ou 228...; espaces et séparateurs sont ignorés.', '90121212'],
+        ['Combinaison', 'Avec un numéro local, phonePrefix est ajouté une seule fois. Avec un numéro complet, phonePrefix peut être vide ou 228; il n’est jamais ajouté une deuxième fois.', '228 + 90121212 → +22890121212'],
+        ['Numéro complet', 'Un indicatif déjà présent est reconnu et normalisé en +228; aucun double indicatif n’est ajouté.', '00228 90121212 → +22890121212'],
+      ]);
+      instructions['!cols'] = [{ wch: 20 }, { wch: 86 }, { wch: 38 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'parents');
+      XLSX.utils.book_append_sheet(workbook, instructions, 'Instructions');
       const buffer: ArrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -6640,7 +6731,7 @@ export async function createApp() {
         const normalizedRow = validation.normalized;
         const name = (normalizedRow.name || '').trim();
         const normalizedEmail = normalizeEmail(normalizedRow.email || '');
-        const phone = `${normalizedRow.phonePrefix || '+228'} ${normalizedRow.phone}`.trim();
+        const phone = normalizedRow.phone;
         const address = normalizedRow.address || '';
         const gender = normalizedRow.gender || null;
         const addRowError = (error: string) => errors.push({ row: i + 2, name: name || undefined, email: normalizedEmail || undefined, error });
@@ -6665,6 +6756,17 @@ export async function createApp() {
         const existingGlobal = await findExistingUsersByEmail(normalizedEmail);
         if (existingGlobal.length > 0) {
           addRowError('Cet email est déjà utilisé et ne peut pas être importé dans cet établissement');
+          continue;
+        }
+
+        const canonicalPhone = canonicalizeUserPhone(phone);
+        if (!canonicalPhone) {
+          addRowError('Un numéro de téléphone valide est obligatoire');
+          continue;
+        }
+        const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
+        if (existingByPhone.length > 0) {
+          addRowError(DUPLICATE_PHONE_ERROR.message);
           continue;
         }
 
@@ -6709,9 +6811,18 @@ export async function createApp() {
         if (errors.length > errorsBeforeStudentLookup) continue;
 
         const fakeUid = `sim_parent_${Date.now()}_${i}`;
-        const userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId, gender }).returning();
+        let userRes: any[];
+        try {
+          userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId, gender, phone: canonicalPhone }).returning();
+        } catch (err: any) {
+          if (isUsersPhoneUniqueViolation(err)) {
+            addRowError(DUPLICATE_PHONE_ERROR.message);
+            continue;
+          }
+          throw err;
+        }
         const createdUser = userRes[0];
-        const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: phone || null, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
+        const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: canonicalPhone, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
         if (linkedStudentId != null) {
           await db.update(students).set({ parentId: parentRes[0].id }).where(and(
             eq(students.id, linkedStudentId),
@@ -11556,4 +11667,3 @@ export async function startServer() {
 if (process.env.NODE_ENV !== 'test') {
   startServer();
 }
-

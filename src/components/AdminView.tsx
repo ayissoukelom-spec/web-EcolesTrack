@@ -32,7 +32,8 @@ import * as XLSX from 'xlsx';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import TeachingAssignmentsEditor, { type TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
-import { PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
+import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
+import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 
 const validateRecords = (records: any[]) => {
@@ -1440,9 +1441,9 @@ export default function AdminView({
       setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
       return;
     }
-    const newParentPhoneDigits = newParentForm.phone.replace(/\D/g, '');
-    if (newParentForm.phonePrefix === '+228' && !/^[0-9]{8}$/.test(newParentPhoneDigits)) {
-      setStudentError('Le numéro de téléphone du parent doit contenir exactement 8 chiffres pour +228.');
+    const newParentPhone = canonicalizeUserPhone(newParentForm.phone, newParentForm.phonePrefix);
+    if (!newParentPhone) {
+      setStudentError('Le téléphone du parent doit être valide.');
       return;
     }
 
@@ -1458,7 +1459,7 @@ export default function AdminView({
       const createdParent = await onAddParent({
         name: newParentForm.name,
         email: newParentForm.email,
-        phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
+        phone: newParentPhone,
         address: newParentForm.address,
         schoolId: targetSchoolId,
         gender: newParentGender,
@@ -1773,15 +1774,15 @@ export default function AdminView({
         setStudentError('Veuillez sélectionner l’élève rattaché.');
         return;
       }
-      const parentPhoneDigits = parentForm.phone.replace(/\D/g, '');
-      if (parentForm.phonePrefix === '+228' && !/^[0-9]{8}$/.test(parentPhoneDigits)) {
-        setStudentError('Le numéro de téléphone du parent doit contenir exactement 8 chiffres pour +228.');
+      const parentPhone = canonicalizeUserPhone(parentForm.phone, parentForm.phonePrefix);
+      if (!parentPhone) {
+        setStudentError('Le téléphone du parent doit être valide.');
         return;
       }
       await onAddParent({
         name: parentForm.name,
         email: parentForm.email,
-        phone: `${parentForm.phonePrefix} ${parentPhoneDigits}`,
+        phone: parentPhone,
         address: parentForm.address,
         schoolId: parseInt(parentForm.schoolId),
         studentId: parseInt(parentForm.studentId),
@@ -1811,10 +1812,15 @@ export default function AdminView({
           setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
           return;
         }
+        const newParentPhone = canonicalizeUserPhone(newParentForm.phone, newParentForm.phonePrefix);
+        if (!newParentPhone) {
+          setStudentError('Le téléphone du parent doit être valide.');
+          return;
+        }
         const createdParent = await onAddParent({
           name: newParentForm.name,
           email: newParentForm.email,
-          phone: `${newParentForm.phonePrefix} ${newParentForm.phone}`,
+          phone: newParentPhone,
           address: newParentForm.address,
           schoolId: targetSchoolId,
           gender: newParentGender,
@@ -1996,8 +2002,10 @@ export default function AdminView({
       ));
       const rowErrors: {row:number; errors:string[]}[] = [];
       const valid: any[] = [];
+      const previewRecords: any[] = [];
       for (let i = 0; i < normalized.length; i++) {
         const result = validateParentImportRow(normalized[i], { requireSchoolId: userRole !== 'school_admin' });
+        previewRecords.push(result.normalized);
         if (result.errors.length > 0) rowErrors.push({ row: i + 2, errors: result.errors }); else valid.push(result.normalized);
       }
 
@@ -2010,7 +2018,7 @@ export default function AdminView({
       }
 
       setValidImportRecords(valid.length > 0 ? valid : null);
-      setImportPreviewRecords(normalized.slice(0, 100));
+      setImportPreviewRecords(previewRecords.slice(0, 100));
       setImportPreviewHeaders(Object.keys(normalized[0] || {}));
       setShowImportDetails(true);
 
@@ -4264,8 +4272,13 @@ export default function AdminView({
                         return;
                       }
                       const phoneDigits = newUserForm.phone.replace(/\D/g, '');
-                      if (phoneDigits.length !== 8) {
-                        setCreateUserError('Le numéro de téléphone doit contenir exactement 8 chiffres');
+                      const phoneValue = newUserForm.role === 'parent'
+                        ? canonicalizeParentImportPhone(newUserForm.phone, '+228')
+                        : phoneDigits.length === 8 ? `+228${phoneDigits}` : null;
+                      if (!phoneValue) {
+                        setCreateUserError(newUserForm.role === 'parent'
+                          ? 'Le téléphone du parent doit être un numéro togolais valide au format +228XXXXXXXX.'
+                          : 'Le numéro de téléphone doit contenir exactement 8 chiffres');
                         return;
                       }
                       if (!newUserPassword || newUserPassword.length < 6) {
@@ -4329,7 +4342,7 @@ export default function AdminView({
                           role: newUserForm.role,
                           schoolId: resolvedSchoolId,
                           academicYearId: newUserForm.role === 'school_admin' ? parseInt(newUserForm.academicYearId) : undefined,
-                          phone: newUserForm.role !== 'parent' ? `+228${phoneDigits}` : newUserForm.phone,
+                          phone: phoneValue,
                           specialization: resolvedSpecialization,
                           subjectIds: resolvedSubjectIds,
                           gender: newUserForm.gender || undefined,
@@ -6308,6 +6321,3 @@ export default function AdminView({
     </div>
   );
 }
-
-
-

@@ -78,6 +78,13 @@
       "when": 1790891000000,
       "tag": "0137_add_late_arrival_teaching_assignment",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791042864819,
+      "tag": "0011_users_phone_required_unique",
+      "breakpoints": true
     }
   ]
 }

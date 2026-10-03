@@ -134,11 +134,31 @@ describe('handleLocalLogin', () => {
     { input: '78 23 45 67', countryCode: '+228', expected: ['22878234567'] },
     { input: '78-23-45-67', countryCode: '+229', expected: ['22978234567'] },
     { input: '00229 78.23.45.67', countryCode: undefined, expected: ['22978234567'] },
-    { input: '228-78-23-45-67', countryCode: '+228', expected: ['22822878234567'] },
+    { input: '228-78-23-45-67', countryCode: '+228', expected: ['22878234567'] },
     { input: '78 23 45 67', countryCode: undefined, expected: [] },
   ])('normalizes $input with its country code', async ({ input, countryCode, expected }) => {
     const { normalizeParentLoginPhone } = await import('./localLogin.ts');
     expect(normalizeParentLoginPhone(input, countryCode)).toEqual(expected);
+  });
+
+  it.each([
+    { input: '+228 78 23 45 67', countryCode: undefined, expected: '+22878234567' },
+    { input: '00228 78-23-45-67', countryCode: undefined, expected: '+22878234567' },
+    { input: '228 78-23-45-67', countryCode: undefined, expected: '+22878234567' },
+    { input: '78 23 45 67', countryCode: '+228', expected: '+22878234567' },
+    { input: '228 78-23-45-67', countryCode: '+228', expected: '+22878234567' },
+    { input: '78 23 45 67', countryCode: undefined, expected: null },
+    { input: '123', countryCode: undefined, expected: null },
+    { input: '+228 90 ABC 00 00', countryCode: undefined, expected: null },
+    { input: '   ', countryCode: '+228', expected: null },
+  ])('canonicalizes $input for users.phone', async ({ input, countryCode, expected }) => {
+    const { canonicalizeUserPhone } = await import('./localLogin.ts');
+    expect(canonicalizeUserPhone(input, countryCode)).toBe(expected);
+  });
+
+  it('treats a null phone as absent', async () => {
+    const { canonicalizeUserPhone } = await import('./localLogin.ts');
+    expect(canonicalizeUserPhone(null)).toBeNull();
   });
 
   it.each([

@@ -4,6 +4,9 @@ import { db } from '../db/index.ts';
 import { users, localAuths, userLoginEvents } from '../db/schema.ts';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { parents } from '../db/schema.ts';
+import { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
+
+export { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
 
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
 const DEFAULT_JWT_AUDIENCE = 'ecoletrack-api';
@@ -25,18 +28,6 @@ function normalizeJwtExpiresIn(rawValue: string | undefined): JwtExpiresIn {
 
   return DEFAULT_JWT_EXPIRES_IN;
 }
-
-export const normalizeParentLoginPhone = (value: string, phoneCountryCode?: string): string[] => {
-  const digits = value.replace(/\D/g, '');
-  if (!digits) return [];
-  const trimmedValue = value.trim();
-  if (trimmedValue.startsWith('+')) return [digits];
-  if (trimmedValue.startsWith('00')) return [digits.slice(2)];
-
-  const countryCodeDigits = String(phoneCountryCode ?? '').replace(/\D/g, '');
-  if (!countryCodeDigits) return [];
-  return [`${countryCodeDigits}${digits}`];
-};
 
 export async function handleLocalLogin(req: Request, res: Response) {
   try {

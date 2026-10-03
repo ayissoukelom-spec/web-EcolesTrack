@@ -119,12 +119,17 @@ export const users = pgTable('users', {
   role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'teacher' | 'parent'
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'set null' }),
-  phone: text('phone'),
+  phone: text('phone').notNull().unique('users_phone_unique'),
   gender: text('gender'),
   isDeleted: boolean('is_deleted').default(false).notNull(),
   lastLoginAt: timestamp('last_login_at'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (table) => ({
+  phoneCanonicalCheck: check(
+    'users_phone_canonical_check',
+    sql`left(${table.phone}, 1) = '+' AND length(${table.phone}) BETWEEN 3 AND 16 AND substring(${table.phone} from 2 for 1) BETWEEN '1' AND '9' AND substring(${table.phone} from 2) !~ '[^0-9]'`,
+  ),
+}));
 
 export const userSchools = pgTable('user_schools', {
   id: serial('id').primaryKey(),
