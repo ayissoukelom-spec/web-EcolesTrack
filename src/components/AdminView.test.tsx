@@ -414,6 +414,93 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.queryByText('Kossi Doe')).toBeNull();
   });
 
+  it('preserves the parent country calling code when editing a stored international number', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const parent: Parent = {
+      id: 55,
+      userId: 6,
+      name: 'Awa Mensah',
+      email: 'awa@example.com',
+      phone: '+229 78 23 45 67',
+      schoolId: 1,
+    };
+    const user: User = { id: 6, uid: 'parent_6', email: 'awa@example.com', name: 'Awa Mensah', role: 'parent', schoolId: 1 };
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[parent]}
+        usersList={[user]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onUpdateUser={onUpdateUser}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+    const editDialog = screen.getByRole('dialog');
+    expect((within(editDialog).getByLabelText('Indicatif du téléphone parent') as HTMLSelectElement).value).toBe('+229');
+    fireEvent.click(within(editDialog).getByRole('button', { name: 'Enregistrer' }));
+
+    expect(onUpdateUser).toHaveBeenCalledWith(6, expect.objectContaining({ phone: '+229 78234567' }));
+  });
+
+  it('recognizes a legacy full +228 number stored without a plus sign', async () => {
+    const parent: Parent = {
+      id: 55,
+      userId: 6,
+      name: 'Awa Mensah',
+      email: 'awa@example.com',
+      phone: '22878234567',
+      schoolId: 1,
+    };
+    const user: User = { id: 6, uid: 'parent_6', email: 'awa@example.com', name: 'Awa Mensah', role: 'parent', schoolId: 1 };
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[parent]}
+        usersList={[user]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onUpdateUser={async () => ({})}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+    const editDialog = screen.getByRole('dialog');
+    expect((within(editDialog).getByLabelText('Indicatif du téléphone parent') as HTMLSelectElement).value).toBe('+228');
+    expect((within(editDialog).getByPlaceholderText('Numéro local') as HTMLInputElement).value).toBe('78234567');
+  });
+
   it('sorts the visible parents list alphabetically by name in the DOM', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const parents: Parent[] = [

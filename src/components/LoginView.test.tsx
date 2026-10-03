@@ -53,7 +53,7 @@ describe('LoginView', () => {
 
     render(<LoginView onLogin={mockOnLogin} />);
 
-    fireEvent.change(screen.getByLabelText(/Email ou numéro de téléphone/i), { target: { value: 'test@example.com' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'test@example.com' } });
     fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 
@@ -71,14 +71,31 @@ describe('LoginView', () => {
 
     render(<LoginView onLogin={mockOnLogin} />);
 
-    const identifierInput = screen.getByLabelText(/Email ou numéro de téléphone/i) as HTMLInputElement;
+    const identifierInput = screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }) as HTMLInputElement;
+    expect(identifierInput.tagName).toBe('INPUT');
     expect(identifierInput.type).toBe('text');
     fireEvent.change(identifierInput, { target: { value: '90123456' } });
     fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 
     await waitFor(() => expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('parent-jwt'));
-    expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: '90123456', password: '123456' });
+    expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: '90123456', password: '123456', phoneCountryCode: '+228' });
+  });
+
+  it('submits the selected country code so equal local numbers identify different accounts', async () => {
+    window.fetch = createFetchMock([
+      { id: 3, uid: 'parent_benin', email: 'benin@example.com', name: 'Parent Benin', role: 'parent', token: 'benin-jwt', mustReset: false },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByLabelText(/Indicatif du pays/i), { target: { value: '+229' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: '78 23 45 67' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('benin-jwt'));
+    expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: '78 23 45 67', password: '123456', phoneCountryCode: '+229' });
   });
 
   it('does not store access token when login response is missing token', async () => {
@@ -89,7 +106,7 @@ describe('LoginView', () => {
 
     render(<LoginView onLogin={mockOnLogin} />);
 
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'test@example.com' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'test@example.com' } });
     fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 

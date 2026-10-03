@@ -130,17 +130,20 @@ describe('handleLocalLogin', () => {
   });
 
   it.each([
-    { input: '+228 90 12 34 56', expected: ['22890123456', '90123456'] },
-    { input: '90 12 34 56', expected: ['90123456', '22890123456'] },
-    { input: '228-90-12-34-56', expected: ['22890123456', '90123456'] },
-  ])('uses the existing digit-only phone normalization for $input', async ({ input, expected }) => {
+    { input: '+228 78 23 45 67', countryCode: '+229', expected: ['22878234567'] },
+    { input: '78 23 45 67', countryCode: '+228', expected: ['22878234567'] },
+    { input: '78-23-45-67', countryCode: '+229', expected: ['22978234567'] },
+    { input: '00229 78.23.45.67', countryCode: undefined, expected: ['22978234567'] },
+    { input: '228-78-23-45-67', countryCode: '+228', expected: ['22822878234567'] },
+    { input: '78 23 45 67', countryCode: undefined, expected: [] },
+  ])('normalizes $input with its country code', async ({ input, countryCode, expected }) => {
     const { normalizeParentLoginPhone } = await import('./localLogin.ts');
-    expect(normalizeParentLoginPhone(input)).toEqual(expected);
+    expect(normalizeParentLoginPhone(input, countryCode)).toEqual(expected);
   });
 
   it.each([
-    { input: '+228 90 12 34 56', email: 'parent@example.com' },
-    { input: '90 12 34 56', email: '' },
+    { input: '+228 78 23 45 67', countryCode: '+229', email: 'parent@example.com' },
+    { input: '78 23 45 67', countryCode: '+229', email: '' },
   ])('authenticates a parent by phone ($input), even without an email value on the returned record', async ({ input, email }) => {
     const password = 'ParentSecret123!';
     const salt = 'parent-salt';
@@ -153,7 +156,7 @@ describe('handleLocalLogin', () => {
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
-    await handleLocalLogin({ body: { identifier: input, password } } as Request, res);
+    await handleLocalLogin({ body: { identifier: input, phoneCountryCode: '+229', password } } as Request, res);
 
     expect(res.status).not.toHaveBeenCalled();
     expect((res.json as any).mock.calls[0][0]).toMatchObject({ id: userRecord.id, role: 'parent', tokenType: 'access' });
@@ -161,14 +164,14 @@ describe('handleLocalLogin', () => {
   });
 
   it.each([
-    { identifier: 'missing@example.com', error: 'Email ou mot de passe invalide' },
-    { identifier: '90123456', error: 'Email ou mot de passe invalide' },
-  ])('uses a generic authentication failure for unknown identifiers: $identifier', async ({ identifier, error }) => {
+    { identifier: 'missing@example.com', phoneCountryCode: undefined, error: 'Email ou mot de passe invalide' },
+    { identifier: '78 23 45 67', phoneCountryCode: '+228', error: 'Email ou mot de passe invalide' },
+  ])('uses a generic authentication failure for unknown identifiers: $identifier', async ({ identifier, phoneCountryCode, error }) => {
     mockWhere.mockResolvedValueOnce([]);
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
-    await handleLocalLogin({ body: { identifier, password: 'wrong' } } as Request, res);
+    await handleLocalLogin({ body: { identifier, phoneCountryCode, password: 'wrong' } } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error });
@@ -177,7 +180,7 @@ describe('handleLocalLogin', () => {
 
   it.each([
     { identifier: 'parent@example.com', phone: false },
-    { identifier: '+228 90 12 34 56', phone: true },
+    { identifier: '78 23 45 67', phone: true },
   ])('does not distinguish a parent account with a wrong password for $identifier', async ({ identifier, phone }) => {
     const crypto = await import('node:crypto');
     const salt = 'parent-salt';
@@ -189,7 +192,7 @@ describe('handleLocalLogin', () => {
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
-    await handleLocalLogin({ body: { identifier, password: 'wrong-password' } } as Request, res);
+    await handleLocalLogin({ body: { identifier, phoneCountryCode: phone ? '+228' : undefined, password: 'wrong-password' } } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
@@ -204,7 +207,7 @@ describe('handleLocalLogin', () => {
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
-    await handleLocalLogin({ body: { identifier: '90123456', password: 'correct-password' } } as Request, res);
+    await handleLocalLogin({ body: { identifier: '78 23 45 67', phoneCountryCode: '+228', password: 'correct-password' } } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
@@ -216,7 +219,7 @@ describe('handleLocalLogin', () => {
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
-    await handleLocalLogin({ body: { identifier: '90123456', password: 'correct-password' } } as Request, res);
+    await handleLocalLogin({ body: { identifier: '78 23 45 67', phoneCountryCode: '+228', password: 'correct-password' } } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(mockInnerJoin).toHaveBeenCalledTimes(1);

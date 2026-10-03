@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
 import { users, localAuths, userLoginEvents } from '../db/schema.ts';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import { parents } from '../db/schema.ts';
 
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
@@ -26,17 +26,22 @@ function normalizeJwtExpiresIn(rawValue: string | undefined): JwtExpiresIn {
   return DEFAULT_JWT_EXPIRES_IN;
 }
 
-export const normalizeParentLoginPhone = (value: string): string[] => {
+export const normalizeParentLoginPhone = (value: string, phoneCountryCode?: string): string[] => {
   const digits = value.replace(/\D/g, '');
   if (!digits) return [];
-  if (/^\d{8}$/.test(digits)) return [digits, `228${digits}`];
-  if (/^228\d{8}$/.test(digits)) return [digits, digits.slice(3)];
-  return [digits];
+  const trimmedValue = value.trim();
+  if (trimmedValue.startsWith('+')) return [digits];
+  if (trimmedValue.startsWith('00')) return [digits.slice(2)];
+
+  const countryCodeDigits = String(phoneCountryCode ?? '').replace(/\D/g, '');
+  if (!countryCodeDigits) return [];
+  return [`${countryCodeDigits}${digits}`];
 };
 
 export async function handleLocalLogin(req: Request, res: Response) {
   try {
     const identifier = String(req.body?.identifier ?? req.body?.email ?? '').trim();
+    const phoneCountryCode = typeof req.body?.phoneCountryCode === 'string' ? req.body.phoneCountryCode : '';
     const password = req.body?.password;
     if (!identifier || !password) {
       return res.status(400).json({ error: 'Missing login identifier or password' });
@@ -49,14 +54,17 @@ export async function handleLocalLogin(req: Request, res: Response) {
       const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
       userRecord = usersFound[0];
     } else {
-      const phoneValues = normalizeParentLoginPhone(identifier);
+      const phoneValues = normalizeParentLoginPhone(identifier, phoneCountryCode);
       const phoneRows = phoneValues.length > 0
         ? await db.select({ user: users })
           .from(users)
           .innerJoin(parents, eq(parents.userId, users.id))
           .where(and(
             eq(users.role, 'parent'),
-            sql`regexp_replace(coalesce(${parents.phone}, ''), '[^0-9]', '', 'g') IN (${sql.join(phoneValues.map((value) => sql`${value}`), sql`, `)})`,
+            or(
+              sql`regexp_replace(coalesce(${parents.phone}, ''), '[^0-9]', '', 'g') = ${phoneValues[0]}`,
+              sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') = ${phoneValues[0]}`,
+            ),
           ))
         : [];
       const matchingUsers = Array.from(new Map(phoneRows.map((row: any) => [row.user.id, row.user])).values());

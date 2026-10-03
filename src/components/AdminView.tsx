@@ -364,6 +364,31 @@ const sortedParentPhonePrefixes = [...parentPhonePrefixes].sort((a, b) => {
   return getCountry(a.label).localeCompare(getCountry(b.label), 'fr', { sensitivity: 'base' });
 });
 
+const splitStoredParentPhone = (value: unknown): { phonePrefix: string; phone: string } => {
+  const rawPhone = String(value ?? '').trim();
+  const rawDigits = rawPhone.replace(/\D/g, '');
+  if (!rawPhone.startsWith('+') && !rawPhone.startsWith('00')) {
+    const legacyWestAfricanPrefix = ['+228', '+229'].find((prefix) => {
+      const countryDigits = prefix.replace(/\D/g, '');
+      return rawDigits.length === countryDigits.length + 8 && rawDigits.startsWith(countryDigits);
+    });
+    if (legacyWestAfricanPrefix) {
+      const countryDigits = legacyWestAfricanPrefix.replace(/\D/g, '');
+      return { phonePrefix: legacyWestAfricanPrefix, phone: rawDigits.slice(countryDigits.length) };
+    }
+    return { phonePrefix: '', phone: rawDigits };
+  }
+
+  const internationalDigits = rawPhone.startsWith('00') ? rawDigits.slice(2) : rawDigits;
+  const matchingPrefix = [...parentPhonePrefixes]
+    .sort((left, right) => right.value.length - left.value.length)
+    .find((prefix) => internationalDigits.startsWith(prefix.value.replace(/\D/g, '')));
+  if (!matchingPrefix) return { phonePrefix: '', phone: internationalDigits };
+
+  const prefixDigits = matchingPrefix.value.replace(/\D/g, '');
+  return { phonePrefix: matchingPrefix.value, phone: internationalDigits.slice(prefixDigits.length) };
+};
+
 interface AdminViewProps {
   userRole: UserRole;
   schoolsList: School[];
@@ -2263,6 +2288,7 @@ export default function AdminView({
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
   const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[], teachingAssignments: [] as TeachingAssignmentDraft[] });
+  const [userParentPhonePrefix, setUserParentPhonePrefix] = useState('');
 
   useEffect(() => {
     const schoolId = userForm.role === 'teacher' && userForm.schoolId ? Number(userForm.schoolId) : null;
@@ -3369,14 +3395,25 @@ export default function AdminView({
                     />
                   </div>
                 ) : (
-                  <input
-                    className="w-full px-3 py-2 border rounded"
-                    type="tel"
-                    value={userForm.phone}
-                    onChange={(e) => setUserForm({ ...userForm, phone: e.target.value.replace(/\D/g, '').slice(0, 8) })}
-                    placeholder="90000000"
-                    maxLength={8}
-                  />
+                  <div className="flex gap-2">
+                    <select
+                      aria-label="Indicatif du téléphone parent"
+                      className="w-40 px-2 py-2 border rounded bg-white"
+                      value={userParentPhonePrefix}
+                      onChange={(e) => setUserParentPhonePrefix(e.target.value)}
+                    >
+                      <option value="">-- Indicatif --</option>
+                      {sortedParentPhonePrefixes.map((prefix) => <option key={prefix.value} value={prefix.value}>{prefix.label}</option>)}
+                    </select>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-2 border rounded"
+                      type="tel"
+                      value={userForm.phone}
+                      onChange={(e) => setUserForm({ ...userForm, phone: e.target.value.replace(/\D/g, '').slice(0, 20) })}
+                      placeholder="Numéro local"
+                      maxLength={20}
+                    />
+                  </div>
                 )}
                 {userForm.role === 'teacher' && (
                   <div className="space-y-2">
@@ -3458,7 +3495,19 @@ export default function AdminView({
                       const normalizedPhoneDigits = rawPhoneDigits.length === 11 && rawPhoneDigits.startsWith('228')
                         ? rawPhoneDigits.slice(3)
                         : rawPhoneDigits;
-                      if (userForm.phone && normalizedPhoneDigits.length !== 8) {
+                      if (userForm.phone && userForm.role === 'parent') {
+                        if (!userParentPhonePrefix) {
+                          setEditUserError('Sélectionnez le pays associé au téléphone du parent.');
+                          return;
+                        }
+                        if ((userParentPhonePrefix === '+228' && rawPhoneDigits.length !== 8)
+                          || (userParentPhonePrefix !== '+228' && (rawPhoneDigits.length < 1 || rawPhoneDigits.length > 20))) {
+                          setEditUserError(userParentPhonePrefix === '+228'
+                            ? 'Le numéro du parent doit contenir 8 chiffres pour +228.'
+                            : 'Le numéro du parent doit contenir entre 1 et 20 chiffres.');
+                          return;
+                        }
+                      } else if (userForm.phone && normalizedPhoneDigits.length !== 8) {
                         setEditUserError('Le numéro de téléphone doit contenir exactement 8 chiffres');
                         return;
                       }
@@ -3485,7 +3534,9 @@ export default function AdminView({
                         role: updatedRole,
                         schoolId: userForm.schoolId ? parseInt(userForm.schoolId) : undefined,
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
-                        phone: userForm.phone ? (updatedRole !== 'parent' ? `+228${normalizedPhoneDigits}` : userForm.phone) : undefined,
+                        phone: userForm.phone ? (updatedRole === 'parent'
+                          ? `${userParentPhonePrefix} ${rawPhoneDigits}`
+                          : `+228${normalizedPhoneDigits}`) : undefined,
                         specialization: userForm.specialization,
                         subjectIds: updatedRole === 'teacher' ? getSubjectIdsByNames(selectedSpecializations, approvedSubjectsList) : undefined,
                         address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
@@ -5934,7 +5985,8 @@ export default function AdminView({
                           onClick={() => {
                             const user = usersList.find((u) => u.id === pt.userId);
                             if (!user) return;
-                            const normalizedPhone = String(pt.phone || '').replace(/\D/g, '');
+                            const parentPhoneParts = splitStoredParentPhone(pt.phone);
+                            setUserParentPhonePrefix(parentPhoneParts.phonePrefix);
                             setUserToEdit(user);
                             setUserForm({
                               email: user.email,
@@ -5943,7 +5995,7 @@ export default function AdminView({
                               schoolId: user.schoolId ? String(user.schoolId) : String(pt.schoolId || ''),
                               schoolSearch: '',
                               academicYearId: '',
-                              phone: normalizedPhone,
+                              phone: parentPhoneParts.phone,
                               address: pt.address || '',
                               studentId: pt.studentId ? String(pt.studentId) : '',
                               specialization: '',
@@ -6066,11 +6118,13 @@ export default function AdminView({
                           onClick={() => {
                             const teacherProfile = teachersList.find((t) => t.userId === user.id);
                             const assignedClassIds = teacherProfile ? (teacherProfile.classIds || []) : [];
-                            const rawPhone = (user as any).phone || '';
-                            const strippedPhoneDigits = rawPhone.replace(/\D/g, '');
-                            const normalizedPhone = strippedPhoneDigits.length === 11 && strippedPhoneDigits.startsWith('228')
-                              ? strippedPhoneDigits.slice(3)
-                              : strippedPhoneDigits;
+                            const rawPhone = user.role === 'parent'
+                              ? parentsList.find((parent: any) => parent.userId === user.id)?.phone ?? (user as any).phone
+                              : (user as any).phone;
+                            const parentPhoneParts = user.role === 'parent'
+                              ? splitStoredParentPhone(rawPhone)
+                              : { phonePrefix: '', phone: String(rawPhone || '').replace(/\D/g, '') };
+                            setUserParentPhonePrefix(parentPhoneParts.phonePrefix);
                             setUserToEdit(user);
                             setUserForm({
                               email: user.email,
@@ -6079,7 +6133,7 @@ export default function AdminView({
                               schoolId: user.schoolId ? String(user.schoolId) : '',
                               schoolSearch: '',
                               academicYearId: (user as any).academicYearId ? String((user as any).academicYearId) : '',
-                              phone: normalizedPhone,
+                              phone: parentPhoneParts.phone,
                               specialization: (user as any).specialization || '',
                               gender: (user as any).gender || '',
                               address: '',
