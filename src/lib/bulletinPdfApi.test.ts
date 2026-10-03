@@ -27,6 +27,8 @@ import {
   resolvePdfSubjectDisplayInfo,
   fitPrincipalNameToWidth,
   resolvePrincipalBoxWidth,
+  fitHeaderEmailToBounds,
+  resolveSchoolHeaderEmailBounds,
   resolveBulletinClassTeacher,
   type BulletinPdfActor,
   type BulletinPdfData,
@@ -602,6 +604,69 @@ describe('résolution du titulaire de classe pour le PDF', () => {
     expect((await renderPdfWithTeacher(schoolClassTeacher))).toContain('Titulaire historique');
     expect((await renderPdfWithTeacher(missingGlobalTeacher))).toContain('Aucun');
   });
+});
+
+describe('ajustement de l email dans la zone fixe de l en-tête', () => {
+    const createEmailLayout = async (email: string, centerX?: number) => {
+      const pdf = await PDFDocument.create();
+      const font = await pdf.embedFont(StandardFonts.HelveticaBoldOblique);
+      const bounds = resolveSchoolHeaderEmailBounds(16);
+      const layout = fitHeaderEmailToBounds(email, font, bounds, centerX ?? (bounds.left + bounds.right) / 2);
+      return { bounds, layout };
+    };
+
+    it.each([
+      { label: 'court', email: 'info@ecole.test' },
+      { label: 'long', email: 'contact.direction.generale@ecole-secondaire-regionale.test' },
+      { label: 'très long', email: 'contact.direction.generale.administration.scolarite@ecole-secondaire-regionale-avec-nom-tres-long.test' },
+    ])('conserve l adresse complète sur une seule ligne pour un email $label', async ({ email }) => {
+      const { bounds, layout } = await createEmailLayout(email);
+
+      expect(layout.text).toBe(email);
+      expect(layout.text).not.toMatch(/[\r\n]/);
+      expect(layout.x).toBeGreaterThanOrEqual(bounds.left);
+      expect(layout.x + layout.textWidth).toBeLessThanOrEqual(bounds.right);
+      expect(layout.availableWidth).toBe(bounds.width);
+      expect(layout.fontSize).toBeLessThanOrEqual(7);
+      if (email === 'info@ecole.test') expect(layout.fontSize).toBe(7);
+      else expect(layout.fontSize).toBeLessThan(7);
+    });
+
+    it('garde la largeur du grand bloc constante quelle que soit la longueur de l email', async () => {
+      const short = await createEmailLayout('info@ecole.test');
+      const long = await createEmailLayout('contact.direction.generale.administration@ecole-secondaire-regionale.test');
+
+      expect(short.bounds).toEqual({ left: 29, right: 194, width: 165 });
+      expect(long.bounds).toEqual(short.bounds);
+    });
+
+    it('positionne l email près des bords gauche et droit sans les dépasser', async () => {
+      const bounds = resolveSchoolHeaderEmailBounds(16);
+      const left = await createEmailLayout('info@ecole.test', bounds.left);
+      const right = await createEmailLayout('info@ecole.test', bounds.right);
+
+      expect(left.layout.x).toBe(bounds.left);
+      expect(right.layout.x + right.layout.textWidth).toBeCloseTo(bounds.right, 6);
+    });
+
+    it('utilise uniquement l espace avant la zone du logo pour éviter un chevauchement à droite', async () => {
+      const { bounds, layout } = await createEmailLayout('contact.direction.generale@ecole-secondaire-regionale.test', 400);
+      const logoZoneLeft = 16 + 178 + 8;
+
+      expect(layout.x + layout.textWidth).toBeLessThanOrEqual(logoZoneLeft - 8);
+      expect(layout.x + layout.textWidth).toBeLessThanOrEqual(bounds.right);
+    });
+
+    it('rend un email très long complet dans le PDF sans le passer sur plusieurs lignes', async () => {
+      const email = 'contact.direction.generale.administration.scolarite@ecole-secondaire-regionale-avec-nom-tres-long.test';
+      const bytes = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: { ...snapshotData.school, email },
+      });
+      const pdfText = extractPdfText(bytes);
+
+      expect(pdfText).toContain(email);
+    });
 });
 
 describe('largeur fixe du rectangle du proviseur', () => {

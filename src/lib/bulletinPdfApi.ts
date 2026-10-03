@@ -1736,6 +1736,33 @@ export const computeHeaderParagraphLayout = (
   ].filter((line) => line.text.length > 0);
 };
 
+export const resolveSchoolHeaderEmailBounds = (margin: number): { left: number; right: number; width: number } => ({
+  left: margin + 13,
+  right: margin + 178,
+  width: 165,
+});
+
+export const fitHeaderEmailToBounds = (
+  value: string,
+  font: any,
+  bounds: { left: number; right: number },
+  centerX: number,
+  initialFontSize = 7,
+): { text: string; x: number; fontSize: number; textWidth: number; availableWidth: number } => {
+  const text = sanitizePdfText(value);
+  const availableWidth = Math.max(0, bounds.right - bounds.left);
+  let fontSize = initialFontSize;
+  let textWidth = font.widthOfTextAtSize(text, fontSize);
+
+  while (textWidth > availableWidth && fontSize > 0) {
+    fontSize *= availableWidth / textWidth;
+    textWidth = font.widthOfTextAtSize(text, fontSize);
+  }
+
+  const x = Math.max(bounds.left, Math.min(centerX - textWidth / 2, bounds.right - textWidth));
+  return { text, x, fontSize, textWidth, availableWidth };
+};
+
 export const fitHeaderParagraphFontSize = (
   value: string,
   maxWidth: number,
@@ -2178,12 +2205,23 @@ export const createBulletinPdfDocument = async (
       const coordinateLines = emailLine
         ? nonEmailLines.length > 0 ? [nonEmailLines.join(' '), emailLine] : [emailLine]
         : [postalAndPhone.join(' ')];
-      const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
-      const coordinateCenterX = leftX + 7 + firstLineWidth / 2;
-      coordinateLines.forEach((line, lineIndex) => {
+      const emailBounds = resolveSchoolHeaderEmailBounds(margin);
+      if (emailLine) {
+        if (nonEmailLines.length > 0) {
+          const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
+          drawCenteredWrappedText(page, coordinateLines[0], emailBounds.left + firstLineWidth / 2, height - 119, firstLineWidth, 7, text, fontBoldItalic, 1);
+        }
+        const initialEmailWidth = fontBoldItalic.widthOfTextAtSize(emailLine, 7);
+        const emailCenterX = nonEmailLines.length > 0
+          ? emailBounds.left + fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7) / 2
+          : emailBounds.left + Math.min(initialEmailWidth, emailBounds.width) / 2;
+        const emailLayout = fitHeaderEmailToBounds(emailLine, fontBoldItalic, emailBounds, emailCenterX);
+        drawText(page, emailLayout.text, emailLayout.x, height - 128, emailLayout.fontSize, text, fontBoldItalic);
+      } else {
+        const line = coordinateLines[0];
         const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);
-        drawCenteredWrappedText(page, line, coordinateCenterX, height - 119 - lineIndex * 9, lineWidth, 7, text, fontBoldItalic, 1);
-      });
+        drawCenteredWrappedText(page, line, emailBounds.left + lineWidth / 2, height - 119, lineWidth, 7, text, fontBoldItalic, 1);
+      }
     }
     const republicText = 'REPUBLIQUE TOGOLAISE';
     const republicTextWidth = fontBold.widthOfTextAtSize(republicText, 9);
