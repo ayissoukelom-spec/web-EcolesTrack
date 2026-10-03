@@ -328,9 +328,9 @@ export const resolveAnnualPeriodScope = (
   currentTermId: number,
   terms: AnnualPeriodLike[],
   schoolYearId: number,
-): { periods: AnnualPeriodLike[]; isLastPeriod: boolean } => {
+): { periods: AnnualPeriodLike[]; availablePeriods: AnnualPeriodLike[]; isLastPeriod: boolean } => {
   const currentTerm = terms.find((term) => term.id === currentTermId);
-  if (!currentTerm) return { periods: [], isLastPeriod: false };
+  if (!currentTerm) return { periods: [], availablePeriods: [], isLastPeriod: false };
 
   const currentType = inferAnnualPeriodType(currentTerm);
   const scopedTerms = terms.filter((term) => (
@@ -350,9 +350,12 @@ export const resolveAnnualPeriodScope = (
       ? [orderedTerms[0], orderedTerms.at(-1)!]
       : orderedTerms.slice(-expectedPeriodCount)
     : orderedTerms;
+  const currentTermIndex = orderedTerms.findIndex((term) => term.id === currentTermId);
+  const availablePeriods = currentTermIndex < 0 ? [] : orderedTerms.slice(0, currentTermIndex + 1);
 
   return {
     periods: annualTerms,
+    availablePeriods,
     isLastPeriod: annualTerms.at(-1)?.id === currentTermId,
   };
 };
@@ -385,9 +388,11 @@ export const calculateAnnualBulletinResults = ({
   }
 
   const annualAverages = classStudentIds.map((studentId) => {
-    const periodAverages = periods.map((period) => parseAnnualAverage(latestByStudentTerm.get(`${studentId}:${period.id}`)?.average ?? null));
-    const average = periodAverages.every((value) => value != null)
-      ? periodAverages.reduce((sum, value) => sum + (value as number), 0) / periodAverages.length
+    const periodAverages = periods
+      .map((period) => parseAnnualAverage(latestByStudentTerm.get(`${studentId}:${period.id}`)?.average ?? null))
+      .filter((value): value is number => value != null);
+    const average = periodAverages.length > 0
+      ? periodAverages.reduce((sum, value) => sum + value, 0) / periodAverages.length
       : null;
     return { studentId, average };
   }).filter((entry): entry is { studentId: number; average: number } => entry.average != null);

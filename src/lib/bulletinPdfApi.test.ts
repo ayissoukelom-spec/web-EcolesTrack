@@ -33,6 +33,7 @@ import {
   type BulletinPdfDataProvider,
 } from './bulletinPdfApi';
 import { resolveSubjectCoefficientFromPublishedComposition } from './bulletinService';
+import { calculateAnnualBulletinResults } from './bulletinSnapshotService';
 
 const actor: BulletinPdfActor = {
   role: 'school_admin',
@@ -364,6 +365,25 @@ describe('décision de fin d année', () => {
     { isLastPeriod: true, annualAverage: 12, promotionThreshold: 10, studentGender: null, nextClassName: '1ère D' },
   ])('ne décide pas quand une condition obligatoire manque: %j', (input) => {
     expect(resolvePromotionDecision(input)).toBeNull();
+  });
+
+  it.each([
+    { average: 14, expected: 'Admis en classe de 1ère D' },
+    { average: 8, expected: 'Redouble la classe' },
+  ])('applique la décision annuelle avec une seule moyenne disponible: $average', ({ average, expected }) => {
+    const { annualAverage } = calculateAnnualBulletinResults({
+      targetStudentId: 1,
+      classStudentIds: [1],
+      periods: [{ id: 1, name: '1er Semestre' }, { id: 2, name: '2ème Semestre' }],
+      bulletins: [{ id: 2, studentId: 1, schoolYearId: 1, termId: 2, average }],
+    });
+    expect(resolvePromotionDecision({
+      isLastPeriod: true,
+      annualAverage,
+      promotionThreshold: 10,
+      studentGender: 'M',
+      nextClassName: '1ère D',
+    })).toBe(expected);
   });
 
   it('normalise les valeurs de sexe existantes sans inventer un genre', () => {

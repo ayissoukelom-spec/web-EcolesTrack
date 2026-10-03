@@ -27,6 +27,7 @@ describe('calcul de la moyenne et du rang annuels', () => {
     ];
 
     expect(resolveAnnualPeriodScope(1, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(1, terms, 100).availablePeriods.map((period) => period.id)).toEqual([1]);
     expect(resolveAnnualPeriodScope(2, terms, 100).isLastPeriod).toBe(true);
     expect(calculateAnnualBulletinResults({ targetStudentId: 1, classStudentIds: [1, 2], periods: terms, bulletins })).toEqual({
       annualAverage: 10,
@@ -47,12 +48,37 @@ describe('calcul de la moyenne et du rang annuels', () => {
     ];
 
     expect(resolveAnnualPeriodScope(1, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(1, terms, 100).availablePeriods.map((period) => period.id)).toEqual([1]);
     expect(resolveAnnualPeriodScope(2, terms, 100).isLastPeriod).toBe(false);
+    expect(resolveAnnualPeriodScope(2, terms, 100).availablePeriods.map((period) => period.id)).toEqual([1, 2]);
     expect(resolveAnnualPeriodScope(3, terms, 100).isLastPeriod).toBe(true);
     expect(calculateAnnualBulletinResults({ targetStudentId: 1, classStudentIds: [1], periods: terms, bulletins })).toEqual({
       annualAverage: 12,
       annualRank: 1,
     });
+  });
+
+  it.each([
+    { label: 'semestriel, toutes les périodes notées', periods: [1, 2], bulletins: [{ id: 1, studentId: 1, schoolYearId: 100, termId: 1, average: 12 }, { id: 2, studentId: 1, schoolYearId: 100, termId: 2, average: 14 }], expected: 13 },
+    { label: 'semestriel, seule la dernière période notée', periods: [1, 2], bulletins: [{ id: 2, studentId: 1, schoolYearId: 100, termId: 2, average: 14 }], expected: 14 },
+    { label: 'trimestriel, seule la dernière période notée', periods: [1, 2, 3], bulletins: [{ id: 3, studentId: 1, schoolYearId: 100, termId: 3, average: 15 }], expected: 15 },
+    { label: 'trimestriel, une période absente et deux notées', periods: [1, 2, 3], bulletins: [{ id: 1, studentId: 1, schoolYearId: 100, termId: 1, average: 12 }, { id: 3, studentId: 1, schoolYearId: 100, termId: 3, average: 16 }], expected: 14 },
+  ])('calcule la moyenne disponible : $label', ({ periods: periodIds, bulletins, expected }) => {
+    const periods = periodIds.map((id) => ({ id, name: `Période ${id}` }));
+    expect(calculateAnnualBulletinResults({ targetStudentId: 1, classStudentIds: [1], periods, bulletins })).toEqual({
+      annualAverage: expected,
+      annualRank: 1,
+    });
+  });
+
+  it('renvoie null si aucune période ne possède de moyenne', () => {
+    const result = calculateAnnualBulletinResults({
+      targetStudentId: 1,
+      classStudentIds: [1],
+      periods: [{ id: 1, name: 'S1' }, { id: 2, name: 'S2' }],
+      bulletins: [{ id: 2, studentId: 1, schoolYearId: 100, termId: 2, average: null }],
+    });
+    expect(result).toEqual({ annualAverage: null, annualRank: null });
   });
 });
 

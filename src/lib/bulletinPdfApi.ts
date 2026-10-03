@@ -1167,6 +1167,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .where(eq(schoolTerms.academicYearId, header.schoolYearId))
       .orderBy(schoolTerms.orderIndex);
 
+    const annualPeriodScope = resolveAnnualPeriodScope(header.termId, previousTerms, header.schoolYearId);
     const historicalBulletins = await db
       .select({
         id: bulletins.id,
@@ -1180,30 +1181,35 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       .where(and(
         eq(bulletins.studentId, header.studentId),
         eq(bulletins.schoolYearId, header.schoolYearId),
+        inArray(bulletins.termId, annualPeriodScope.availablePeriods.map((period) => period.id)),
       ))
       .orderBy(desc(bulletins.id));
 
-    const annualClassStudents = await db
-      .selectDistinct({ id: bulletins.studentId })
-      .from(bulletins)
-      .where(and(
-        eq(bulletins.classId, header.classId),
-        eq(bulletins.schoolYearId, header.schoolYearId),
-      ));
-    const annualBulletins = await db
-      .select({
-        id: bulletins.id,
-        studentId: bulletins.studentId,
-        schoolYearId: bulletins.schoolYearId,
-        termId: bulletins.termId,
-        average: bulletins.average,
-      })
-      .from(bulletins)
-      .where(and(
-        eq(bulletins.classId, header.classId),
-        eq(bulletins.schoolYearId, header.schoolYearId),
-      ));
-    const annualPeriodScope = resolveAnnualPeriodScope(header.termId, previousTerms, header.schoolYearId);
+    const annualClassStudents = annualPeriodScope.isLastPeriod
+      ? await db
+        .selectDistinct({ id: bulletins.studentId })
+        .from(bulletins)
+        .where(and(
+          eq(bulletins.classId, header.classId),
+          eq(bulletins.schoolYearId, header.schoolYearId),
+        ))
+      : [];
+    const annualBulletins = annualPeriodScope.isLastPeriod
+      ? await db
+        .select({
+          id: bulletins.id,
+          studentId: bulletins.studentId,
+          schoolYearId: bulletins.schoolYearId,
+          termId: bulletins.termId,
+          average: bulletins.average,
+        })
+        .from(bulletins)
+        .where(and(
+          eq(bulletins.classId, header.classId),
+          eq(bulletins.schoolYearId, header.schoolYearId),
+          inArray(bulletins.termId, annualPeriodScope.periods.map((period) => period.id)),
+        ))
+      : [];
     const annualResults = annualPeriodScope.isLastPeriod
       ? calculateAnnualBulletinResults({
         targetStudentId: header.studentId,
