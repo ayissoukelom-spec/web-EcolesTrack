@@ -20,7 +20,7 @@ function persistAccessToken(token: unknown) {
 }
 
 export default function LoginView({ onLogin }: Props) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export default function LoginView({ onLogin }: Props) {
       const response = await fetch('/api/auth/local-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier, password }),
       });
 
       if (!response.ok) {
@@ -246,8 +246,8 @@ export default function LoginView({ onLogin }: Props) {
         {sessionExpiredMessage && <div className="text-amber-300 mb-2">{sessionExpiredMessage}</div>}
         {error && <div className="text-rose-400 mb-2">{error}</div>}
         <label className="block text-sm mb-2">
-          <RequiredLabel label="Email" required />
-          <input className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+          <RequiredLabel label="Email ou numéro de téléphone" required />
+          <input className="w-full mt-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={identifier} onChange={(e) => setIdentifier(e.target.value)} type="text" autoComplete="username" required />
         </label>
         <label className="block text-sm mb-4">
           <RequiredLabel label="Mot de passe" required />

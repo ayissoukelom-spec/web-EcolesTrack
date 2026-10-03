@@ -53,13 +53,32 @@ describe('LoginView', () => {
 
     render(<LoginView onLogin={mockOnLogin} />);
 
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'test@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Email ou numéro de téléphone/i), { target: { value: 'test@example.com' } });
     fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
 
     await waitFor(() => {
       expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
     });
+    expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: 'test@example.com', password: '123456' });
+  });
+
+  it('submits a phone number in the shared identifier field without email-only browser validation', async () => {
+    window.fetch = createFetchMock([
+      { id: 2, uid: 'parent_2', email: 'parent@example.com', name: 'Parent Example', role: 'parent', token: 'parent-jwt', mustReset: false },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+
+    const identifierInput = screen.getByLabelText(/Email ou numéro de téléphone/i) as HTMLInputElement;
+    expect(identifierInput.type).toBe('text');
+    fireEvent.change(identifierInput, { target: { value: '90123456' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('parent-jwt'));
+    expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: '90123456', password: '123456' });
   });
 
   it('does not store access token when login response is missing token', async () => {

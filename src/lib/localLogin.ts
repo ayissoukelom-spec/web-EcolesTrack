@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
 import { users, localAuths, userLoginEvents } from '../db/schema.ts';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import { parents } from '../db/schema.ts';
 
 const DEFAULT_JWT_ISSUER = 'ecoletrack';
 const DEFAULT_JWT_AUDIENCE = 'ecoletrack-api';
@@ -25,34 +26,64 @@ function normalizeJwtExpiresIn(rawValue: string | undefined): JwtExpiresIn {
   return DEFAULT_JWT_EXPIRES_IN;
 }
 
+export const normalizeParentLoginPhone = (value: string): string[] => {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return [];
+  if (/^\d{8}$/.test(digits)) return [digits, `228${digits}`];
+  if (/^228\d{8}$/.test(digits)) return [digits, digits.slice(3)];
+  return [digits];
+};
+
 export async function handleLocalLogin(req: Request, res: Response) {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Missing email or password' });
+    const identifier = String(req.body?.identifier ?? req.body?.email ?? '').trim();
+    const password = req.body?.password;
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Missing login identifier or password' });
     }
 
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
-    if (usersFound.length === 0) {
+    const isEmail = identifier.includes('@');
+    let userRecord: any;
+    if (isEmail) {
+      const normalizedEmail = identifier.toLowerCase();
+      const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
+      userRecord = usersFound[0];
+    } else {
+      const phoneValues = normalizeParentLoginPhone(identifier);
+      const phoneRows = phoneValues.length > 0
+        ? await db.select({ user: users })
+          .from(users)
+          .innerJoin(parents, eq(parents.userId, users.id))
+          .where(and(
+            eq(users.role, 'parent'),
+            sql`regexp_replace(coalesce(${parents.phone}, ''), '[^0-9]', '', 'g') IN (${sql.join(phoneValues.map((value) => sql`${value}`), sql`, `)})`,
+          ))
+        : [];
+      const matchingUsers = Array.from(new Map(phoneRows.map((row: any) => [row.user.id, row.user])).values());
+      if (matchingUsers.length !== 1) {
+        return res.status(401).json({ error: 'Email ou mot de passe invalide' });
+      }
+      userRecord = matchingUsers[0];
+    }
+
+    if (!userRecord) {
       return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
-    const userRecord = usersFound[0];
     if (userRecord.role === 'student') {
-      return res.status(401).json({ error: 'Connexion non autorisée pour un compte élève' });
+      return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
     const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
     if (authRows.length === 0) {
-      return res.status(401).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
+      return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
     const { passwordHash, salt, mustReset } = authRows[0] as any;
     const crypto = await import('node:crypto');
     const verifyHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
     if (verifyHash !== passwordHash) {
-      return res.status(401).json({ error: 'Mot de passe incorrect' });
+      return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
     let localMustReset = !!mustReset;

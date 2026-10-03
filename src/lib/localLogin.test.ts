@@ -3,13 +3,13 @@ import { Request, Response } from 'express';
 import { verifyJwt } from './jwt.ts';
 
 const mockWhere = vi.fn();
+const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
+const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
 const mockUpdateWhere = vi.fn();
 const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
 const mockInsertValues = vi.fn();
 const mockDb = {
-  select: vi.fn(() => ({
-    from: vi.fn(() => ({ where: mockWhere })),
-  })),
+  select: vi.fn(() => ({ from: mockFrom })),
   update: vi.fn(() => ({ set: mockSet })),
   insert: vi.fn(() => ({ values: mockInsertValues })),
 };
@@ -20,6 +20,7 @@ vi.mock('../db/index.ts', () => ({
 
 vi.mock('../db/schema.ts', () => ({
   users: {},
+  parents: {},
   localAuths: {},
   userLoginEvents: {},
 }));
@@ -106,6 +107,119 @@ describe('handleLocalLogin', () => {
     expect(decoded.sub).toBe(String(userRecord.id));
     expect(typeof decoded.iat).toBe('number');
     expect(typeof decoded.exp).toBe('number');
+    expect(mockInnerJoin).not.toHaveBeenCalled();
+  });
+
+  it('keeps parent email login working with the existing password and token flow', async () => {
+    const password = 'ParentSecret123!';
+    const salt = 'parent-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = { id: 457, uid: 'parent_457', email: 'parent@example.com', name: 'Parent Example', role: 'parent', schoolId: 99 };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({ id: userRecord.id, role: 'parent', tokenType: 'access' });
+    expect(mockInnerJoin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { input: '+228 90 12 34 56', expected: ['22890123456', '90123456'] },
+    { input: '90 12 34 56', expected: ['90123456', '22890123456'] },
+    { input: '228-90-12-34-56', expected: ['22890123456', '90123456'] },
+  ])('uses the existing digit-only phone normalization for $input', async ({ input, expected }) => {
+    const { normalizeParentLoginPhone } = await import('./localLogin.ts');
+    expect(normalizeParentLoginPhone(input)).toEqual(expected);
+  });
+
+  it.each([
+    { input: '+228 90 12 34 56', email: 'parent@example.com' },
+    { input: '90 12 34 56', email: '' },
+  ])('authenticates a parent by phone ($input), even without an email value on the returned record', async ({ input, email }) => {
+    const password = 'ParentSecret123!';
+    const salt = 'parent-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = { id: 458, uid: 'parent_458', email, name: 'Parent Example', role: 'parent', schoolId: 99 };
+
+    mockWhere.mockResolvedValueOnce([{ user: userRecord }]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier: input, password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({ id: userRecord.id, role: 'parent', tokenType: 'access' });
+    expect(mockInnerJoin).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { identifier: 'missing@example.com', error: 'Email ou mot de passe invalide' },
+    { identifier: '90123456', error: 'Email ou mot de passe invalide' },
+  ])('uses a generic authentication failure for unknown identifiers: $identifier', async ({ identifier, error }) => {
+    mockWhere.mockResolvedValueOnce([]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier, password: 'wrong' } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error });
+    expect(JSON.stringify((res.json as any).mock.calls[0][0])).not.toMatch(/exists|aucun compte|numéro/i);
+  });
+
+  it.each([
+    { identifier: 'parent@example.com', phone: false },
+    { identifier: '+228 90 12 34 56', phone: true },
+  ])('does not distinguish a parent account with a wrong password for $identifier', async ({ identifier, phone }) => {
+    const crypto = await import('node:crypto');
+    const salt = 'parent-salt';
+    const passwordHash = crypto.pbkdf2Sync('correct-password', salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = { id: 459, uid: 'parent_459', email: 'parent@example.com', name: 'Parent Example', role: 'parent', schoolId: 99 };
+
+    mockWhere.mockResolvedValueOnce(phone ? [{ user: userRecord }] : [userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier, password: 'wrong-password' } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ambiguous parent phone without selecting an arbitrary account', async () => {
+    mockWhere.mockResolvedValueOnce([
+      { user: { id: 460, role: 'parent' } },
+      { user: { id: 461, role: 'parent' } },
+    ]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier: '90123456', password: 'correct-password' } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Email ou mot de passe invalide' });
+    expect(mockWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not allow a non-parent role to authenticate by phone', async () => {
+    mockWhere.mockResolvedValueOnce([]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier: '90123456', password: 'correct-password' } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockInnerJoin).toHaveBeenCalledTimes(1);
   });
 
   it('updates lastLoginAt for a successful parent login', async () => {
@@ -284,6 +398,6 @@ describe('handleLocalLogin', () => {
     await handleLocalLogin(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Missing email or password' });
+    expect(res.json).toHaveBeenCalledWith({ error: 'Missing login identifier or password' });
   });
 });
