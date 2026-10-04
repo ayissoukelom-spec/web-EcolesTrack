@@ -417,6 +417,21 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.queryByText('Awa Mensah')).toBeNull();
     expect(screen.queryByText('Kossi Doe')).toBeNull();
     expect(screen.queryByText('Parent sans email')).toBeNull();
+
+    fireEvent.change(emailSearch, { target: { value: '' } });
+    const parentSearch = screen.getByPlaceholderText('Nom, prénom ou téléphone...');
+    fireEvent.change(parentSearch, { target: { value: '00 00 000' } });
+    expect(screen.getByText('Awa Mensah')).toBeTruthy();
+    expect(screen.queryByText('Kossi Doe')).toBeNull();
+    expect(screen.queryByText('Parent sans email')).toBeNull();
+
+    fireEvent.change(parentSearch, { target: { value: '22890000001' } });
+    expect(screen.getByText('Kossi Doe')).toBeTruthy();
+    expect(screen.queryByText('Awa Mensah')).toBeNull();
+
+    fireEvent.change(parentSearch, { target: { value: 'Parent sans email' } });
+    expect(screen.getByText('Parent sans email')).toBeTruthy();
+    expect(screen.queryByText('Awa Mensah')).toBeNull();
   });
 
   it('preserves the parent country calling code when editing a stored international number', async () => {

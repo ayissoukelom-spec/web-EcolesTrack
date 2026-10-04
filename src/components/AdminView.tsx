@@ -33,6 +33,7 @@ import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import TeachingAssignmentsEditor, { type TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
 import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
+import { matchesParentSearch } from '../lib/parentSearch';
 import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
 import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
@@ -2573,7 +2574,7 @@ export default function AdminView({
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
     (userRole !== 'parent' || (currentParent ? p.id === currentParent.id : false)) &&
     (p.email ?? '').toLowerCase().includes(parentEmailSearchQuery.trim().toLowerCase()) &&
-    filterBySearch(p.name)
+    matchesParentSearch(p, searchQuery)
   );
 
   const sortedVisibleParents = [...filteredParentsList].sort((a, b) =>
@@ -4462,7 +4463,7 @@ export default function AdminView({
       {/* Tab Panels Contents */}
       <div className="bg-white border border-slate-50 rounded-2xl shadow-sm overflow-visible" id="admin-table-container">
         {/* Searching filter */}
-        {!anyModalOpen && (
+        {!anyModalOpen && activeTab !== 'parents' && (
           <div className="relative p-4 border-b border-slate-100">
             <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 pointer-events-none">
               <Search className="h-4 w-4" />
@@ -4471,7 +4472,7 @@ export default function AdminView({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Rechercher parmi les ${
+              placeholder={activeTab === 'parents' ? 'Nom, prénom ou téléphone...' : `Rechercher parmi les ${
                 activeTab === 'schools' ? 'écoles' :
                 activeTab === 'years' ? 'années scolaires' :
                 activeTab === 'classes' ? 'classes' :
@@ -6010,32 +6011,57 @@ export default function AdminView({
                 userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(parent, superAdminSchoolFilterId)
               ).length} parents
             </div>
-            <div className="mb-4">
-              <label htmlFor="parent-email-search" className="block mb-1 text-slate-600 text-xs sm:text-sm font-semibold">
-                Rechercher par email
-              </label>
-              <input
-                id="parent-email-search"
-                type="search"
-                value={parentEmailSearchQuery}
-                onChange={(e) => setParentEmailSearchQuery(e.target.value)}
-                placeholder="awa@gmail.com"
-                className="w-full max-w-md px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
-              />
-            </div>
-            {userRole === 'super_admin' && (
-              <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
-                <label className="text-slate-600 text-xs sm:text-sm font-semibold">Filtrer par école</label>
-                <select
-                  className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
-                  value={superAdminSchoolFilterId ?? ''}
-                  onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                >
-                  <option value="">Toutes les écoles</option>
-                  {schoolsList.map((school) => (
-                    <option key={school.id} value={String(school.id)}>{school.name}</option>
-                  ))}
-                </select>
+            {!anyModalOpen && (
+              <div className={`mb-4 grid grid-cols-1 gap-3 ${userRole === 'super_admin' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+                {userRole === 'super_admin' && (
+                  <div className="min-w-0">
+                    <label htmlFor="parent-school-filter" className="mb-1 block text-slate-600 text-xs sm:text-sm font-semibold">
+                      École
+                    </label>
+                    <select
+                      id="parent-school-filter"
+                      className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      value={superAdminSchoolFilterId ?? ''}
+                      onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                    >
+                      <option value="">Toutes les écoles</option>
+                      {schoolsList.map((school) => (
+                        <option key={school.id} value={String(school.id)}>{school.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <label htmlFor="search-admin" className="mb-1 block text-slate-600 text-xs sm:text-sm font-semibold">
+                    Nom, prénom ou téléphone
+                  </label>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                      <Search className="h-4 w-4" />
+                    </span>
+                    <input
+                      id="search-admin"
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Nom, prénom ou téléphone..."
+                      className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <label htmlFor="parent-email-search" className="mb-1 block text-slate-600 text-xs sm:text-sm font-semibold">
+                    Rechercher par email
+                  </label>
+                  <input
+                    id="parent-email-search"
+                    type="search"
+                    value={parentEmailSearchQuery}
+                    onChange={(e) => setParentEmailSearchQuery(e.target.value)}
+                    placeholder="awa@gmail.com"
+                    className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                </div>
               </div>
             )}
             <div className="mb-4">
