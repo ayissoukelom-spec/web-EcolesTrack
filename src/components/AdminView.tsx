@@ -3572,11 +3572,13 @@ export default function AdminView({
                     try {
                       if (!onUpdateUser || !userToEdit) return;
                       setEditUserError(null);
-                      if (!userForm.email.trim()) {
+                      const email = String(userForm.email ?? '').trim();
+                      const name = String(userForm.name ?? '').trim();
+                      if (userForm.role !== 'parent' && !email) {
                         setEditUserError("L'email est requis");
                         return;
                       }
-                      if (!userForm.name.trim()) {
+                      if (!name) {
                         setEditUserError('Le nom complet est requis');
                         return;
                       }
@@ -3618,8 +3620,8 @@ export default function AdminView({
                         return;
                       }
                       await onUpdateUser(userToEdit.id, {
-                        email: userForm.email.trim(),
-                        name: userForm.name.trim(),
+                        email,
+                        name,
                         role: updatedRole,
                         schoolId: userForm.schoolId ? parseInt(userForm.schoolId) : undefined,
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
@@ -5605,7 +5607,7 @@ export default function AdminView({
                                 const assignedClassIds = tc.classIds || [];
                                 setUserToEdit(user);
                                 setUserForm({
-                                  email: user.email,
+                                  email: user.email ?? '',
                                   name: user.name,
                                   role: 'teacher',
                                   schoolId: user.schoolId ? String(user.schoolId) : '',
@@ -6083,7 +6085,7 @@ export default function AdminView({
                             setUserParentPhonePrefix(parentPhoneParts.phonePrefix);
                             setUserToEdit(user);
                             setUserForm({
-                              email: user.email,
+                              email: user.email ?? '',
                               name: user.name,
                               role: 'parent',
                               schoolId: user.schoolId ? String(user.schoolId) : String(pt.schoolId || ''),
@@ -6221,7 +6223,7 @@ export default function AdminView({
                             setUserParentPhonePrefix(parentPhoneParts.phonePrefix);
                             setUserToEdit(user);
                             setUserForm({
-                              email: user.email,
+                              email: user.email ?? '',
                               name: user.name,
                               role: user.role,
                               schoolId: user.schoolId ? String(user.schoolId) : '',

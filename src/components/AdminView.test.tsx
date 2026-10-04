@@ -464,6 +464,54 @@ describe('AdminView create-user teacher form', () => {
     expect(onUpdateUser).toHaveBeenCalledWith(6, expect.objectContaining({ phone: '+229 78234567' }));
   });
 
+  it('updates a parent without an email or student without calling trim on null', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const parent: Parent = {
+      id: 55,
+      userId: 6,
+      name: 'Awa Mensah',
+      email: null,
+      phone: '+228 90000000',
+      schoolId: 1,
+    };
+    const user: User = { id: 6, uid: 'parent_6', email: null, name: 'Awa Mensah', role: 'parent', schoolId: 1 };
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[parent]}
+        usersList={[user]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onUpdateUser={onUpdateUser}
+        currentSchoolId={1}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+    const editDialog = screen.getByRole('dialog');
+    fireEvent.change(within(editDialog).getByPlaceholderText('M. Koffi'), { target: { value: 'Awa Updated' } });
+    fireEvent.click(within(editDialog).getByRole('button', { name: 'Enregistrer' }));
+
+    expect(onUpdateUser).toHaveBeenCalledWith(6, expect.objectContaining({
+      email: '',
+      name: 'Awa Updated',
+      studentId: undefined,
+    }));
+  });
+
   it('recognizes a legacy full +228 number stored without a plus sign', async () => {
     const parent: Parent = {
       id: 55,
