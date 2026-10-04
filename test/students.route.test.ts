@@ -18,6 +18,7 @@ const mockState = {
   dashboardEvaluations: [] as Array<any>,
   dashboardGrades: [] as Array<any>,
   users: [] as Array<any>,  // Separate mock data for users table
+  studentGenderSelected: false,
 };
 
 const createBuilder = (rows: any[], projection?: any) => {
@@ -46,6 +47,9 @@ const createBuilder = (rows: any[], projection?: any) => {
       } else if (table === classes) {
         builder._rows = [{ id: 5, schoolId: 10, academicYearId: 2 }];
       } else if (table === students) {
+        if (Object.prototype.hasOwnProperty.call(projection ?? {}, 'gender')) {
+          mockState.studentGenderSelected = true;
+        }
         // Simulate basic role-aware filtering for students queries to make tests
         // assert real expected results instead of only checking array presence.
         let rows = (mockState.students || []).map((student: any) => ({ isActive: true, ...student }));
@@ -312,6 +316,7 @@ describe('GET /api/students (scope)', () => {
     mockState.dashboardEvaluations = [];
     mockState.dashboardGrades = [];
     mockState.users = [];  // Reset users mock data
+    mockState.studentGenderSelected = false;
   });
 
   it('returns [] for teacher without schoolId', async () => {
@@ -337,7 +342,7 @@ describe('GET /api/students (scope)', () => {
     mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
     // include an unrelated student to ensure only assigned-class students are returned
     mockState.students = [
-      { id: 101, schoolId: 10, classId: 1 },
+      { id: 101, schoolId: 10, classId: 1, gender: 'F' },
       { id: 999, schoolId: 11, classId: 5 },
     ];
 
@@ -351,7 +356,8 @@ describe('GET /api/students (scope)', () => {
 
     expect(res.body).toHaveLength(1);
     expect(res.body.map((s: any) => s.id)).toEqual([101]);
-    expect(res.body[0]).toMatchObject({ id: 101, schoolId: 10, classId: 1 });
+    expect(res.body[0]).toMatchObject({ id: 101, schoolId: 10, classId: 1, gender: 'F' });
+    expect(mockState.studentGenderSelected).toBe(true);
   });
 
   it('does not let includeFormer expand teacher access or return inactive students', async () => {

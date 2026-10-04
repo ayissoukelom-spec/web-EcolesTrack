@@ -3,7 +3,7 @@ import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult,
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, SubjectType, EducationLevel, getTeacherDisplayName } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, getTeacherDisplayName } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -2361,13 +2361,18 @@ export default function AdminView({
   const [schoolLogoError, setSchoolLogoError] = useState<string | null>(null);
   const schoolLogoInputRef = useRef<HTMLInputElement | null>(null);
   const [editSchoolError, setEditSchoolError] = useState<string | null>(null);
+  const [editSchoolClasses, setEditSchoolClasses] = useState<Class[]>([]);
+  const [editSchoolSubjects, setEditSchoolSubjects] = useState<Subject[]>([]);
+  const [editSchoolAssociationsLoading, setEditSchoolAssociationsLoading] = useState(false);
+  const [editSchoolAssociationsError, setEditSchoolAssociationsError] = useState<string | null>(null);
 
-  const existingEditSchoolSubjectNames = schoolToEdit
-    ? Array.from(new Set((subjectsList || [])
-      .filter((subject: any) => subject.schoolId === schoolToEdit.id)
-      .map((subject: any) => String(subject.name || '').trim())
-      .filter(Boolean)))
-    : [];
+  const existingEditSchoolClassNames = Array.from(new Set(editSchoolClasses
+    .filter((klass) => schoolToEdit && isClassVisibleToSchool(klass, schoolToEdit.id))
+    .map((klass) => klass.name.trim())
+    .filter(Boolean)));
+  const existingEditSchoolSubjectNames = Array.from(new Set(editSchoolSubjects
+    .map((subject) => String(subject.name || '').trim())
+    .filter(Boolean)));
 
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -2390,11 +2395,54 @@ export default function AdminView({
     };
   }, [schoolToEdit]);
 
+  useEffect(() => {
+    if (!editSchoolOpen || !schoolToEdit?.id) {
+      setEditSchoolClasses([]);
+      setEditSchoolSubjects([]);
+      setEditSchoolAssociationsLoading(false);
+      setEditSchoolAssociationsError(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const schoolId = schoolToEdit.id;
+    setEditSchoolClasses([]);
+    setEditSchoolSubjects([]);
+    setEditSchoolAssociationsLoading(true);
+    setEditSchoolAssociationsError(null);
+
+    Promise.all([
+      apiFetch(`/api/classes?schoolId=${schoolId}`),
+      apiFetch(`/api/subjects?schoolId=${schoolId}&approvedOnly=true`),
+    ])
+      .then(([classPayload, subjectPayload]) => {
+        if (cancelled) return;
+        setEditSchoolClasses(Array.isArray(classPayload) ? classPayload : []);
+        setEditSchoolSubjects(Array.isArray(subjectPayload) ? subjectPayload : []);
+      })
+      .catch((error: any) => {
+        if (!cancelled) {
+          setEditSchoolAssociationsError(error?.message || 'Impossible de charger les associations de cette école.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEditSchoolAssociationsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [editSchoolOpen, schoolToEdit?.id]);
+
   const availableEditSchoolSubjectNames = Array.from(new Set((subjectsList || [])
-    .map((subject: any) => String(subject.name || '').trim())
+    .filter((subject: Subject) => subject.schoolId == null || subject.schoolId === schoolToEdit?.id)
+    .map((subject: Subject) => String(subject.name || '').trim())
     .filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'fr'))
     .filter((name) => !existingEditSchoolSubjectNames.includes(name));
+
+  const availableEditSchoolClassNames = Array.from(new Set(sortClasses((classesList || [])
+    .filter((klass) => klass.schoolId == null || klass.schoolId === schoolToEdit?.id))
+    .map((klass) => klass.name)))
+    .filter((name) => !existingEditSchoolClassNames.includes(name));
 
   // States for student editing
   const [editStudentOpen, setEditStudentOpen] = useState(false);
@@ -2804,12 +2852,14 @@ export default function AdminView({
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Classes déjà assignées</label>
                     <div className="flex flex-wrap gap-2">
-                      {schoolToEdit && Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).length > 0 ? (
-                        Array.from(new Set(classesList.filter((c) => isClassVisibleToSchool(c, schoolToEdit?.id)).map((c) => c.name).filter(Boolean))).map((name) => (
+                      {existingEditSchoolClassNames.length > 0 ? (
+                        existingEditSchoolClassNames.map((name) => (
                           <span key={name} className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-medium">
                             {name}
                           </span>
                         ))
+                      ) : editSchoolAssociationsLoading ? (
+                        <span className="text-xs text-slate-500">Chargement des classes associées...</span>
                       ) : (
                         <span className="text-xs text-slate-500">Aucune classe assignée actuellement.</span>
                       )}
@@ -2818,9 +2868,10 @@ export default function AdminView({
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des classes à cette école</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
-                      {Array.from(new Set(sortClasses(classesList || []).map((c) => c.name)))
-                        .filter((name) => !classesList.some((c) => isClassVisibleToSchool(c, schoolToEdit?.id) && c.name === name))
-                        .map((name) => (
+                      {editSchoolAssociationsLoading ? (
+                        <span className="text-xs text-slate-500">Chargement des classes...</span>
+                      ) : editSchoolAssociationsError ? null : availableEditSchoolClassNames.length > 0 ? (
+                        availableEditSchoolClassNames.map((name) => (
                           <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
                             <input
                               type="checkbox"
@@ -2836,7 +2887,10 @@ export default function AdminView({
                             />
                             <span className="text-sm text-slate-700">{name}</span>
                           </label>
-                        ))}
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">Aucune classe disponible à ajouter.</span>
+                      )}
                     </div>
                     <p className="mt-2 text-xs text-slate-500">Sélectionnez les classes à ajouter à cette école si elles n'ont pas été créées lors de son enregistrement.</p>
                   </div>
@@ -2849,6 +2903,8 @@ export default function AdminView({
                             {name}
                           </span>
                         ))
+                      ) : editSchoolAssociationsLoading ? (
+                        <span className="text-xs text-slate-500">Chargement des matières associées...</span>
                       ) : (
                         <span className="text-xs text-slate-500">Aucune matière assignée actuellement.</span>
                       )}
@@ -2857,30 +2913,39 @@ export default function AdminView({
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ajouter des matières à cette école</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto border border-slate-200 rounded-xl bg-slate-50 p-3">
-                      {availableEditSchoolSubjectNames.length > 0 ? (
-                        availableEditSchoolSubjectNames.map((name) => (
-                          <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
-                            <input
-                              type="checkbox"
-                              checked={editSchoolForm.subjectNames.includes(name)}
-                              onChange={(e) => {
-                                const current = editSchoolForm.subjectNames || [];
-                                const next = e.target.checked
-                                  ? [...current, name]
-                                  : current.filter((n) => n !== name);
-                                setEditSchoolForm({ ...editSchoolForm, subjectNames: next });
-                              }}
-                              className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
-                            />
-                            <span className="text-sm text-slate-700">{name}</span>
-                          </label>
-                        ))
-                      ) : (
-                        <span className="text-xs text-slate-500">Aucune matière disponible à ajouter.</span>
+                      {editSchoolAssociationsLoading ? (
+                        <span className="text-xs text-slate-500">Chargement des matières...</span>
+                      ) : editSchoolAssociationsError ? null : (
+                        availableEditSchoolSubjectNames.length > 0 ? (
+                          availableEditSchoolSubjectNames.map((name) => (
+                            <label key={name} className="flex items-center gap-2 rounded-xl px-3 py-2 cursor-pointer hover:bg-slate-100">
+                              <input
+                                type="checkbox"
+                                checked={editSchoolForm.subjectNames.includes(name)}
+                                onChange={(e) => {
+                                  const current = editSchoolForm.subjectNames || [];
+                                  const next = e.target.checked
+                                    ? [...current, name]
+                                    : current.filter((n) => n !== name);
+                                  setEditSchoolForm({ ...editSchoolForm, subjectNames: next });
+                                }}
+                                className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
+                              />
+                              <span className="text-sm text-slate-700">{name}</span>
+                            </label>
+                          ))
+                        ) : (
+                          <span className="text-xs text-slate-500">Aucune matière disponible à ajouter.</span>
+                        )
                       )}
                     </div>
                     <p className="mt-2 text-xs text-slate-500">Choisissez les matières à ajouter à l'école. Les matières déjà assignées ne sont pas affichées.</p>
                   </div>
+                  {editSchoolAssociationsError && (
+                    <div className="p-2 bg-rose-50 border border-rose-200 rounded text-rose-700 text-xs" role="alert">
+                      {editSchoolAssociationsError}
+                    </div>
+                  )}
                 </div>
               </div>
               {editSchoolError && (

@@ -1335,6 +1335,97 @@ describe('AdminView create-user teacher form', () => {
     }));
   });
 
+  it('hydrates school associations in the selected school scope and only submits new additions', async () => {
+    const onUpdateSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/classes?schoolId=1')) {
+        return new Response(JSON.stringify([
+          { id: 10, name: '4ème', schoolId: null, academicYearId: 1, status: 'approved' },
+          { id: 11, name: '5ème', schoolId: null, academicYearId: 1, status: 'approved' },
+          { id: 14, name: 'CM2', schoolId: 1, academicYearId: 1 },
+        ]), { status: 200 });
+      }
+      if (url.includes('/api/subjects?schoolId=1&approvedOnly=true')) {
+        return new Response(JSON.stringify([
+          { id: 20, name: 'Mathématiques', schoolId: null, status: 'approved' },
+          { id: 21, name: 'Français', schoolId: null, status: 'approved' },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '+228 90000000' }]}
+          yearsList={[]}
+          classesList={[
+            { id: 10, name: '4ème', schoolId: null, academicYearId: 1 },
+            { id: 11, name: '5ème', schoolId: null, academicYearId: 1 },
+            { id: 12, name: '3ème', schoolId: null, academicYearId: 1 },
+            { id: 13, name: 'Classe de l’autre école', schoolId: 2, academicYearId: 1 },
+            { id: 14, name: 'CM2', schoolId: 1, academicYearId: 1 },
+          ]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          subjectsList={[
+            { id: 20, name: 'Mathématiques', schoolId: null },
+            { id: 21, name: 'Français', schoolId: null },
+            { id: 22, name: 'Sciences', schoolId: null },
+            { id: 23, name: 'Matière de l’autre école', schoolId: 2 },
+          ]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onCreateUser={async () => ({})}
+          onUpdateUser={async () => ({})}
+          onSetPassword={async () => ({})}
+          onDeleteUser={async () => undefined}
+          onUpdateSchool={onUpdateSchool}
+          currentSchoolId={1}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+      fireEvent.click(screen.getByTitle('Éditer'));
+
+      const editDialog = screen.getByRole('dialog', { name: /Modifier l'école/ });
+      expect(await within(editDialog).findByText('4ème')).toBeTruthy();
+      expect(within(editDialog).getByText('5ème')).toBeTruthy();
+      expect(within(editDialog).getByText('CM2')).toBeTruthy();
+      expect(within(editDialog).getByText('Mathématiques')).toBeTruthy();
+      expect(within(editDialog).getByText('Français')).toBeTruthy();
+      expect(within(editDialog).queryByLabelText('4ème')).toBeNull();
+      expect(within(editDialog).queryByLabelText('5ème')).toBeNull();
+      expect(within(editDialog).queryByLabelText('Mathématiques')).toBeNull();
+      expect(within(editDialog).queryByLabelText('Français')).toBeNull();
+      expect(within(editDialog).queryByText('Classe de l’autre école')).toBeNull();
+      expect(within(editDialog).queryByText('Matière de l’autre école')).toBeNull();
+
+      fireEvent.click(within(editDialog).getByLabelText('3ème'));
+      fireEvent.click(within(editDialog).getByLabelText('Sciences'));
+      fireEvent.click(within(editDialog).getByRole('button', { name: /^Enregistrer$/i }));
+
+      expect(onUpdateSchool).toHaveBeenCalledWith(1, expect.objectContaining({
+        classNames: ['3ème'],
+        subjectNames: ['Sciences'],
+      }));
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/api/classes?schoolId=1'), expect.anything());
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/api/subjects?schoolId=1&approvedOnly=true'), expect.anything());
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('shows an error when creating a school without a name', async () => {
     const onAddSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];

@@ -3,7 +3,7 @@ import request from 'supertest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { schools, academicYears, users, subjects, classes, schoolClasses, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals } from '../src/db/schema.ts';
+import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals } from '../src/db/schema.ts';
 
 const schoolLogoS3 = vi.hoisted(() => ({
   send: vi.fn(),
@@ -22,6 +22,7 @@ const mockState = {
   schoolUpdateError: null as Error | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null; cycleId?: number | null; cycleCode?: string | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
+  schoolSubjects: [] as Array<{ id: number; schoolId: number; subjectId: number; status: string }>,
   schoolTerms: [] as Array<Record<string, any>>,
   cycles: [
     { id: 1, code: 'college', isActive: true },
@@ -101,7 +102,9 @@ const createBuilder = () => {
         return Promise.resolve(mockState.schools).then(resolve);
       }
       if (builder.table === classes) {
-        return Promise.resolve(mockState.classes).then(resolve);
+        const conditions = builder.conditions.flatMap((condition) => extractConditionPairs(condition));
+        const rows = mockState.classes.filter((row) => conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+        return Promise.resolve(rows).then(resolve);
       }
       if (builder.table === schoolClasses) {
         let rows = mockState.schoolClasses;
@@ -146,8 +149,11 @@ const createBuilder = () => {
         }
         return Promise.resolve(assignments).then(resolve);
       }
-      if (builder.table === subjects) {
-        return Promise.resolve(mockState.subjects).then(resolve);
+      if (builder.table === subjects || builder.table === schoolSubjects) {
+        const sourceRows = builder.table === subjects ? mockState.subjects : mockState.schoolSubjects;
+        const conditions = builder.conditions.flatMap((condition) => extractConditionPairs(condition));
+        const rows = sourceRows.filter((row) => conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+        return Promise.resolve(rows).then(resolve);
       }
       return Promise.resolve([]).then(resolve);
     },
@@ -188,6 +194,14 @@ const mockDb = {
         mockState.schoolClasses.push(schoolClassRow);
         return {
           returning: async () => [schoolClassRow],
+        };
+      }
+      if (table === schoolSubjects) {
+        const id = mockState.schoolSubjects.length + 1;
+        const schoolSubjectRow = { id, ...values };
+        mockState.schoolSubjects.push(schoolSubjectRow);
+        return {
+          returning: async () => [schoolSubjectRow],
         };
       }
       if (table === subjects) {
@@ -371,6 +385,7 @@ describe('POST /api/schools', () => {
     mockState.schoolUpdateError = null;
     mockState.classes = [];
     mockState.schoolClasses = [];
+    mockState.schoolSubjects = [];
     mockState.schoolTerms = [];
     mockState.cycles = [
       { id: 1, code: 'college', isActive: true },
@@ -603,6 +618,36 @@ describe('POST /api/schools', () => {
 
     expect(globalClasses).toHaveLength(1);
     expect(schoolClassLinks).toHaveLength(2);
+  });
+
+  it('adds new classes and subjects without removing existing school associations', async () => {
+    mockState.schools = [{ id: 1, name: 'École A', phone: '+228 90000001' }];
+    mockState.classes = [
+      { id: 10, name: '4ème', schoolId: null, academicYearId: 1 },
+      { id: 11, name: '5ème', schoolId: null, academicYearId: 1 },
+      { id: 12, name: '3ème', schoolId: null, academicYearId: 1 },
+    ];
+    mockState.schoolClasses = [
+      { id: 1, schoolId: 1, classId: 10, status: 'approved' },
+      { id: 2, schoolId: 1, classId: 11, status: 'approved' },
+    ];
+    mockState.subjects = [
+      { id: 20, name: 'Mathématiques', schoolId: null },
+      { id: 21, name: 'Français', schoolId: null },
+      { id: 22, name: 'Sciences', schoolId: null },
+    ];
+    mockState.schoolSubjects = [
+      { id: 1, schoolId: 1, subjectId: 20, status: 'approved' },
+      { id: 2, schoolId: 1, subjectId: 21, status: 'approved' },
+    ];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École A', classNames: ['3ème'], subjectNames: ['Sciences'] })
+      .expect(200);
+
+    expect(mockState.schoolClasses.map((row) => row.classId).sort()).toEqual([10, 11, 12]);
+    expect(mockState.schoolSubjects.map((row) => row.subjectId).sort()).toEqual([20, 21, 22]);
   });
 
   describe('school-term catalogue permissions', () => {

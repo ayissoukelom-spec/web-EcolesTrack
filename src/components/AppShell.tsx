@@ -426,6 +426,7 @@ export default function AppShell() {
             studentsList={studentsList}
             parentsList={parentsList}
             usersList={usersList}
+            subjectsList={approvedSubjectsList}
             onAddSchool={handleAddSchool}
             onUpdateSchool={handleUpdateSchool}
             onUpdateStudent={handleUpdateStudent}
