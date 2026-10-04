@@ -582,7 +582,7 @@ describe('GET /api/students (scope)', () => {
     return { res, insertedRows };
   };
 
-  it('normalizes firstName on student creation without altering the lastName', async () => {
+  it.each(['dupont', 'Dupont', 'dUpOnT', 'DUPONT'])('uppercases lastName on student creation for %s and leaves firstName casing alone', async (lastName) => {
     const insertedRows: any[] = [];
     mockState.students = [];
     mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
@@ -603,8 +603,8 @@ describe('GET /api/students (scope)', () => {
       .set('x-simulated-school-id', '10')
       .set('x-simulated-user-id', '2')
       .send({
-        firstName: 'JEAN PIERRE',
-        lastName: 'DUPONT',
+        firstName: 'Jean',
+        lastName,
         birthDate: '2015-04-12',
         schoolId: 10,
         classId: 5,
@@ -615,11 +615,11 @@ describe('GET /api/students (scope)', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(insertedRows[0].values.firstName).toBe('Jean Pierre');
+    expect(insertedRows[0].values.firstName).toBe('Jean');
     expect(insertedRows[0].values.lastName).toBe('DUPONT');
   });
 
-  it('normalizes firstName on student update without altering the lastName', async () => {
+  it('uppercases lastName on student update without uppercasing firstName', async () => {
     const insertedRows: any[] = [];
     mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
     mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
@@ -663,8 +663,8 @@ describe('GET /api/students (scope)', () => {
       .set('x-simulated-school-id', '10')
       .set('x-simulated-user-id', '2')
       .send({
-        firstName: 'jEAN pIeRrE',
-        lastName: 'DUPONT',
+        firstName: 'Jean',
+        lastName: 'dUpOnT',
         birthDate: '2015-04-12',
         schoolId: 10,
         classId: 5,
@@ -676,7 +676,7 @@ describe('GET /api/students (scope)', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(insertedRows[0].firstName).toBe('Jean Pierre');
+    expect(insertedRows[0].firstName).toBe('Jean');
     expect(insertedRows[0].lastName).toBe('DUPONT');
   });
 
@@ -817,7 +817,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'teacher-a', role: 'teacher', schoolId: 10 }];
     mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10, specialization: 'Math' }];
-    mockState.classAssignments = [{ id: 1, teacherId: 42, classId: 300, schoolId: null, classSchoolId: null, approvedForSchoolIds: [10] }];
+    mockState.classAssignments = [{ id: 1, teacherId: 42, classId: 300, schoolId: 10, classSchoolId: null, approvedForSchoolIds: [10] }];
     mockState.teacherSubjectRows = [{ teacherId: 42, subjectId: 11, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
@@ -1017,8 +1017,8 @@ describe('GET /api/students (scope)', () => {
     updateSpy.mockRestore();
   });
 
-  it('normalizes firstName in batch imports and keeps the surname unchanged', async () => {
-    const { res, insertedRows } = await importBatchRow(batchRow({ firstName: 'jEaN pIeRrE', lastName: 'DUPONT' }));
+  it('normalizes imported lastName without uppercasing firstName', async () => {
+    const { res, insertedRows } = await importBatchRow(batchRow({ firstName: 'jEaN pIeRrE', lastName: 'dUpOnT' }));
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(1);
     expect(insertedRows).toContainEqual(expect.objectContaining({

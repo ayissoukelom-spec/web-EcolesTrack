@@ -1703,7 +1703,7 @@ export async function createApp() {
         uid: finalUid,
         email: normalizedEmail,
         name: teacherDisplayName,
-        lastName: role === 'teacher' ? String(lastName).trim() : null,
+        lastName: role === 'teacher' ? String(lastName).trim().toUpperCase() : null,
         firstNames: role === 'teacher' ? String(firstNames).trim() : null,
         role,
         schoolId: resolvedSchoolId,
@@ -2061,7 +2061,7 @@ export async function createApp() {
 
       const updatedValues: any = { email: normalizedIncomingEmail, name: teacherDisplayName, role, gender: gender ?? null };
       if (role === 'teacher' && lastName && firstNames) {
-        updatedValues.lastName = String(lastName).trim();
+        updatedValues.lastName = String(lastName).trim().toUpperCase();
         updatedValues.firstNames = String(firstNames).trim();
       }
       if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
@@ -2412,7 +2412,7 @@ export async function createApp() {
       const updatedFields: any = {};
       if (displayName) updatedFields.name = displayName;
       if (isTeacher && lastName && firstNames) {
-        updatedFields.lastName = String(lastName).trim();
+        updatedFields.lastName = String(lastName).trim().toUpperCase();
         updatedFields.firstNames = String(firstNames).trim();
       }
       let canonicalPhoneForUpdate: string | null = null;
@@ -3772,7 +3772,7 @@ export async function createApp() {
       for (let i = 0; i < payload.length; i++) {
         const s = payload[i];
         const firstName = normalizeFirstName(s.firstName);
-        const lastName = s.lastName?.trim();
+        const lastName = s.lastName?.trim().toUpperCase();
         const birthDate = s.birthDate?.trim() || '';
         const rawAcademicYearId = s.academicYearId !== undefined && s.academicYearId !== null && String(s.academicYearId).trim() !== ''
           ? String(s.academicYearId).trim()
@@ -6235,7 +6235,7 @@ export async function createApp() {
         uid: fakeUid,
         email: normalizedEmail,
         name: displayName,
-        lastName: String(lastName).trim(),
+        lastName: String(lastName).trim().toUpperCase(),
         firstNames: String(firstNames).trim(),
         role: 'teacher',
         schoolId: parsedSchoolId,
@@ -7112,6 +7112,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { firstName, lastName, birthDate, schoolId, classId, parentId, schoolAdminId, gender, enrolledAt, academicYearId, studentStatus } = req.body;
       const normalizedFirstName = normalizeFirstName(firstName);
+      const normalizedLastName = typeof lastName === 'string' ? lastName.toUpperCase() : lastName;
       const parsedSchoolId = schoolId !== undefined && schoolId !== null && String(schoolId).trim() !== '' ? parseInt(String(schoolId)) : null;
       const parsedClassId = classId !== undefined && classId !== null && String(classId).trim() !== '' ? parseInt(String(classId)) : null;
       const parsedParentId = parentId !== undefined && parentId !== null && String(parentId).trim() !== '' ? parseInt(String(parentId)) : null;
@@ -7238,7 +7239,7 @@ export async function createApp() {
 
       const result = await db.insert(students).values({
         firstName: normalizedFirstName,
-        lastName,
+        lastName: normalizedLastName,
         birthDate,
         gender: normalizedGender,
         schoolId: effectiveSchoolId,
@@ -7269,6 +7270,7 @@ export async function createApp() {
       const studentId = parseInt(req.params.id, 10);
       const { firstName, lastName, birthDate, schoolId, classId, parentId, academicYearId, teacherId, schoolAdminId, gender, studentStatus } = req.body;
       const normalizedFirstName = normalizeFirstName(firstName);
+      const normalizedLastName = typeof lastName === 'string' ? lastName.toUpperCase() : lastName;
 
       if (!studentId) {
         return res.status(400).json({ error: 'Missing required fields' });
@@ -7421,7 +7423,7 @@ export async function createApp() {
 
       const changes: string[] = [];
       if (existingStudent.firstName !== normalizedFirstName) changes.push(`firstName: "${existingStudent.firstName}" → "${normalizedFirstName}"`);
-      if (existingStudent.lastName !== lastName) changes.push(`lastName: "${existingStudent.lastName}" → "${lastName}"`);
+      if (existingStudent.lastName !== normalizedLastName) changes.push(`lastName: "${existingStudent.lastName}" → "${normalizedLastName}"`);
       if (existingStudent.birthDate !== birthDate) changes.push(`birthDate: "${existingStudent.birthDate}" → "${birthDate}"`);
       if (existingStudent.gender !== newGender) changes.push(`gender: "${existingStudent.gender ?? ''}" → "${newGender ?? ''}"`);
       if (existingStudent.schoolId !== resolvedSchoolId) changes.push(`schoolId: ${existingStudent.schoolId} → ${resolvedSchoolId}`);
@@ -7436,7 +7438,7 @@ export async function createApp() {
 
       const result = await db
         .update(students)
-        .set({ firstName: normalizedFirstName, lastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
+        .set({ firstName: normalizedFirstName, lastName: normalizedLastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
         .where(eq(students.id, studentId))
         .returning();
 
