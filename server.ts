@@ -34,6 +34,7 @@ import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
+import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
@@ -10845,14 +10846,20 @@ if (uniqueParentIds.length > 0) {
               metadata: {
                 target: "notes",
                 gradeId: savedGrade.id,
+                eventVersion: savedGrade.editCount ?? 0,
                 studentId,
                 evaluationId,
                 isGradeModification,
               },
-              dedupeKey: `grade-${savedGrade.id}`,
+              dedupeKey: getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0),
             };
+            console.info("grade notification created", {
+              gradeId: savedGrade.id,
+              eventVersion: savedGrade.editCount ?? 0,
+              dedupeKey: gradeNotificationPayload.dedupeKey,
+            });
             const { signature, timestamp } = signInternalPayload(gradeNotificationPayload);
-            await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
+            const response = await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -10861,10 +10868,17 @@ if (uniqueParentIds.length > 0) {
               },
               body: JSON.stringify(gradeNotificationPayload),
             });
+            if (!response.ok) {
+              throw new Error(`Grade notification service returned HTTP ${response.status}`);
+            }
           }
         }
       } catch (notificationError) {
-        console.error("Erreur notification mobile note:", notificationError);
+        console.error("grade push failed", {
+          gradeId: savedGrade?.id,
+          eventVersion: savedGrade?.editCount ?? 0,
+          error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
       }
 
       let totalStudentsInClass: Array<{ count: number }>; 
