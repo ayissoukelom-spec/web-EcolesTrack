@@ -721,12 +721,16 @@ describe('GET tenant-scoped teacher lists', () => {
     expect(teacherScope?.teachingClassIds.has(300)).toBe(true);
 
     FIXTURES.students.push(
-      { id: 901, schoolId: 10, classId: 300, firstName: 'Local', lastName: 'Student', parentId: null, isActive: true },
-      { id: 902, schoolId: 20, classId: 300, firstName: 'Foreign', lastName: 'Student', parentId: null, isActive: true },
+      { id: 901, schoolId: 10, classId: 300, firstName: 'Local', lastName: 'Student', parentId: 1901, isActive: true },
+      { id: 902, schoolId: 20, classId: 300, firstName: 'Foreign', lastName: 'Student', parentId: 1902, isActive: true },
+    );
+    FIXTURES.parents.push(
+      { id: 1901, userId: 6, studentId: 901, schoolId: 10 },
+      { id: 1902, userId: 7, studentId: 902, schoolId: 20 },
     );
     FIXTURES.absences.push(
-      { id: 901, studentId: 901, studentName: 'Student Local', classId: 300, className: 'Global Class', schoolId: 10, date: '2026-09-20', period: 'morning', isJustified: false },
-      { id: 902, studentId: 902, studentName: 'Student Foreign', classId: 300, className: 'Global Class', schoolId: 20, date: '2026-09-20', period: 'morning', isJustified: false },
+      { id: 901, studentId: 901, studentName: 'Student Local', classId: 300, subjectId: 2, teachingAssignmentId: 301, className: 'Global Class', schoolId: 10, date: '2026-09-20', period: 'morning', isJustified: false },
+      { id: 902, studentId: 902, studentName: 'Student Foreign', classId: 300, subjectId: 2, teachingAssignmentId: 301, className: 'Global Class', schoolId: 20, date: '2026-09-20', period: 'morning', isJustified: false },
     );
 
     const response = await request(app).get('/api/absences').set(teacherHeaders).expect(200);

@@ -1696,10 +1696,33 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .put('/api/users/3')
       .set('Authorization', 'Bearer token-school')
-      .send({ name: 'Updated Teacher' });
+      .send({ name: 'dUpOnT Jean', lastName: 'dUpOnT', firstNames: 'Jean' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 3, name: 'Updated Teacher' });
+    expect(FIXTURES.users.find((user) => user.id === 3)).toMatchObject({
+      lastName: 'DUPONT',
+      firstNames: 'Jean',
+    });
+  });
+  it('uppercases lastName when an admin updates a teacher account', async () => {
+    const res = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({
+        email: 'teacher@school.test',
+        name: 'dUpOnT Jean',
+        lastName: 'dUpOnT',
+        firstNames: 'Jean',
+        role: 'teacher',
+        schoolId: 10,
+      });
+
+    expect(res.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 3)).toMatchObject({
+      lastName: 'DUPONT',
+      firstNames: 'Jean',
+    });
   });
 
   it('3d. parent can access own parent details via GET /api/parents/:id', async () => {
@@ -2099,7 +2122,7 @@ describe('E2E security: auth & privilege checks', () => {
       .expect(403);
 
     await parentAPost('/api/absence-declarations')
-      .send({ parentId: 4, studentId: 13, date: '2026-10-03', startTime: '08:00', endTime: '10:00', reason: 'IDOR test' })
+      .send({ parentId: 4, studentId: 13, date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10), startTime: '08:00', endTime: '10:00', reason: 'IDOR test' })
       .expect(403);
     await parentAGet('/api/notifications/501/attachments/801').expect(403);
   });
@@ -2245,10 +2268,14 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/teachers')
       .set('Authorization', 'Bearer token-school')
-      .send({ name: 'New Teacher', email: 'newteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
+      .send({ name: 'dUpOnT Jean', lastName: 'dUpOnT', firstNames: 'Jean', email: 'newteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ email: 'newteacher@x.test', name: 'New Teacher', schoolId: 10 });
+    expect(res.body).toMatchObject({ email: 'newteacher@x.test', schoolId: 10 });
+    expect(FIXTURES.users.find((user) => user.email === 'newteacher@x.test')).toMatchObject({
+      lastName: 'DUPONT',
+      firstNames: 'Jean',
+    });
   });
 
   it('3i. teacher cannot create a teacher via POST /api/teachers', async () => {
@@ -2577,8 +2604,8 @@ describe('E2E security: auth & privilege checks', () => {
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
       .send([
-        { name: 'Parent Sans Enfant 1', email: 'parent-no-child-1@x.test', phonePrefix: '+228', phone: '90000002', parentType: 'mere', address: '' },
-        { name: 'Parent Sans Enfant 2', email: 'parent-no-child-2@x.test', phonePrefix: '+228', phone: '90000003', parentType: 'pere', address: '' },
+        { name: 'Parent Sans Enfant 1', email: 'parent-no-child-1@x.test', phonePrefix: '+228', phone: '90000021', parentType: 'mere', address: '' },
+        { name: 'Parent Sans Enfant 2', email: 'parent-no-child-2@x.test', phonePrefix: '+228', phone: '90000022', parentType: 'pere', address: '' },
       ]);
 
     expect(res.status).toBe(200);
@@ -2616,7 +2643,7 @@ describe('E2E security: auth & privilege checks', () => {
 
   it('3o1. duplicate Parent email is rejected clearly during batch import', async () => {
     FIXTURES.students.push({ id: 15, schoolId: 10, classId: 1, isActive: true, firstName: 'New', lastName: 'Student', parentId: null });
-    const payload = [{ name: 'Duplicate Parent', email: 'duplicate@x.test', phonePrefix: '+228', phone: '90000001', parentType: 'pere', studentId: 15 }];
+    const payload = [{ name: 'Duplicate Parent', email: 'duplicate@x.test', phonePrefix: '+228', phone: '90000099', parentType: 'pere', studentId: 15 }];
     await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
@@ -3220,7 +3247,7 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ firstName: 'Child', lastName: 'One Updated', birthDate: '2010-01-01', schoolId: 10, classId: 1, parentId: 1 });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 11, lastName: 'One Updated', schoolId: 10 });
+    expect(res.body).toMatchObject({ id: 11, lastName: 'ONE UPDATED', schoolId: 10 });
   });
 
   it('4. school_admin cannot act outside their school', async () => {
@@ -3332,7 +3359,7 @@ describe('E2E security: auth & privilege checks', () => {
       .send({
         uid: 'teacher-assigned-at-create',
         email: 'teacher-assigned@x.test',
-        lastName: 'Assigned',
+        lastName: 'dUpOnT',
         firstNames: 'Teacher',
         name: 'Assigned Teacher',
         role: 'teacher',
@@ -3343,6 +3370,10 @@ describe('E2E security: auth & privilege checks', () => {
       });
 
     expect(createRes.status).toBe(201);
+    expect(FIXTURES.users.find((user) => user.email === 'teacher-assigned@x.test')).toMatchObject({
+      lastName: 'DUPONT',
+      firstNames: 'Teacher',
+    });
     const createdUser = FIXTURES.users.find((user) => user.uid === 'teacher-assigned-at-create');
     const teacherProfile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
     expect(teacherProfile).toBeDefined();
@@ -3366,7 +3397,7 @@ describe('E2E security: auth & privilege checks', () => {
         name: 'Unapproved Teacher',
         role: 'teacher',
         schoolId: 10,
-        phone: '+228 90000001',
+        phone: '+228 90009999',
         specialization: 'Physique',
         subjectIds: [901],
       });

@@ -316,19 +316,20 @@ describe('registerBulletinGenerateRoute', () => {
     app.use(express.json());
 
     const verifyMiddleware = (req: any, _res: any, next: any) => {
-      req.user = { id: 3, uid: 'teacher-1', role: 'teacher', appRole: 'teacher', schoolId: 10 };
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin', schoolId: 10 };
       next();
     };
 
     studentAccessMock.getAuthorizedStudents.mockResolvedValue([{ id: 101, classId: 80, schoolId: 10, firstName: 'Alice', lastName: 'Smith' }]);
 
+    const actor = { id: 1, role: 'super_admin', schoolId: 10 };
     let loadedStudents: any = null;
     registerBulletinGenerateRoute(app, {
-      resolveActor: async () => ({ id: 3, role: 'teacher', schoolId: 10 }),
+      resolveActor: async () => actor,
       verifyMiddleware: verifyMiddleware as any,
       accessMiddleware: (_req, _res, next) => next(),
       generateHandler: async (_studentId, _termId, persistence) => {
-        const rows = await persistence.transaction(async (ctx) => ctx.getClassStudents(80));
+        const rows = await persistence.transaction(async (ctx) => ctx.getClassStudents(80, 10));
         loadedStudents = rows;
         return {
           bulletinId: 999,
@@ -360,7 +361,7 @@ describe('registerBulletinGenerateRoute', () => {
 
     expect(response.status).toBe(201);
     expect(loadedStudents).toEqual([{ id: 101, classId: 80, schoolId: 10, firstName: 'Alice', lastName: 'Smith' }]);
-    expect(studentAccessMock.getAuthorizedStudents).toHaveBeenCalledWith({ id: 3, role: 'teacher', schoolId: 10 }, { classIds: [80] });
+    expect(studentAccessMock.getAuthorizedStudents).toHaveBeenCalledWith(actor, { classIds: [80] });
   });
 
   it('returns 403 when studentAccess authorization fails during bulletin generation', async () => {
@@ -368,18 +369,18 @@ describe('registerBulletinGenerateRoute', () => {
     app.use(express.json());
 
     const verifyMiddleware = (req: any, _res: any, next: any) => {
-      req.user = { id: 3, uid: 'teacher-1', role: 'teacher', appRole: 'teacher', schoolId: 10 };
+      req.user = { id: 1, uid: 'admin-1', role: 'super_admin', appRole: 'admin', schoolId: 10 };
       next();
     };
 
     studentAccessMock.getAuthorizedStudents.mockRejectedValue(new Error('not allowed'));
 
     registerBulletinGenerateRoute(app, {
-      resolveActor: async () => ({ id: 3, role: 'teacher', schoolId: 10 }),
+      resolveActor: async () => ({ id: 1, role: 'super_admin', schoolId: 10 }),
       verifyMiddleware: verifyMiddleware as any,
       accessMiddleware: (_req, _res, next) => next(),
       generateHandler: async (_studentId, _termId, persistence) => {
-        await persistence.transaction(async (ctx) => ctx.getClassStudents(80));
+        await persistence.transaction(async (ctx) => ctx.getClassStudents(80, 10));
         return {
           bulletinId: 999,
           studentId: 1,

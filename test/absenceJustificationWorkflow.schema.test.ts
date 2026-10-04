@@ -33,6 +33,7 @@ describe('absence justification workflow contract', () => {
   it('keeps text-only mobile submissions pending and the attachment path separate', () => {
     const mobileRoot = path.resolve('..', 'Nouveau dossier (2)');
     const mobileServerText = fs.readFileSync(path.join(mobileRoot, 'server.ts'), 'utf8');
+    const uploadCleanupText = fs.readFileSync(path.join(mobileRoot, 'backend', 'temporaryUploadCleanup.ts'), 'utf8');
     const mobileStoreText = fs.readFileSync(path.join(mobileRoot, 'backend/store.ts'), 'utf8');
     const mobileJustificationText = fs.readFileSync(path.join(mobileRoot, 'backend/absenceJustification.ts'), 'utf8');
     const parentPortalText = fs.readFileSync(path.join(mobileRoot, 'src/components/ParentPortal.tsx'), 'utf8');
@@ -49,8 +50,10 @@ describe('absence justification workflow contract', () => {
     expect(mobileServerText).toContain('forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile)');
     expect(mobileServerText).toContain('err instanceof AbsenceJustificationAlreadyRejectedError');
     expect(mobileServerText).toContain('res.status(409).json({ error: err.message, code: err.code })');
-    expect(mobileServerText).toContain('finally {');
-    expect(mobileServerText).toContain('removeTemporaryAbsenceJustificationFiles(uploadedFiles)');
+    expect(mobileServerText).toContain('withTemporaryUploadCleanup(uploadedFiles, uploadStorageDir');
+    expect(uploadCleanupText).toContain('finally {');
+    expect(uploadCleanupText).toContain('if (path.dirname(filePath) !== root) return;');
+    expect(uploadCleanupText).toContain('await fsPromises.unlink(filePath)');
   });
 
   it('guards the web text, direct-file and internal-file submission endpoints', () => {

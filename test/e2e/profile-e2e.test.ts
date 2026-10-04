@@ -1,7 +1,12 @@
-import { beforeAll, describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import request from 'supertest';
+import { randomInt, randomUUID } from 'node:crypto';
+import { inArray } from 'drizzle-orm';
+import { db } from '../../src/db';
+import { auditEvents, localAuths, notifications, users } from '../../src/db/schema';
 
 let app: any;
+const testEmails: string[] = [];
 
 beforeAll(async () => {
   process.env.NODE_ENV = 'test';
@@ -9,8 +14,23 @@ beforeAll(async () => {
   app = await serverModule.createApp();
 });
 
+afterAll(async () => {
+  if (testEmails.length === 0) return;
+  const testUsers = await db.select({ id: users.id }).from(users).where(inArray(users.email, testEmails));
+  const testUserIds = testUsers.map((user) => user.id);
+  if (testUserIds.length === 0) return;
+  await db.delete(auditEvents).where(inArray(auditEvents.actorUserId, testUserIds));
+  await db.delete(localAuths).where(inArray(localAuths.userId, testUserIds));
+  await db.delete(notifications).where(inArray(notifications.userId, testUserIds));
+  await db.delete(users).where(inArray(users.id, testUserIds));
+});
+
 function uniqueEmail() {
-  return `e2e-parent-${Date.now()}@test.local`;
+  return `e2e-parent-${randomUUID()}@test.local`;
+}
+
+function uniquePhone() {
+  return `+2299${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
 }
 
 async function post(path: string, body: any, headers: Record<string,string> = {}) {
@@ -39,10 +59,13 @@ async function get(path: string, headers: Record<string,string> = {}) {
 describe('E2E: create → force password change → update profile → re-login', () => {
   it('should create parent, force reset, change password, update profile and verify on re-login', async () => {
     const email = uniqueEmail();
+    testEmails.push(email);
     const name = 'E2E Parent';
+    const initialPhone = uniquePhone();
+    const updatedPhone = uniquePhone();
 
     // 1) Create parent via admin create (simulate super_admin)
-    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: '+22911111111' }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
+    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: initialPhone }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
     expect(create.status).toBe(201);
     const created = create.json;
     expect(created).toHaveProperty('id');
@@ -86,7 +109,7 @@ describe('E2E: create → force password change → update profile → re-login'
 
     // 4) Update profile as the owner (simulate parent actor by uid)
     const updatedName = 'E2E Parent Updated';
-    const putResp = await put(`/api/users/${userId}`, { name: updatedName, phone: '+22922222222' }, { 'x-simulated-role': 'parent', 'x-simulated-uid': uid, 'x-simulated-email': email });
+    const putResp = await put(`/api/users/${userId}`, { name: updatedName, phone: updatedPhone }, { 'x-simulated-role': 'parent', 'x-simulated-uid': uid, 'x-simulated-email': email });
     expect(putResp.status).toBe(200);
     expect(putResp.json).toHaveProperty('name');
     expect(putResp.json.name).toBe(updatedName);
@@ -102,9 +125,10 @@ describe('E2E: create → force password change → update profile → re-login'
 
   it('should reject a reused token after logout', async () => {
     const email = uniqueEmail();
+    testEmails.push(email);
     const name = 'E2E Logout Test';
 
-    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: '+22933333333' }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
+    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: uniquePhone() }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
     expect(create.status).toBe(201);
 
     const login = await post('/api/auth/local-login', { email, password: '123456' });

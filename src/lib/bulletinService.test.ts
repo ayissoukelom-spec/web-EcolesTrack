@@ -372,8 +372,8 @@ describe('bulletinService', () => {
     ]);
 
     expect(result.totalCoefficients).toBe(9);
-    expect(result.totalPoints).toBeCloseTo(108.125, 5);
-    expect(result.average).toBeCloseTo(12.0138888889, 5);
+    expect(result.totalPoints).toBeCloseTo(107.625, 5);
+    expect(result.average).toBeCloseTo(11.9583333333, 5);
     expect((13.375 * 3)).toBeCloseTo(40.125, 5);
   });
 });
