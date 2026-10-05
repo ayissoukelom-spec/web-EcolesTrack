@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Edit2,
   LoaderCircle,
+  X,
 } from 'lucide-react';
 import {
   getDateOnlyMs,
@@ -113,6 +114,7 @@ export default function NotesView({
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
   const [gradeInputValues, setGradeInputValues] = useState<{ [studentId: number]: { score: string; remarks: string } }>({});
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [gradeValidationErrors, setGradeValidationErrors] = useState<Record<number, string>>({});
   const [isSavingAllGrades, setIsSavingAllGrades] = useState(false);
   const isSavingAllGradesRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
@@ -292,52 +294,56 @@ export default function NotesView({
   const handleSaveAllGrades = async () => {
     if (!selectedEvalId || isSavingAllGradesRef.current) return;
 
-    const saveableGrades = currentClassStudents
-      .map((student) => {
-        const existingGrade = gradesList.find(
-          (g) => String(g.evaluationId) === selectedEvalId && g.studentId === student.id
-        );
-        const input = gradeInputValues[student.id];
-        if (!input || input.score === undefined || input.score === '') return null;
+    const saveableGrades: Array<{
+      gradeId?: number;
+      evaluationId: number;
+      studentId: number;
+      score: string;
+      remarks: string;
+      isUpdate: boolean;
+    }> = [];
+    const validationErrors: Record<number, string> = {};
 
-        const validation = validateGradeScore(input.score, currentEvaluation?.maxScore);
-        if (!validation.isValid) {
-          setSaveStatus(validation.error || 'Note invalide');
-          setTimeout(() => setSaveStatus(null), 3000);
-          return null;
-        }
+    for (const student of currentClassStudents) {
+      const existingGrade = gradesList.find(
+        (g) => String(g.evaluationId) === selectedEvalId && g.studentId === student.id
+      );
+      const input = gradeInputValues[student.id];
+      if (!input || input.score === undefined || input.score === '') continue;
 
-        if (existingGrade) {
-          if (userRole === 'teacher' || (userRole === 'school_admin' && isGradeModified(existingGrade))) {
-            return null;
-          }
+      if (existingGrade && (userRole === 'teacher' || (userRole === 'school_admin' && isGradeModified(existingGrade)))) {
+        continue;
+      }
 
-          return {
+      const validation = validateGradeScore(input.score, gradeMaximumScore);
+      if (!validation.isValid) {
+        validationErrors[student.id] = validation.error || 'Note invalide';
+        continue;
+      }
+
+      saveableGrades.push(existingGrade
+        ? {
             gradeId: existingGrade.id,
             evaluationId: parseInt(selectedEvalId),
             studentId: student.id,
             score: input.score,
             remarks: input.remarks || '',
             isUpdate: true,
-          };
-        }
+          }
+        : {
+            evaluationId: parseInt(selectedEvalId),
+            studentId: student.id,
+            score: input.score,
+            remarks: input.remarks || '',
+            isUpdate: false,
+          });
+    }
 
-        return {
-          evaluationId: parseInt(selectedEvalId),
-          studentId: student.id,
-          score: input.score,
-          remarks: input.remarks || '',
-          isUpdate: false,
-        };
-      })
-      .filter(Boolean) as Array<{
-        gradeId?: number;
-        evaluationId: number;
-        studentId: number;
-        score: string;
-        remarks: string;
-        isUpdate: boolean;
-      }>;
+    if (Object.keys(validationErrors).length > 0) {
+      setGradeValidationErrors(validationErrors);
+      setSaveStatus(null);
+      return;
+    }
 
     if (saveableGrades.length === 0) {
       setSaveStatus('Aucune nouvelle note à enregistrer.');
@@ -346,6 +352,7 @@ export default function NotesView({
     }
 
     isSavingAllGradesRef.current = true;
+    setGradeValidationErrors({});
     setIsSavingAllGrades(true);
     try {
       await Promise.all(saveableGrades.map(async (grade) => {
@@ -393,6 +400,7 @@ export default function NotesView({
     getEligibleStudentsWithHistoryForEvaluationUtil(evaluation, currentClassStudents, gradesList);
 
   const scoreScaleSuffix = currentEvaluation?.maxScore != null ? `/${currentEvaluation.maxScore}` : '/20';
+  const gradeMaximumScore = currentEvaluation?.maxScore ?? 20;
   const classAverageScaleSuffix = currentEvaluation?.maxScore != null ? `/${currentEvaluation.maxScore}` : '/20';
   const eligibleStudentsForSelectedEval = getEligibleStudentsForEvaluationWithGradesUtil(currentEvaluation, currentClassStudents, gradesList);
   const selectedEvalGrades = gradesList.filter((g) => String(g.evaluationId) === selectedEvalId);
@@ -874,6 +882,7 @@ export default function NotesView({
                 if (onSchoolFilterChange) onSchoolFilterChange(value ? parseInt(value, 10) : null);
                 setSelectedClassId('');
                 setSelectedEvalId('');
+                setGradeValidationErrors({});
               }}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none"
             >
@@ -891,6 +900,7 @@ export default function NotesView({
             onChange={(e) => {
               const nextClassId = e.target.value;
               setSelectedClassId(nextClassId);
+              setGradeValidationErrors({});
               const firstEvalForClass = approvedEvaluations.find((ev) => String(ev.classId) === nextClassId);
               if (firstEvalForClass) {
                 setSelectedEvalId(String(firstEvalForClass.id));
@@ -928,6 +938,7 @@ export default function NotesView({
             onChange={(e) => {
               const evId = e.target.value;
               setSelectedEvalId(evId);
+              setGradeValidationErrors({});
               populateGradeInputsForEvaluation(evId);
             }}
             disabled={!selectedClassId}
@@ -946,6 +957,35 @@ export default function NotesView({
       {saveStatus && (
         <div className="p-3 bg-emerald-50 text-emerald-700 text-xs border border-emerald-100 rounded-xl font-semibold animate-bounce">
           {saveStatus}
+        </div>
+      )}
+      {Object.keys(gradeValidationErrors).length > 0 && (
+        <div className="rounded-xl border-2 border-rose-300 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm" role="alert">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-bold">Enregistrement impossible : une ou plusieurs notes sont invalides.</p>
+              <p className="mt-1">Une note ne peut pas dépasser {gradeMaximumScore}. Vérifiez les notes signalées puis réessayez.</p>
+            </div>
+            <button
+              type="button"
+              aria-label="Fermer le message d’erreur"
+              onClick={() => setGradeValidationErrors({})}
+              className="rounded-md p-1 text-rose-800 hover:bg-rose-100"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {Object.entries(gradeValidationErrors).map(([studentId, error]) => {
+              const student = currentClassStudents.find((item) => item.id === Number(studentId));
+              const input = gradeInputValues[Number(studentId)];
+              return (
+                <li key={studentId}>
+                  {student ? `${student.lastName} ${student.firstName}`.trim() : 'Élève'} — {currentEvaluation?.subject || 'Matière'} : {input?.score || '—'}/{currentEvaluation?.maxScore ?? 20} ({error})
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -1098,27 +1138,46 @@ export default function NotesView({
                                     <div className="text-slate-400 text-[10px]">Note déjà enregistrée</div>
                                   </div>
                                 ) : isEligible ? (
-                                    <input
-                                      type="number"
-                                      inputMode="decimal"
-                                      step="0.01"
-                                      min="0"
-                                      max={currentEvaluation?.maxScore ?? undefined}
-                                      value={gradeInputValues[st.id]?.score || ''}
-                                      onChange={(e) => {
-                                        if (!canEditGrade) return;
-                                        const val = e.target.value;
-                                        setGradeInputValues({
-                                          ...gradeInputValues,
-                                          [st.id]: {
-                                            score: val,
-                                            remarks: gradeInputValues[st.id]?.remarks || '',
-                                          },
-                                        });
-                                      }}
-                                      placeholder="ex. 15.5 or Abs"
-                                      className="w-24 px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-lg focus:outline-indigo-500 text-center font-bold text-slate-800"
-                                    />
+                                    <div className="flex flex-col items-start gap-1">
+                                      <input
+                                        type="number"
+                                        inputMode="decimal"
+                                        step="0.01"
+                                        min="0"
+                                        max={currentEvaluation?.maxScore ?? undefined}
+                                        value={gradeInputValues[st.id]?.score || ''}
+                                        onChange={(e) => {
+                                          if (!canEditGrade) return;
+                                          const val = e.target.value;
+                                          setGradeInputValues({
+                                            ...gradeInputValues,
+                                            [st.id]: {
+                                              score: val,
+                                              remarks: gradeInputValues[st.id]?.remarks || '',
+                                            },
+                                          });
+                                          setGradeValidationErrors((previous) => {
+                                            if (!(st.id in previous)) return previous;
+                                            const validation = validateGradeScore(val, gradeMaximumScore);
+                                            if (!validation.isValid) {
+                                              return { ...previous, [st.id]: validation.error || 'Note invalide' };
+                                            }
+                                            return Object.fromEntries(
+                                              Object.entries(previous).filter(([studentId]) => Number(studentId) !== st.id)
+                                            );
+                                          });
+                                        }}
+                                        placeholder="ex. 15.5 or Abs"
+                                        aria-invalid={!!gradeValidationErrors[st.id]}
+                                        aria-describedby={gradeValidationErrors[st.id] ? `grade-error-${st.id}` : undefined}
+                                        className={`w-24 px-2.5 py-1.5 bg-slate-50 border text-xs sm:text-sm rounded-lg focus:outline-indigo-500 text-center font-bold text-slate-800 ${gradeValidationErrors[st.id] ? 'border-rose-500 ring-2 ring-rose-200 bg-rose-50' : 'border-slate-200'}`}
+                                      />
+                                      {gradeValidationErrors[st.id] && (
+                                        <span id={`grade-error-${st.id}`} className="max-w-48 text-[10px] font-semibold text-rose-700">
+                                          {gradeValidationErrors[st.id]}
+                                        </span>
+                                      )}
+                                    </div>
                                   ) : (
                                     <div className="text-left text-xs text-amber-800 font-semibold">
                                       Non éligible<br />(inscrit après le devoir)

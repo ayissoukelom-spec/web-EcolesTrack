@@ -402,6 +402,109 @@ test('school_admin can update one existing grade with save all', async () => {
   expect(within(container).queryByRole('status')).toBeNull();
 });
 
+test('save all blocks the whole batch when one of six entered grades exceeds the evaluation maximum', async () => {
+  const studentsList = [
+    { id: 201, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Jean', lastName: 'Dupont' },
+    { id: 202, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Marie', lastName: 'Claire' },
+    { id: 203, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Ali', lastName: 'Diallo' },
+    { id: 204, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Awa', lastName: 'Kossi' },
+    { id: 205, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Yao', lastName: 'Mensah' },
+    { id: 206, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Ama', lastName: 'Tetteh' },
+  ];
+  const onAddGrade = vi.fn(() => Promise.resolve());
+  const onUpdateGrade = vi.fn(() => Promise.resolve());
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      studentsList={studentsList}
+      gradesList={[]}
+      onAddGrade={onAddGrade}
+      onUpdateGrade={onUpdateGrade}
+      initialSelectedEvalId={2}
+    /> as any,
+    'super_admin',
+    null
+  );
+
+  const classSelect = screen.getAllByRole('combobox').find((select) => within(select).queryByText(/6ème A/));
+  if (!classSelect) throw new Error('Could not locate class select');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+  fireEvent.change(findEvaluationSelect(), { target: { value: '2' } });
+
+  const container = document.getElementById('grades-table-container');
+  if (!container) throw new Error('Could not locate grades table container');
+  const scoreFor = (name: RegExp) => {
+    const row = screen.getByText(name).closest('tr');
+    if (!row) throw new Error(`Could not locate student row for ${name}`);
+    return within(row).getByRole('spinbutton') as HTMLInputElement;
+  };
+  const invalidInput = scoreFor(/Dupont Jean/i);
+  fireEvent.change(invalidInput, { target: { value: '21' } });
+  ['Claire Marie', 'Diallo Ali', 'Kossi Awa', 'Mensah Yao', 'Tetteh Ama'].forEach((name, index) => {
+    fireEvent.change(scoreFor(new RegExp(name, 'i')), { target: { value: String(14 - index) } });
+  });
+
+  fireEvent.click(within(container).getByRole('button', { name: /Enregistrer tout/i }));
+
+  expect(onAddGrade).not.toHaveBeenCalled();
+  expect(onUpdateGrade).not.toHaveBeenCalled();
+  expect(within(container).queryByRole('status')).toBeNull();
+  const alert = screen.getByRole('alert');
+  expect(alert.textContent).toContain('Enregistrement impossible');
+  expect(alert.textContent).toContain('Une note ne peut pas dépasser 20');
+  expect(alert.textContent).toContain('Dupont Jean');
+  expect(alert.textContent).toContain('Math');
+  expect(alert.textContent).toContain('21/20');
+  expect(invalidInput.getAttribute('aria-invalid')).toBe('true');
+  expect(Array.from(container.querySelectorAll<HTMLInputElement>('input[type="number"]'))
+    .filter((input) => input !== invalidInput)
+    .every((input) => input.getAttribute('aria-invalid') !== 'true')).toBe(true);
+});
+
+test('save all signals every invalid grade and keeps the alert until correction', async () => {
+  const studentsList = [
+    { id: 201, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Jean', lastName: 'Dupont' },
+    { id: 202, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Marie', lastName: 'Claire' },
+    { id: 203, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Ali', lastName: 'Diallo' },
+  ];
+  const onAddGrade = vi.fn(() => Promise.resolve());
+  renderWithAuth(
+    <NotesView {...baseProps} studentsList={studentsList} gradesList={[]} onAddGrade={onAddGrade} initialSelectedEvalId={2} /> as any,
+    'super_admin',
+    null
+  );
+
+  const classSelect = screen.getAllByRole('combobox').find((select) => within(select).queryByText(/6ème A/));
+  if (!classSelect) throw new Error('Could not locate class select');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+  fireEvent.change(findEvaluationSelect(), { target: { value: '2' } });
+
+  const container = document.getElementById('grades-table-container');
+  if (!container) throw new Error('Could not locate grades table container');
+  const scoreFor = (name: RegExp) => {
+    const row = screen.getByText(name).closest('tr');
+    if (!row) throw new Error(`Could not locate student row for ${name}`);
+    return within(row).getByRole('spinbutton') as HTMLInputElement;
+  };
+  const firstInvalid = scoreFor(/Dupont Jean/i);
+  const secondInvalid = scoreFor(/Claire Marie/i);
+  fireEvent.change(firstInvalid, { target: { value: '21' } });
+  fireEvent.change(secondInvalid, { target: { value: '-1' } });
+  fireEvent.change(scoreFor(/Diallo Ali/i), { target: { value: '13' } });
+  fireEvent.click(within(container).getByRole('button', { name: /Enregistrer tout/i }));
+
+  expect(onAddGrade).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert').textContent).toContain('Dupont Jean');
+  expect(screen.getByRole('alert').textContent).toContain('Claire Marie');
+  expect(firstInvalid.getAttribute('aria-invalid')).toBe('true');
+  expect(secondInvalid.getAttribute('aria-invalid')).toBe('true');
+
+  fireEvent.change(firstInvalid, { target: { value: '15' } });
+  await waitFor(() => expect(firstInvalid.getAttribute('aria-invalid')).toBe('false'));
+  expect(screen.getByRole('alert').textContent).not.toContain('Dupont Jean');
+  expect(secondInvalid.getAttribute('aria-invalid')).toBe('true');
+});
+
 test('save all restores the button and keeps the existing error message when saving fails', async () => {
   const props = {
     ...baseProps,
