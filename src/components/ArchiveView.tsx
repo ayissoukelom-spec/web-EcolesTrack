@@ -13,7 +13,7 @@ import {
   parseDateValue,
 } from '../lib/evaluationUtils';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 interface ArchiveViewProps {
@@ -126,59 +126,44 @@ export default function ArchiveView({
       ...grades.map((grade) => [grade.index, grade.studentName, grade.score, grade.remarks]),
     ];
 
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Relevé des notes');
-
-    worksheet['!cols'] = [
-      { wch: 5 },
-      { wch: 30 },
-      { wch: 15 },
-      { wch: 40 },
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Relevé des notes');
+    worksheet.addRows(rows);
+    worksheet.columns = [
+      { width: 5 },
+      { width: 30 },
+      { width: 15 },
+      { width: 40 },
     ];
-    worksheet['!freeze'] = { xSplit: 0, ySplit: 7 };
+    worksheet.views = [{ state: 'frozen', ySplit: 7 }];
+    worksheet.getCell('A1').font = { bold: true, size: 16 };
+    worksheet.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
 
-    const headerRow = 6;
-    const titleCell = worksheet['A1'];
-    if (titleCell) {
-      titleCell.s = {
-        font: { bold: true, sz: 16 },
-        alignment: { horizontal: 'left', vertical: 'center' },
+    const headerRow = worksheet.getRow(7);
+    for (let col = 1; col <= 4; col += 1) {
+      const cell = headerRow.getCell(col);
+      cell.font = { bold: true };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        bottom: { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        left: { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        right: { style: 'thin', color: { argb: 'FFBFBFBF' } },
       };
-    }
-
-    for (let col = 0; col < 4; col += 1) {
-      const cellRef = XLSX.utils.encode_cell({ r: headerRow, c: col });
-      const cell = worksheet[cellRef];
-      if (cell) {
-        cell.s = {
-          font: { bold: true },
-          fill: { fgColor: { rgb: 'FFDCE6F1' } },
-          border: {
-            top: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
-            bottom: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
-            left: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
-            right: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
-          },
-          alignment: { horizontal: 'center', vertical: 'center' },
-        };
-      }
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
     }
 
     grades.forEach((_, rowIndex) => {
-      const rowNumber = headerRow + 1 + rowIndex;
-      for (let col = 0; col < 4; col += 1) {
-        const cellRef = XLSX.utils.encode_cell({ r: rowNumber, c: col });
-        const cell = worksheet[cellRef];
-        if (cell) {
-          cell.s = {
-            alignment: { horizontal: col === 0 ? 'center' : 'left', vertical: 'center' },
-          };
-        }
+      const row = worksheet.getRow(8 + rowIndex);
+      for (let col = 1; col <= 4; col += 1) {
+        row.getCell(col).alignment = {
+          horizontal: col === 1 ? 'center' : 'left',
+          vertical: 'middle',
+        };
       }
     });
 
-    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellStyles: true });
+    const data = await workbook.xlsx.writeBuffer();
     const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     downloadBlob(blob, `archive-evaluation-${ev.id}.xlsx`);
   };

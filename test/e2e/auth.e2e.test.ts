@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import ExcelJS from 'exceljs';
 
 // Mock DB and Auth middleware before importing the server so the real server
 // uses our test doubles when startServer() runs on import.
@@ -656,6 +657,7 @@ function createMockDb() {
 
       const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
+        if (selectedAlias === 'user' && baseRow._joinedUser) return baseRow._joinedUser;
         if (resolveTableName(builder._table) === 'grades' && selectedAlias === 'subject') {
           const evaluation = FIXTURES.evaluations.find((row: any) => Number(row.id) === Number(baseRow.evaluationId));
           const subject = FIXTURES.subjects.find((row: any) => Number(row.id) === Number(evaluation?.subjectId));
@@ -714,6 +716,8 @@ function createMockDb() {
         const fromName = resolveTableName(builder._table);
         const hasStudentParentJoin = fromName === 'students'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
+        const hasUsersParentsJoin = fromName === 'users'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
         const hasParentStudentJoin = fromName === 'parents'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const hasClassTeachersClassJoin = fromName === 'classTeachers'
@@ -724,6 +728,7 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const baseConditions = { ...conditions };
         if (hasStudentParentJoin) delete baseConditions.userId;
+        if (hasUsersParentsJoin) delete baseConditions.phone;
         if (hasClassTeachersClassJoin) delete baseConditions.schoolId;
         if (hasHomeroomClassJoin) delete baseConditions.schoolId;
         if (hasAbsenceStudentJoin) delete baseConditions.schoolId;
@@ -733,7 +738,7 @@ function createMockDb() {
         const hasSchoolSubjectsJoin = fromName === 'subjects'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
-        let rows = filterTableRows(builder._table, baseConditions, builder._cond);
+        let rows = filterTableRows(builder._table, baseConditions, hasUsersParentsJoin ? undefined : builder._cond);
 
         if (hasAbsenceStudentJoin && conditions.schoolId != null) {
           rows = rows.filter((absence: any) => {
@@ -819,6 +824,16 @@ function createMockDb() {
           rows = rows.flatMap((student: any) => FIXTURES.parents
             .filter((parent: any) => parent.id === student.parentId)
             .map((parent: any) => ({ ...student, userId: parent.userId })));
+        }
+
+        if (hasUsersParentsJoin) {
+          const requestedPhone = String(conditions.phone ?? '').replace(/\D/g, '');
+          rows = rows
+            .filter((user: any) => user.role === 'parent' && FIXTURES.parents.some((parent: any) => (
+              Number(parent.userId) === Number(user.id)
+              && [parent.phone, user.phone].some((phone) => String(phone ?? '').replace(/\D/g, '') === requestedPhone)
+            )))
+            .map((user: any) => ({ ...user, _joinedUser: user }));
         }
 
         if (hasParentStudentJoin) {
@@ -937,10 +952,14 @@ function createMockDb() {
     },
     async transaction(callback: (tx: any) => Promise<any>) {
       const studentsBefore = JSON.parse(JSON.stringify(FIXTURES.students));
+      const usersBefore = JSON.parse(JSON.stringify(FIXTURES.users));
+      const localAuthsBefore = JSON.parse(JSON.stringify(FIXTURES.localAuths));
       try {
         return await callback(db);
       } catch (error) {
         FIXTURES.students.splice(0, FIXTURES.students.length, ...studentsBefore);
+        FIXTURES.users.splice(0, FIXTURES.users.length, ...usersBefore);
+        FIXTURES.localAuths.splice(0, FIXTURES.localAuths.length, ...localAuthsBefore);
         throw error;
       }
     },
@@ -1028,6 +1047,10 @@ function createMockDb() {
               return [existing || FIXTURES.homeroomAssignments[FIXTURES.homeroomAssignments.length - 1]];
             }
             if (obj.userId !== undefined && obj.passwordHash) {
+              if (db.__failNextLocalAuthInsert) {
+                db.__failNextLocalAuthInsert = false;
+                throw new Error('Simulated DB failure for local authentication');
+              }
               FIXTURES.localAuths.push(obj as any);
               return [obj];
             }
@@ -1111,6 +1134,11 @@ function createMockDb() {
             const tableName = resolveTableName(table);
             if (tableName === 'schoolSubjects') {
               const matchedRows = FIXTURES.schoolSubjects.filter((row: any) => Object.entries(conditions).every(([key, value]) => row[key] === value));
+              matchedRows.forEach((row: any) => Object.assign(row, values));
+              return matchedRows;
+            }
+            if (tableName === 'localAuths' && conditions.userId != null) {
+              const matchedRows = FIXTURES.localAuths.filter((row: any) => row.userId === Number(conditions.userId));
               matchedRows.forEach((row: any) => Object.assign(row, values));
               return matchedRows;
             }
@@ -1269,7 +1297,7 @@ vi.mock('../../src/middleware/auth.ts', async () => {
       else if (token === 'token-school') req.user = { uid: 'school-uid', role: 'school_admin', email: 'admin@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-teacher') req.user = { uid: 'teacher-uid', role: 'teacher', email: 'teacher@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-surveillant') req.user = { uid: 'surveillant-uid', role: 'surveillant', email: 'surveillant@school.test', schoolId: 10, simulated: false };
-      else req.user = null;
+      else return expr.verifyToken(req, res, next);
       if (req.user) req.user.appRole = expr.mapToAppRole(req.user.role);
       next();
       return;
@@ -1312,7 +1340,7 @@ vi.mock('src/middleware/auth', async () => {
       else if (token === 'token-school') req.user = { uid: 'school-uid', role: 'school_admin', email: 'admin@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-teacher') req.user = { uid: 'teacher-uid', role: 'teacher', email: 'teacher@school.test', schoolId: 10, simulated: false };
       else if (token === 'token-surveillant') req.user = { uid: 'surveillant-uid', role: 'surveillant', email: 'surveillant@school.test', schoolId: 10, simulated: false };
-      else req.user = null;
+      else return expr.verifyToken(req, res, next);
       if (req.user) req.user.appRole = expr.mapToAppRole(req.user.role);
       next();
       return;
@@ -2106,6 +2134,7 @@ describe('E2E security: auth & privilege checks', () => {
       evaluationMaximumScore: 19,
     });
     expect(grades.body.some((grade: any) => [13, 14, 15].includes(grade.studentId))).toBe(false);
+    expect(JSON.stringify(grades.body)).not.toMatch(/Other (Minimum|Maximum)/);
     expect(grades.body.every((grade: any) => !('minimumStudentId' in grade) && !('maximumStudentId' in grade))).toBe(true);
 
     const ownJustification = await parentAGet('/api/absences/101/justification/download');
@@ -2558,17 +2587,25 @@ describe('E2E security: auth & privilege checks', () => {
       });
 
     expect(res.status).toBe(200);
-    const XLSX = await import('xlsx');
-    const workbook = XLSX.read(res.body, { type: 'buffer' });
-    expect(workbook.SheetNames).toEqual(['parents', 'Instructions']);
-    expect(XLSX.utils.sheet_to_json(workbook.Sheets.parents, { header: 1 })[0]).toEqual([
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body);
+    expect(workbook.worksheets.map((worksheet) => worksheet.name)).toEqual(['parents', 'Instructions']);
+    const parentsWorksheet = workbook.getWorksheet('parents')!;
+    const parentHeaders = parentsWorksheet.getRow(1).values as unknown as unknown[];
+    expect(parentHeaders.slice(1)).toEqual([
       'Nom', 'Prénoms', 'email', 'phonePrefix', 'phone', 'address', 'schoolId', 'studentId',
       'parentType', 'gender', 'studentIds', 'studentNames',
     ]);
-    const instructions = XLSX.utils.sheet_to_json(workbook.Sheets.Instructions, { header: 1 }).flat().join(' ');
-    expect(instructions).toContain('Indicatif togolais 228, +228 ou 00228');
-    expect(instructions).toContain('+22890121212');
-    expect(instructions).toContain('aucun double indicatif');
+    const instructionsWorksheet = workbook.getWorksheet('Instructions')!;
+    const instructions: string[] = [];
+    instructionsWorksheet.eachRow((row) => {
+      const values = row.values as unknown as unknown[];
+      instructions.push(...values.slice(1).map(String));
+    });
+    const instructionsText = instructions.join(' ');
+    expect(instructionsText).toContain('Indicatif togolais 228, +228 ou 00228');
+    expect(instructionsText).toContain('+22890121212');
+    expect(instructionsText).toContain('aucun double indicatif');
   });
 
   it('3o. school_admin can batch import parents for their own school via POST /api/parents/batch', async () => {
@@ -2590,13 +2627,271 @@ describe('E2E security: auth & privilege checks', () => {
     const auth = FIXTURES.localAuths.find((row: any) => row.userId === importedUserId);
     expect(auth).toBeDefined();
     expect(auth.mustReset).toBe(true);
-    expect(crypto.pbkdf2Sync('123456', auth.salt, 310000, 64, 'sha512').toString('hex')).toBe(auth.passwordHash);
+    const temporaryPassword = res.body.inserted[0].temporaryPassword;
+    expect(temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(auth.passwordHash).not.toBe(temporaryPassword);
+    expect(auth).not.toHaveProperty('temporaryPassword');
+    expect(JSON.stringify(auth)).not.toContain(temporaryPassword);
+    expect(crypto.pbkdf2Sync(temporaryPassword, auth.salt, 310000, 64, 'sha512').toString('hex')).toBe(auth.passwordHash);
+
+    const sharedPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'localparent@x.test', password: '123456' });
+    expect(sharedPasswordLogin.status).toBe(401);
 
     const login = await request(app)
       .post('/api/auth/local-login')
-      .send({ email: 'localparent@x.test', password: '123456' });
+      .send({ email: 'localparent@x.test', password: temporaryPassword });
     expect(login.status).toBe(200);
     expect(login.body.mustReset).toBe(true);
+
+    await request(app)
+      .get('/api/grades')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('PASSWORD_RESET_REQUIRED'));
+
+    await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({ email: 'localparent@x.test', currentPassword: temporaryPassword, newPassword: 'Changed-Password-2026!' })
+      .expect(200);
+
+    const changedAuth = FIXTURES.localAuths.find((row: any) => row.userId === importedUserId);
+    expect(changedAuth.mustReset).toBe(false);
+    expect(changedAuth.passwordHash).toBe(crypto.pbkdf2Sync('Changed-Password-2026!', changedAuth.salt, 310000, 64, 'sha512').toString('hex'));
+    expect(changedAuth.passwordHash).not.toBe(crypto.pbkdf2Sync(temporaryPassword, changedAuth.salt, 310000, 64, 'sha512').toString('hex'));
+    const changedPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'localparent@x.test', password: 'Changed-Password-2026!' });
+    expect(changedPasswordLogin.status).toBe(200);
+
+    await request(app)
+      .get('/api/grades')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .expect(200);
+  });
+
+  it('creates local accounts with unique one-time temporary passwords and stores only hashes', async () => {
+    const create = (suffix: string, phone: string) => request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({
+        uid: `temporary-account-${suffix}`,
+        email: `temporary-account-${suffix}@x.test`,
+        name: `Temporary Teacher ${suffix}`,
+        lastName: 'Temporary',
+        firstNames: `Teacher ${suffix}`,
+        role: 'teacher',
+        schoolId: 10,
+        phone,
+      });
+
+    const [first, second] = await Promise.all([
+      create('one', '+22890000031'),
+      create('two', '+22890000032'),
+    ]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(second.body.temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(first.body.temporaryPassword).not.toBe('123456');
+    expect(second.body.temporaryPassword).not.toBe('123456');
+    expect(first.body.temporaryPassword).not.toBe(second.body.temporaryPassword);
+
+    const firstTemporaryPassword = first.body.temporaryPassword;
+    for (const response of [first, second]) {
+      const auth = FIXTURES.localAuths.find((row: any) => row.userId === response.body.id);
+      expect(auth).toMatchObject({ mustReset: true });
+      expect(auth.passwordHash).toMatch(/^[a-f0-9]{128}$/);
+      expect(auth.salt).toMatch(/^[a-f0-9]{32}$/);
+      expect(auth).not.toHaveProperty('temporaryPassword');
+      expect(auth.passwordHash).not.toBe(response.body.temporaryPassword);
+      expect(JSON.stringify(auth)).not.toContain(response.body.temporaryPassword);
+    }
+
+    const login = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: first.body.email, password: firstTemporaryPassword });
+    expect(login.status).toBe(200);
+    expect(login.body.mustReset).toBe(true);
+    await request(app)
+      .get('/api/grades')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('PASSWORD_RESET_REQUIRED'));
+
+    const newPassword = 'Changed-Teacher-2026!';
+    await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({ currentPassword: firstTemporaryPassword, newPassword })
+      .expect(200);
+
+    const oldPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: first.body.email, password: firstTemporaryPassword });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const phoneLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ identifier: '90000031', phoneCountryCode: '+228', password: newPassword });
+    expect(phoneLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: first.body.email, password: newPassword });
+    expect(newPasswordLogin.status).toBe(200);
+    expect(newPasswordLogin.body.mustReset).toBe(false);
+  }, 30000);
+
+  it('allows a parent without email to log in by phone and change the required temporary password', async () => {
+    const created = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', '******')
+      .send({
+        uid: 'temporary-parent-without-email',
+        name: 'Parent sans email',
+        role: 'parent',
+        schoolId: 10,
+        phone: '+22890000035',
+      })
+      .set('Authorization', 'Bearer token-school');
+
+    expect(created.status).toBe(201);
+    expect(created.body.email).toBeNull();
+    expect(created.body.temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+
+    const temporaryPassword = created.body.temporaryPassword;
+    const auth = FIXTURES.localAuths.find((row: any) => row.userId === created.body.id);
+    expect(auth.mustReset).toBe(true);
+    expect(auth).not.toHaveProperty('temporaryPassword');
+    expect(JSON.stringify(auth)).not.toContain(temporaryPassword);
+
+    const login = await request(app)
+      .post('/api/auth/local-login')
+      .send({ identifier: '90000035', phoneCountryCode: '+228', password: temporaryPassword });
+    expect(login.status).toBe(200);
+    expect(login.body).toMatchObject({ id: created.body.id, email: null, mustReset: true });
+
+    const newPassword = 'Changed-Password-2026!';
+    await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({ currentPassword: temporaryPassword, newPassword })
+      .expect(200);
+
+    expect(auth.mustReset).toBe(false);
+    const oldPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ identifier: '90000035', phoneCountryCode: '+228', password: temporaryPassword });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ identifier: '90000035', phoneCountryCode: '+228', password: newPassword });
+    expect(newPasswordLogin.status).toBe(200);
+    expect(newPasswordLogin.body.mustReset).toBe(false);
+  });
+
+  it('rolls back local account creation if local authentication cannot be stored', async () => {
+    (mockDb.db as any).__failNextLocalAuthInsert = true;
+    const response = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({
+        uid: 'temporary-account-auth-failure',
+        email: 'temporary-account-auth-failure@x.test',
+        name: 'Temporary Account Auth Failure',
+        role: 'surveillant',
+        schoolId: 10,
+        phone: '+22890000033',
+      });
+
+    expect(response.status).toBe(500);
+    expect(FIXTURES.users.some((row: any) => row.uid === 'temporary-account-auth-failure')).toBe(false);
+    expect(FIXTURES.localAuths).toHaveLength(0);
+  });
+
+  it('resets a local password to a new one-time temporary password', async () => {
+    const created = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-super')
+      .send({
+        uid: 'temporary-account-reset',
+        email: 'temporary-account-reset@x.test',
+        name: 'Temporary Account Reset',
+        role: 'surveillant',
+        schoolId: 10,
+        phone: '+22890000034',
+      });
+    expect(created.status).toBe(201);
+    const oldTemporaryPassword = created.body.temporaryPassword;
+
+    const reset = await request(app)
+      .post('/api/admin/set-password')
+      .set('Authorization', 'Bearer token-super')
+      .send({ userId: created.body.id });
+
+    expect(reset.status).toBe(200);
+    expect(reset.body.mustReset).toBe(true);
+    expect(reset.body.temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(reset.body.temporaryPassword).not.toBe(oldTemporaryPassword);
+    expect(reset.body).not.toHaveProperty('password');
+    expect(JSON.stringify(reset.body)).not.toContain(oldTemporaryPassword);
+
+    const resetAuth = FIXTURES.localAuths.find((row: any) => row.userId === created.body.id);
+    expect(resetAuth.mustReset).toBe(true);
+    expect(resetAuth.passwordHash).not.toBe(crypto.pbkdf2Sync(oldTemporaryPassword, resetAuth.salt, 310000, 64, 'sha512').toString('hex'));
+    expect(resetAuth.passwordHash).not.toBe(reset.body.temporaryPassword);
+
+    const oldPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: created.body.email, password: oldTemporaryPassword });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: created.body.email, password: reset.body.temporaryPassword });
+    expect(newLogin.status).toBe(200);
+    expect(newLogin.body.mustReset).toBe(true);
+
+    await request(app)
+      .get('/api/grades')
+      .set('Authorization', `Bearer ${newLogin.body.token}`)
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('PASSWORD_RESET_REQUIRED'));
+
+    const chosenPassword = 'Teacher-After-Reset-2026!';
+    await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${newLogin.body.token}`)
+      .send({ currentPassword: reset.body.temporaryPassword, newPassword: chosenPassword })
+      .expect(200);
+
+    const temporaryPasswordAfterChange = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: created.body.email, password: reset.body.temporaryPassword });
+    expect(temporaryPasswordAfterChange.status).toBe(401);
+
+    const chosenPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: created.body.email, password: chosenPassword });
+    expect(chosenPasswordLogin.status).toBe(200);
+    expect(chosenPasswordLogin.body.mustReset).toBe(false);
+  });
+
+  it('does not create local authentication when resetting an externally authenticated account', async () => {
+    const response = await request(app)
+      .post('/api/admin/set-password')
+      .set('Authorization', 'Bearer token-super')
+      .send({ userId: 3 });
+
+    expect(response.status).toBe(409);
+    expect(response.body).not.toHaveProperty('temporaryPassword');
+    expect(FIXTURES.localAuths).toHaveLength(0);
   });
 
   it('3o0. school_admin can batch import multiple parents without students', async () => {
@@ -2626,6 +2921,8 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body.insertedCount).toBe(1);
     expect(res.body.errors).toHaveLength(1);
     expect(res.body.errors[0].error).toContain('déjà utilisé par un autre compte');
+    expect(res.body.inserted[0].temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(res.body.errors[0]).not.toHaveProperty('temporaryPassword');
   });
 
   it('rejects parent import when another user role already owns the phone', async () => {
@@ -2829,14 +3126,20 @@ describe('E2E security: auth & privilege checks', () => {
         response.on('end', () => callback(null, Buffer.concat(chunks)));
       });
       expect(res.status).toBe(200);
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(res.body, { type: 'buffer' });
-      expect(workbook.SheetNames).toContain('instructions');
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets.students!, { header: 1 });
-      expect(rows[0]).toContain('parentPhonePrefix');
-      expect(rows[0]).toContain('parentPhone');
-      const instructions = XLSX.utils.sheet_to_json(workbook.Sheets.instructions!, { header: 1 });
-      expect(instructions.flat().join(' ')).toContain('+22890121212');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.body);
+      expect(workbook.worksheets.map((worksheet) => worksheet.name)).toContain('instructions');
+      const studentsWorksheet = workbook.getWorksheet('students')!;
+      const headers = (studentsWorksheet.getRow(1).values as unknown[]).slice(1);
+      expect(headers).toContain('parentPhonePrefix');
+      expect(headers).toContain('parentPhone');
+      const instructionsWorksheet = workbook.getWorksheet('instructions')!;
+      const instructions: string[] = [];
+      instructionsWorksheet.eachRow((row) => {
+        const values = row.values as unknown as unknown[];
+        instructions.push(...values.slice(1).map(String));
+      });
+      expect(instructions.join(' ')).toContain('+22890121212');
     });
 
     it('rejects a parent from another school even when the email matches', async () => {

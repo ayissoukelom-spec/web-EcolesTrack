@@ -98,6 +98,39 @@ describe('LoginView', () => {
     expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: '78 23 45 67', password: '123456', phoneCountryCode: '+229' });
   });
 
+  it('allows a parent without email to complete the required password change', async () => {
+    window.fetch = createFetchMock([
+      {
+        id: 35,
+        uid: 'parent_without_email',
+        email: null,
+        name: 'Parent sans email',
+        role: 'parent',
+        token: 'parent-without-email-jwt',
+        mustReset: true,
+      },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: '90000035' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'temporary-password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+    expect(await screen.findByText(/Vous devez remplacer le mot de passe par défaut/i)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Mot de passe actuel/i, { selector: 'input' }), { target: { value: 'temporary-password' } });
+    fireEvent.change(screen.getByLabelText(/^Nouveau mot de passe/i, { selector: 'input' }), { target: { value: 'Changed-Password-2026!' } });
+    fireEvent.change(screen.getByLabelText(/Confirmer le nouveau mot de passe/i, { selector: 'input' }), { target: { value: 'Changed-Password-2026!' } });
+    fireEvent.click(screen.getByRole('button', { name: /Mettre à jour le mot de passe/i }));
+
+    await waitFor(() => expect((window.fetch as any).mock.calls).toHaveLength(2));
+    expect(JSON.parse((window.fetch as any).mock.calls[1][1].body)).toEqual({
+      currentPassword: 'temporary-password',
+      newPassword: 'Changed-Password-2026!',
+    });
+  });
+
   it('does not store access token when login response is missing token', async () => {
     window.fetch = createFetchMock([
       { id: 1, uid: 'user_1', email: 'test@example.com', name: 'Test User', role: 'parent', mustReset: false },

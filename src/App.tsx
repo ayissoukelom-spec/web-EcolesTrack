@@ -80,7 +80,16 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
+  const importCredentialsSessionRef = useRef(`${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const sessionKey = `${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`;
+    if (importCredentialsSessionRef.current !== sessionKey) {
+      importCredentialsSessionRef.current = sessionKey;
+      setImportResult(null);
+    }
+  }, [authenticatedUser?.id, authenticatedUser?.uid, role, token]);
 
   // States loaded from backend
   const [stats, setStats] = useState({
@@ -440,6 +449,7 @@ export default function App() {
   }, [currentRole]);
 
   const handleRoleChange = (newRole: string) => {
+    setImportResult(null);
     if (!newRole) {
       clearSimulatedRole();
       clearSimulatedUser();
@@ -469,6 +479,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    setImportResult(null);
     clearSimulatedRole();
     clearSimulatedUser();
     try {
@@ -735,7 +746,7 @@ export default function App() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
     try {
       const payload = {
         ...data,
@@ -786,15 +797,16 @@ export default function App() {
     }
   };
 
-  const handleSetPassword = async (userId: number, password: string) => {
+  const handleSetPassword = async (userId: number) => {
     try {
-      await apiFetch('/api/admin/set-password', {
+      const result = await apiFetch('/api/admin/set-password', {
         method: 'POST',
-        body: JSON.stringify({ userId, password }),
+        body: JSON.stringify({ userId }),
       });
-      fetchAllData();
+      void fetchAllData(false);
+      return result;
     } catch (err: any) {
-      setErrorMsg(err.message || 'Impossible de mettre à jour le mot de passe');
+      setErrorMsg(err.message || 'Impossible de réinitialiser le mot de passe');
       throw err;
     }
   };
@@ -1470,6 +1482,7 @@ export default function App() {
                   onBatchCreateStudents={handleBatchCreateStudents}
                   onBatchCreateParents={handleBatchCreateParents}
                   importResult={importResult}
+                  onClearImportResult={() => setImportResult(null)}
                   onCreateUser={handleCreateUser}
                   onUpdateUser={handleUpdateUser}
                   onSetPassword={handleSetPassword}

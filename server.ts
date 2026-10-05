@@ -23,6 +23,7 @@ const fetch = globalThis.fetch;
 import path from 'path';
 import { promises as fsPromises } from 'fs';
 import crypto from 'crypto';
+import ExcelJS from 'exceljs';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
@@ -36,6 +37,7 @@ import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gr
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
+import { generateTemporaryLocalPassword, hashLocalPassword } from './src/lib/localPassword.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
@@ -1557,8 +1559,8 @@ export async function createApp() {
       });
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
-      const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, password, classIds, teachingAssignments, studentId } = req.body;
-      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds, passwordPresent: typeof password === 'string' && password.length > 0 });
+      const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
+      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds });
       const normalizedEmail = normalizeEmail(email);
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
       if (role !== 'parent' && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
@@ -1612,9 +1614,6 @@ export async function createApp() {
       if ((role === 'teacher' || role === 'surveillant') && (schoolId == null) && actor.role === 'school_admin' && actor.schoolId == null) {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher and surveillant roles' });
       }
-
-      // Do not require an explicit password during creation; a default password will be applied.
-      // The provided `password` field will be ignored to enforce the default.
 
       // Check if school_admin is creating a user for a different school
       if (actor.role === 'school_admin' && schoolId != null && schoolId !== actor.schoolId) {
@@ -1706,19 +1705,28 @@ export async function createApp() {
         }
       }
 
-      const newUserRows = await db.insert(users).values({
-        uid: finalUid,
-        email: normalizedEmail,
-        name: teacherDisplayName,
-        lastName: role === 'teacher' ? String(lastName).trim().toUpperCase() : null,
-        firstNames: role === 'teacher' ? String(firstNames).trim() : null,
-        role,
-        schoolId: resolvedSchoolId,
-        academicYearId,
-        gender: gender ?? null,
-        phone: canonicalPhone,
-      }).returning();
-      const createdUser = newUserRows[0];
+      const temporaryCredential = generateTemporaryLocalPassword();
+      const createdUser = await db.transaction(async (tx) => {
+        const [newUser] = await tx.insert(users).values({
+          uid: finalUid,
+          email: normalizedEmail,
+          name: teacherDisplayName,
+          lastName: role === 'teacher' ? String(lastName).trim().toUpperCase() : null,
+          firstNames: role === 'teacher' ? String(firstNames).trim() : null,
+          role,
+          schoolId: resolvedSchoolId,
+          academicYearId,
+          gender: gender ?? null,
+          phone: canonicalPhone,
+        }).returning();
+        await tx.insert(localAuths).values({
+          userId: newUser.id,
+          passwordHash: temporaryCredential.passwordHash,
+          salt: temporaryCredential.salt,
+          mustReset: true,
+        });
+        return newUser;
+      });
 
       if (role === 'school_admin' && resolvedSchoolId != null) {
         await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
@@ -1855,27 +1863,12 @@ export async function createApp() {
         }
       }
 
-      // Create local auth credentials with enforced default password '123456'.
-      try {
-        const passwordToSet = '123456';
-        const crypto = await import('node:crypto');
-        const salt = crypto.randomBytes(16).toString('hex');
-        const hash = crypto.pbkdf2Sync(passwordToSet, salt, 310000, 64, 'sha512').toString('hex');
-        const existingLocal = await db.select().from(localAuths).where(eq(localAuths.userId, createdUser.id));
-        if (existingLocal.length > 0) {
-          await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: true }).where(eq(localAuths.userId, createdUser.id));
-        } else {
-          await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt, mustReset: true }).returning();
-        }
-      } catch (e: any) {
-        console.warn('Failed to set default password for new user', { userId: createdUser.id, err: e?.message || e });
-      }
-
       await logAuditEvent(actor, 'create', 'user', createdUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created ${role} account ${createdUser.email}`);
 
       // Build response with classIds for teachers
       const responseBody: any = {
         ...createdUser,
+        temporaryPassword: temporaryCredential.temporaryPassword,
         specialization: role === 'teacher' ? (teacherProfile?.specialization || null) : null,
         phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? canonicalPhone : createdUser.phone ?? null,
       };
@@ -2331,28 +2324,18 @@ export async function createApp() {
   // Admin: set password for a user (super_admin or school_admin for own school)
   app.post('/api/admin/set-password', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log('DEBUG /api/admin/set-password headers', {
-        simulatedRole: req.headers['x-simulated-role'],
-        simulatedSchoolId: req.headers['x-simulated-school-id'],
-        contentType: req.headers['content-type'],
-      });
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
-      console.log('DEBUG /api/admin/set-password actor', actor);
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
-      const { userId, password } = req.body;
-      console.log('DEBUG /api/admin/set-password body', { userId, passwordPresent: !!password });
-      if (!userId || !password) return res.status(400).json({ error: 'Missing userId or password' });
-      if (password === '123456') return res.status(400).json({ error: 'Le mot de passe ne peut pas être le mot de passe par défaut' });
+      const userId = Number(req.body?.userId);
+      if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid userId' });
 
-      const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
-      console.log('DEBUG /api/admin/set-password targetUser', targetUser);
+      const [targetUser] = await db.select().from(users).where(eq(users.id, userId));
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
       if (targetUser.role === 'student') return res.status(403).json({ error: 'Cannot set password for student profile' });
       if (actor.role === 'school_admin') {
         if (targetUser.schoolId !== actor.schoolId) {
-          console.log('DEBUG /api/admin/set-password forbidden school mismatch', { actorSchoolId: actor.schoolId, targetSchoolId: targetUser.schoolId });
           return res.status(403).json({ error: 'Forbidden: cannot set password for users outside your school' });
         }
         if (['super_admin', 'school_admin'].includes(targetUser.role)) {
@@ -2360,21 +2343,21 @@ export async function createApp() {
         }
       }
 
-      // simple PBKDF2 hashing
-      const crypto = await import('node:crypto');
-      const salt = crypto.randomBytes(16).toString('hex');
-      const hash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
-
-      const exists = await db.select().from(localAuths).where(eq(localAuths.userId, parseInt(userId)));
-      if (exists.length > 0) {
-        await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: false }).where(eq(localAuths.userId, parseInt(userId)));
-      } else {
-        await db.insert(localAuths).values({ userId: parseInt(userId), passwordHash: hash, salt, mustReset: false }).returning();
+      const [existingLocalAuth] = await db.select().from(localAuths).where(eq(localAuths.userId, userId));
+      if (!existingLocalAuth) {
+        return res.status(409).json({ error: 'This account does not use local password authentication' });
       }
 
-      res.json({ success: true, userId });
+      const temporaryCredential = generateTemporaryLocalPassword();
+      await db.update(localAuths).set({
+        passwordHash: temporaryCredential.passwordHash,
+        salt: temporaryCredential.salt,
+        mustReset: true,
+      }).where(eq(localAuths.userId, userId));
+
+      res.json({ success: true, userId, temporaryPassword: temporaryCredential.temporaryPassword, mustReset: true });
     } catch (err: any) {
-      console.error('Error setting password:', err);
+      console.error('Error resetting local password:', err?.message || err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -2531,19 +2514,23 @@ export async function createApp() {
   app.post('/api/auth/change-password', requireAuth, async (req: AuthRequest, res) => {
     try {
       const { email, currentPassword, newPassword } = req.body;
-      if (!email || !currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+      if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+      const authenticatedUserId = req.user?.id;
+      if (typeof authenticatedUserId !== 'number' || !Number.isInteger(authenticatedUserId)) {
+        return res.status(401).json({ error: 'Unauthenticated' });
+      }
       const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
       if (passwordPolicyError) return res.status(400).json({ error: passwordPolicyError });
 
-      const normalizedEmail = String(email).trim().toLowerCase();
-      const authenticatedEmail = req.user?.email ? String(req.user.email).trim().toLowerCase() : '';
-      if (!authenticatedEmail || authenticatedEmail !== normalizedEmail) {
-        return res.status(403).json({ error: 'Forbidden: authenticated user does not match requested email' });
-      }
+      const [userRecord] = await db.select().from(users).where(eq(users.id, authenticatedUserId));
+      if (!userRecord) return res.status(404).json({ error: 'Utilisateur non trouvé' });
 
-      const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
-      if (usersFound.length === 0) return res.status(404).json({ error: 'Utilisateur non trouvé' });
-      const userRecord = usersFound[0];
+      if (email != null && String(email).trim()) {
+        const requestedEmail = normalizeEmail(email);
+        if (!userRecord.email || requestedEmail !== normalizeEmail(userRecord.email)) {
+          return res.status(403).json({ error: 'Forbidden: authenticated user does not match requested email' });
+        }
+      }
 
       const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
       if (authRows.length === 0) return res.status(400).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
@@ -2555,7 +2542,7 @@ export async function createApp() {
 
       // Hash new password and clear mustReset
       const newSalt = crypto.randomBytes(16).toString('hex');
-      const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 310000, 64, 'sha512').toString('hex');
+      const newHash = hashLocalPassword(newPassword, newSalt);
 
       await db.update(localAuths).set({ passwordHash: newHash, salt: newSalt, mustReset: false }).where(eq(localAuths.userId, userRecord.id));
 
@@ -3616,16 +3603,13 @@ export async function createApp() {
   app.get('/api/students/template', async (req, res) => {
     try {
       // generate a small workbook with headers matching expected fields
-      // lazy-import xlsx so server starts even if dependency not installed yet
-      const XLSX = await import('xlsx');
       const rows = [
         ['firstName', 'lastName', 'birthDate', 'schoolId', 'classId', 'parentId', 'parentName', 'parentEmail', 'parentPhonePrefix', 'parentPhone', 'academicYearId', 'studentStatus', 'teacherId', 'schoolAdminId', 'gender'],
         ['Lucas', 'Dubois', '2008-04-12', 1, 1, '', 'Marie Dubois', 'marie.dubois@example.com', '+228', '90000001', 1, '', 2, 1, 'Masculin'],
         ['Chloe', 'Dubois', '2010-09-25', 1, 1, '', 'Paul Dubois', '', '', '+22890000002', 1, '', 3, 1, 'Féminin'],
       ];
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'students');
+      const wb = new ExcelJS.Workbook();
+      wb.addWorksheet('students').addRows(rows);
       const instructions = [
         ['Identification du parent'],
         ['Renseigner au moins une des colonnes parentId, parentPhone ou parentEmail.'],
@@ -3640,8 +3624,8 @@ export async function createApp() {
         ['Numéro complet', '', '228 90121212', '+22890121212'],
         ['En cas de parent introuvable, ambigu ou de clés contradictoires, la ligne est rejetée.'],
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), 'instructions');
-      const buf: ArrayBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      wb.addWorksheet('instructions').addRows(instructions);
+      const buf = await wb.xlsx.writeBuffer();
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="students_template.xlsx"');
       res.send(Buffer.from(buf));
@@ -6712,37 +6696,33 @@ export async function createApp() {
   // Return an Excel template for parents (public - no auth required)
   app.get('/api/parents/template', async (req, res) => {
     try {
-      const XLSX = await import('xlsx');
       const headers = [...PARENT_IMPORT_HEADERS];
-      const worksheet = XLSX.utils.aoa_to_sheet([headers]);
-      worksheet['!cols'] = headers.map((_, index) => ({ wch: index === 0 ? 24 : 18 }));
-      worksheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
-      const headerStyle = {
-        font: { bold: true, color: { rgb: 'FFFFFF' } },
-        fill: { fgColor: { rgb: '2563EB' }, type: 'pattern', patternType: 'solid' },
-        border: {
-          top: { style: 'thin', color: { rgb: 'D1D5DB' } },
-          bottom: { style: 'thin', color: { rgb: 'D1D5DB' } },
-          left: { style: 'thin', color: { rgb: 'D1D5DB' } },
-          right: { style: 'thin', color: { rgb: 'D1D5DB' } },
-        },
-      };
-      headers.forEach((_, index) => {
-        const cellRef = XLSX.utils.encode_cell({ r: 0, c: index });
-        worksheet[cellRef] = { ...worksheet[cellRef], s: headerStyle };
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('parents');
+      worksheet.addRow(headers);
+      worksheet.columns = headers.map((_, index) => ({ width: index === 0 ? 24 : 18 }));
+      worksheet.views = [{ state: 'frozen', ySplit: 1, topLeftCell: 'A2' }];
+      worksheet.getRow(1).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        };
       });
-      const instructions = XLSX.utils.aoa_to_sheet([
+      const instructions = [
         ['Colonne', 'Format attendu', 'Exemple'],
         ['phonePrefix', 'Indicatif togolais 228, +228 ou 00228. Facultatif : +228 est utilisé par défaut.', '228'],
         ['phone', '8 chiffres locaux, ou numéro complet +228..., 00228... ou 228...; espaces et séparateurs sont ignorés.', '90121212'],
         ['Combinaison', 'Avec un numéro local, phonePrefix est ajouté une seule fois. Avec un numéro complet, phonePrefix peut être vide ou 228; il n’est jamais ajouté une deuxième fois.', '228 + 90121212 → +22890121212'],
         ['Numéro complet', 'Un indicatif déjà présent est reconnu et normalisé en +228; aucun double indicatif n’est ajouté.', '00228 90121212 → +22890121212'],
-      ]);
-      instructions['!cols'] = [{ wch: 20 }, { wch: 86 }, { wch: 38 }];
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'parents');
-      XLSX.utils.book_append_sheet(workbook, instructions, 'Instructions');
-      const buffer: ArrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+      ];
+      const instructionsWorksheet = workbook.addWorksheet('Instructions');
+      instructionsWorksheet.addRows(instructions);
+      instructionsWorksheet.columns = [{ width: 20 }, { width: 86 }, { width: 38 }];
+      const buffer = await workbook.xlsx.writeBuffer();
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="parents_template.xlsx"');
@@ -6951,9 +6931,27 @@ export async function createApp() {
         if (errors.length > errorsBeforeStudentLookup) continue;
 
         const fakeUid = `sim_parent_${Date.now()}_${i}`;
-        let userRes: any[];
+        const temporaryCredential = generateTemporaryLocalPassword();
+        let createdUser: typeof users.$inferSelect;
         try {
-          userRes = await db.insert(users).values({ uid: fakeUid, email: normalizedEmail, name, role: 'parent', schoolId, gender, phone: canonicalPhone }).returning();
+          createdUser = await db.transaction(async (tx) => {
+            const [newUser] = await tx.insert(users).values({
+              uid: fakeUid,
+              email: normalizedEmail,
+              name,
+              role: 'parent',
+              schoolId,
+              gender,
+              phone: canonicalPhone,
+            }).returning();
+            await tx.insert(localAuths).values({
+              userId: newUser.id,
+              passwordHash: temporaryCredential.passwordHash,
+              salt: temporaryCredential.salt,
+              mustReset: true,
+            });
+            return newUser;
+          });
         } catch (err: any) {
           if (isUsersPhoneUniqueViolation(err)) {
             addRowError(DUPLICATE_PHONE_ERROR.message);
@@ -6961,7 +6959,6 @@ export async function createApp() {
           }
           throw err;
         }
-        const createdUser = userRes[0];
         const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: canonicalPhone, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
         if (linkedStudentId != null) {
           await db.update(students).set({ parentId: parentRes[0].id }).where(and(
@@ -6983,31 +6980,11 @@ export async function createApp() {
           console.warn('Failed to insert user_schools for imported parent', e?.message || e);
         }
 
-        try {
-          const passwordToSet = '123456';
-          const crypto = await import('node:crypto');
-          const salt = crypto.randomBytes(16).toString('hex');
-          const hash = crypto.pbkdf2Sync(passwordToSet, salt, 310000, 64, 'sha512').toString('hex');
-          const existingLocal = await db.select().from(localAuths).where(eq(localAuths.userId, createdUser.id));
-          if (existingLocal.length > 0) {
-            await db.update(localAuths).set({ passwordHash: hash, salt, mustReset: true }).where(eq(localAuths.userId, createdUser.id));
-          } else {
-            await db.insert(localAuths).values({ userId: createdUser.id, passwordHash: hash, salt, mustReset: true }).returning();
-          }
-        } catch (e: any) {
-          console.warn('Failed to set default password for imported parent', {
-            userId: createdUser.id,
-            message: e?.message,
-            code: e?.code,
-            detail: e?.detail,
-            constraint: e?.constraint,
-            table: e?.table,
-            column: e?.column,
-            where: e?.where,
-          });
-        }
-
-        inserted.push({ user: createdUser, parentId: parentRes[0].id });
+        inserted.push({
+          user: createdUser,
+          parentId: parentRes[0].id,
+          temporaryPassword: temporaryCredential.temporaryPassword,
+        });
       }
 
       // audit
@@ -10596,6 +10573,7 @@ if (uniqueParentIds.length > 0) {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
 
+      let childStudentIds: number[] = [];
       let query = db
         .select({
           id: grades.id,
@@ -10623,7 +10601,7 @@ if (uniqueParentIds.length > 0) {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          childStudentIds = await getParentChildStudentIds(actor.id);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -10681,6 +10659,7 @@ if (uniqueParentIds.length > 0) {
         evaluationMaximumScore: scoreBounds.get(grade.evaluationId)?.maximum ?? null,
       })));
     } catch (err: any) {
+      console.error('Error fetching grades list:', err);
       res.status(500).json({ error: 'Failed to fetch grades list' });
     }
   });

@@ -26,11 +26,6 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
     event.preventDefault();
     setError(null);
 
-    if (!simulatedUser?.email) {
-      setError('Impossible de récupérer l’adresse e-mail de l’utilisateur.');
-      return;
-    }
-
     if (!currentPassword.trim()) {
       setError('Le mot de passe actuel est requis.');
       return;
@@ -55,7 +50,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
       await apiFetch('/api/auth/change-password', {
         method: 'POST',
         body: JSON.stringify({
-          email: simulatedUser.email,
+          ...(simulatedUser.email ? { email: simulatedUser.email } : {}),
           currentPassword,
           newPassword,
         }),

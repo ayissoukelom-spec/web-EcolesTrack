@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { MessageCircle } from 'lucide-react';
 import type { Student, UserRole } from '../types.ts';
 import { apiFetch, getUiErrorMessage } from '../lib/api.ts';
@@ -60,7 +61,7 @@ export default function ParentWhatsAppButton({ currentRole, studentsList }: Pare
       {whatsAppUrl && (
         <a
           href={whatsAppUrl}
-          target="_blank"
+          target={Capacitor.isNativePlatform() ? undefined : '_blank'}
           rel="noopener noreferrer"
           className="inline-flex items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
         >

@@ -1,10 +1,15 @@
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ParentWhatsAppButton from './ParentWhatsAppButton';
 
-const { apiFetchMock } = vi.hoisted(() => ({
+const { apiFetchMock, mockIsNativePlatform } = vi.hoisted(() => ({
   apiFetchMock: vi.fn(),
+  mockIsNativePlatform: vi.fn(() => false),
+}));
+
+vi.mock('@capacitor/core', () => ({
+  Capacitor: { isNativePlatform: mockIsNativePlatform },
 }));
 
 vi.mock('../lib/api.ts', () => ({
@@ -18,7 +23,10 @@ const children = [
 ];
 
 describe('ParentWhatsAppButton', () => {
-  beforeEach(() => apiFetchMock.mockReset());
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    mockIsNativePlatform.mockReset().mockReturnValue(false);
+  });
   afterEach(() => cleanup());
 
   it('uses the existing contact API for an authorized child and opens only its returned WhatsApp link', async () => {
@@ -35,6 +43,19 @@ describe('ParentWhatsAppButton', () => {
     expect(apiFetchMock).toHaveBeenCalledWith('/api/parent/whatsapp-contact?studentId=71');
   });
 
+  it('uses normal external-link navigation in Capacitor so the operating system can open WhatsApp', async () => {
+    mockIsNativePlatform.mockReturnValue(true);
+    apiFetchMock.mockResolvedValue({ whatsappUrl: 'https://wa.me/22890000001?text=Bonjour' });
+
+    render(<ParentWhatsAppButton currentRole="parent" studentsList={children} />);
+
+    const button = await screen.findByRole('link', { name: "WhatsApp — Contacter l'administration" });
+    expect(button.getAttribute('href')).toBe('https://wa.me/22890000001?text=Bonjour');
+    expect(button.getAttribute('target')).toBeNull();
+    fireEvent.click(button);
+    expect(button.getAttribute('href')).toBe('https://wa.me/22890000001?text=Bonjour');
+  });
+
   it('hides the button when the API has no usable administrator phone', async () => {
     apiFetchMock.mockResolvedValue({ whatsappUrl: null });
     render(<ParentWhatsAppButton currentRole="parent" studentsList={children} />);
@@ -48,6 +69,14 @@ describe('ParentWhatsAppButton', () => {
     render(<ParentWhatsAppButton currentRole="parent" studentsList={children} />);
 
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /WhatsApp/i })).toBeNull();
+  });
+
+  it('shows a readable error when the contact API fails', async () => {
+    apiFetchMock.mockRejectedValue(new Error('Service indisponible'));
+    render(<ParentWhatsAppButton currentRole="parent" studentsList={children} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Service indisponible');
     expect(screen.queryByRole('link', { name: /WhatsApp/i })).toBeNull();
   });
 

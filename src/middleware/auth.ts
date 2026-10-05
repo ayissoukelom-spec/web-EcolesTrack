@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getJwtSecret, verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
-import { tokenBlacklist, users } from '../db/schema.ts';
+import { localAuths, tokenBlacklist, users } from '../db/schema.ts';
 import { eq, gt, and, or } from 'drizzle-orm';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
@@ -132,6 +132,18 @@ export const verifyToken = async (
 
     if (decoded.sub !== String(dbUser.id)) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+
+    const [localAuth] = await db.select({ mustReset: localAuths.mustReset })
+      .from(localAuths)
+      .where(eq(localAuths.userId, dbUser.id));
+    const isPasswordChangeRequest = req.method === 'POST' && req.path === '/api/auth/change-password';
+    const isLogoutRequest = req.method === 'POST' && req.path === '/api/auth/logout';
+    if (localAuth?.mustReset && !isPasswordChangeRequest && !isLogoutRequest) {
+      return res.status(403).json({
+        error: 'Veuillez changer votre mot de passe avant de continuer.',
+        code: 'PASSWORD_RESET_REQUIRED',
+      });
     }
 
     req.user = {

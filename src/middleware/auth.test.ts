@@ -40,7 +40,7 @@ describe('auth middleware access control', () => {
     process.env.NODE_ENV = 'production';
     process.env.JWT_SECRET = 'test-jwt-secret';
     mockDb.select.mockClear();
-    mockWhere.mockClear();
+    mockWhere.mockReset();
     mockVerifyJwt.mockClear();
   });
 
@@ -74,6 +74,7 @@ describe('auth middleware access control', () => {
     });
     mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([]);
 
     const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
     const res = createMockRes();
@@ -202,6 +203,72 @@ describe('auth middleware access control', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('restricts temporary-password tokens to password change and logout', async () => {
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: 'user_99',
+      type: 'access',
+      jti: 'jti-99',
+      sub: '99',
+    });
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([{
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    }]);
+    mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
+
+    const req = {
+      headers: { authorization: 'Bearer temporary-token' },
+      method: 'GET',
+      path: '/api/grades',
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'PASSWORD_RESET_REQUIRED' }));
+  });
+
+  it('allows a temporary-password token to reach the password-change endpoint', async () => {
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: 'user_99',
+      type: 'access',
+      jti: 'jti-99',
+      sub: '99',
+    });
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([{
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    }]);
+    mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
+
+    const req = {
+      headers: { authorization: 'Bearer temporary-token' },
+      method: 'POST',
+      path: '/api/auth/change-password',
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.user?.id).toBe(99);
+    expect(res.status).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid JWT signature without falling back to simulated auth', async () => {

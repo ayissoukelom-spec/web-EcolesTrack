@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import App from './App.tsx';
 import { AuthProvider } from './contexts/AuthContext.tsx';
 
@@ -68,7 +69,27 @@ vi.mock('./hooks/useAbsences.ts', () => ({
 vi.mock('./components/SimulatorHeader.tsx', () => ({ default: () => <div>SimulatorHeader</div> }));
 vi.mock('./components/LoginView.tsx', () => ({ default: () => <div>LoginView</div> }));
 vi.mock('./components/DashboardView.tsx', () => ({ default: () => <div>DashboardView</div> }));
-vi.mock('./components/AdminView.tsx', () => ({ default: () => <div>AdminView</div> }));
+vi.mock('./components/AdminView.tsx', () => ({
+  default: ({ onSetPassword }: { onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }> }) => {
+    const [temporaryPassword, setTemporaryPassword] = useState('');
+    return (
+      <>
+        <div>AdminView</div>
+        {onSetPassword && (
+          <button
+            onClick={async () => {
+              const result = await onSetPassword(61);
+              setTemporaryPassword(result.temporaryPassword || '');
+            }}
+          >
+            Mock reset parent account
+          </button>
+        )}
+        {temporaryPassword && <div role="dialog">{temporaryPassword}</div>}
+      </>
+    );
+  },
+}));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./components/AbsenceView.tsx', () => ({
   default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence }: {
@@ -234,6 +255,43 @@ describe('App bulletin navigation', () => {
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('refreshes after reset without unmounting the admin view or losing its temporary password result', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    const temporaryPassword = 'K7mP4xQa';
+    mockApiFetch.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/admin/set-password' && options?.method === 'POST') {
+        return Promise.resolve({ temporaryPassword, mustReset: true });
+      }
+      if (url === '/api/schools') return Promise.resolve([]);
+      if (url === '/api/academic-years') return Promise.resolve([]);
+      if (url === '/api/teachers') return Promise.resolve([]);
+      if (url === '/api/parents') return Promise.resolve([]);
+      if (url === '/api/evaluations') return Promise.resolve([]);
+      if (url === '/api/grades') return Promise.resolve([]);
+      if (url === '/api/notifications') return Promise.resolve([]);
+      if (url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Administration' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock reset parent account' }));
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent(temporaryPassword);
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/admin/set-password', {
+      method: 'POST',
+      body: JSON.stringify({ userId: 61 }),
+    }));
+    expect(screen.getByRole('dialog')).toHaveTextContent(temporaryPassword);
   });
 
   it('refreshes grades from the backend after saving a grade', async () => {

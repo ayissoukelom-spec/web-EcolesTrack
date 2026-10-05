@@ -29,7 +29,8 @@ import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
 import { getClassGroupsVisibleToSchool, isClassVisibleToSchool } from '../lib/classVisibility.ts';
 import { normalizeClassProgressionCode } from '../lib/classProgression.ts';
 import { STUDENT_ACADEMIC_YEAR_STATUSES, isStudentAcademicYearStatus } from '../lib/studentAcademicYearStatus.ts';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { readFirstExcelSheetRecords } from '../lib/excelImport';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import TeachingAssignmentsEditor, { type TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
@@ -37,6 +38,7 @@ import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
 import { matchesParentSearch } from '../lib/parentSearch';
 import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
 import { canonicalizeStudentParentPhone } from '../lib/studentImport';
+import { buildTemporaryCredentialsWorkbook, mapTemporaryCredentialAccounts } from '../lib/temporaryCredentialsWorkbook';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 
 const validateRecords = (records: any[]) => {
@@ -130,7 +132,7 @@ const getCompleteTeachingAssignments = (assignments: TeachingAssignmentDraft[]) 
 
   const normalizeRecords = (records: any[]) => {
     return records.map((r: any) => {
-      const out: any = {};
+      const out = Object.create(null) as Record<string, any>;
       // copy and trim strings
       Object.keys(r || {}).forEach((k) => { out[k] = String(r[k] ?? '').trim(); });
       // normalize date
@@ -433,9 +435,10 @@ interface AdminViewProps {
   onBatchCreateStudents?: (records: any[]) => void;
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
+  onClearImportResult?: () => void;
   onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
   onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
-  onSetPassword?: (userId: number, password: string) => Promise<any>;
+  onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }>;
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number) => void;
@@ -477,6 +480,7 @@ export default function AdminView({
   onBatchCreateStudents,
   onBatchCreateParents,
   importResult,
+  onClearImportResult,
   onCreateUser,
   usersList,
   onDeleteClass,
@@ -1171,7 +1175,7 @@ export default function AdminView({
     yearsList.find((y) => y.id === classesList.find((c) => c.id === st.classId)?.academicYearId)?.name ||
     '';
 
-  const exportStudentsExcel = () => {
+  const exportStudentsExcel = async () => {
     if (!isStudentExportAllowed) return;
 
     const rows = sortedVisibleStudents.map((st) => ({
@@ -1181,10 +1185,11 @@ export default function AdminView({
       'Année scolaire': getStudentAcademicYearName(st),
       Tuteur: st.parentName || '',
     }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Élèves');
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Élèves');
+    worksheet.columns = Object.keys(rows[0] || {}).map((header) => ({ header, key: header }));
+    worksheet.addRows(rows.map((row) => Object.values(row)));
+    const excelBuffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([excelBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -1200,7 +1205,7 @@ export default function AdminView({
     URL.revokeObjectURL(url);
   };
 
-  const exportParentsExcel = () => {
+  const exportParentsExcel = async () => {
     const rows = sortedVisibleParents.map((parent) => ({
       Nom: parent.name || '',
       Email: parent.email || '',
@@ -1214,10 +1219,11 @@ export default function AdminView({
         ? new Date(parent.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
         : 'Jamais connecté',
     }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Parents');
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Parents');
+    worksheet.columns = Object.keys(rows[0] || {}).map((header) => ({ header, key: header }));
+    worksheet.addRows(rows.map((row) => Object.values(row)));
+    const excelBuffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([excelBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -1990,21 +1996,18 @@ export default function AdminView({
         const header = (rows[0] || []).map((h) => String(h || '').trim());
         const recordsArr: any[] = [];
         for (let i = 1; i < rows.length; i++) {
-          const r: any = {};
+          const r = Object.create(null) as Record<string, string>;
           for (let j = 0; j < header.length; j++) {
             r[header[j]] = rows[i][j] ?? '';
           }
           recordsArr.push(r);
         }
         records = recordsArr;
-      } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+      } else if (name.endsWith('.xlsx')) {
         const ab = await file.arrayBuffer();
-        const wb = XLSX.read(ab, { type: 'array' });
-        const first = wb.SheetNames[0];
-        const sheet = wb.Sheets[first];
-        records = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
+        records = await readFirstExcelSheetRecords(ab);
       } else {
-        setImportErrorsList(['Format de fichier non supporté. Utilisez CSV ou Excel.']);
+        setImportErrorsList(['Format de fichier non supporté. Utilisez CSV ou Excel (.xlsx).']);
         setImportPreviewRecords([]);
         setImportPreviewHeaders([]);
         setImportRowErrors(null);
@@ -2136,7 +2139,7 @@ export default function AdminView({
         }
         const header = rows.shift()!.map((h) => String(h || '').trim());
         const records: any[] = rows.map((cols) => {
-          const obj: any = {};
+          const obj = Object.create(null) as Record<string, string>;
           for (let i = 0; i < header.length; i++) {
             obj[header[i]] = String(cols[i] ?? '').trim();
           }
@@ -2182,21 +2185,18 @@ export default function AdminView({
           setImportPreviewHeaders(Object.keys(normalized[0] || {}));
           setShowImportDetails(true);
         }
-      } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+      } else if (name.endsWith('.xlsx')) {
         const data = await file.arrayBuffer();
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        if (!worksheet) {
+        const json = await readFirstExcelSheetRecords(data);
+        if (json.length === 0) {
           setImportErrorsList(['Aucune feuille trouvée dans le fichier Excel.']);
           setImportPreviewRecords([]);
           setImportPreviewHeaders([]);
           setImportRowErrors(null);
           setShowImportDetails(true);
         } else {
-          const json: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
           const records = json.map((row) => {
-            const obj: any = {};
+            const obj = Object.create(null) as Record<string, string>;
             Object.keys(row).forEach((k) => { obj[String(k).trim()] = String(row[k] ?? '').trim(); });
             return obj;
           }).filter((r) => r.firstName && r.lastName);
@@ -2243,7 +2243,7 @@ export default function AdminView({
           }
         }
       } else {
-        setImportErrorsList(['Type de fichier non supporté. Utilisez un fichier .csv, .xlsx ou .xls.']);
+        setImportErrorsList(['Type de fichier non supporté. Utilisez un fichier .csv ou .xlsx.']);
         setImportPreviewRecords([]);
         setImportPreviewHeaders([]);
         setImportRowErrors(null);
@@ -2322,8 +2322,6 @@ export default function AdminView({
   const [showCreateUserForm, setShowCreateUserForm] = useState(false);
   const [newUserForm, setNewUserForm] = useState(getDefaultNewUserForm);
   const [newUserAssignedClassIds, setNewUserAssignedClassIds] = useState<number[]>([]);
-  const [newUserPassword, setNewUserPassword] = useState('123456');
-  const [newUserPasswordConfirm, setNewUserPasswordConfirm] = useState('123456');
   const [createUserError, setCreateUserError] = useState<string | null>(null);
   const [createdUserPreview, setCreatedUserPreview] = useState<any | null>(null);
   const [showCreatedUserPreview, setShowCreatedUserPreview] = useState(false);
@@ -2336,6 +2334,10 @@ export default function AdminView({
   const [parentDetailOpen, setParentDetailOpen] = useState(false);
   const [parentDetail, setParentDetail] = useState<Parent | null>(null);
   const [editUserOpen, setEditUserOpen] = useState(false);
+  const [resetCredentialPreview, setResetCredentialPreview] = useState<{ name: string; identifier: string; temporaryPassword: string } | null>(null);
+  const [resetCredentialCopyStatus, setResetCredentialCopyStatus] = useState<string | null>(null);
+  const [importCredentialDownloadError, setImportCredentialDownloadError] = useState<string | null>(null);
+  const [isDownloadingImportCredentials, setIsDownloadingImportCredentials] = useState(false);
   const [userToEdit, setUserToEdit] = useState<User | null>(null);
   const [manageMultiSchoolOpen, setManageMultiSchoolOpen] = useState(false);
   const [multiSchoolTargetUser, setMultiSchoolTargetUser] = useState<User | null>(null);
@@ -2374,14 +2376,18 @@ export default function AdminView({
     return () => { cancelled = true; };
   }, [userForm.role, userForm.schoolId]);
 
-  const [editUserPassword, setEditUserPassword] = useState('');
-  const [editUserPasswordConfirm, setEditUserPasswordConfirm] = useState('');
   const [editUserError, setEditUserError] = useState<string | null>(null);
   const [deleteUserOpen, setDeleteUserOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [deleteUserSuccess, setDeleteUserSuccess] = useState(false);
+
+  useEffect(() => {
+    if (importResult && userRole !== 'super_admin' && userRole !== 'school_admin') {
+      onClearImportResult?.();
+    }
+  }, [importResult, onClearImportResult, userRole]);
 
   // States for school editing
   const [editSchoolOpen, setEditSchoolOpen] = useState(false);
@@ -2509,7 +2515,7 @@ export default function AdminView({
   const closeAllModals = () => {
     // detect unsaved changes in common forms
     const formHasValues = (obj: any) => Object.values(obj || {}).some((v: any) => String(v || '').trim() !== '');
-    const newUserDirty = showCreateUserForm && (formHasValues(newUserForm) || (newUserPassword.trim() !== '' && newUserPassword !== '123456') || (newUserPasswordConfirm.trim() !== '' && newUserPasswordConfirm !== '123456'));
+    const newUserDirty = showCreateUserForm && formHasValues(newUserForm);
     const studentFormDirty = isModalOpen && formHasValues(studentForm);
     const editStudentDirty = editStudentOpen && formHasValues(editStudentForm);
     const yearFormDirty = formHasValues(yearForm);
@@ -2528,14 +2534,6 @@ export default function AdminView({
     setStudentDetail(null);
     performCloseAllModals();
   };
-
-  // Ensure default password is set when opening the create-user modal
-  useEffect(() => {
-    if (showCreateUserForm) {
-      setNewUserPassword('123456');
-      setNewUserPasswordConfirm('123456');
-    }
-  }, [showCreateUserForm]);
 
   const openStudentDetail = (student: Student) => {
     setStudentDetail(student);
@@ -2615,19 +2613,46 @@ export default function AdminView({
     )
   );
 
+  const downloadImportCredentials = async () => {
+    const createdAccounts = Array.isArray(importResult?.inserted)
+      ? importResult.inserted.filter((item: any) => typeof item?.temporaryPassword === 'string' && item.temporaryPassword.length > 0)
+      : [];
+    if (!createdAccounts.length) return;
+
+    if (isDownloadingImportCredentials) return;
+    setIsDownloadingImportCredentials(true);
+    setImportCredentialDownloadError(null);
+    try {
+      const file = await buildTemporaryCredentialsWorkbook(mapTemporaryCredentialAccounts(createdAccounts));
+      const url = URL.createObjectURL(new Blob([file], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `comptes-importes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      onClearImportResult?.();
+    } catch (error: any) {
+      setImportCredentialDownloadError(error?.message || 'Impossible de générer le fichier récapitulatif.');
+    } finally {
+      setIsDownloadingImportCredentials(false);
+    }
+  };
+
   return (
     <div className="space-y-6" id="admin-view">
       <input
         type="file"
         ref={fileInputRef}
-        accept=".xlsx,.xls,.csv"
+        accept=".xlsx,.csv"
         onChange={handleFileChange}
         className="hidden"
       />
       <input
         type="file"
         ref={parentFileInputRef}
-        accept=".xlsx,.xls,.csv"
+        accept=".xlsx,.csv"
         onChange={parentHandleFileChange}
         className="hidden"
       />
@@ -3580,29 +3605,36 @@ export default function AdminView({
                     />
                   </div>
                 )}
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Mot de passe (laissez vide pour ne pas modifier)</label>
-                  <input
-                    className="w-full p-2 border rounded"
-                    type="password"
-                    placeholder="Nouveau mot de passe"
-                    value={editUserPassword}
-                    onChange={(e) => setEditUserPassword(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Confirmer mot de passe</label>
-                  <input
-                    className="w-full p-2 border rounded"
-                    type="password"
-                    placeholder="Confirmer le nouveau mot de passe"
-                    value={editUserPasswordConfirm}
-                    onChange={(e) => setEditUserPasswordConfirm(e.target.value)}
-                  />
-                </div>
                 {editUserError && <div className="text-rose-600 text-sm">{editUserError}</div>}
-                <div className="flex justify-end gap-2 mt-3">
-                  <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setEditUserOpen(false); setUserToEdit(null); setEditUserError(null); }}>Annuler</button>
+                <div className="flex flex-wrap justify-between gap-2 mt-3">
+                  {onSetPassword && (userRole === 'super_admin' || userRole === 'school_admin') && (
+                    <button className="px-3 py-2 rounded border border-amber-300 text-amber-800" onClick={async () => {
+                      if (!userToEdit) return;
+                      try {
+                        setEditUserError(null);
+                        const result = await onSetPassword(userToEdit.id);
+                        if (!result.temporaryPassword) throw new Error('La réinitialisation n’a pas retourné de mot de passe temporaire.');
+                        const parentPhone = userToEdit.role === 'parent'
+                          ? userToEdit.phone || parentsList.find((parent) => parent.userId === userToEdit.id)?.phone
+                          : null;
+                        setResetCredentialPreview({
+                          name: userToEdit.name,
+                          identifier: userToEdit.role === 'parent'
+                            ? parentPhone || 'Téléphone non disponible'
+                            : userToEdit.email || 'Email non disponible',
+                          temporaryPassword: result.temporaryPassword,
+                        });
+                        setResetCredentialCopyStatus(null);
+                        setEditUserOpen(false);
+                        setUserToEdit(null);
+                        setEditUserError(null);
+                      } catch (error: any) {
+                        setEditUserError(error?.message || 'Échec de la réinitialisation du mot de passe');
+                      }
+                    }}>Réinitialiser le mot de passe</button>
+                  )}
+                  <div className="ml-auto flex gap-2">
+                    <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setEditUserOpen(false); setUserToEdit(null); setEditUserError(null); }}>Annuler</button>
                   <button className="px-3 py-2 rounded bg-indigo-600 text-white" onClick={async () => {
                     try {
                       if (!onUpdateUser || !userToEdit) return;
@@ -3637,14 +3669,6 @@ export default function AdminView({
                         setEditUserError('Le numéro de téléphone doit contenir exactement 8 chiffres');
                         return;
                       }
-                      if (editUserPassword && editUserPassword.length < 6) {
-                        setEditUserError('Le mot de passe doit contenir au moins 6 caractères');
-                        return;
-                      }
-                      if (editUserPassword && editUserPassword !== editUserPasswordConfirm) {
-                        setEditUserError('Les mots de passe ne correspondent pas');
-                        return;
-                      }
                       const updatedRole = userToEdit.role === 'teacher' ? 'teacher' : userForm.role;
                       const selectedSpecializations = Array.isArray(userForm.specialization)
                         ? userForm.specialization
@@ -3670,18 +3694,68 @@ export default function AdminView({
                         classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
                         teachingAssignments: updatedRole === 'teacher' ? teachingAssignments : undefined,
                       });
-                      if (editUserPassword && onSetPassword) {
-                        await onSetPassword(userToEdit.id, editUserPassword);
-                      }
                       setEditUserOpen(false);
                       setUserToEdit(null);
-                      setEditUserPassword('');
-                      setEditUserPasswordConfirm('');
                     } catch (e: any) {
                       setEditUserError(e?.message || 'Échec de la mise à jour');
                     }
                   }}>Enregistrer</button>
+                  </div>
                 </div>
+              </div>
+            </div>
+          </ModalSurface>
+        )}
+
+        {resetCredentialPreview && (
+          <ModalSurface
+            isOpen={!!resetCredentialPreview}
+            onClose={() => {
+              setResetCredentialPreview(null);
+              setResetCredentialCopyStatus(null);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Mot de passe réinitialisé"
+          >
+            <div className="w-full space-y-3">
+              <h3 className="font-bold">Mot de passe réinitialisé</h3>
+              <p className="text-sm text-slate-700">
+                <strong>Identifiant de connexion :</strong> {resetCredentialPreview.identifier}
+              </p>
+              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                <strong>Nouveau mot de passe temporaire :</strong>
+                <code className="mt-1 block select-all break-all">{resetCredentialPreview.temporaryPassword}</code>
+              </div>
+              <p className="text-sm text-slate-700">Ce mot de passe est temporaire et devra être changé lors de la prochaine connexion.</p>
+              {resetCredentialCopyStatus && (
+                <p role="status" className={`text-sm ${resetCredentialCopyStatus.startsWith('Copie impossible') ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {resetCredentialCopyStatus}
+                </p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 rounded bg-indigo-600 text-white"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(resetCredentialPreview.temporaryPassword);
+                      setResetCredentialCopyStatus('Mot de passe temporaire copié.');
+                    } catch (error) {
+                      console.error('Failed to copy the temporary password:', error);
+                      setResetCredentialCopyStatus('Copie impossible. Sélectionnez et copiez le mot de passe affiché.');
+                    }
+                  }}
+                >
+                  Copier
+                </button>
+                <button
+                  className="px-3 py-2 rounded bg-slate-100"
+                  onClick={() => {
+                    setResetCredentialPreview(null);
+                    setResetCredentialCopyStatus(null);
+                  }}
+                >
+                  Fermer
+                </button>
               </div>
             </div>
           </ModalSurface>
@@ -3704,6 +3778,17 @@ export default function AdminView({
                 <div><strong>Nom:</strong> {createdUserPreview.name}</div>
                 <div><strong>Email:</strong> {createdUserPreview.email}</div>
                 <div><strong>Rôle:</strong> {createdUserPreview.role}</div>
+                {createdUserPreview.temporaryPassword ? (
+                  <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                    <strong>Mot de passe temporaire (à transmettre une seule fois):</strong>
+                    <code className="mt-1 block select-all break-all">{createdUserPreview.temporaryPassword}</code>
+                    <span className="mt-1 block text-xs">Il devra être remplacé à la première connexion.</span>
+                  </div>
+                ) : (
+                  <div role="alert" className="rounded border border-rose-200 bg-rose-50 p-3 text-rose-800">
+                    Le mot de passe initial n’a pas pu être créé. Réinitialisez le mot de passe du compte avant de le transmettre.
+                  </div>
+                )}
                 <div><strong>UID:</strong> {createdUserPreview.uid}</div>
                 <div><strong>ID interne:</strong> {createdUserPreview.id}</div>
                 {createdUserPreview.schoolId && (
@@ -4329,35 +4414,9 @@ export default function AdminView({
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                    <RequiredLabel label="Mot de passe" required />
-                  </label>
-                  <input
-                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
-                    type="password"
-                    placeholder="Min. 6 caractères"
-                    value={newUserPassword}
-                    readOnly
-                    aria-readonly="true"
-                    onChange={(e) => setNewUserPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="sm:col-span-2 mt-4">
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                  <RequiredLabel label="Confirmer mot de passe" required />
-                </label>
-                <input
-                  className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
-                  type="password"
-                  placeholder="Confirmer"
-                  value={newUserPasswordConfirm}
-                  readOnly
-                  aria-readonly="true"
-                  onChange={(e) => setNewUserPasswordConfirm(e.target.value)}
-                />
+                <p className="text-sm text-slate-600 sm:col-span-2">
+                  Un mot de passe temporaire unique sera généré après la création du compte.
+                </p>
               </div>
 
               {createUserError && (
@@ -4397,14 +4456,6 @@ export default function AdminView({
                         setCreateUserError(newUserForm.role === 'parent'
                           ? 'Le téléphone du parent doit être un numéro togolais valide au format +228XXXXXXXX.'
                           : 'Le numéro de téléphone doit contenir exactement 8 chiffres');
-                        return;
-                      }
-                      if (!newUserPassword || newUserPassword.length < 6) {
-                        setCreateUserError('Le mot de passe doit contenir au moins 6 caractères');
-                        return;
-                      }
-                      if (newUserPassword !== newUserPasswordConfirm) {
-                        setCreateUserError('Les mots de passe ne correspondent pas');
                         return;
                       }
                       if (newUserForm.role === 'school_admin' && !newUserForm.schoolId) {
@@ -4464,7 +4515,6 @@ export default function AdminView({
                           specialization: resolvedSpecialization,
                           subjectIds: resolvedSubjectIds,
                           gender: newUserForm.gender || undefined,
-                          password: newUserPassword,
                           classIds: newUserForm.role === 'teacher' ? newUserAssignedClassIds : undefined,
                           teachingAssignments: newUserForm.role === 'teacher' ? teachingAssignments : undefined,
                         });
@@ -4472,8 +4522,6 @@ export default function AdminView({
                         setCreatedUserPreview(created || null);
                         setShowCreatedUserPreview(true);
                         setNewUserForm({ uid: '', email: '', name: '', role: 'school_admin', schoolId: '', academicYearId: '', phone: '', specialization: [], teachingAssignments: [], gender: '' });
-                        setNewUserPassword('');
-                        setNewUserPasswordConfirm('');
                       }
                     } catch (e: any) {
                       const message = e?.message || 'Échec de création du compte';
@@ -4528,6 +4576,18 @@ export default function AdminView({
             <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
               <h3 className="font-bold text-slate-800">Importation terminée</h3>
               <p className="mt-1 text-slate-600">{Number(importResult.insertedCount || 0)} parent(s) importé(s).</p>
+              {(userRole === 'super_admin' || userRole === 'school_admin')
+                && Array.isArray(importResult.inserted)
+                && importResult.inserted.some((item: any) => item.temporaryPassword) && (
+                <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  <h4 className="font-semibold">Identifiants temporaires des comptes créés</h4>
+                  <p className="mt-1 text-xs">Téléchargez le récapitulatif maintenant. Il contient uniquement les nouveaux comptes et ne sera plus récupérable après fermeture.</p>
+                  <button type="button" disabled={isDownloadingImportCredentials} className="mt-3 rounded bg-amber-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60" onClick={downloadImportCredentials}>
+                    {isDownloadingImportCredentials ? 'Génération du fichier…' : 'Télécharger le récapitulatif sécurisé (.xlsx)'}
+                  </button>
+                  {importCredentialDownloadError && <p role="alert" className="mt-2 text-sm text-rose-700">{importCredentialDownloadError}</p>}
+                </div>
+              )}
               {Array.isArray(importResult.errors) && importResult.errors.length === 0 ? (
                 <p className="mt-1 font-semibold text-emerald-700">Toutes les lignes ont été importées avec succès.</p>
               ) : (
@@ -4563,7 +4623,7 @@ export default function AdminView({
               </select>
             </div>
             <div className="mt-2">
-              <button onClick={() => { if (typeof window !== 'undefined') window.location.reload(); }} className="text-xs text-indigo-600 font-semibold">Fermer</button>
+              <button onClick={() => { setImportCredentialDownloadError(null); onClearImportResult?.(); }} className="text-xs text-indigo-600 font-semibold">Fermer</button>
             </div>
           </div>
         )}

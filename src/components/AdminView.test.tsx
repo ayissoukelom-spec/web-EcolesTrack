@@ -5,7 +5,8 @@ import { AuthProvider } from '../contexts/AuthContext.tsx';
 import AdminView from './AdminView';
 import AdminModal from './AdminModal';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
-import * as XLSX from 'xlsx';
+import { readFirstExcelSheetRecords } from '../lib/excelImport';
+import { apiFetch } from '../lib/api';
 
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 const getPrimarySchoolPhoneInput = () => screen.getAllByPlaceholderText('90000000')[0] as HTMLInputElement;
@@ -660,8 +661,7 @@ describe('AdminView create-user teacher form', () => {
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(screen.getByRole('button', { name: 'Télécharger Excel' }).hasAttribute('disabled')).toBe(false));
       const blob = createObjectURL.mock.calls[0][0] as Blob;
-      const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets['Élèves']);
+      const rows = await readFirstExcelSheetRecords(await blob.arrayBuffer());
 
       expect(click).toHaveBeenCalled();
       expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves-actifs.xlsx');
@@ -675,9 +675,9 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
       const formerBlob = createObjectURL.mock.calls[1][0] as Blob;
-      const formerWorkbook = XLSX.read(await formerBlob.arrayBuffer(), { type: 'array' });
+      const formerRows = await readFirstExcelSheetRecords(await formerBlob.arrayBuffer());
       expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('liste-anciens-eleves.xlsx');
-      expect(XLSX.utils.sheet_to_json(formerWorkbook.Sheets['Élèves'])).toEqual([
+      expect(formerRows).toEqual([
         { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Tuteur: 'Parent Ancien' },
       ]);
 
@@ -691,10 +691,9 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(3));
       const allBlob = createObjectURL.mock.calls[2][0] as Blob;
-      const allWorkbook = XLSX.read(await allBlob.arrayBuffer(), { type: 'array' });
+      const allRows = await readFirstExcelSheetRecords(await allBlob.arrayBuffer());
       expect((click.mock.instances[2] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
-      const allRows = XLSX.utils.sheet_to_json(allWorkbook.Sheets['Élèves']) as Array<{ Nom: string }>;
-      expect(allRows.map((row) => row.Nom)).toEqual(expect.arrayContaining(['Amani', 'Ancien', 'Tano']));
+      expect((allRows as Array<{ Nom: string }>).map((row) => row.Nom)).toEqual(expect.arrayContaining(['Amani', 'Ancien', 'Tano']));
 
       fireEvent.click(screen.getAllByRole('button', { name: 'Modifier' })[0]);
       const studentDialog = screen.getByRole('dialog', { name: "Modifier l'élève" });
@@ -759,8 +758,7 @@ describe('AdminView create-user teacher form', () => {
 
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
       const blob = createObjectURL.mock.calls[0][0] as Blob;
-      const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Parents);
+      const rows = await readFirstExcelSheetRecords(await blob.arrayBuffer());
 
       expect(click).toHaveBeenCalled();
       expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-parents.xlsx');
@@ -1025,6 +1023,187 @@ describe('AdminView create-user teacher form', () => {
       </AuthProvider>
     );
     expect(screen.getByText('Toutes les lignes ont été importées avec succès.')).toBeTruthy();
+  });
+
+  it('downloads import credentials only for administrators and clears them after download', async () => {
+    const onClearImportResult = vi.fn();
+    const createObjectUrl = vi.fn(() => 'blob:temporary-credentials');
+    const revokeObjectUrl = vi.fn();
+    const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+    const clickAnchor = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectUrl, configurable: true });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectUrl, configurable: true });
+    const props = {
+      userRole: 'school_admin' as const,
+      schoolsList: [] as School[],
+      yearsList: [] as AcademicYear[],
+      classesList: [] as Class[],
+      teachersList: [] as Teacher[],
+      studentsList: [] as Student[],
+      parentsList: [] as Parent[],
+      usersList: [] as User[],
+      onAddSchool: async () => ({}),
+      onAddYear: () => undefined,
+      onAddClass: async () => undefined,
+      onAddTeacher: async () => ({}),
+      onAddParent: async () => ({}),
+      onAddStudent: () => undefined,
+      onDeleteClass: () => undefined,
+      onDeleteSchool: () => undefined,
+      onClearImportResult,
+      importResult: {
+        insertedCount: 1,
+        errors: [{ row: 5, name: 'Rejected Parent', error: 'Rejected' }],
+        inserted: [{
+          user: { id: 1, name: 'Created Parent', email: 'created@example.test' },
+          temporaryPassword: 'one-time-secret',
+        }],
+      },
+    };
+
+    try {
+      renderWithAuth(<AdminView {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /Télécharger le récapitulatif sécurisé/i }));
+      await waitFor(() => expect(onClearImportResult).toHaveBeenCalledOnce());
+      expect(createObjectUrl).toHaveBeenCalledOnce();
+      expect(clickAnchor).toHaveBeenCalledOnce();
+      await waitFor(() => expect(revokeObjectUrl).toHaveBeenCalledWith('blob:temporary-credentials'));
+    } finally {
+      clickAnchor.mockRestore();
+      if (createObjectUrlDescriptor) Object.defineProperty(URL, 'createObjectURL', createObjectUrlDescriptor);
+      else delete (URL as any).createObjectURL;
+      if (revokeObjectUrlDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrlDescriptor);
+      else delete (URL as any).revokeObjectURL;
+    }
+  });
+
+  it('does not expose the temporary-credentials download action to parents', () => {
+    renderWithAuth(
+      <AdminView
+        userRole="parent"
+        schoolsList={[]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        importResult={{
+          insertedCount: 1,
+          errors: [],
+          inserted: [{ user: { id: 1, name: 'Created Parent', email: 'created@example.test' }, temporaryPassword: 'one-time-secret' }],
+        }}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Télécharger le récapitulatif sécurisé/i })).toBeNull();
+    expect(screen.queryByText('one-time-secret')).toBeNull();
+  });
+
+  it.each([
+    {
+      role: 'parent' as const,
+      tab: /Parents & Tuteurs/i,
+      identifier: '+22890000001',
+      uid: 'sim_parent_technical_uid',
+      user: { id: 61, uid: 'sim_parent_technical_uid', email: null, name: 'Parent Test', role: 'parent' as const, schoolId: 1 },
+      parent: { id: 71, userId: 61, name: 'Parent Test', phone: '+22890000001', schoolId: 1 } as Parent,
+      teacher: undefined,
+    },
+    {
+      role: 'teacher' as const,
+      tab: /Enseignants/i,
+      identifier: 'teacher@example.test',
+      uid: 'teacher_technical_uid',
+      user: { id: 62, uid: 'teacher_technical_uid', email: 'teacher@example.test', name: 'Teacher Test', role: 'teacher' as const, schoolId: 1 },
+      parent: undefined,
+      teacher: { id: 81, userId: 62, name: 'Teacher Test', email: 'teacher@example.test', schoolId: 1 } as Teacher,
+    },
+  ])('displays, copies, and clears the reset temporary password for $role', async ({ role, tab, identifier, uid, user, parent, teacher }) => {
+    const temporaryPassword = 'K7mP4xQa';
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/set-password')) {
+        return new Response(JSON.stringify({ temporaryPassword, mustReset: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={teacher ? [teacher] : []}
+          studentsList={[]}
+          parentsList={parent ? [parent] : []}
+          usersList={[user]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onSetPassword={async (userId) => apiFetch('/api/admin/set-password', {
+            method: 'POST',
+            body: JSON.stringify({ userId }),
+          })}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: tab }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Réinitialiser le mot de passe' }));
+
+      const resetDialog = await screen.findByRole('dialog', { name: 'Mot de passe réinitialisé' });
+      expect(screen.queryByRole('dialog', { name: 'Modifier le compte' })).toBeNull();
+      expect(resetDialog).toBeTruthy();
+      expect(within(resetDialog).getByText(identifier)).toBeTruthy();
+      expect(within(resetDialog).getByText(temporaryPassword)).toBeTruthy();
+      expect(within(resetDialog).getByText(/devra être changé lors de la prochaine connexion/i)).toBeTruthy();
+      expect(within(resetDialog).queryByText(uid)).toBeNull();
+      expect(within(resetDialog).queryByText(/passwordHash|salt/i)).toBeNull();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/set-password'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ userId: user.id }),
+        }),
+      );
+
+      fireEvent.click(within(resetDialog).getByRole('button', { name: 'Copier' }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(temporaryPassword));
+
+      fireEvent.click(within(resetDialog).getByRole('button', { name: 'Fermer' }));
+      await waitFor(() => expect(screen.queryByText(temporaryPassword)).toBeNull());
+    } finally {
+      fetchSpy.mockRestore();
+      if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor);
+      else delete (navigator as any).clipboard;
+    }
   });
 
   it('shows configured class groups and filters classes when creating a school', async () => {

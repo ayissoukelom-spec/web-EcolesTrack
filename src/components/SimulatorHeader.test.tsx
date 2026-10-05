@@ -46,14 +46,24 @@ function mockApi(subjectRows: Record<string, any[]> = subjectsBySchool) {
       return jsonResponse(subjectRows[url.searchParams.get('schoolId') || ''] || []);
     }
     if (url.pathname === '/api/admin/users') {
-      return jsonResponse({ id: 80, role: 'teacher' }, 201);
+      const payload = JSON.parse(String(init?.body));
+      return jsonResponse({
+        id: 80,
+        uid: payload.role === 'parent' ? 'sim_parent_80' : 'sim_teacher_80',
+        name: payload.name,
+        email: payload.email,
+        phone: payload.phone,
+        role: payload.role,
+        temporaryPassword: 'K7mP4xQ8',
+        mustReset: true,
+      }, 201);
     }
     return jsonResponse([]);
   });
   return requests;
 }
 
-function renderHeader() {
+function renderHeader(props: { onRefreshData?: () => void | Promise<void>; onLogout?: () => void } = {}) {
   return render(
     <SimulatorHeader
       currentRole="super_admin"
@@ -66,8 +76,9 @@ function renderHeader() {
       yearsList={[]}
       approvedSubjectsList={[]}
       onRoleChange={() => undefined}
-      onRefreshData={() => undefined}
+      onRefreshData={props.onRefreshData || (() => undefined)}
       isSyncing={false}
+      onLogout={props.onLogout}
     />,
   );
 }
@@ -194,6 +205,58 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
     expect(payload).toMatchObject({ role: 'teacher', schoolId: 25, subjectIds: [501] });
   });
 
+  it('shows and copies the generated temporary password after profile teacher creation', async () => {
+    const requests = mockApi();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    renderHeader();
+    openCreateAccount();
+    selectSchool(25);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
+    await selectTestClass();
+    fillRequiredTeacherFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    const temporaryPassword = 'K7mP4xQ8';
+    expect(await screen.findByTestId('created-temporary-password')).toHaveTextContent(temporaryPassword);
+    expect(screen.getByText('Mot de passe temporaire')).toBeTruthy();
+    expect(screen.getByText(/choisir un nouveau mot de passe lors de sa première connexion/i)).toBeTruthy();
+    expect(screen.getByText(/jean@example\.test/)).toBeTruthy();
+    expect(screen.queryByText(/sim_teacher_80/)).toBeNull();
+
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload.role).toBe('teacher');
+    expect(payload.email).toBe('jean@example.test');
+    expect(payload).not.toHaveProperty('password');
+    expect(screen.queryByDisplayValue('123456')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copier' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(temporaryPassword));
+    expect(await screen.findByRole('status')).toHaveTextContent('copié');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fermer' }));
+    expect(screen.queryByTestId('created-temporary-password')).toBeNull();
+  });
+
+  it('keeps the generated password visible if refreshing data fails after account creation', async () => {
+    mockApi();
+    renderHeader({ onRefreshData: () => Promise.reject(new Error('refresh failed')) });
+    openCreateAccount();
+    selectSchool(25);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
+    await selectTestClass();
+    fillRequiredTeacherFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    expect(await screen.findByTestId('created-temporary-password')).toHaveTextContent('K7mP4xQ8');
+    expect(await screen.findByText(/Le compte est créé\. Le rechargement des données a échoué/i)).toBeTruthy();
+  });
+
   it('creates a parent without an email and sends null in the payload', async () => {
     const requests = mockApi();
     renderHeader();
@@ -219,6 +282,8 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
     const payload = JSON.parse(String(createRequest?.init?.body));
     expect(payload).toMatchObject({ role: 'parent', schoolId: 25, email: null });
     expect(screen.queryByText('L’email est requis')).toBeNull();
+    expect(await screen.findByText(/\(\+22890000000\)/)).toBeTruthy();
+    expect(screen.queryByText(/sim_parent_80/)).toBeNull();
   });
 
   it('creates a parent when an email is provided', async () => {
@@ -242,6 +307,8 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
     const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
     const payload = JSON.parse(String(createRequest?.init?.body));
     expect(payload).toMatchObject({ role: 'parent', email: 'parent@example.test' });
+    expect(await screen.findByText(/\(\+22890000000\)/)).toBeTruthy();
+    expect(screen.queryByText(/sim_parent_80/)).toBeNull();
   });
 
   it.each([

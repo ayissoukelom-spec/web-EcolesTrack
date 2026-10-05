@@ -87,12 +87,12 @@ export async function handleLocalLogin(req: Request, res: Response) {
 
     let localMustReset = !!mustReset;
     if (typeof mustReset === 'undefined' || mustReset === null) {
-      try {
-        const defaultHash = crypto.pbkdf2Sync('123456', salt, 310000, 64, 'sha512').toString('hex');
-        localMustReset = (passwordHash === defaultHash);
-      } catch (e) {
-        localMustReset = false;
-      }
+      const defaultHash = crypto.pbkdf2Sync('123456', salt, 310000, 64, 'sha512').toString('hex');
+      localMustReset = (passwordHash === defaultHash);
+    }
+
+    if (localMustReset && password === '123456') {
+      return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
     const payload = {

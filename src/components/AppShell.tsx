@@ -282,7 +282,7 @@ export default function AppShell() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
     const created = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(data) });
     await fetchAllData();
     return created;
@@ -293,9 +293,10 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleSetPassword = async (userId: number, password: string) => {
-    await apiFetch('/api/admin/set-password', { method: 'POST', body: JSON.stringify({ userId, password }) });
+  const handleSetPassword = async (userId: number) => {
+    const result = await apiFetch('/api/admin/set-password', { method: 'POST', body: JSON.stringify({ userId }) });
     await fetchAllData();
+    return result;
   };
 
   const handleDeleteUser = async (id: number) => {
@@ -439,6 +440,7 @@ export default function AppShell() {
             onBatchCreateStudents={handleBatchCreateStudents}
             onBatchCreateParents={handleBatchCreateParents}
             importResult={importResult}
+            onClearImportResult={() => setImportResult(null)}
             onCreateUser={handleCreateUser}
             onUpdateUser={handleUpdateUser}
             onSetPassword={handleSetPassword}

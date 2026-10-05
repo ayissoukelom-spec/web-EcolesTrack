@@ -43,7 +43,7 @@ export default function SimulatorHeader({
   onLogout,
 }: SimulatorHeaderProps) {
   // Use AuthContext for role and user (ignoring prop currentRole for source of truth)
-  const { user, role } = useAuth();
+  const { user, role, token } = useAuth();
   const simUser = user as any; // Keep as any for flexible field access (backward compatible)
   // Type assertion: role is UserRole | '' (empty string when no active role)
   const currentRole: UserRole = role as UserRole;
@@ -157,6 +157,11 @@ export default function SimulatorHeader({
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
+  const currentSessionKey = `${token ?? ''}:${simUser?.id ?? ''}:${simUser?.uid ?? ''}:${role}`;
+  const [createdCredential, setCreatedCredential] = useState<{ name: string; identifier: string; temporaryPassword: string; sessionKey: string } | null>(null);
+  const [credentialCopyStatus, setCredentialCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [credentialRefreshWarning, setCredentialRefreshWarning] = useState<string | null>(null);
+  const sessionKeyRef = useRef(currentSessionKey);
 
   React.useEffect(() => {
     if (!loginSchoolId && defaultSchoolId) {
@@ -168,8 +173,6 @@ export default function SimulatorHeader({
   const [createLastName, setCreateLastName] = useState('');
   const [createPhonePrefix, setCreatePhonePrefix] = useState('+228');
   const [createPhone, setCreatePhone] = useState('');
-  const [createPassword, setCreatePassword] = useState('123456');
-  const [createPasswordConfirm, setCreatePasswordConfirm] = useState('123456');
   const [createRole, setCreateRole] = useState('teacher');
   const emailRequired = createRole !== 'parent';
   const [createGender, setCreateGender] = useState('');
@@ -185,13 +188,30 @@ export default function SimulatorHeader({
   } | null>(null);
   const [isLoadingSchoolTeacherSubjects, setIsLoadingSchoolTeacherSubjects] = useState(false);
   
-  // Ensure default password prefilled when open
   useEffect(() => {
-    if (createAccountOpen) {
-      setCreatePassword('123456');
-      setCreatePasswordConfirm('123456');
+    if (sessionKeyRef.current !== currentSessionKey) {
+      sessionKeyRef.current = currentSessionKey;
+      setCreatedCredential(null);
+      setCredentialCopyStatus('idle');
+      setCredentialRefreshWarning(null);
     }
-  }, [createAccountOpen]);
+  }, [currentSessionKey]);
+
+  const clearCreatedCredential = () => {
+    setCreatedCredential(null);
+    setCredentialCopyStatus('idle');
+    setCredentialRefreshWarning(null);
+  };
+
+  const copyTemporaryPassword = async () => {
+    if (!createdCredential) return;
+    try {
+      await navigator.clipboard.writeText(createdCredential.temporaryPassword);
+      setCredentialCopyStatus('copied');
+    } catch {
+      setCredentialCopyStatus('error');
+    }
+  };
   const [showClassSelection, setShowClassSelection] = useState(true);
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -750,6 +770,39 @@ export default function SimulatorHeader({
       )}
 
       {/* Create Account modal */}
+      {createdCredential && createdCredential.sessionKey === currentSessionKey && (
+        <ModalSurface
+          isOpen={!!createdCredential}
+          onClose={clearCreatedCredential}
+          ariaLabel="Mot de passe temporaire du compte créé"
+          contentClassName="bg-white rounded-2xl p-6 w-full max-w-md text-slate-800 shadow-xl relative"
+          overlayClassName="bg-black/50 z-[10001]"
+        >
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-bold text-lg">Compte créé</h3>
+              <p className="mt-2 text-sm text-slate-600">
+                {createdCredential.name} ({createdCredential.identifier})
+              </p>
+            </div>
+            <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+              <strong>Mot de passe temporaire</strong>
+              <code data-testid="created-temporary-password" className="mt-1 block select-all break-all">{createdCredential.temporaryPassword}</code>
+              <p className="mt-2 text-xs">L’utilisateur devra choisir un nouveau mot de passe lors de sa première connexion.</p>
+              <button type="button" className="mt-3 rounded bg-amber-700 px-3 py-2 text-sm font-semibold text-white" onClick={copyTemporaryPassword}>
+                Copier
+              </button>
+              {credentialCopyStatus === 'copied' && <p role="status" className="mt-2 text-xs">Mot de passe temporaire copié.</p>}
+              {credentialCopyStatus === 'error' && <p role="alert" className="mt-2 text-xs">Impossible de copier le mot de passe. Sélectionnez-le pour le copier manuellement.</p>}
+            </div>
+            {credentialRefreshWarning && <p role="status" className="text-sm text-amber-800">{credentialRefreshWarning}</p>}
+            <div className="flex justify-end">
+              <button type="button" className="rounded bg-slate-100 px-3 py-2" onClick={clearCreatedCredential}>Fermer</button>
+            </div>
+          </div>
+        </ModalSurface>
+      )}
+
       {createAccountOpen && (
         <ModalSurface
           isOpen={createAccountOpen}
@@ -1076,19 +1129,9 @@ export default function SimulatorHeader({
               )}
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                              <div>
-                                <label className="block text-xs">
-                                    <RequiredLabel label="Mot de passe" required />
-                                  </label>
-                                  <input className="w-full p-2 border rounded" type="password" value={createPassword} readOnly aria-readonly="true" onChange={(e) => setCreatePassword(e.target.value)} placeholder="••••••••" />
-                              </div>
-
-                <div>
-                  <label className="block text-xs">
-                    <RequiredLabel label="Confirmer le mot de passe" required />
-                  </label>
-                  <input className="w-full p-2 border rounded" type="password" value={createPasswordConfirm} readOnly aria-readonly="true" onChange={(e) => setCreatePasswordConfirm(e.target.value)} placeholder="••••••••" />
-                </div>
+                <p className="text-sm text-slate-600 md:col-span-2">
+                  Un mot de passe temporaire aléatoire sera généré après la création et affiché une seule fois.
+                </p>
               </div>
             </div>
 
@@ -1114,10 +1157,6 @@ export default function SimulatorHeader({
                   }
                   if (emailRequired && !createEmail) {
                     setCreateError('L’email est requis');
-                    return;
-                  }
-                  if (!createPassword || createPassword.length < 6) {
-                    setCreateError('Le mot de passe doit contenir au moins 6 caractères');
                     return;
                   }
                   if (createRole === 'school_admin' && !createSchoolId) {
@@ -1164,10 +1203,6 @@ export default function SimulatorHeader({
                       setCreateError('Veuillez sélectionner au moins une classe pour l\'enseignant');
                       return;
                     }
-                  }
-                  if (createPassword !== createPasswordConfirm) {
-                    setCreateError('Les mots de passe ne correspondent pas');
-                    return;
                   }
                   setIsCreating(true);
                   const normalizedLastName = createRole === 'teacher' ? createLastName.trim().toUpperCase() : createLastName.trim();
@@ -1228,17 +1263,28 @@ export default function SimulatorHeader({
 
                   const createdUser = await apiFetch('/api/admin/users', {
                     method: 'POST',
-                    body: JSON.stringify({ ...payload, password: createPassword }),
+                    body: JSON.stringify(payload),
                   });
 
+                  if (typeof createdUser?.temporaryPassword !== 'string' || !createdUser.temporaryPassword) {
+                    throw new Error('Le compte a été créé, mais le mot de passe temporaire est absent de la réponse. Réinitialisez-le avant de le transmettre.');
+                  }
+                  setCreatedCredential({
+                    name: String(createdUser.name || name),
+                    identifier: String(createRole === 'parent'
+                      ? createdUser.phone || payload.phone
+                      : createdUser.email || ''),
+                    temporaryPassword: createdUser.temporaryPassword,
+                    sessionKey: currentSessionKey,
+                  });
+                  setCredentialCopyStatus('idle');
+                  setCredentialRefreshWarning(null);
                   setCreateAccountOpen(false);
                   setCreateEmail('');
                   setCreateFirstName('');
                   setCreateLastName('');
                   setCreatePhone('');
                   setCreatePhonePrefix('+228');
-                  setCreatePassword('');
-                  setCreatePasswordConfirm('');
                   setCreateRole('teacher');
                   setCreateParentType('');
                   setCreateSchoolId('');
@@ -1247,7 +1293,12 @@ export default function SimulatorHeader({
                   setCreateSpecializations([]);
                   setCreateAssignedClassIds([]);
                   setCreateGender('');
-                  onRefreshData();
+                  try {
+                    await onRefreshData();
+                  } catch (refreshError) {
+                    console.warn('Account created, but refreshing application data failed.', refreshError);
+                    setCredentialRefreshWarning('Le compte est créé. Le rechargement des données a échoué, mais le mot de passe temporaire reste affiché ici.');
+                  }
                 } catch (err: any) {
                   setCreateError(err?.message || 'Erreur lors de la création du compte');
                 } finally {
@@ -1356,6 +1407,7 @@ export default function SimulatorHeader({
                   <button type="button" className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded text-indigo-600 font-medium" onClick={() => { if (onManageAccounts) onManageAccounts(); setProfileMenuOpen(false); }}>⚙️ Gestion des comptes</button>
                   <button type="button" className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded" onClick={async () => {
                     setProfileMenuOpen(false);
+                    clearCreatedCredential();
                     if (onLogout) await onLogout();
                   }}>Se déconnecter</button>
                 </div>
