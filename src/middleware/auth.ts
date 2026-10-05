@@ -6,6 +6,12 @@ import { eq, gt, and, or } from 'drizzle-orm';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 
+export function assertSimulatedAuthConfiguration(): void {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SIMULATED_AUTH === 'true') {
+    throw new Error('ALLOW_SIMULATED_AUTH=true is not allowed when NODE_ENV=production.');
+  }
+}
+
 export const mapToAppRole = (rawRole?: string | null): AppRole | undefined => {
   if (!rawRole) return undefined;
   if (rawRole === 'super_admin' || rawRole === 'school_admin' || rawRole === 'admin') return 'admin';
@@ -34,7 +40,8 @@ export const verifyToken = async (
   next: NextFunction
 ) => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const allowSimulatedAuth = process.env.NODE_ENV === 'test' || process.env.ALLOW_SIMULATED_AUTH === 'true';
+  const allowSimulatedAuth = !isProduction
+    && (process.env.NODE_ENV === 'test' || process.env.ALLOW_SIMULATED_AUTH === 'true');
   const authHeader = req.headers.authorization;
 
   const simulatedRoleHeader = req.headers['x-simulated-role'];

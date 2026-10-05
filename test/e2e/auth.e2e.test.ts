@@ -1436,6 +1436,20 @@ describe('E2E security: auth & privilege checks', () => {
     resetLocalLoginRateLimit();
   });
 
+  it('refuses to create the app when simulated auth is enabled in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ALLOW_SIMULATED_AUTH = 'true';
+
+    try {
+      await expect(serverModule.createApp()).rejects.toThrow(
+        'ALLOW_SIMULATED_AUTH=true is not allowed when NODE_ENV=production.',
+      );
+    } finally {
+      process.env.NODE_ENV = 'test';
+      delete process.env.ALLOW_SIMULATED_AUTH;
+    }
+  });
+
   it('1. rejects x-simulated-* headers in production', async () => {
     process.env.NODE_ENV = 'production';
     const res = await request(app)

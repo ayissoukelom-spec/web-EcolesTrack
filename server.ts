@@ -29,7 +29,7 @@ import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
-import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import { requireAuth, AuthRequest, assertSimulatedAuthConfiguration } from './src/middleware/auth.ts';
 import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts';
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
@@ -928,6 +928,7 @@ function verifyInternalNotificationAttachmentRequest(req: any, res: any): boolea
 }
 
 export async function createApp() {
+  assertSimulatedAuthConfiguration();
   const app = express();
 
   // JSON parsing middleware

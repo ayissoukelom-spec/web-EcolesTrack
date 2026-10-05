@@ -26,7 +26,14 @@ vi.mock('../lib/jwt.ts', () => {
   };
 });
 
-import { mapToAppRole, requireOwnership, requireRole, type AuthRequest, verifyToken } from './auth';
+import {
+  assertSimulatedAuthConfiguration,
+  mapToAppRole,
+  requireOwnership,
+  requireRole,
+  type AuthRequest,
+  verifyToken,
+} from './auth';
 
 const createMockRes = () => {
   const res: any = {};
@@ -38,6 +45,7 @@ const createMockRes = () => {
 describe('auth middleware access control', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'production';
+    delete process.env.ALLOW_SIMULATED_AUTH;
     process.env.JWT_SECRET = 'test-jwt-secret';
     mockDb.select.mockClear();
     mockWhere.mockReset();
@@ -45,6 +53,7 @@ describe('auth middleware access control', () => {
   });
 
   it('rejects simulated auth headers in production', async () => {
+    process.env.ALLOW_SIMULATED_AUTH = 'true';
     const req = { headers: { 'x-simulated-role': 'super_admin' } } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
@@ -53,6 +62,21 @@ describe('auth middleware access control', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(req.user).toBeUndefined();
+  });
+
+  it('rejects simulated auth configuration in production', () => {
+    process.env.ALLOW_SIMULATED_AUTH = 'true';
+
+    expect(assertSimulatedAuthConfiguration).toThrow(
+      'ALLOW_SIMULATED_AUTH=true is not allowed when NODE_ENV=production.',
+    );
+  });
+
+  it('accepts disabled simulated auth configuration in production', () => {
+    process.env.ALLOW_SIMULATED_AUTH = 'false';
+
+    expect(assertSimulatedAuthConfiguration).not.toThrow();
   });
 
   it('authorizes a valid JWT access token and populates req.user', async () => {
@@ -322,8 +346,10 @@ describe('auth middleware access control', () => {
   });
 
   it('authorizes simulated auth headers in test when no token is present', async () => {
-    process.env.NODE_ENV = 'test';
+    process.env.NODE_ENV = 'development';
+    process.env.ALLOW_SIMULATED_AUTH = 'true';
     delete process.env.JWT_SECRET;
+    expect(assertSimulatedAuthConfiguration).not.toThrow();
 
     const req = {
       headers: {
