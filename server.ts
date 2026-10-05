@@ -39,6 +39,7 @@ import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniquene
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
+import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import {
   schools,
   academicYears,
@@ -1321,6 +1322,7 @@ export async function createApp() {
   registerBulletinGenerateRoute(app, { resolveActor });
   registerBulletinReadRoutes(app, { resolveActor });
   registerBulletinPdfRoute(app, { resolveActor });
+  registerClassRankingRoute(app, { resolveActor });
 
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {

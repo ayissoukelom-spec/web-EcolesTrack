@@ -720,7 +720,7 @@ const computeSubjectRank = (
   return null;
 };
 
-const computeRank = (
+export const computeRank = (
   targetStudentId: number,
   officialAverages: Array<{ studentId: number; average: number | null }>,
 ): number | null => {
@@ -734,6 +734,112 @@ const computeRank = (
   return targetIndex > 0 && previousAverage === rankedAverages[targetIndex].average
     ? rankedAverages.findIndex((entry) => entry.average === rankedAverages[targetIndex].average) + 1
     : targetIndex + 1;
+};
+
+export interface OfficialStudentAverageInput {
+  student: BulletinStudentLike;
+  classStudents: BulletinStudentLike[];
+  termId: number;
+  termEvaluations: BulletinEvaluationLike[];
+  allGrades: BulletinGradeLike[];
+  teacherNameMap?: Map<number, string>;
+  subjectTypeNames?: Map<string, SubjectTypeMetadata>;
+  subjectIdsByName?: Map<string, number>;
+  subjectMetadataByName?: Map<string, { id: number; name: string }>;
+  subjectMetadataById?: Map<number, { id: number; name: string }>;
+}
+
+export const calculateOfficialStudentAverage = ({
+  student,
+  classStudents,
+  termId,
+  termEvaluations,
+  allGrades,
+  teacherNameMap = new Map(),
+  subjectTypeNames = new Map(),
+  subjectIdsByName = new Map(),
+  subjectMetadataByName = new Map(),
+  subjectMetadataById = new Map(),
+}: OfficialStudentAverageInput) => {
+  const calculation = calculateStudentTermAverage({
+    term: { id: termId },
+    student,
+    evaluations: termEvaluations,
+    grades: allGrades.filter((grade) => grade.studentId === student.id),
+  });
+  const lines = computeSubjectLines(
+    calculation.selectedEvaluations,
+    calculation.snapshots,
+    classStudents,
+    allGrades,
+    student.id,
+    student.classId,
+    termId,
+    termEvaluations,
+    teacherNameMap,
+    subjectTypeNames,
+    subjectIdsByName,
+    subjectMetadataByName,
+    subjectMetadataById,
+  );
+
+  return {
+    calculation,
+    lines,
+    subjectAverage: calculateWeightedSubjectAverage(lines),
+  };
+};
+
+export interface OfficialClassResult {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  average: number | null;
+  rank: number | null;
+}
+
+export const calculateOfficialClassResults = (
+  classStudents: BulletinStudentLike[],
+  termId: number,
+  termEvaluations: BulletinEvaluationLike[],
+  allGrades: BulletinGradeLike[],
+): OfficialClassResult[] => {
+  const collator = new Intl.Collator('fr', { sensitivity: 'base' });
+  const results: OfficialClassResult[] = classStudents.map((student) => {
+    const { subjectAverage } = calculateOfficialStudentAverage({
+      student,
+      classStudents,
+      termId,
+      termEvaluations,
+      allGrades,
+    });
+    const average = subjectAverage.average;
+    return {
+      studentId: student.id,
+      firstName: student.firstName ?? '',
+      lastName: student.lastName ?? '',
+      average: average != null && Number.isFinite(average) ? average : null,
+      rank: null,
+    };
+  });
+
+  const officialAverages = results.map(({ studentId, average }) => ({ studentId, average }));
+  for (const result of results) {
+    result.rank = computeRank(result.studentId, officialAverages);
+  }
+
+  return results.sort((a, b) => {
+    if (a.average == null) return b.average == null
+      ? collator.compare(a.lastName, b.lastName)
+        || collator.compare(a.firstName, b.firstName)
+        || a.studentId - b.studentId
+      : 1;
+    if (b.average == null) return -1;
+    return b.average - a.average
+      || collator.compare(a.lastName, b.lastName)
+      || collator.compare(a.firstName, b.firstName)
+      || a.studentId - b.studentId;
+  });
 };
 
 export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersistence => ({
@@ -1410,63 +1516,41 @@ export const generateBulletinSnapshot = async (
     const evaluationIds = termEvaluations.map((evaluation) => evaluation.id);
     const classStudentIds = classStudents.map((row) => row.id);
     const allGrades = await ctx.getGradesForStudents(classStudentIds, evaluationIds);
-    const studentGrades = allGrades.filter((grade) => grade.studentId === student.id);
-
-    const calculation = calculateStudentTermAverage({
-      term: { id: term.id },
-      student,
-      evaluations: termEvaluations,
-      grades: studentGrades,
-    });
-
     // Load teacher names for all evaluations
     const teacherIds = Array.from(new Set(termEvaluations.map((e) => e.teacherId).filter((id) => id != null) as number[]));
     const teacherNameMap = await ctx.getTeacherNames(teacherIds);
 
-    const lines = computeSubjectLines(
-      calculation.selectedEvaluations,
-      calculation.snapshots,
+    const { lines, subjectAverage } = calculateOfficialStudentAverage({
+      student,
       classStudents,
-      allGrades,
-      student.id,
-      student.classId,
-      term.id,
+      termId: term.id,
       termEvaluations,
+      allGrades,
       teacherNameMap,
       subjectTypeNames,
       subjectIdsByName,
       subjectMetadataByName,
       subjectMetadataById,
-    );
+    });
     const subjectGroups = groupBulletinLinesBySubjectType(lines);
-    const subjectAverage = calculateWeightedSubjectAverage(lines);
     const finalAverage = subjectAverage.average;
     const officialAverages = classStudents
       .map((classStudent) => {
         if (classStudent.id === student.id) return { studentId: classStudent.id, average: finalAverage };
 
-        const classStudentCalculation = calculateStudentTermAverage({
-          term: { id: term.id },
+        const { subjectAverage: classStudentAverage } = calculateOfficialStudentAverage({
           student: classStudent,
-          evaluations: termEvaluations,
-          grades: allGrades.filter((grade) => grade.studentId === classStudent.id),
-        });
-        const classStudentLines = computeSubjectLines(
-          classStudentCalculation.selectedEvaluations,
-          classStudentCalculation.snapshots,
           classStudents,
-          allGrades,
-          classStudent.id,
-          student.classId,
-          term.id,
+          termId: term.id,
           termEvaluations,
+          allGrades,
           teacherNameMap,
           subjectTypeNames,
           subjectIdsByName,
           subjectMetadataByName,
           subjectMetadataById,
-        );
-        return { studentId: classStudent.id, average: calculateWeightedSubjectAverage(classStudentLines).average };
+        });
+        return { studentId: classStudent.id, average: classStudentAverage.average };
       })
       .filter((entry): entry is { studentId: number; average: number } => entry.average != null && Number.isFinite(entry.average));
     const classAverages = officialAverages.map((entry) => entry.average);
