@@ -31,6 +31,7 @@ import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
+import ParentWhatsAppButton from './components/ParentWhatsAppButton.tsx';
 import LoginView from './components/LoginView.tsx';
 import DashboardView from './components/DashboardView.tsx';
 import AdminView from './components/AdminView.tsx';
@@ -1080,6 +1081,7 @@ export default function App() {
         isSyncing={isSyncing}
         onManageAccounts={() => setActiveTab('administration')}
       />
+      <ParentWhatsAppButton currentRole={currentRole} studentsList={studentsList} />
 
       {visibleErrorMsg && (
         <GlobalErrorToast message={visibleErrorMsg} onClose={() => setErrorMsg(null)} />

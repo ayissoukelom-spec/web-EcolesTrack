@@ -41,6 +41,7 @@ import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import { registerClassSubjectPivotRoute } from './src/lib/classSubjectPivotApi.ts';
+import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAdminWhatsAppApi.ts';
 import {
   schools,
   academicYears,
@@ -1325,6 +1326,7 @@ export async function createApp() {
   registerBulletinPdfRoute(app, { resolveActor });
   registerClassRankingRoute(app, { resolveActor });
   registerClassSubjectPivotRoute(app, { resolveActor });
+  registerParentSchoolAdminWhatsAppRoute(app, { resolveActor });
 
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {

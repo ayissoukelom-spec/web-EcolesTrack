@@ -146,6 +146,62 @@ describe('App bulletin navigation', () => {
     });
   });
 
+  it('keeps the parent WhatsApp contact available while navigating between parent pages', async () => {
+    mockGetSimulatedRole.mockReturnValue('parent');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-parent-10',
+      email: 'parent@example.com',
+      name: 'Parent',
+      schoolId: 1,
+      role: 'parent',
+      id: 10,
+      phone: '+22899999999',
+    });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/students?includeFormer=true') {
+        return Promise.resolve([{
+          id: 71,
+          schoolId: 1,
+          classId: 4,
+          className: '6ème A',
+          firstName: 'Alice',
+          lastName: 'Akakpo',
+          parentId: 3,
+        }]);
+      }
+      if (url === '/api/parents') {
+        return Promise.resolve([{ id: 3, userId: 10, name: 'Parent', email: 'parent@example.com', phone: '+22899999999' }]);
+      }
+      if (url === '/api/parent/whatsapp-contact?studentId=71') {
+        return Promise.resolve({ whatsappUrl: 'https://wa.me/22890000001?text=Bonjour' });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const contactButton = await screen.findByRole('link', { name: "WhatsApp — Contacter l'administration" });
+    expect(contactButton.getAttribute('href')).toBe('https://wa.me/22890000001?text=Bonjour');
+
+    fireEvent.click(screen.getByRole('button', { name: /Absences/i }));
+    expect(await screen.findByText('AbsenceView')).toBeTruthy();
+    expect(screen.getByRole('link', { name: "WhatsApp — Contacter l'administration" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+    expect(await screen.findByText('Eleve selectionne')).toBeTruthy();
+    expect(screen.getByRole('link', { name: "WhatsApp — Contacter l'administration" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Tableau de Bord/i }));
+    expect(await screen.findByText('DashboardView')).toBeTruthy();
+    expect(screen.getByRole('link', { name: "WhatsApp — Contacter l'administration" })).toBeTruthy();
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/parent/whatsapp-contact?studentId=71');
+  });
+
   it('allows super_admin to access the Bulletin entry and page', async () => {
     mockGetSimulatedRole.mockReturnValue('super_admin');
     mockGetSimulatedUser.mockReturnValue({ uid: 'sim-super-admin', email: 'superadmin@example.com', name: 'Super Admin', schoolId: null, role: 'super_admin', id: 1 });
