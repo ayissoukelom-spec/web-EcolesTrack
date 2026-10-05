@@ -1083,7 +1083,7 @@ export default function App() {
       )}
 
       {/* Main workspace with sidebar option layout */}
-      <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6">
+      <div className="flex-1 w-[94%] max-w-[1920px] mx-auto p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6">
         
         {/* SIDEBAR NAVIGATION */}
         <aside className="w-full lg:w-64 shrink-0 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm" id="main-sidebar">

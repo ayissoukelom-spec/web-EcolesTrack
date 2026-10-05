@@ -1262,7 +1262,7 @@ export default function SimulatorHeader({
         </ModalSurface>
       )}
 
-      <div className="max-w-7xl mx-auto p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="w-[94%] max-w-[1920px] mx-auto p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         {/* Title */}
         <div className="flex items-center gap-3">
           <img
@@ -1367,7 +1367,7 @@ export default function SimulatorHeader({
       
       {/* Context disclaimer */}
       <div className="bg-slate-950/60 border-t border-slate-800/80 px-4 py-2.5 text-xs text-slate-400">
-        <div className="max-w-7xl mx-auto flex items-center gap-2">
+        <div className="w-[94%] max-w-[1920px] mx-auto flex items-center gap-2">
           <Shield className="h-4 w-4 text-slate-400 shrink-0" />
           <span>
             Rôle Actif : <strong className="text-slate-200">{activeRoleDetails.label}</strong> — {activeRoleDetails.description}
