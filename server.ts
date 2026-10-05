@@ -1648,6 +1648,13 @@ export async function createApp() {
         }
       }
 
+      const parentSchoolId = role === 'parent'
+        ? resolvedSchoolId ?? requestedParentStudent?.schoolId ?? null
+        : null;
+      if (role === 'parent' && actor.role !== 'super_admin' && parentSchoolId != null && parentSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Forbidden: cannot create parent for another school' });
+      }
+
       const temporaryCredential = generateTemporaryLocalPassword();
       const createdUser = await db.transaction(async (tx) => {
         const [newUser] = await tx.insert(users).values({
@@ -1668,6 +1675,42 @@ export async function createApp() {
           salt: temporaryCredential.salt,
           mustReset: true,
         });
+
+        let newParent: typeof parents.$inferSelect | null = null;
+        if (role === 'parent') {
+          [newParent] = await tx.insert(parents).values({
+            userId: newUser.id,
+            phone: canonicalPhone,
+            address: '',
+            studentId: requestedParentStudentId || undefined,
+            schoolId: parentSchoolId,
+          }).returning();
+
+          if (requestedParentStudentId != null) {
+            const studentConditions = [
+              eq(students.id, requestedParentStudentId),
+              sql`${students.parentId} IS NULL`,
+            ];
+            if (parentSchoolId != null) studentConditions.push(eq(students.schoolId, parentSchoolId));
+            const linkedStudents = await tx.update(students)
+              .set({ parentId: newParent.id })
+              .where(and(...studentConditions))
+              .returning({ id: students.id });
+            if (linkedStudents.length === 0) {
+              throw new Error('Parent student link could not be created');
+            }
+          }
+
+          if (parentSchoolId != null) {
+            await tx.insert(userSchools).values({
+              userId: newUser.id,
+              schoolId: parentSchoolId,
+              role: 'parent',
+              isActive: true,
+            });
+          }
+        }
+
         return newUser;
       });
 
@@ -1684,43 +1727,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
       }
 
-      if (role === 'parent') {
-        const parentStudentId = requestedParentStudentId;
-        let parentSchoolId = resolvedSchoolId ?? null;
-
-        if (parentStudentId && requestedParentStudent && parentSchoolId == null) {
-          parentSchoolId = requestedParentStudent.schoolId;
-        }
-
-        if (actor.role !== 'super_admin' && parentSchoolId != null && actor.schoolId != null && parentSchoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Forbidden: cannot create parent for another school' });
-        }
-
-        const [createdParent] = await db.insert(parents).values({
-          userId: createdUser.id,
-          phone: canonicalPhone,
-          address: '',
-          studentId: parentStudentId || undefined,
-          schoolId: parentSchoolId,
-        }).returning();
-
-        if (parentStudentId != null && createdParent?.id != null) {
-          await db.update(students).set({ parentId: createdParent.id }).where(and(
-            eq(students.id, parentStudentId),
-            eq(students.schoolId, parentSchoolId!),
-            sql`${students.parentId} IS NULL`,
-          ));
-        }
-
-        if (parentSchoolId != null) {
-          await db.insert(userSchools).values({
-            userId: createdUser.id,
-            schoolId: parentSchoolId,
-            role: 'parent',
-            isActive: true,
-          });
-        }
-      } else if (role === 'teacher') {
+      if (role === 'teacher') {
         const teacherResult = await db.insert(teachers)
           .values({ userId: createdUser.id, schoolId: resolvedSchoolId ?? 0, phone: phone || '', specialization: normalizeSpecialization(specialization) || null })
           .returning();
@@ -2708,37 +2715,37 @@ export async function createApp() {
       const existingByPhone = await findExistingUsersByPhone(canonicalPhone);
       if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
 
-      const newUserResult = await db.insert(users).values({
-        uid,
-        email: email || 'user@schooltrack.fr',
-        name: name || 'Nouvel Utilisateur',
-        role: finalRole,
-        schoolId: resolvedSchoolId,
-        phone: canonicalPhone,
-      }).returning();
-
-      const createdUser = newUserResult[0];
-
-      // Create linked profile type
-      if (finalRole === 'parent') {
-        await db.insert(parents).values({
-          userId: createdUser.id,
+      const createdUser = await db.transaction(async (tx) => {
+        const [newUser] = await tx.insert(users).values({
+          uid,
+          email: email || 'user@schooltrack.fr',
+          name: name || 'Nouvel Utilisateur',
+          role: finalRole,
+          schoolId: resolvedSchoolId,
           phone: canonicalPhone,
-          address: '',
-        });
-        if (resolvedSchoolId != null) {
-          try {
-            await db.insert(userSchools).values({
-              userId: createdUser.id,
+        }).returning();
+
+        if (finalRole === 'parent') {
+          await tx.insert(parents).values({
+            userId: newUser.id,
+            phone: canonicalPhone,
+            address: '',
+          });
+          if (resolvedSchoolId != null) {
+            await tx.insert(userSchools).values({
+              userId: newUser.id,
               schoolId: resolvedSchoolId,
               role: 'parent',
               isActive: true,
             });
-          } catch (e: any) {
-            console.warn('Failed to insert user_schools for register-or-login parent', e?.message || e);
           }
         }
-      } else if (finalRole === 'school_admin') {
+
+        return newUser;
+      });
+
+      // Create linked profile type
+      if (finalRole === 'school_admin') {
         if (resolvedSchoolId != null) {
           try {
             await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
@@ -6532,38 +6539,52 @@ export async function createApp() {
           if (existingByPhone.length > 0) return sendDuplicatePhoneResponse(res);
 
           const fakeUid = `sim_parent_${Date.now()}`;
-          const userResult = await db.insert(users).values({
-            uid: fakeUid,
-            email: normalizedEmail,
-            name,
-            role: 'parent',
-            schoolId: effectiveSchoolId,
-            phone: canonicalPhone,
-            gender: gender ?? null,
-          }).returning();
-
-          const createdUser = userResult[0];
-          const parentResult = await db.insert(parents).values({
-            userId: createdUser.id,
-            phone: canonicalPhone,
-            address,
-            studentId: parsedStudentId ?? null,
-            schoolId: effectiveSchoolId ?? null,
-          }).returning();
-
-          const createdParent = parentResult[0];
-          if (parsedStudentId) {
-            await db.update(students).set({ parentId: createdParent.id }).where(eq(students.id, parsedStudentId));
-          }
-
-          if (effectiveSchoolId != null) {
-            await db.insert(userSchools).values({
-              userId: createdUser.id,
-              schoolId: effectiveSchoolId,
+          const { createdUser, createdParent } = await db.transaction(async (tx) => {
+            const [newUser] = await tx.insert(users).values({
+              uid: fakeUid,
+              email: normalizedEmail,
+              name,
               role: 'parent',
-              isActive: true,
-            });
-          }
+              schoolId: effectiveSchoolId,
+              phone: canonicalPhone,
+              gender: gender ?? null,
+            }).returning();
+
+            const [newParent] = await tx.insert(parents).values({
+              userId: newUser.id,
+              phone: canonicalPhone,
+              address,
+              studentId: parsedStudentId ?? null,
+              schoolId: effectiveSchoolId ?? null,
+            }).returning();
+
+            if (parsedStudentId != null) {
+              const linkConditions = [
+                eq(students.id, parsedStudentId),
+                eq(students.isActive, true),
+                sql`${students.parentId} IS NULL`,
+              ];
+              if (effectiveSchoolId != null) linkConditions.push(eq(students.schoolId, effectiveSchoolId));
+              const linkedStudents = await tx.update(students)
+                .set({ parentId: newParent.id })
+                .where(and(...linkConditions))
+                .returning({ id: students.id });
+              if (linkedStudents.length === 0) {
+                throw new Error('Parent student link could not be created');
+              }
+            }
+
+            if (effectiveSchoolId != null) {
+              await tx.insert(userSchools).values({
+                userId: newUser.id,
+                schoolId: effectiveSchoolId,
+                role: 'parent',
+                isActive: true,
+              });
+            }
+
+            return { createdUser: newUser, createdParent: newParent };
+          });
 
           res.status(201).json({
             ...createdUser,
@@ -6821,8 +6842,9 @@ export async function createApp() {
         const fakeUid = `sim_parent_${Date.now()}_${i}`;
         const temporaryCredential = generateTemporaryLocalPassword();
         let createdUser: typeof users.$inferSelect;
+        let parentId: number;
         try {
-          createdUser = await db.transaction(async (tx) => {
+          ({ createdUser, parentId } = await db.transaction(async (tx) => {
             const [newUser] = await tx.insert(users).values({
               uid: fakeUid,
               email: normalizedEmail,
@@ -6838,8 +6860,38 @@ export async function createApp() {
               salt: temporaryCredential.salt,
               mustReset: true,
             });
-            return newUser;
-          });
+            const [newParent] = await tx.insert(parents).values({
+              userId: newUser.id,
+              phone: canonicalPhone,
+              address: address || null,
+              studentId: linkedStudentId,
+              schoolId: schoolId || null,
+            }).returning();
+            if (linkedStudentId != null) {
+              const linkConditions = [
+                eq(students.id, linkedStudentId),
+                sql`${students.parentId} IS NULL`,
+                eq(students.isActive, true),
+              ];
+              if (schoolId != null) linkConditions.push(eq(students.schoolId, schoolId));
+              const linkedStudents = await tx.update(students)
+                .set({ parentId: newParent.id })
+                .where(and(...linkConditions))
+                .returning({ id: students.id });
+              if (linkedStudents.length === 0) {
+                throw new Error('Parent student link could not be created');
+              }
+            }
+            if (schoolId != null) {
+              await tx.insert(userSchools).values({
+                userId: newUser.id,
+                schoolId,
+                role: 'parent',
+                isActive: true,
+              });
+            }
+            return { createdUser: newUser, parentId: newParent.id };
+          }));
         } catch (err: any) {
           if (isUsersPhoneUniqueViolation(err)) {
             addRowError(DUPLICATE_PHONE_ERROR.message);
@@ -6847,30 +6899,10 @@ export async function createApp() {
           }
           throw err;
         }
-        const parentRes = await db.insert(parents).values({ userId: createdUser.id, phone: canonicalPhone, address: address || null, studentId: linkedStudentId, schoolId: schoolId || null }).returning();
-        if (linkedStudentId != null) {
-          await db.update(students).set({ parentId: parentRes[0].id }).where(and(
-            eq(students.id, linkedStudentId),
-            eq(students.schoolId, schoolId),
-            sql`${students.parentId} IS NULL`,
-          ));
-        }
-        try {
-          if (schoolId != null) {
-            await db.insert(userSchools).values({
-              userId: createdUser.id,
-              schoolId,
-              role: 'parent',
-              isActive: true,
-            });
-          }
-        } catch (e: any) {
-          console.warn('Failed to insert user_schools for imported parent', e?.message || e);
-        }
 
         inserted.push({
           user: createdUser,
-          parentId: parentRes[0].id,
+          parentId,
           temporaryPassword: temporaryCredential.temporaryPassword,
         });
       }

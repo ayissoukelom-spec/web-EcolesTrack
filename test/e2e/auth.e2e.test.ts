@@ -132,6 +132,8 @@ function setCurrentAndFormerNotificationRecipients() {
 function createMockDb() {
   const db: any = {
     __failNextNotificationAttachmentInsert: false,
+    __failNextParentInsert: false,
+    __failNextParentMembershipInsert: false,
   };
 
   // Minimal mock that supports the select/insert/update/delete chains used
@@ -964,12 +966,16 @@ function createMockDb() {
       const studentsBefore = JSON.parse(JSON.stringify(FIXTURES.students));
       const usersBefore = JSON.parse(JSON.stringify(FIXTURES.users));
       const localAuthsBefore = JSON.parse(JSON.stringify(FIXTURES.localAuths));
+      const parentsBefore = JSON.parse(JSON.stringify(FIXTURES.parents));
+      const userSchoolsBefore = JSON.parse(JSON.stringify(FIXTURES.userSchools));
       try {
         return await callback(db);
       } catch (error) {
         FIXTURES.students.splice(0, FIXTURES.students.length, ...studentsBefore);
         FIXTURES.users.splice(0, FIXTURES.users.length, ...usersBefore);
         FIXTURES.localAuths.splice(0, FIXTURES.localAuths.length, ...localAuthsBefore);
+        FIXTURES.parents.splice(0, FIXTURES.parents.length, ...parentsBefore);
+        FIXTURES.userSchools.splice(0, FIXTURES.userSchools.length, ...userSchoolsBefore);
         throw error;
       }
     },
@@ -1029,6 +1035,10 @@ function createMockDb() {
               return [row];
             }
             if (tableName === 'parents') {
+              if (db.__failNextParentInsert) {
+                db.__failNextParentInsert = false;
+                throw new Error('Simulated DB failure for parent profile');
+              }
               const nextId = FIXTURES.parents.reduce((max: number, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
               const row = { id: nextId, ...obj };
               FIXTURES.parents.push(row as any);
@@ -1047,6 +1057,10 @@ function createMockDb() {
             }
 
             if (obj.userId !== undefined && obj.schoolId !== undefined && obj.role && obj.passwordHash === undefined && obj.actorUserId === undefined) {
+              if (db.__failNextParentMembershipInsert && obj.role === 'parent') {
+                db.__failNextParentMembershipInsert = false;
+                throw new Error('Simulated DB failure for parent school membership');
+              }
               FIXTURES.userSchools.push(obj as any);
               return [obj];
             }
@@ -2371,6 +2385,115 @@ describe('E2E security: auth & privilege checks', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ email: null, name: 'Parent Sans Email', schoolId: 10 });
+  });
+
+  it('rolls back direct parent creation if the school association fails, then allows a retry', async () => {
+    FIXTURES.students.push({
+      id: 19,
+      schoolId: 10,
+      classId: 1,
+      firstName: 'Unlinked',
+      lastName: 'Student',
+      birthDate: '2010-01-01',
+      gender: 'female',
+      parentId: null,
+      schoolAdminId: null,
+      enrolledAt: '2025-09-01T00:00:00Z',
+    });
+    const usersBefore = FIXTURES.users.length;
+    const parentsBefore = FIXTURES.parents.length;
+    const membershipsBefore = FIXTURES.userSchools.length;
+    (mockDb.db as any).__failNextParentInsert = false;
+    (mockDb.db as any).__failNextParentMembershipInsert = true;
+
+    const payload = {
+      name: 'Atomic Parent',
+      email: 'atomic-parent@x.test',
+      phone: '+22890000061',
+      address: 'Test address',
+      schoolId: 10,
+      studentId: 19,
+    };
+    const failed = await request(app)
+      .post('/api/parents')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send(payload);
+
+    expect(failed.status).toBe(500);
+    expect(FIXTURES.users).toHaveLength(usersBefore);
+    expect(FIXTURES.parents).toHaveLength(parentsBefore);
+    expect(FIXTURES.userSchools).toHaveLength(membershipsBefore);
+    expect(FIXTURES.users.some((user) => user.email === payload.email)).toBe(false);
+    expect(FIXTURES.students.find((student: any) => student.id === 19)?.parentId).toBeNull();
+
+    const retried = await request(app)
+      .post('/api/parents')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send(payload);
+
+    expect(retried.status).toBe(201);
+    const createdUser = FIXTURES.users.find((user) => user.email === payload.email);
+    const createdParent = FIXTURES.parents.find((parent: any) => parent.userId === createdUser?.id);
+    expect(createdUser).toBeDefined();
+    expect(createdParent).toMatchObject({ userId: createdUser?.id, schoolId: 10 });
+    expect(FIXTURES.userSchools).toContainEqual(expect.objectContaining({
+      userId: createdUser?.id,
+      schoolId: 10,
+      role: 'parent',
+    }));
+    expect(FIXTURES.students.find((student: any) => student.id === 19)?.parentId).toBe(createdParent?.id);
+  });
+
+  it('rolls back admin parent user and local auth if its profile insert fails', async () => {
+    const usersBefore = FIXTURES.users.length;
+    const parentsBefore = FIXTURES.parents.length;
+    const localAuthsBefore = FIXTURES.localAuths.length;
+    const membershipsBefore = FIXTURES.userSchools.length;
+    (mockDb.db as any).__failNextParentMembershipInsert = false;
+    (mockDb.db as any).__failNextParentInsert = true;
+
+    const payload = {
+      uid: 'atomic-admin-parent',
+      email: 'atomic-admin-parent@x.test',
+      name: 'Atomic Admin Parent',
+      role: 'parent',
+      schoolId: 10,
+      phone: '+22890000062',
+    };
+    const failed = await request(app)
+      .post('/api/admin/users')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send(payload);
+
+    expect(failed.status).toBe(500);
+    expect(FIXTURES.users).toHaveLength(usersBefore);
+    expect(FIXTURES.parents).toHaveLength(parentsBefore);
+    expect(FIXTURES.localAuths).toHaveLength(localAuthsBefore);
+    expect(FIXTURES.userSchools).toHaveLength(membershipsBefore);
+    expect(FIXTURES.users.some((user) => user.uid === payload.uid)).toBe(false);
+
+    const retried = await request(app)
+      .post('/api/admin/users')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send(payload);
+
+    expect(retried.status).toBe(201);
+    const createdUser = FIXTURES.users.find((user) => user.uid === payload.uid);
+    expect(FIXTURES.parents).toContainEqual(expect.objectContaining({ userId: createdUser?.id, schoolId: 10 }));
+    expect(FIXTURES.localAuths).toContainEqual(expect.objectContaining({ userId: createdUser?.id, mustReset: true }));
+    expect(FIXTURES.userSchools).toContainEqual(expect.objectContaining({
+      userId: createdUser?.id,
+      schoolId: 10,
+      role: 'parent',
+    }));
   });
 
   it('3k-ter. school_admin can create a parent without an email via POST /api/admin/users', async () => {
