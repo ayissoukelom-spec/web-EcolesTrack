@@ -1,10 +1,4 @@
-const TEMPORARY_PASSWORD = '123456';
-
 export function getNewPasswordPolicyError(password: string): string | null {
-  if (password === TEMPORARY_PASSWORD) {
-    return 'Le nouveau mot de passe ne peut pas être le mot de passe temporaire.';
-  }
-
   const missingRules: string[] = [];
   if ([...password].length < 8) missingRules.push('au moins 8 caractères');
   if (!/[A-Z]/.test(password)) missingRules.push('au moins une lettre majuscule');

@@ -2520,9 +2520,6 @@ export async function createApp() {
       if (typeof authenticatedUserId !== 'number' || !Number.isInteger(authenticatedUserId)) {
         return res.status(401).json({ error: 'Unauthenticated' });
       }
-      const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
-      if (passwordPolicyError) return res.status(400).json({ error: passwordPolicyError });
-
       const [userRecord] = await db.select().from(users).where(eq(users.id, authenticatedUserId));
       if (!userRecord) return res.status(404).json({ error: 'Utilisateur non trouvé' });
 
@@ -2535,11 +2532,18 @@ export async function createApp() {
 
       const authRows = await db.select().from(localAuths).where(eq(localAuths.userId, userRecord.id));
       if (authRows.length === 0) return res.status(400).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
-      const { passwordHash, salt } = authRows[0] as any;
+      const { passwordHash, salt, mustReset } = authRows[0] as any;
 
       const crypto = await import('node:crypto');
       const verifyHash = crypto.pbkdf2Sync(currentPassword, salt, 310000, 64, 'sha512').toString('hex');
       if (verifyHash !== passwordHash) return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
+
+      if (mustReset && hashLocalPassword(String(newPassword), salt) === passwordHash) {
+        return res.status(400).json({ error: 'Le nouveau mot de passe doit être différent du mot de passe actuel.' });
+      }
+
+      const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
+      if (passwordPolicyError) return res.status(400).json({ error: passwordPolicyError });
 
       // Hash new password and clear mustReset
       const newSalt = crypto.randomBytes(16).toString('hex');

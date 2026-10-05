@@ -89,7 +89,7 @@ describe('E2E: create → force password change → update profile → re-login'
       ['Ab123', 'Le nouveau mot de passe doit contenir au moins 8 caractères.'],
       ['12345678', 'Le nouveau mot de passe doit contenir au moins une lettre majuscule.'],
       ['abcdefgh', 'Le nouveau mot de passe doit contenir au moins une lettre majuscule et au moins un chiffre.'],
-      ['123456', 'Le nouveau mot de passe ne peut pas être le mot de passe temporaire.'],
+      ['123456', 'Le nouveau mot de passe doit contenir au moins 8 caractères et au moins une lettre majuscule.'],
       ['abc', 'Le nouveau mot de passe doit contenir au moins 8 caractères, au moins une lettre majuscule et au moins un chiffre.'],
     ];
     for (const [newPassword, error] of rejectedPasswords) {
@@ -101,6 +101,23 @@ describe('E2E: create → force password change → update profile → re-login'
       expect(rejected.status).toBe(400);
       expect(rejected.json.error).toBe(error);
     }
+
+    const reusedTemporaryPassword = await post('/api/auth/change-password', {
+      email,
+      currentPassword: temporaryPassword,
+      newPassword: temporaryPassword,
+    }, { Authorization: 'Bearer ' + loginToken });
+    expect(reusedTemporaryPassword.status).toBe(400);
+    expect(reusedTemporaryPassword.json.error).toBe(
+      'Le nouveau mot de passe doit être différent du mot de passe actuel.',
+    );
+
+    const temporaryPasswordStillWorks = await post('/api/auth/local-login', {
+      email,
+      password: temporaryPassword,
+    });
+    expect(temporaryPasswordStillWorks.status).toBe(200);
+    expect(temporaryPasswordStillWorks.json.mustReset).toBe(true);
 
     // 3) Change password using change-password endpoint
     const newPassword = 'Abcd1234';
@@ -123,6 +140,18 @@ describe('E2E: create → force password change → update profile → re-login'
     expect(relogin.json.mustReset).toBe(false);
     expect(relogin.json).toHaveProperty('name');
     expect(relogin.json.name).toBe(updatedName);
+
+    const changedAgain = await post('/api/auth/change-password', {
+      currentPassword: newPassword,
+      newPassword: 'Abcd5678',
+    }, { Authorization: 'Bearer ' + relogin.json.token });
+    expect(changedAgain.status).toBe(200);
+    const normalPasswordLogin = await post('/api/auth/local-login', {
+      email,
+      password: 'Abcd5678',
+    });
+    expect(normalPasswordLogin.status).toBe(200);
+    expect(normalPasswordLogin.json.mustReset).toBe(false);
   }, 20000);
 
   it('should reject a reused token after logout', async () => {

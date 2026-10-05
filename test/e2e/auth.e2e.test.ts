@@ -2756,6 +2756,28 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ email: first.body.email, password: firstTemporaryPassword });
     expect(login.status).toBe(200);
     expect(login.body.mustReset).toBe(true);
+    const reusedTemporaryPassword = await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({
+        currentPassword: firstTemporaryPassword,
+        newPassword: firstTemporaryPassword,
+      });
+    expect(reusedTemporaryPassword.status).toBe(400);
+    expect(reusedTemporaryPassword.body.error).toBe(
+      'Le nouveau mot de passe doit être différent du mot de passe actuel.',
+    );
+    const unchangedAuth = FIXTURES.localAuths.find((row: any) => row.userId === first.body.id);
+    expect(unchangedAuth.mustReset).toBe(true);
+    expect(unchangedAuth.passwordHash).toBe(
+      crypto.pbkdf2Sync(firstTemporaryPassword, unchangedAuth.salt, 310000, 64, 'sha512').toString('hex'),
+    );
+    const temporaryPasswordStillWorks = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: first.body.email, password: firstTemporaryPassword });
+    expect(temporaryPasswordStillWorks.status).toBe(200);
+    expect(temporaryPasswordStillWorks.body.mustReset).toBe(true);
+
     await request(app)
       .get('/api/grades')
       .set('Authorization', `Bearer ${login.body.token}`)
@@ -2784,6 +2806,18 @@ describe('E2E security: auth & privilege checks', () => {
       .send({ email: first.body.email, password: newPassword });
     expect(newPasswordLogin.status).toBe(200);
     expect(newPasswordLogin.body.mustReset).toBe(false);
+
+    const changedAgain = await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${newPasswordLogin.body.token}`)
+      .send({ currentPassword: newPassword, newPassword: 'Changed-Teacher-2027!' });
+    expect(changedAgain.status).toBe(200);
+    resetLocalLoginRateLimit();
+    const normalPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: first.body.email, password: 'Changed-Teacher-2027!' });
+    expect(normalPasswordLogin.status).toBe(200);
+    expect(normalPasswordLogin.body.mustReset).toBe(false);
   }, 30000);
 
   it('allows a parent without email to log in by phone and change the required temporary password', async () => {
