@@ -32,6 +32,7 @@ import {
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
 import { resolveSchoolTermForClass } from './educationStructure.ts';
+import { sortStudentsAlphabetically } from './studentOrdering';
 
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
@@ -1256,7 +1257,9 @@ export const registerBulletinGenerateRoute = (
         || !(await isApprovedClassForSchool(classId, actor.schoolId))
       )) return res.status(403).json({ error: 'Class is outside the school scope' });
 
-      const classStudents = await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] });
+      const classStudents = sortStudentsAlphabetically(
+        await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] }),
+      );
       const studentIds = classStudents.map((student: any) => Number(student.id)).filter((id) => Number.isInteger(id) && id > 0);
       if (studentIds.length === 0) return res.status(400).json({ error: 'No authorized students found in class' });
 

@@ -50,4 +50,21 @@ describe('sortStudentsAlphabetically', () => {
     expect(sorted.map((item) => item.id)).toEqual([3, 2, 1]);
     expect(students.map((item) => item.id)).toEqual([1, 2, 3]);
   });
+
+  test('orders tied names by id while preserving every student exactly once', () => {
+    const students = [
+      student(12, 'KOFFI', 'Jean'),
+      student(8, 'Étoile', 'Aïcha'),
+      student(3, 'Amega', 'David'),
+      student(4, 'ETOILE', 'AICHA'),
+      student(7, 'Étoile', 'Zoé'),
+      student(2, 'Etoile', 'Zoé'),
+    ];
+
+    const sorted = sortStudentsAlphabetically(students);
+
+    expect(sorted.map((item) => item.id)).toEqual([3, 4, 8, 2, 7, 12]);
+    expect(sorted).toHaveLength(students.length);
+    expect(new Set(sorted.map((item) => item.id)).size).toBe(students.length);
+  });
 });

@@ -1,6 +1,6 @@
 import { Student } from '../types';
 
-export function sortStudentsAlphabetically(students: Student[]): Student[] {
+export function sortStudentsAlphabetically<T extends Pick<Student, 'id' | 'lastName' | 'firstName'>>(students: T[]): T[] {
   return students.slice().sort((left, right) => {
     const lastNameComparison = String(left.lastName ?? '').trim().localeCompare(
       String(right.lastName ?? '').trim(),
