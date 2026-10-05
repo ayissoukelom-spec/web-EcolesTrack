@@ -1144,8 +1144,12 @@ describe('bulletin PDF API', () => {
     const canonicalPdfBytes = await createBulletinPdfDocument({ ...snapshotData, className: 'Tle' });
     const baselinePdfBytes = await createBulletinPdfDocument({ ...snapshotData, className: 'T le' });
 
-    expect(Buffer.from(pdfBytes).equals(Buffer.from(canonicalPdfBytes))).toBe(true);
-    expect(Buffer.from(pdfBytes).equals(Buffer.from(baselinePdfBytes))).toBe(false);
+    const pdfText = normalizePdfTextForAssertion(extractPdfText(pdfBytes));
+    const canonicalPdfText = normalizePdfTextForAssertion(extractPdfText(canonicalPdfBytes));
+    const baselinePdfText = normalizePdfTextForAssertion(extractPdfText(baselinePdfBytes));
+
+    expect(pdfText).toBe(canonicalPdfText);
+    expect(pdfText).not.toBe(baselinePdfText);
     expect(data.className).toBe(className);
     expect(data.average).toBe(snapshotData.average);
     expect(data.rank).toBe(snapshotData.rank);

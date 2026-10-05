@@ -60,17 +60,21 @@ export interface BulletinSubjectGroup<T> {
   lines: T[];
 }
 
-export const groupBulletinLinesBySubjectType = <T extends { subjectTypeName?: string | null }>(
+export const groupBulletinLinesBySubjectType = <T extends {
+  subjectTypeName?: string | null;
+  subjectTypeId?: number | null;
+  sortOrder?: number | null;
+}>(
   lines: T[],
 ): BulletinSubjectGroup<T>[] => {
   const groups = new Map<string, BulletinSubjectGroup<T>>();
 
   for (const line of lines) {
-    const subjectTypeId = typeof (line as { subjectTypeId?: number | null }).subjectTypeId === 'number'
-      ? (line as { subjectTypeId: number }).subjectTypeId
+    const subjectTypeId = typeof line.subjectTypeId === 'number'
+      ? line.subjectTypeId
       : null;
     const subjectTypeName = line.subjectTypeName?.trim() || 'Matières sans type';
-    const sortOrder = Number((line as { sortOrder?: number | null }).sortOrder ?? 0);
+    const sortOrder = Number(line.sortOrder ?? 0);
     const groupKey = subjectTypeId == null ? 'null' : String(subjectTypeId);
     const group = groups.get(groupKey) ?? {
       subjectTypeId,
@@ -430,10 +434,10 @@ const buildTeacherNameMap = async (
   return map;
 };
 
-export const resolveSubjectTeacherName = (
+export const resolveSubjectTeacherName = <T>(
   teacherIds: number[],
-  teacherNameMap: Map<number, string>,
-): string | null => {
+  teacherNameMap: Map<number, T>,
+): T | null => {
   if (!teacherIds || teacherIds.length === 0) return null;
 
   const counts = new Map<number, number>();

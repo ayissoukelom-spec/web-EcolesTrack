@@ -33,7 +33,9 @@ export function getFileStorageConfig(): FileStorageConfig {
     throw new Error('Production requires FILE_STORAGE_PROVIDER=s3; local upload storage is ephemeral on Render.');
   }
 
-  const resolvedMode: FileStorageConfig['mode'] = configuredMode || (bucket ? 's3' : 'local');
+  const resolvedMode: FileStorageConfig['mode'] = configuredMode === 'local' || configuredMode === 's3'
+    ? configuredMode
+    : bucket ? 's3' : 'local';
   if (forcePathStyleValue !== 'true' && forcePathStyleValue !== 'false') {
     throw new Error('S3_FORCE_PATH_STYLE must be either "true" or "false".');
   }
@@ -195,15 +197,7 @@ export async function readStoredFile(
         Key: reference,
       }));
       if (!result.Body) return null;
-      if (typeof (result.Body as any).transformToByteArray === 'function') {
-        return Buffer.from(await (result.Body as any).transformToByteArray());
-      }
-      if (typeof (result.Body as any)[Symbol.asyncIterator] === 'function') {
-        const chunks: Buffer[] = [];
-        for await (const chunk of result.Body as any) chunks.push(Buffer.from(chunk));
-        return Buffer.concat(chunks);
-      }
-      return Buffer.from(result.Body as Uint8Array);
+      return Buffer.from(await result.Body.transformToByteArray());
     } catch (error: any) {
       const statusCode = error?.$metadata?.httpStatusCode;
       if (statusCode !== 404 && error?.name !== 'NoSuchKey' && error?.name !== 'NotFound') {

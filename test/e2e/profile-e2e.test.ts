@@ -70,12 +70,14 @@ describe('E2E: create → force password change → update profile → re-login'
     const created = create.json;
     expect(created).toHaveProperty('id');
     expect(created).toHaveProperty('uid');
+    const temporaryPassword = created.temporaryPassword as string;
+    expect(temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
 
     const userId = created.id as number;
     const uid = created.uid as string;
 
-    // 2) Login with default password '123456' and expect mustReset true
-    const login = await post('/api/auth/local-login', { email, password: '123456' });
+    // 2) Login with the temporary password returned at creation and expect mustReset true
+    const login = await post('/api/auth/local-login', { email, password: temporaryPassword });
     expect(login.status).toBe(200);
     expect(login.json).toHaveProperty('mustReset');
     expect(login.json.mustReset).toBeTruthy();
@@ -93,7 +95,7 @@ describe('E2E: create → force password change → update profile → re-login'
     for (const [newPassword, error] of rejectedPasswords) {
       const rejected = await post('/api/auth/change-password', {
         email,
-        currentPassword: '123456',
+        currentPassword: temporaryPassword,
         newPassword,
       }, { Authorization: `Bearer ${loginToken}` });
       expect(rejected.status).toBe(400);
@@ -102,7 +104,7 @@ describe('E2E: create → force password change → update profile → re-login'
 
     // 3) Change password using change-password endpoint
     const newPassword = 'Abcd1234';
-    const change = await post('/api/auth/change-password', { email, currentPassword: '123456', newPassword }, { Authorization: `Bearer ${loginToken}` });
+    const change = await post('/api/auth/change-password', { email, currentPassword: temporaryPassword, newPassword }, { Authorization: `Bearer ${loginToken}` });
     expect(change.status).toBe(200);
     expect(change.json).toHaveProperty('success');
     expect(change.json.success).toBeTruthy();
@@ -131,7 +133,9 @@ describe('E2E: create → force password change → update profile → re-login'
     const create = await post('/api/admin/users', { email, name, role: 'parent', phone: uniquePhone() }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
     expect(create.status).toBe(201);
 
-    const login = await post('/api/auth/local-login', { email, password: '123456' });
+    const temporaryPassword = create.json.temporaryPassword as string;
+    expect(temporaryPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    const login = await post('/api/auth/local-login', { email, password: temporaryPassword });
     expect(login.status).toBe(200);
     const token = login.json.token;
     expect(token).toBeTruthy();

@@ -540,41 +540,39 @@ const buildFallbackLinesFromGrades = (
   }
 
   let runningId = 1;
-  return Array.from(bySubject.entries()).map(([subjectName, agg]) => ({
-    ...(() => {
-      const interrogation = calculateTypeWeightedAverage(agg.groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
-      const devoir = calculateTypeWeightedAverage(agg.groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
-      return {
-        classAverage: calculateClassAverage(interrogation, devoir),
-      };
-    })(),
-    id: runningId++,
-    bulletinId: 0,
-    subjectId: null,
-    subjectName,
-    coefficient: resolveSubjectCoefficientFromPublishedComposition(
-      rows.map((row) => ({
-        subject: row.subject,
-        classId: undefined,
-        termId: undefined,
-        type: row.type,
-        coefficient: row.coefficient,
-        countInBulletin: true,
-      })),
+  return Array.from(bySubject.entries()).map(([subjectName, agg]) => {
+    const interrogation = calculateTypeWeightedAverage(agg.groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
+    const devoir = calculateTypeWeightedAverage(agg.groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
+    const composition = calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score })));
+    const classAverage = calculateClassAverage(interrogation, devoir);
+
+    return {
+      id: runningId++,
+      bulletinId: 0,
+      subjectId: null,
       subjectName,
-      undefined,
-      undefined,
-    ),
-    average: calculateFinalSubjectAverage(
-      calculateClassAverage(interrogation, devoir),
-      calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
-    ),
-    interrogation: calculateTypeWeightedAverage(agg.groups.interrogation.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
-    devoir: calculateTypeWeightedAverage(agg.groups.devoir.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
-    composition: calculateTypeWeightedAverage(agg.groups.composition.map((entry) => ({ coefficient: entry.coefficient, normalizedScore: entry.score }))),
-    teacherComment: null,
-    rank: null,
-  }));
+      coefficient: resolveSubjectCoefficientFromPublishedComposition(
+        rows.map((row) => ({
+          subject: row.subject,
+          classId: undefined,
+          termId: undefined,
+          type: row.type,
+          coefficient: row.coefficient,
+          countInBulletin: true,
+        })),
+        subjectName,
+        undefined,
+        undefined,
+      ),
+      average: calculateFinalSubjectAverage(classAverage, composition),
+      interrogation,
+      devoir,
+      composition,
+      classAverage,
+      teacherComment: null,
+      rank: null,
+    };
+  });
 };
 
 const hexToRgb = (hexColor: string) => {
@@ -1052,7 +1050,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       ? new Map<string, SubjectTypeMetadata>()
       : await loadSubjectTypeNames(db, header.studentSchoolId);
 
-    let resolvedLines = lines.map((line) => {
+    let resolvedLines: BulletinPdfLine[] = lines.map((line) => {
       const resolvedSubject = resolvePdfSubjectDisplayInfo(line, subjectRecordsById, subjectRecordsByName);
       return {
         id: line.id,

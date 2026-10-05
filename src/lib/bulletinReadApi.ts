@@ -51,8 +51,6 @@ export interface BulletinListItem {
   rank: number | null;
   mention: string | null;
   appreciation: string | null;
-  absences: number;
-  retards: number;
   generatedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -72,7 +70,11 @@ export interface BulletinLineResponse {
   subjectName: string;
   coefficient: number;
   average: number | null;
-  teacherName?: string | null;
+  teacherName?: {
+    name: string;
+    lastName: string | null;
+    firstNames: string | null;
+  } | null;
   teacherComment: string | null;
   rank: number | null;
   createdAt: string | null;
@@ -94,6 +96,8 @@ export interface BulletinDetailResponse {
   rank: number | null;
   mention: string | null;
   appreciation: string | null;
+  absences: number;
+  retards: number;
   generatedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;

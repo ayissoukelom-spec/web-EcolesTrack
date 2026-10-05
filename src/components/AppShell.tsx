@@ -464,8 +464,6 @@ export default function AppShell() {
         teachersList={teachersList}
         teacherSubjectIds={currentRole === 'teacher' ? currentTeacherProfile?.subjectIds || [] : []}
         approvedSubjectsList={approvedSubjectsList}
-        teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
-        teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
         onAddAbsence={handleAddAbsence}
         onAddLateArrival={handleAddLateArrival}
         onReviewAbsence={handleReviewAbsence}

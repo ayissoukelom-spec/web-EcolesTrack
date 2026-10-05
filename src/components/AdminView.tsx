@@ -4554,13 +4554,12 @@ export default function AdminView({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={activeTab === 'parents' ? 'Nom, prénom ou téléphone...' : `Rechercher parmi les ${
+              placeholder={`Rechercher parmi les ${
                 activeTab === 'schools' ? 'écoles' :
                 activeTab === 'years' ? 'années scolaires' :
                 activeTab === 'classes' ? 'classes' :
                 activeTab === 'teachers' ? 'enseignants' :
                 activeTab === 'students' ? 'étudiants' :
-                activeTab === 'parents' ? 'parents' :
                 activeTab === 'accounts' ? 'comptes' :
                 'éléments'
               }...`}
@@ -4595,7 +4594,7 @@ export default function AdminView({
                   <p className="mt-1 font-semibold text-rose-700">{Array.isArray(importResult.errors) ? importResult.errors.length : 0} ligne(s) non importée(s).</p>
                   <div className="mt-3 space-y-2" role="alert">
                     <h4 className="font-semibold text-slate-800">Doublons / erreurs</h4>
-                    {(importResult.errors || []).map((item: { row?: number; name?: string; email?: string; error?: string }, index: number) => (
+                    {(importResult.errors || []).map((item: { row?: number; name?: string; email?: string; error?: string; reason?: string }, index: number) => (
                       <div key={`${item.row ?? 'row'}-${item.email ?? index}`} className="rounded border border-rose-100 bg-rose-50 p-3 text-rose-800">
                         <div className="font-semibold">
                           Ligne {item.row ?? '—'}{item.name ? ` — ${item.name}` : ''}{item.email ? ` — ${item.email}` : ''}
@@ -4741,6 +4740,7 @@ export default function AdminView({
                       educationDirection: '',
                       ministryName: '',
                       principalName: '',
+                      principalGender: '',
                       promotionThreshold: '10.00',
                       selectedClassNames: [],
                       selectedClassGroups: [],

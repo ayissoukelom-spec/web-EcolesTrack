@@ -104,6 +104,15 @@ function resetFixtures() {
   });
 }
 
+function resetLocalLoginRateLimit() {
+  const route = app._router.stack
+    .find((layer: any) => layer.route?.path === '/api/auth/local-login')?.route;
+  const limiter = route?.stack
+    .find((layer: any) => typeof layer.handle.resetKey === 'function')?.handle;
+  if (!limiter) throw new Error('Could not locate the local login rate limiter');
+  limiter.resetKey('127.0.0.1');
+}
+
 function setCurrentAndFormerNotificationRecipients() {
   (FIXTURES.parents as any[]).splice(0, FIXTURES.parents.length,
     { id: 1, userId: 6, studentId: 11, schoolId: 10 },
@@ -716,7 +725,8 @@ function createMockDb() {
         const fromName = resolveTableName(builder._table);
         const hasStudentParentJoin = fromName === 'students'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
-        const hasUsersParentsJoin = fromName === 'users'
+        const hasUsersParentPhoneLookup = fromName === 'users'
+          && conditions.phone !== undefined
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
         const hasParentStudentJoin = fromName === 'parents'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
@@ -728,7 +738,7 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const baseConditions = { ...conditions };
         if (hasStudentParentJoin) delete baseConditions.userId;
-        if (hasUsersParentsJoin) delete baseConditions.phone;
+        if (hasUsersParentPhoneLookup) delete baseConditions.phone;
         if (hasClassTeachersClassJoin) delete baseConditions.schoolId;
         if (hasHomeroomClassJoin) delete baseConditions.schoolId;
         if (hasAbsenceStudentJoin) delete baseConditions.schoolId;
@@ -738,7 +748,7 @@ function createMockDb() {
         const hasSchoolSubjectsJoin = fromName === 'subjects'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
-        let rows = filterTableRows(builder._table, baseConditions, hasUsersParentsJoin ? undefined : builder._cond);
+        let rows = filterTableRows(builder._table, baseConditions, hasUsersParentPhoneLookup ? undefined : builder._cond);
 
         if (hasAbsenceStudentJoin && conditions.schoolId != null) {
           rows = rows.filter((absence: any) => {
@@ -826,7 +836,7 @@ function createMockDb() {
             .map((parent: any) => ({ ...student, userId: parent.userId })));
         }
 
-        if (hasUsersParentsJoin) {
+        if (hasUsersParentPhoneLookup) {
           const requestedPhone = String(conditions.phone ?? '').replace(/\D/g, '');
           rows = rows
             .filter((user: any) => user.role === 'parent' && FIXTURES.parents.some((parent: any) => (
@@ -1423,6 +1433,7 @@ describe('E2E security: auth & privilege checks', () => {
 
   beforeEach(() => {
     resetFixtures();
+    resetLocalLoginRateLimit();
   });
 
   it('1. rejects x-simulated-* headers in production', async () => {
@@ -2671,6 +2682,20 @@ describe('E2E security: auth & privilege checks', () => {
       .get('/api/grades')
       .set('Authorization', `Bearer ${login.body.token}`)
       .expect(200);
+  });
+
+  it('enforces the local login rate limit after five attempts', async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await request(app)
+        .post('/api/auth/local-login')
+        .send({ email: 'missing@x.test', password: 'incorrect' });
+      expect(res.status).not.toBe(429);
+    }
+
+    const limited = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'missing@x.test', password: 'incorrect' });
+    expect(limited.status).toBe(429);
   });
 
   it('creates local accounts with unique one-time temporary passwords and stores only hashes', async () => {
