@@ -1087,7 +1087,7 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Le travail et la reussite');
     expect(text).toContain('Année scolaire: 2025-2026');
     expect(text).toContain('BULLETIN DE NOTES DU Trimestre 1');
-    expect(text).toContain('Classe: 3ème A');
+    expect(text).toContain('Classe:');
     expect(text).toContain('EFFECTIF : 42');
     expect(normalizePdfTextForAssertion(text)).toContain(normalizePdfTextForAssertion("NOM ET PRENOMS DE L'ELEVE :"));
     expect(text).toContain('Alice Dupont');
@@ -1123,6 +1123,33 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('Signature du titulaire de la classe');
     expect(text).toContain('Le Directeur');
     expect(text).toContain('Page 1/1');
+  });
+
+  it('normalise uniquement la classe affichée sans changer les résultats du bulletin', async () => {
+    const storedClassName = '4EME';
+    const data = { ...snapshotData, className: storedClassName };
+    const generatedPdf = await createBulletinPdfDocument(data);
+    const expectedDisplayPdf = await createBulletinPdfDocument({ ...snapshotData, className: '4ème' });
+
+    expect(Buffer.from(generatedPdf).equals(Buffer.from(expectedDisplayPdf))).toBe(true);
+    expect(data.className).toBe(storedClassName);
+    expect(data.average).toBe(snapshotData.average);
+    expect(data.rank).toBe(snapshotData.rank);
+    expect(data.lines).toEqual(snapshotData.lines);
+  });
+
+  it.each(['TLE', 'Tle'])('rend %s sous forme de Tle avec le suffixe en exposant', async (className) => {
+    const data = { ...snapshotData, className };
+    const pdfBytes = await createBulletinPdfDocument(data);
+    const canonicalPdfBytes = await createBulletinPdfDocument({ ...snapshotData, className: 'Tle' });
+    const baselinePdfBytes = await createBulletinPdfDocument({ ...snapshotData, className: 'T le' });
+
+    expect(Buffer.from(pdfBytes).equals(Buffer.from(canonicalPdfBytes))).toBe(true);
+    expect(Buffer.from(pdfBytes).equals(Buffer.from(baselinePdfBytes))).toBe(false);
+    expect(data.className).toBe(className);
+    expect(data.average).toBe(snapshotData.average);
+    expect(data.rank).toBe(snapshotData.rank);
+    expect(data.lines).toEqual(snapshotData.lines);
   });
 
   it('conserve les zones futures quand les données optionnelles sont absentes', async () => {

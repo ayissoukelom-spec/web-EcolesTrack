@@ -56,6 +56,7 @@ import { normalizeClassProgressionCode } from './classProgression';
 import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type ExamResultStatus } from './examDecision';
 import { selectPreferredClassExamConfiguration } from './classExamConfiguration';
 import { readStoredFile } from './fileStorage';
+import { normalizeClassNameForDisplay } from './classDisplay';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -1441,6 +1442,11 @@ const normalizeFrenchLevelToken = (value: string): string => value.trim().replac
 const getFrenchLevelTokenDetails = (value: string): { main: string; suffix: string; suffixSize: number; suffixRise: number; width: number } | null => {
   const normalized = normalizeFrenchLevelToken(value).toLowerCase();
 
+  if (/^[6543](?:e|eme|ème)$/.test(normalized)) {
+    const main = normalized[0];
+    return { main, suffix: 'ème', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  }
+
   if (/^1(?:er|ere|ère)$/.test(normalized)) {
     return { main: '1', suffix: 'ère', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
   }
@@ -1449,11 +1455,11 @@ const getFrenchLevelTokenDetails = (value: string): { main: string; suffix: stri
     return { main: '2', suffix: 'nde', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
   }
 
-  if (/^3(?:e|è|eme|ème)$/.test(normalized)) {
-    return { main: '3', suffix: 'ème', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
+  if (/^2(?:e|eme|ème)$/.test(normalized)) {
+    return { main: '2', suffix: 'ème', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
   }
 
-  if (/^t(?:le|l[eé])$/.test(normalized)) {
+  if (/^(?:t(?:le|l[eé])|terminale)$/.test(normalized)) {
     return { main: 'T', suffix: 'le', suffixSize: 7.5, suffixRise: 4.5, width: 0 };
   }
 
@@ -1471,6 +1477,15 @@ export const formatPromotionDecisionForPdf = (value: string): string => {
       return word.toLocaleUpperCase('fr-FR');
     })
     .join(' ');
+};
+
+const getFrenchLevelTokenWidth = (token: string, size: number, font: any): number => {
+  const levelToken = getFrenchLevelTokenDetails(token);
+  if (!levelToken) return font.widthOfTextAtSize(token, size);
+
+  return font.widthOfTextAtSize(levelToken.main, size)
+    + Math.max(1, size * 0.12)
+    + font.widthOfTextAtSize(levelToken.suffix, levelToken.suffixSize);
 };
 
 const drawFrenchLevelToken = (
@@ -2258,15 +2273,26 @@ export const createBulletinPdfDocument = async (
     },
   );
   drawText(page, title, (page.getWidth() - titleWidth) / 2, bulletinHeaderY - studentHeaderOffsetY, 14, text, fontBold);
-  const classLabel = `${template.labels.class}: ${data.className}`;
+  const classNameDisplay = normalizeClassNameForDisplay(data.className);
+  const classNameParts = classNameDisplay.split(/\s+/);
+  const classLevel = classNameParts[0] || '';
+  const classNameSuffix = classNameParts.slice(1).join(' ');
+  const classLabelPrefix = `${template.labels.class}: `;
+  const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), 14)
+    + getFrenchLevelTokenWidth(classLevel, 14, fontBold)
+    + (classNameSuffix ? fontBold.widthOfTextAtSize(` ${classNameSuffix}`, 14) : 0);
   const classEffectif = `EFFECTIF : ${data.classStudentCount}`;
-  const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabel), 14);
   const classEffectifWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classEffectif), 14);
   const classLineGap = 12;
   const classLineWidth = classLabelWidth + classLineGap + classEffectifWidth;
   const classLineX = (page.getWidth() - classLineWidth) / 2;
   const classLineY = bulletinHeaderY - 25 - studentHeaderOffsetY;
-  drawText(page, classLabel, classLineX, classLineY, 14, text, fontBold);
+  const classNameX = classLineX + fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), 14);
+  drawText(page, classLabelPrefix, classLineX, classLineY, 14, text, fontBold);
+  const classLevelWidth = drawFrenchLevelToken(page, classLevel, classNameX, classLineY, 14, text, fontBold);
+  if (classNameSuffix) {
+    drawText(page, ` ${classNameSuffix}`, classNameX + classLevelWidth, classLineY, 14, text, fontBold);
+  }
   drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
   const studentBlockY = cursorY + 12;
   const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
