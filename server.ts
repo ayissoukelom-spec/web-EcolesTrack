@@ -106,9 +106,6 @@ import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
 import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 
-// When true, allow verbose/debug logs that may include sensitive user data.
-const SENSITIVE_LOG = process.env.NODE_ENV === 'test';
-
 const parsePositiveInteger = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
@@ -205,12 +202,11 @@ async function logIfTeacherUserMismatch(userId: number | null | undefined, teach
     const [u] = await db.select({ id: users.id, schoolId: users.schoolId }).from(users).where(eq(users.id, userId));
     const [t] = await db.select({ id: teachers.id, schoolId: teachers.schoolId }).from(teachers).where(eq(teachers.id, teacherId));
     if (!u || !t) return;
-    // If teacher has schoolId but user doesn't, or they differ, warn.
     if (t.schoolId != null && (u.schoolId == null || u.schoolId !== t.schoolId)) {
-      console.warn('DATA-INCONSISTENCY: users.school_id and teachers.school_id mismatch', { userId: u.id, users_schoolId: u.schoolId, teacherId: t.id, teachers_schoolId: t.schoolId });
+      console.warn('Teacher/user school mismatch detected.');
     }
-  } catch (e: any) {
-    console.warn('DIAG: failed to verify teacher/user school_id consistency', { userId, teacherId, err: e?.message || e });
+  } catch {
+    console.warn('Teacher/user school mismatch verification failed.');
   }
 }
 
@@ -312,7 +308,6 @@ export function findConflictingSchoolTerm(existingTerms: Array<{ id?: number | n
 }
 
 export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | null> {
-  if (SENSITIVE_LOG) console.log('TRACE resolveActor enter', { userPresent: !!req.user, user: req.user && { uid: req.user.uid, email: req.user.email, role: req.user.role, schoolId: req.user.schoolId, simulated: req.user.simulated } });
   if (!req.user) return null;
 
   const role = req.user.role;
@@ -324,16 +319,12 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   if (req.user.simulated) {
     let dbUser: any = null;
     const rowsByUid = await db.select().from(users).where(eq(users.uid, uid));
-    if (SENSITIVE_LOG) console.log('TRACE resolveActor lookup by uid', { uid, rowsByUidLength: rowsByUid.length });
     if (rowsByUid.length > 0) dbUser = rowsByUid[0];
 
     if (!dbUser && req.user.email) {
       const rowsByEmail = await db.select().from(users).where(eq(users.email, req.user.email));
-      if (SENSITIVE_LOG) console.log('TRACE resolveActor lookup by email', { email: req.user.email, rowsByEmailLength: rowsByEmail.length });
       if (rowsByEmail.length > 0) dbUser = rowsByEmail[0];
     }
-
-    if (SENSITIVE_LOG) console.log('TRACE resolveActor dbUser final', { found: !!dbUser, dbUser: dbUser ? { id: dbUser.id, uid: dbUser.uid, email: dbUser.email, schoolId: dbUser.schoolId } : null });
 
     if (dbUser) {
       const resolvedSchoolId = req.user.schoolId ?? dbUser.schoolId ?? null;
@@ -654,15 +645,8 @@ async function syncTeacherClassSubjectAssignments(
 
 async function resolveApprovedSubjectForSchool(subjectName: string, targetSchoolId: number | null): Promise<{ subjectId: number; subjectName: string } | null> {
   const normalizedSubject = String(subjectName || '').trim();
-  console.log('DEBUG resolveApprovedSubjectForSchool enter', {
-    subjectName,
-    normalizedSubject,
-    normalizedLength: normalizedSubject.length,
-    targetSchoolId,
-  });
 
   if (!normalizedSubject) {
-    console.log('DEBUG resolveApprovedSubjectForSchool fail empty subject', { subjectName });
     return null;
   }
 
@@ -682,14 +666,7 @@ async function resolveApprovedSubjectForSchool(subjectName: string, targetSchool
         )
       );
 
-    console.log('DEBUG resolveApprovedSubjectForSchool sameSchoolSubject query', {
-      targetSchoolId,
-      normalizedSubject,
-      sameSchoolSubject,
-    });
-
     if (sameSchoolSubject) {
-      console.log('DEBUG resolveApprovedSubjectForSchool pass sameSchoolSubject', { targetSchoolId, normalizedSubject, subjectId: sameSchoolSubject.subjectId });
       return {
         subjectId: sameSchoolSubject.subjectId,
         subjectName: sameSchoolSubject.subjectName,
@@ -716,19 +693,7 @@ async function resolveApprovedSubjectForSchool(subjectName: string, targetSchool
       )
       .where(normalizedSubjectMatch);
 
-    console.log('DEBUG resolveApprovedSubjectForSchool approvedSubjectRows', {
-      targetSchoolId,
-      normalizedSubject,
-      approvedSubjectRows,
-    });
-
     const result = approvedSubjectRows[0] ?? null;
-    console.log('DEBUG resolveApprovedSubjectForSchool result', {
-      targetSchoolId,
-      normalizedSubject,
-      result,
-      reason: result ? 'approvedSubjectRows match' : 'no approved subject match',
-    });
     return result ? { subjectId: result.subjectId, subjectName: result.subjectName } : null;
   }
 
@@ -745,17 +710,7 @@ async function resolveApprovedSubjectForSchool(subjectName: string, targetSchool
       )
     );
 
-  console.log('DEBUG resolveApprovedSubjectForSchool globalSubjectRows', {
-    normalizedSubject,
-    globalSubjectRows,
-  });
-
   const result = globalSubjectRows[0] ?? null;
-  console.log('DEBUG resolveApprovedSubjectForSchool result', {
-    normalizedSubject,
-    result,
-    reason: result ? 'globalSubjectRows match' : 'no global subject match',
-  });
   return result ? { subjectId: result.subjectId, subjectName: result.subjectName } : null;
 }
 
@@ -812,7 +767,7 @@ function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: 
 
 async function logAuditEvent(actor: any, action: string, resourceType: string, resourceId: number | null, schoolId: number | null, description: string) {
   try {
-    const result = await db.insert(auditEvents).values({
+    await db.insert(auditEvents).values({
       actorUserId: actor?.id ?? null,
       actorRole: actor?.role ?? 'unknown',
       actorEmail: actor?.email ?? null,
@@ -824,9 +779,9 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
       description,
     }).returning();
 
-    console.log('Audit event stored:', JSON.stringify(result[0]));
-  } catch (err: any) {
-    console.error('Failed to write audit event:', err?.message || err);
+    console.log('Audit event persisted successfully.');
+  } catch {
+    console.error('Failed to persist audit event.');
   }
 }
 
@@ -1039,11 +994,9 @@ export async function createApp() {
     upload.array('files', 5)(req, res, async (err: any) => {
       if (!err) {
         const uploadedFiles = Array.isArray(req.files) ? req.files : [];
-        console.log('📎 Absence justification upload request', {
+        console.log('Absence justification upload received', {
           contentType: req.headers['content-type'] || null,
-          bodyKeys: Object.keys(req.body || {}),
           uploadedFilesCount: uploadedFiles.length,
-          fileNames: uploadedFiles.map((f: any) => f?.originalname || '(unknown)'),
           totalSize: uploadedFiles.reduce((sum: number, f: any) => sum + Number(f?.size || 0), 0),
         });
 
@@ -1239,10 +1192,7 @@ export async function createApp() {
   // Global debug middleware for request/response tracing
   app.use((req, res, next) => {
     try {
-      console.log('📡 REQUEST:', req.method, req.url, {
-        hasBody: Boolean(req.body),
-        contentType: req.headers['content-type'] || null,
-      });
+      console.log('Request received', { method: req.method, hasBody: Boolean(req.body), contentType: req.headers['content-type'] || null });
     } catch (err) {
       console.error('Failed to log request debug data:', err);
     }
@@ -1251,10 +1201,7 @@ export async function createApp() {
 
     (res as any).json = function (data: any) {
       try {
-        console.log('📤 RESPONSE:', res.statusCode, req.method, req.url, {
-          hasBody: data != null,
-          bodyType: typeof data,
-        });
+        console.log('Response sent', { statusCode: res.statusCode, method: req.method, hasBody: data != null, bodyType: typeof data });
       } catch (err) {
         console.error('Failed to log response JSON debug data:', err);
       }
@@ -1263,7 +1210,7 @@ export async function createApp() {
 
     res.on('finish', () => {
       try {
-        console.log('📥 RESPONSE STATUS:', res.statusCode, req.method, req.url);
+        console.log('Response status', { statusCode: res.statusCode, method: req.method });
       } catch (err) {
         console.error('Failed to log response status:', err);
       }
@@ -1334,7 +1281,6 @@ export async function createApp() {
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {
     try {
-      if (SENSITIVE_LOG) console.log('HANDLER ENTER /api/users/:userId/schools', { params: req.params, body: req.body, simulatedRole: req.headers['x-simulated-role'], hasAuth: !!req.headers.authorization });
 
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
@@ -1554,14 +1500,9 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       let actor = await resolveActor(req);
-      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create request', {
-        actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role, schoolId: actor.schoolId, email: actor.email } : null,
-        bodyKeys: Object.keys(req.body || {}),
-      });
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
-      if (SENSITIVE_LOG) console.log('DEBUG /api/admin/users create body', { email, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, gender, classIds });
       const normalizedEmail = normalizeEmail(email);
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
       if (role !== 'parent' && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
@@ -1802,11 +1743,9 @@ export async function createApp() {
 
         // Assign provided classes to this teacher when classIds are supplied
         if (Array.isArray(effectiveClassIds) && effectiveClassIds.length > 0) {
-          console.log('Assigning classes to teacher (admin create):', { teacherId: teacherProfile?.id, classIds: effectiveClassIds });
           for (const rawClassId of effectiveClassIds) {
             const cid = Number(rawClassId);
             if (Number.isNaN(cid)) {
-              console.log('DIAG admin create skip invalid id', { rawClassId, teacherId: teacherProfile?.id });
               continue;
             }
             const [cls] = await db.select().from(classes).where(eq(classes.id, cid));
@@ -1814,17 +1753,14 @@ export async function createApp() {
             const approved = await isApprovedClassForSchool(cid, resolvedSchoolId);
 
             if (!cls) {
-              console.log('DIAG admin create - ignored', { cid, teacherId: teacherProfile?.id, resolvedSchoolId, reason: 'class_not_found', cls: null, schoolClassRow, approved });
               continue;
             }
 
             if (resolvedSchoolId != null && cls.schoolId != null && cls.schoolId !== resolvedSchoolId) {
-              console.log('DIAG admin create - ignored', { cid, teacherId: teacherProfile?.id, resolvedSchoolId, reason: 'class_school_mismatch', cls, schoolClassRow, approved });
               continue;
             }
 
             if (!approved) {
-              console.log('DIAG admin create - ignored', { cid, teacherId: teacherProfile?.id, resolvedSchoolId, reason: 'not_approved_for_school', cls, schoolClassRow, approved });
               continue;
             }
 
@@ -1836,17 +1772,9 @@ export async function createApp() {
               ));
               if (existingAssignment.length === 0) {
                 await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id, schoolId: resolvedSchoolId });
-                const insertedRows = await db.select().from(classTeachers).where(and(
-                  eq(classTeachers.classId, cid),
-                  eq(classTeachers.teacherId, teacherProfile.id),
-                  eq(classTeachers.schoolId, resolvedSchoolId),
-                ));
-                console.log('DIAG admin create - inserted', { cid, teacherId: teacherProfile.id, insertedCount: insertedRows.length, cls, schoolClassRow, approved, resolvedSchoolId });
-              } else {
-                console.log('DIAG admin create - ignored', { cid, teacherId: teacherProfile.id, reason: 'already_assigned', existingCount: existingAssignment.length, cls, schoolClassRow, approved, resolvedSchoolId });
               }
             } catch (e: any) {
-              console.warn('Failed to assign teacher to class', cid, e?.message || e);
+              console.warn('Failed to assign teacher to class');
             }
           }
         }
@@ -1854,7 +1782,7 @@ export async function createApp() {
         try {
           await db.update(users).set({ schoolId: resolvedSchoolId ?? null }).where(eq(users.id, createdUser.id));
         } catch (e: any) {
-          console.warn('DIAG: failed to sync users.schoolId after teacher creation', { userId: createdUser.id, resolvedSchoolId, err: e?.message || e });
+          console.warn('Failed to sync teacher and user school association');
         }
         // Log if inconsistency exists after creation
         try {
@@ -1926,7 +1854,6 @@ export async function createApp() {
 
       // Check if school_admin is modifying a user outside their school
       const [targetUser] = await db.select().from(users).where(eq(users.id, id));
-      console.log('DEBUG delete: actor=', { uid: actor?.uid, role: actor?.role, schoolId: actor?.schoolId }, 'targetId=', id, 'targetUser=', targetUser ? { id: targetUser.id, role: targetUser.role, schoolId: targetUser.schoolId } : null);
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
       const teachingAssignmentSchoolId = actor.role === 'school_admin'
         ? actor.schoolId
@@ -2417,10 +2344,7 @@ export async function createApp() {
         updatedFields.phone = canonicalPhoneForUpdate;
       }
 
-      if (SENSITIVE_LOG) console.log('DEBUG /api/users/:id update request', { actor: actor ? { id: actor.id, uid: actor.uid, role: actor.role } : null, targetId: id, body: req.body });
-
       if (Object.keys(updatedFields).length > 0) {
-        console.log('DEBUG updating users table', { id, updatedFields });
         await db.update(users).set(updatedFields).where(eq(users.id, id));
       }
 
@@ -2433,16 +2357,13 @@ export async function createApp() {
           address: typeof address === 'string' ? address : existingParent[0]?.address || '',
         };
         if (existingParent.length > 0) {
-          console.log('DEBUG updating parents row', { userId: id, parentValues });
           await db.update(parents).set(parentValues).where(eq(parents.userId, id));
         } else {
-          console.log('DEBUG inserting parents row', { userId: id, parentValues });
           await db.insert(parents).values({ userId: id, ...parentValues });
         }
       }
 
       const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
-      console.log('DEBUG /api/users/:id update result', { updatedUser });
 
       await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : actor.role === 'super_admin' ? 'Super admin' : 'User'} ${actor.email || actor.uid} updated account ${updatedUser.email}`);
 
@@ -4044,66 +3965,66 @@ export async function createApp() {
           ? (await tx.select({ id: evaluations.id }).from(evaluations).where(sql`${evaluations.classId} IN ${classIds}`)).map((e) => e.id)
           : [];
 
-        console.log(`School deletion order for school=${id}: users=${schoolUserIds.length}, classes=${classIds.length}, students=${studentIds.length}, academicYears=${academicYearIds.length}, evaluations=${evaluationIds.length}`);
+        console.log('School deletion transaction started');
 
         if (schoolUserIds.length > 0) {
-          console.log(`Step 1/10: delete notifications for users [${schoolUserIds.join(', ')}]`);
+          console.log('Deleting school notifications');
           await tx.delete(notifications).where(sql`${notifications.userId} IN ${schoolUserIds}`);
         }
 
         if (studentIds.length > 0) {
-          console.log(`Step 2/10: delete absences for students [${studentIds.join(', ')}]`);
+          console.log('Deleting school student absences');
           await tx.delete(absences).where(sql`${absences.studentId} IN ${studentIds}`);
         }
         if (classIds.length > 0) {
-          console.log(`Step 3/10: delete absences for classes [${classIds.join(', ')}]`);
+          console.log('Deleting school class absences');
           await tx.delete(absences).where(sql`${absences.classId} IN ${classIds}`);
         }
 
         if (studentIds.length > 0) {
-          console.log(`Step 4/10: delete grades for students [${studentIds.join(', ')}]`);
+          console.log('Deleting school student grades');
           await tx.delete(grades).where(sql`${grades.studentId} IN ${studentIds}`);
         }
         if (evaluationIds.length > 0) {
-          console.log(`Step 5/10: delete grades for evaluations [${evaluationIds.join(', ')}]`);
+          console.log('Deleting school evaluation grades');
           await tx.delete(grades).where(sql`${grades.evaluationId} IN ${evaluationIds}`);
         }
 
         if (evaluationIds.length > 0) {
-          console.log(`Step 6/10: delete evaluations [${evaluationIds.join(', ')}]`);
+          console.log('Deleting school evaluations');
           await tx.delete(evaluations).where(sql`${evaluations.id} IN ${evaluationIds}`);
         }
 
         if (studentIds.length > 0) {
-          console.log(`Step 7/10: delete students [${studentIds.join(', ')}]`);
+          console.log('Deleting school students');
           await tx.delete(students).where(sql`${students.id} IN ${studentIds}`);
         }
 
         if (schoolUserIds.length > 0) {
-          console.log(`Step 8/10: delete parent profiles for users [${schoolUserIds.join(', ')}]`);
+          console.log('Deleting school parent profiles');
           await tx.delete(parents).where(sql`${parents.userId} IN ${schoolUserIds}`);
         }
 
         if (classIds.length > 0) {
-          console.log(`Step 9/10: unset teacher assignments for classes [${classIds.join(', ')}]`);
+          console.log('Clearing school class teacher assignments');
           await tx.update(classes).set({ teacherId: null }).where(sql`${classes.id} IN ${classIds}`);
         }
 
         if (schoolUserIds.length > 0) {
-          console.log(`Step 10/11: disconnect schoolAdminId and delete audit events for users [${schoolUserIds.join(', ')}]`);
+          console.log('Removing school administrator associations and user audit events');
           await tx.update(students).set({ schoolAdminId: null }).where(sql`${students.schoolAdminId} IN ${schoolUserIds}`);
           await tx.delete(auditEvents).where(sql`${auditEvents.actorUserId} IN ${schoolUserIds}`);
         }
 
         if (schoolUserIds.length > 0) {
-          console.log(`Step 11/11: delete local auth entries for users [${schoolUserIds.join(', ')}]`);
+          console.log('Deleting school local authentication records');
           await tx.delete(localAuths).where(sql`${localAuths.userId} IN ${schoolUserIds}`);
         }
 
         console.log('Step 12/12: delete audit events linked directly to school');
         await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
-        console.log(`Deleting remaining teachers, classes, academic years and users for school=${id}`);
+        console.log('Deleting remaining school records');
         await tx.delete(teachers).where(eq(teachers.schoolId, id));
 
         if (classIds.length > 0) {
@@ -5333,9 +5254,7 @@ export async function createApp() {
         });
       };
 
-      console.log('DEBUG GET /api/classes actor', { role: actor.role, id: actor.id, schoolId: actor.schoolId, targetSchoolId });
       if (actor.role === 'teacher') {
-        console.log('DEBUG teacher branch entered', { actorRole: actor.role, actorId: actor.id, targetSchoolId });
         if (!targetSchoolId) {
           return res.status(403).json({ error: 'Teacher school context is required' });
         }
@@ -5426,7 +5345,6 @@ export async function createApp() {
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
           const childStudentIds = await getParentChildStudentIds(actor.id);
-          console.log('DEBUG parent childStudentIds', childStudentIds);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -5435,12 +5353,10 @@ export async function createApp() {
             .select({ classId: students.classId })
             .from(students)
             .where(inArray(students.id, childStudentIds));
-          console.log('DEBUG parent childClassRows', childClassRows);
 
           const childClassIds = Array.from(new Set(childClassRows
             .map((row: any) => row.classId)
             .filter((id): id is number => id != null)));
-          console.log('DEBUG parent childClassIds', childClassIds);
 
           if (childClassIds.length === 0) {
             return res.json([]);
@@ -5464,7 +5380,6 @@ export async function createApp() {
       const classesForSchool = await resolveClassesForSchool(allClasses, targetSchoolId);
 
       if (actor.role === 'parent') {
-        console.log('DEBUG GET /api/classes parent returning child classes', classesForSchool);
         res.json(classesForSchool);
         return;
       }
@@ -5515,12 +5430,10 @@ export async function createApp() {
           result = result.filter((klass) => klass.status === 'approved');
         }
 
-        console.log('✅ GET /api/classes RESPONSE', result);
         res.json(result);
         return;
       }
 
-      console.log('✅ GET /api/classes RESPONSE', classesForSchool);
       res.json(classesForSchool);
     } catch (err: any) {
       console.error('GET /api/classes failed:', err);
@@ -5530,18 +5443,6 @@ export async function createApp() {
 
   app.post('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
-      console.log('POST /api/classes exécuté');
-      if (SENSITIVE_LOG) {
-        console.log('🔥 RAW BODY RECEIVED =', req.body);
-        console.log('BODY FULL =', JSON.stringify(req.body));
-        console.log('name raw =', req.body?.name);
-        console.log('academicYearId raw =', req.body?.academicYearId);
-        console.log('type =', typeof req.body?.academicYearId);
-        console.log('schoolId raw =', req.body?.schoolId);
-        console.log('schoolId type =', typeof req.body?.schoolId);
-        console.log('🔥 FULL KEYS =', Object.keys(req.body || {}));
-        console.log('🔥 HIT POST /api/classes - NEW CODE');
-      }
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
@@ -5549,7 +5450,6 @@ export async function createApp() {
       const { name, levelId: rawLevelId, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, teacherId } = req.body;
       const trimmedName = typeof name === 'string' ? name.trim() : '';
       const academicYearId = rawAcademicYearId != null && rawAcademicYearId !== '' ? Number(rawAcademicYearId) : null;
-      console.log('academicYearId parsed =', academicYearId, typeof academicYearId);
       if (rawAcademicYearId != null && rawAcademicYearId !== '' && Number.isNaN(academicYearId)) {
         return res.status(400).json({ error: 'Invalid academicYearId' });
       }
@@ -5565,7 +5465,6 @@ export async function createApp() {
       }
 
       const parsedSchoolId = validation.schoolId;
-      console.log('🔥 parsedSchoolId =', parsedSchoolId);
 
       if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden' });
@@ -5606,8 +5505,6 @@ export async function createApp() {
           return res.status(403).json({ error: 'The selected level cycle is not enabled for this school' });
         }
       }
-
-      console.log('Attempting to create class', { name: trimmedName, academicYearId, teacherId, schoolId: resolvedSchoolId });
 
       try {
         const [existingGlobalClass] = await db.select().from(classes).where(
@@ -5655,34 +5552,21 @@ export async function createApp() {
           }
         }
 
-        console.log('✅ CLASS CREATED/REUSED:', classRow);
         res.status(201).json({
           ...classRow,
           schoolId: classRow.schoolId ?? null,
           status: 'approved',
         });
       } catch (insertErr: any) {
-        console.error('ERROR OBJECT:', insertErr);
-        if (insertErr instanceof Error) {
-          console.error('MESSAGE:', insertErr.message);
-          console.error('STACK:', insertErr.stack);
-        }
-        console.dir(insertErr, { depth: null });
-        console.error('code:', insertErr?.code);
-        console.error('detail:', insertErr?.detail);
-        console.error('constraint:', insertErr?.constraint);
-        console.error('table:', insertErr?.table);
-        console.error('column:', insertErr?.column);
-
         // Postgres unique violation
         if (insertErr && insertErr.code === '23505') {
           return res.status(400).json({ error: `Classe déjà existante: ${trimmedName}` });
         }
+        console.error('Class creation failed', { errorCode: insertErr?.code ?? 'unknown' });
         return res.status(500).json({ error: 'Internal server error' });
       }
     } catch (error: any) {
-      console.error('POST /api/classes STACK:', error);
-      console.error(error instanceof Error ? error.stack : error);
+      console.error('Class creation request failed');
 
       // Do not expose internal error message or stack to client; keep server logs for diagnostics.
       return res.status(500).json({ error: 'Internal server error' });
@@ -6584,7 +6468,6 @@ export async function createApp() {
   app.post('/api/parents', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      console.debug('[api/parents POST] body received:', req.body);
           const { name, email, phone, address, schoolId, studentId, gender } = req.body;
           const normalizedEmail = normalizeEmail(email);
           if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required' });
@@ -6681,7 +6564,6 @@ export async function createApp() {
             });
           }
 
-          console.debug('[api/parents POST] parent inserted:', createdParent);
           res.status(201).json({
             ...createdUser,
             parentId: createdParent.id,
@@ -6691,7 +6573,7 @@ export async function createApp() {
             schoolId: createdParent.schoolId ?? null,
           });
         } catch (err: any) {
-          console.error('Error recording parent info:', err);
+          console.error('Parent creation failed');
           if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
           if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
           res.status(500).json({ error: 'Internal server error' });
@@ -8495,7 +8377,6 @@ export async function createApp() {
 
   app.post('/api/absences', requireAuth, async (req: AuthRequest, res) => {
     try {
-      if (SENSITIVE_LOG) console.log('🚀 ENTER POST /api/absences', req.body);
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const { studentId, classId, date, period, subjectId, teachingAssignmentId, startTime, endTime, isJustified, justificationReason } = req.body;
       const normalizedSubjectId = subjectId != null ? Number(subjectId) : undefined;
@@ -8582,14 +8463,6 @@ export async function createApp() {
         }
       }
 
-      console.log('🚀 BEFORE INSERT ABSENCE', {
-        studentId,
-        classId,
-        subjectId,
-        startTime,
-        endTime,
-      });
-
       const [matchedDeclaration] = typeof date === 'string' && date <= todayIsoDate()
         ? await db.select().from(absenceDeclarations).where(and(
           eq(absenceDeclarations.studentId, parseInt(studentId, 10)),
@@ -8614,12 +8487,8 @@ export async function createApp() {
         declarationId: matchedDeclaration?.id,
       }).returning();
 
-      const [absence] = result;
-      console.log('✅ ABSENCE INSERT SUCCESS', absence);
-
       // Automatically create a simulated notification for the Parent of this student
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
-      console.log("[ABSENCE_TRACE] absence created", { absenceId: result[0]?.id, studentId, classId, parentId: parentRecord?.userId ?? null });
       if (parentRecord) {
         // Build a user-friendly message using start/end times and subject when available.
         const formatDateSafe = (dateStr: string) => {
@@ -8650,7 +8519,7 @@ export async function createApp() {
             const [sub] = await db.select({ name: subjects.name }).from(subjects).where(eq(subjects.id, normalizedSubjectIds[0]));
             subjectName = sub?.name;
           } catch (e) {
-            console.warn('Failed to load subject name for notification composition', e);
+            console.warn('Failed to resolve subject for absence notification');
           }
         }
 
@@ -8693,8 +8562,6 @@ export async function createApp() {
           },
           dedupeKey: `absence-${result[0].id}`,
         };
-        console.log("[ABSENCE_TRACE] calling internal absence notification", { url: notificationUrl, payload: notificationPayload });
-
         try {
           const { signature, timestamp } = signInternalPayload(notificationPayload);
           const notificationResponse = await fetch(notificationUrl, {
@@ -8706,15 +8573,15 @@ export async function createApp() {
             },
             body: JSON.stringify(notificationPayload),
           });
-          console.log("[ABSENCE_TRACE] internal absence notification response", { status: notificationResponse.status, ok: notificationResponse.ok });
-        } catch (notificationError) {
-          console.error("[ABSENCE_TRACE] Erreur notification mobile absence:", notificationError);
+          if (!notificationResponse.ok) console.warn('Absence notification service returned an unsuccessful response');
+        } catch {
+          console.error('Absence notification delivery failed');
         }
       }
 
       res.status(201).json(result[0]);
     } catch (error: any) {
-      console.error('❌ ABSENCE CREATION ERROR:', error);
+      console.error('Absence creation failed');
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -10095,17 +9962,6 @@ export async function createApp() {
   });
 
   app.post('/api/evaluations', requireAuth, async (req: AuthRequest, res) => {
-    console.log('TRACE /api/evaluations handler ENTRY', {
-      path: req.path,
-      method: req.method,
-      headers: {
-        'x-simulated-role': req.headers['x-simulated-role'],
-        'x-simulated-uid': req.headers['x-simulated-uid'],
-        'x-simulated-school-id': req.headers['x-simulated-school-id'],
-        'content-type': req.headers['content-type'],
-      },
-    });
-
     try {
       const actor = await resolveActor(req);
       if (!actor) {
@@ -10437,7 +10293,6 @@ export async function createApp() {
   minute: "2-digit",
 });
 const evaluationMessage = `Un nouveau devoir en ${resolvedSubjectName} a été programmé pour la classe de ${classRecord.name} sur le ${formattedDate}. Encouragez votre enfant à se préparer !`;
-console.log("📌 MESSAGE DEVOIR GENERE :", evaluationMessage);
 
 if (uniqueParentIds.length > 0) {
   const notificationsToInsert = uniqueParentIds.map((parentUserId) => ({
@@ -10452,11 +10307,6 @@ if (uniqueParentIds.length > 0) {
         
         for (const parentUserId of uniqueParentIds) {
   try {
-    console.log("📤 ENVOI NOTIFICATION DEVOIR", {
-  parentUserId,
-  evaluationId: createdEvaluation.id,
-  title: generatedName
-});
     const evaluationNotificationPayload = {
       parentId: parentUserId,
       title: `Nouveau devoir à venir : ${generatedName}`,
@@ -10481,15 +10331,15 @@ if (uniqueParentIds.length > 0) {
       },
       body: JSON.stringify(evaluationNotificationPayload),
     });
-  } catch (notificationError) {
-    console.error("Erreur notification devoir mobile :", notificationError);
+  } catch {
+    console.error('Evaluation notification delivery failed');
   }
 }
       }
 
       res.status(201).json(createdEvaluation);
     } catch (err: any) {
-      console.error(err);
+      console.error('Evaluation creation failed');
       res.status(500).json({ error: 'Failed to create assessment' });
     }
   });
@@ -10671,7 +10521,6 @@ if (uniqueParentIds.length > 0) {
 
   app.post('/api/grades', requireAuth, async (req: AuthRequest, res) => {
     try {
-      if (SENSITIVE_LOG) console.log('POST /api/grades payload', req.body);
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
@@ -10698,12 +10547,6 @@ if (uniqueParentIds.length > 0) {
 
       const evaluationDate = String(evaluation.date || '');
       const plannedDate = new Date(evaluationDate);
-      console.log('DEBUG evaluation.date raw:', evaluation.date);
-      console.log('DEBUG evaluation.date typeof:', typeof evaluation.date);
-      console.log('DEBUG plannedDate:', plannedDate);
-      console.log('DEBUG plannedDate timestamp:', plannedDate.getTime());
-      console.log('DEBUG current date:', new Date());
-      console.log('DEBUG now timestamp:', Date.now());
       if (evaluationDate && Number.isNaN(plannedDate.getTime())) {
         return res.status(400).json({ error: 'Date du devoir invalide' });
       }
@@ -10722,15 +10565,6 @@ if (uniqueParentIds.length > 0) {
       if (student.isActive !== true || student.classId !== evaluation.classId) {
         return res.status(403).json({ error: 'Student must be active and belong to the evaluation class' });
       }
-      console.log('Grade save details', {
-        evaluationId,
-        studentId,
-        score,
-        remarks,
-        studentSchoolId: student.schoolId,
-        userSchoolId: actor.schoolId,
-      });
-
       // Validate that student was enrolled in the class before or at the evaluation timestamp.
       // Prefer the evaluation.createdAt timestamp if available, otherwise fall back to evaluation.date.
       if (student.enrolledAt && (evaluation.createdAt || evaluation.date)) {
@@ -10806,8 +10640,6 @@ if (uniqueParentIds.length > 0) {
 
       // Notification mobile parent après création de la note
       try {
-        console.log("🔔 Début notification note", { studentId });
-
         const [studentRecord] = await db
           .select()
           .from(students)
@@ -10843,11 +10675,6 @@ if (uniqueParentIds.length > 0) {
               },
               dedupeKey: getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0),
             };
-            console.info("grade notification created", {
-              gradeId: savedGrade.id,
-              eventVersion: savedGrade.editCount ?? 0,
-              dedupeKey: gradeNotificationPayload.dedupeKey,
-            });
             const { signature, timestamp } = signInternalPayload(gradeNotificationPayload);
             const response = await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
               method: "POST",
@@ -10864,11 +10691,7 @@ if (uniqueParentIds.length > 0) {
           }
         }
       } catch (notificationError) {
-        console.error("grade push failed", {
-          gradeId: savedGrade?.id,
-          eventVersion: savedGrade?.editCount ?? 0,
-          error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-        });
+        console.error('Grade notification delivery failed');
       }
 
       let totalStudentsInClass: Array<{ count: number }>; 
@@ -11259,10 +11082,6 @@ if (uniqueParentIds.length > 0) {
         declared: Number(absenceStatusCountsResult[0]?.declared || 0),
       };
 
-      console.log('Nombre d\'élèves :', studentCountResult[0]?.count || 0);
-      console.log('Premier élève :', studentGenderRows[0]);
-      console.log('Valeurs de genre observées :', studentGenderRows.slice(0, 10).map((row) => row.gender));
-
       const totalStudents = studentCountResult[0]?.count || 0;
       const genderCounts = studentGenderRows.reduce((acc, row) => {
         const normalized = normalizeGenderValue(row.gender);
@@ -11293,10 +11112,6 @@ if (uniqueParentIds.length > 0) {
         const taux = studentCount > 0 ? Math.max(0, 100 - (absenceCount / (studentCount * 20) * 100)) : 100;
         return { name: classRow.name, taux: Number((Math.round(taux * 100) / 100).toFixed(2)) };
       });
-
-      console.log('Classes retournées :', chartClassesRows);
-      console.log('Élèves par classe :', Array.from(studentsByClass.entries()));
-      console.log('Données envoyées au graphique :', chartData);
 
       // Calculate attendance rate (simplified)
       const attendanceRate = totalStudents > 0 && totalAbsences > 0 ? 
@@ -11384,8 +11199,6 @@ if (uniqueParentIds.length > 0) {
         maleStudents: genderCounts.maleStudents,
         femaleStudents: genderCounts.femaleStudents,
       };
-
-      console.log('Statistiques envoyées :', stats);
 
       res.json({
         stats,
