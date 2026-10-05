@@ -353,7 +353,11 @@ test('school_admin can update one existing grade with save all', async () => {
     ],
   };
   const onAddGrade = vi.fn(() => Promise.resolve());
-  const onUpdateGrade = vi.fn(() => Promise.resolve());
+  let finishSave!: () => void;
+  const pendingSave = new Promise<void>((resolve) => {
+    finishSave = resolve;
+  });
+  const onUpdateGrade = vi.fn(() => pendingSave);
 
   renderWithAuth(<NotesView {...props} onAddGrade={onAddGrade} onUpdateGrade={onUpdateGrade} initialSelectedEvalId={2} /> as any, 'school_admin', 1);
 
@@ -376,6 +380,13 @@ test('school_admin can update one existing grade with save all', async () => {
   const saveAllBtn = within(container).getByRole('button', { name: /Enregistrer tout/i });
   fireEvent.click(saveAllBtn);
 
+  const savingButton = within(container).getByRole('button', { name: /Enregistrement en cours…/i }) as HTMLButtonElement;
+  const updateCallCount = onUpdateGrade.mock.calls.length;
+  expect(savingButton.disabled).toBe(true);
+  expect(within(container).getByRole('status').textContent).toContain('Enregistrement des notes en cours, veuillez patienter…');
+  fireEvent.click(savingButton);
+  expect(onUpdateGrade).toHaveBeenCalledTimes(updateCallCount);
+
   expect(onUpdateGrade).toHaveBeenCalledWith({
     gradeId: 12,
     evaluationId: 2,
@@ -384,6 +395,52 @@ test('school_admin can update one existing grade with save all', async () => {
     remarks: '',
   });
   expect(onAddGrade).not.toHaveBeenCalled();
+
+  finishSave();
+  await screen.findByText('Toutes les notes ont été enregistrées.');
+  expect(within(container).getByRole('button', { name: /Enregistrer tout/i }).hasAttribute('disabled')).toBe(false);
+  expect(within(container).queryByRole('status')).toBeNull();
+});
+
+test('save all restores the button and keeps the existing error message when saving fails', async () => {
+  const props = {
+    ...baseProps,
+    studentsList: [
+      { id: 201, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Jean', lastName: 'Dupont' },
+      { id: 202, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Marie', lastName: 'Claire' },
+    ],
+    gradesList: [
+      { id: 11, evaluationId: 2, studentId: 201, score: '15', remarks: '' },
+      { id: 12, evaluationId: 2, studentId: 202, score: '12', remarks: '' },
+    ],
+  };
+  let failSave!: (error: Error) => void;
+  const pendingSave = new Promise<void>((_resolve, reject) => {
+    failSave = reject;
+  });
+  const onUpdateGrade = vi.fn(() => pendingSave);
+
+  renderWithAuth(<NotesView {...props} onAddGrade={vi.fn()} onUpdateGrade={onUpdateGrade} initialSelectedEvalId={2} /> as any, 'school_admin', 1);
+
+  const classSelect = screen.getAllByRole('combobox').find((select) => within(select).queryByText(/6ème A/));
+  if (!classSelect) throw new Error('Could not locate class select');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+  fireEvent.change(findEvaluationSelect(), { target: { value: '2' } });
+
+  const studentRow = await screen.findByText(/Claire Marie/i);
+  const row = studentRow.closest('tr');
+  if (!row) throw new Error('Could not locate student row for Claire Marie');
+  fireEvent.change(await within(row).findByDisplayValue('12'), { target: { value: '13' } });
+
+  const container = document.getElementById('grades-table-container');
+  if (!container) throw new Error('Could not locate grades table container');
+  fireEvent.click(within(container).getByRole('button', { name: /Enregistrer tout/i }));
+  expect((within(container).getByRole('button', { name: /Enregistrement en cours…/i }) as HTMLButtonElement).disabled).toBe(true);
+
+  failSave(new Error('Save failed'));
+  await screen.findByText('Erreur lors de l’enregistrement de certaines notes.');
+  expect(within(container).getByRole('button', { name: /Enregistrer tout/i }).hasAttribute('disabled')).toBe(false);
+  expect(within(container).queryByRole('status')).toBeNull();
 });
 
 test('falls back to onAddGrade when onUpdateGrade is not provided', async () => {

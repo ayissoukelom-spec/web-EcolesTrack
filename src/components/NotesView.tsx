@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Evaluation, Grade, Student, Class, UserRole } from '../types';
 import { sortClasses } from '../lib/classOrdering';
@@ -11,7 +11,8 @@ import {
   Calendar,
   CheckCircle,
   HelpCircle,
-  Edit2
+  Edit2,
+  LoaderCircle,
 } from 'lucide-react';
 import {
   getDateOnlyMs,
@@ -112,6 +113,8 @@ export default function NotesView({
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
   const [gradeInputValues, setGradeInputValues] = useState<{ [studentId: number]: { score: string; remarks: string } }>({});
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [isSavingAllGrades, setIsSavingAllGrades] = useState(false);
+  const isSavingAllGradesRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
 
   // New Eval form states
@@ -287,7 +290,7 @@ export default function NotesView({
   };
 
   const handleSaveAllGrades = async () => {
-    if (!selectedEvalId) return;
+    if (!selectedEvalId || isSavingAllGradesRef.current) return;
 
     const saveableGrades = currentClassStudents
       .map((student) => {
@@ -342,6 +345,8 @@ export default function NotesView({
       return;
     }
 
+    isSavingAllGradesRef.current = true;
+    setIsSavingAllGrades(true);
     try {
       await Promise.all(saveableGrades.map(async (grade) => {
         if (grade.isUpdate && grade.gradeId != null && onUpdateGrade) {
@@ -365,6 +370,9 @@ export default function NotesView({
     } catch (err: any) {
       setSaveStatus('Erreur lors de l’enregistrement de certaines notes.');
       console.error('Failed to save all grades:', err);
+    } finally {
+      isSavingAllGradesRef.current = false;
+      setIsSavingAllGrades(false);
     }
 
     setTimeout(() => setSaveStatus(null), 3000);
@@ -1016,14 +1024,22 @@ export default function NotesView({
                 </div>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 text-xs text-indigo-100">
                   <div>Total copies saisies : {eligibleGradesForSelectedEval.length} / {eligibleStudentsForSelectedEval.length}</div>
-                  <button
-                    type="button"
-                    onClick={handleSaveAllGrades}
-                    disabled={userRole === 'teacher' ? saveableStudentCount === 0 : eligibleStudentsForSelectedEval.length === 0}
-                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-400 disabled:cursor-not-allowed rounded-xl text-white text-xs font-semibold transition-colors"
-                  >
-                    Enregistrer tout
-                  </button>
+                  <div className="flex flex-col items-start gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveAllGrades}
+                      disabled={isSavingAllGrades || (userRole === 'teacher' ? saveableStudentCount === 0 : eligibleStudentsForSelectedEval.length === 0)}
+                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-400 disabled:cursor-not-allowed rounded-xl text-white text-xs font-semibold transition-colors"
+                    >
+                      {isSavingAllGrades && <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                      {isSavingAllGrades ? 'Enregistrement en cours…' : 'Enregistrer tout'}
+                    </button>
+                    {isSavingAllGrades && (
+                      <span className="text-xs text-indigo-100" role="status">
+                        Enregistrement des notes en cours, veuillez patienter…
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
