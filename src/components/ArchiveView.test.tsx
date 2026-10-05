@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AuthProvider } from '../contexts/AuthContext';
 import ArchiveView from './ArchiveView';
 import NotesView from './NotesView';
@@ -156,6 +156,25 @@ describe('Archive UI regression', () => {
 
     expect(screen.getAllByRole('button', { name: /Télécharger Excel/i })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /Télécharger PDF/i })).toHaveLength(2);
+  });
+
+  it('indique la progression d un export et réactive le bouton après son traitement', async () => {
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(<ArchiveView {...defaultProps} userRole="teacher" teacherId={100} />);
+
+    const exportButtons = screen.getAllByRole('button', { name: /Télécharger Excel/i });
+    fireEvent.click(exportButtons[0]);
+    fireEvent.click(exportButtons[1]);
+
+    const progressButtons = screen.getAllByRole('button', { name: /Téléchargement en cours…/i })
+      .filter((element) => element.tagName === 'BUTTON');
+    expect(progressButtons).toHaveLength(2);
+    expect(progressButtons.every((button) => button.hasAttribute('disabled'))).toBe(true);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Télécharger Excel/i }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
+    });
+    logError.mockRestore();
   });
 
   it('n affiche pas les boutons d export pour un administrateur', () => {

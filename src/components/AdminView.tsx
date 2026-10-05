@@ -20,7 +20,8 @@ import {
   UserPlus,
   Settings,
   Eye,
-  BookOpen
+  BookOpen,
+  LoaderCircle,
 } from 'lucide-react';
 
 import { sortClasses } from '../lib/classOrdering';
@@ -531,6 +532,8 @@ export default function AdminView({
   };
 
   const [activeTab, setActiveTab] = useState<'schools' | 'years' | 'classes' | 'teachers' | 'students' | 'parents' | 'accounts' | 'matieres'>(getDefaultTab);
+  const [downloadingAdminActions, setDownloadingAdminActions] = useState<Set<string>>(() => new Set());
+  const downloadingAdminActionsRef = useRef(new Set<string>());
   const [searchQuery, setSearchQuery] = useState('');
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
@@ -1136,6 +1139,32 @@ export default function AdminView({
   });
 
   const isStudentExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
+
+  const runAdminDownload = async (key: string, downloadFile: () => void | Promise<void>) => {
+    if (downloadingAdminActionsRef.current.has(key)) return;
+    downloadingAdminActionsRef.current.add(key);
+    setDownloadingAdminActions(new Set(downloadingAdminActionsRef.current));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    try {
+      await downloadFile();
+    } catch (error) {
+      console.error('Failed to download admin file', error);
+    } finally {
+      downloadingAdminActionsRef.current.delete(key);
+      setDownloadingAdminActions(new Set(downloadingAdminActionsRef.current));
+    }
+  };
+
+  const triggerTemplateDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
 
   const getStudentAcademicYearName = (st: Student) =>
     st.yearName ||
@@ -1919,14 +1948,15 @@ export default function AdminView({
     setIsModalOpen(false);
   };
 
-  const downloadTemplate = () => {
-    // public endpoint that returns a CSV template
-    window.open('/api/students/template', '_blank');
-  };
+  const downloadTemplate = () => runAdminDownload('students-template', async () => {
+    const blob = await apiFetchBlob('/api/students/template');
+    triggerTemplateDownload(blob, 'students_template.xlsx');
+  });
 
-  const downloadParentsTemplate = () => {
-    window.open('/api/parents/template', '_blank');
-  };
+  const downloadParentsTemplate = () => runAdminDownload('parents-template', async () => {
+    const blob = await apiFetchBlob('/api/parents/template');
+    triggerTemplateDownload(blob, 'parents_template.xlsx');
+  });
 
   const parentHandleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2641,11 +2671,13 @@ export default function AdminView({
             {activeTab === 'students' && (
               <>
                 <button
-                  onClick={downloadTemplate}
-                  className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100"
+                  onClick={() => void downloadTemplate()}
+                  disabled={downloadingAdminActions.has('students-template')}
+                  className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100 disabled:cursor-wait disabled:opacity-60"
                   title="Télécharger un modèle Excel d'exemple"
                 >
-                  Modèle Excel
+                  {downloadingAdminActions.has('students-template') && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                  {downloadingAdminActions.has('students-template') ? 'Téléchargement en cours…' : 'Modèle Excel'}
                 </button>
 
                 <button
@@ -2667,11 +2699,13 @@ export default function AdminView({
             {activeTab === 'parents' && (
               <>
                 <button
-                  onClick={downloadParentsTemplate}
-                  className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100"
+                  onClick={() => void downloadParentsTemplate()}
+                  disabled={downloadingAdminActions.has('parents-template')}
+                  className="hidden sm:inline-flex items-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-100 disabled:cursor-wait disabled:opacity-60"
                   title="Télécharger le modèle Parents"
                 >
-                  Modèle Parents
+                  {downloadingAdminActions.has('parents-template') && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                  {downloadingAdminActions.has('parents-template') ? 'Téléchargement en cours…' : 'Modèle Parents'}
                 </button>
 
                 <button
@@ -5940,10 +5974,12 @@ export default function AdminView({
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={exportStudentsExcel}
-                    className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3 py-2 rounded-lg border border-emerald-700 shadow-sm transition-colors"
+                    onClick={() => void runAdminDownload('students-export', exportStudentsExcel)}
+                    disabled={downloadingAdminActions.has('students-export')}
+                    className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3 py-2 rounded-lg border border-emerald-700 shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60"
                   >
-                    Télécharger Excel
+                    {downloadingAdminActions.has('students-export') && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                    {downloadingAdminActions.has('students-export') ? 'Téléchargement en cours…' : 'Télécharger Excel'}
                   </button>
                 </div>
               </div>
@@ -6067,10 +6103,12 @@ export default function AdminView({
             <div className="mb-4">
               <button
                 type="button"
-                onClick={exportParentsExcel}
-                className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3 py-2 rounded-lg border border-emerald-700 shadow-sm transition-colors"
+                onClick={() => void runAdminDownload('parents-export', exportParentsExcel)}
+                disabled={downloadingAdminActions.has('parents-export')}
+                className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3 py-2 rounded-lg border border-emerald-700 shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60"
               >
-                Télécharger Excel
+                {downloadingAdminActions.has('parents-export') && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                {downloadingAdminActions.has('parents-export') ? 'Téléchargement en cours…' : 'Télécharger Excel'}
               </button>
             </div>
             <div className="overflow-x-auto">

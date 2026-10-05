@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '../contexts/AuthContext.tsx';
 import AdminView from './AdminView';
@@ -654,8 +654,11 @@ describe('AdminView create-user teacher form', () => {
       expect(createButton.className).toContain('shrink-0');
       expect(closeButton.parentElement).toBe(createButton.parentElement);
       expect(closeButton.parentElement?.className).toContain('flex-wrap');
-      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
-
+      const studentExportButton = screen.getByRole('button', { name: 'Télécharger Excel' });
+      fireEvent.click(studentExportButton);
+      expect(screen.getByRole('button', { name: /Téléchargement en cours…/i }).hasAttribute('disabled')).toBe(true);
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Télécharger Excel' }).hasAttribute('disabled')).toBe(false));
       const blob = createObjectURL.mock.calls[0][0] as Blob;
       const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets['Élèves']);
@@ -670,6 +673,7 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'former' } });
       expect(screen.getByText(/Ancien élève/)).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
       const formerBlob = createObjectURL.mock.calls[1][0] as Blob;
       const formerWorkbook = XLSX.read(await formerBlob.arrayBuffer(), { type: 'array' });
       expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('liste-anciens-eleves.xlsx');
@@ -685,6 +689,7 @@ describe('AdminView create-user teacher form', () => {
       expect(allStudentRows.some((row) => row.textContent?.includes('Awa'))).toBe(true);
       expect(allStudentRows.some((row) => row.textContent?.includes('Kossi'))).toBe(true);
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(3));
       const allBlob = createObjectURL.mock.calls[2][0] as Blob;
       const allWorkbook = XLSX.read(await allBlob.arrayBuffer(), { type: 'array' });
       expect((click.mock.instances[2] as HTMLAnchorElement).download).toBe('liste-eleves.xlsx');
@@ -752,6 +757,7 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
 
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
       const blob = createObjectURL.mock.calls[0][0] as Blob;
       const workbook = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Parents);

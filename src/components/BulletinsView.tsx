@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ShieldCheck } from 'lucide-react';
+import { ChevronDown, LoaderCircle, ShieldCheck } from 'lucide-react';
 import type {
   BulletinDetail,
   BulletinListFilters,
@@ -701,10 +701,11 @@ export default function BulletinsView({
           <button
             type="button"
             onClick={handleDownloadBatch}
-            disabled={pdfHook.loading || selectedBatchIds.length === 0}
-            className="text-xs px-3 py-2 rounded-xl border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50"
+            disabled={pdfHook.batchLoading || selectedBatchIds.length === 0}
+            className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-xl border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50"
           >
-            {pdfHook.loading ? 'Telechargement...' : `Telecharger la selection (${selectedBatchIds.length})`}
+            {pdfHook.batchLoading && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+            {pdfHook.batchLoading ? 'Téléchargement en cours…' : `Telecharger la selection (${selectedBatchIds.length})`}
           </button>
           <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-xl">
             <ShieldCheck className="h-4 w-4" />
@@ -859,10 +860,11 @@ export default function BulletinsView({
             <button
               type="button"
               onClick={() => pdfHook.runMany(lastGeneratedClassIds)}
-              disabled={pdfHook.loading || lastGeneratedClassIds.length === 0}
-              className="text-xs px-3 py-2 rounded-xl border border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-100 disabled:opacity-50"
+              disabled={pdfHook.batchLoading || lastGeneratedClassIds.length === 0}
+              className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-xl border border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-100 disabled:opacity-50"
             >
-              {pdfHook.loading ? 'Telechargement...' : `Telecharger les ${lastGeneratedClassIds.length} bulletins`}
+              {pdfHook.batchLoading && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+              {pdfHook.batchLoading ? 'Téléchargement en cours…' : `Telecharger les ${lastGeneratedClassIds.length} bulletins`}
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
@@ -954,7 +956,7 @@ export default function BulletinsView({
           liveNotes={liveNotesForDetail}
           subjectBreakdown={subjectBreakdownForDetail}
           classTeacherName={classTeacherNameForDetail}
-          pdfLoading={pdfHook.loading}
+          pdfLoading={selectedId != null && pdfHook.isDownloading(selectedId)}
           onDownloadPdf={handleDownloadPdf}
         />
       </div>

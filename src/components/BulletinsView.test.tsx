@@ -54,8 +54,9 @@ vi.mock('../hooks/useGenerateBulletin.ts', () => ({
 
 vi.mock('../hooks/useDownloadBulletinPDF.ts', () => ({
   useDownloadBulletinPDF: () => ({
-    loading: false,
+    batchLoading: false,
     error: null,
+    isDownloading: () => false,
     run: vi.fn(),
     runMany: vi.fn(),
   }),

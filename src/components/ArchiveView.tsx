@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole, getTeacherDisplayName } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, LoaderCircle } from 'lucide-react';
 import {
   getEligibleStudentsForEvaluation,
   getEligibleStudentsForEvaluationWithGrades,
@@ -51,6 +51,23 @@ export default function ArchiveView({
   const [selectedClassId, setSelectedClassId] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [downloadingExports, setDownloadingExports] = useState<Set<string>>(() => new Set());
+  const downloadingExportsRef = useRef(new Set<string>());
+
+  const runExport = async (key: string, exportFile: () => Promise<void>) => {
+    if (downloadingExportsRef.current.has(key)) return;
+    downloadingExportsRef.current.add(key);
+    setDownloadingExports(new Set(downloadingExportsRef.current));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    try {
+      await exportFile();
+    } catch (error) {
+      console.error('Failed to export evaluation file', error);
+    } finally {
+      downloadingExportsRef.current.delete(key);
+      setDownloadingExports(new Set(downloadingExportsRef.current));
+    }
+  };
 
   const normalizeDateOnly = (value: string | Date | undefined | null): string | null => {
     const date = parseDateValue(value);
@@ -407,17 +424,21 @@ export default function ArchiveView({
                     <div className="flex flex-wrap gap-3 mb-4">
                       <button
                         type="button"
-                        onClick={() => exportEvaluationExcel(ev)}
-                        className="rounded-full bg-emerald-600 text-white px-4 py-2 text-xs font-semibold hover:bg-emerald-700"
+                        onClick={() => void runExport(`${ev.id}:excel`, () => exportEvaluationExcel(ev))}
+                        disabled={downloadingExports.has(`${ev.id}:excel`)}
+                        className="inline-flex items-center gap-2 rounded-full bg-emerald-600 text-white px-4 py-2 text-xs font-semibold hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
                       >
-                        Télécharger Excel
+                        {downloadingExports.has(`${ev.id}:excel`) && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                        {downloadingExports.has(`${ev.id}:excel`) ? 'Téléchargement en cours…' : 'Télécharger Excel'}
                       </button>
                       <button
                         type="button"
-                        onClick={() => exportEvaluationPdf(ev)}
-                        className="rounded-full bg-rose-600 text-white px-4 py-2 text-xs font-semibold hover:bg-rose-700"
+                        onClick={() => void runExport(`${ev.id}:pdf`, () => exportEvaluationPdf(ev))}
+                        disabled={downloadingExports.has(`${ev.id}:pdf`)}
+                        className="inline-flex items-center gap-2 rounded-full bg-rose-600 text-white px-4 py-2 text-xs font-semibold hover:bg-rose-700 disabled:cursor-wait disabled:opacity-60"
                       >
-                        Télécharger PDF
+                        {downloadingExports.has(`${ev.id}:pdf`) && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                        {downloadingExports.has(`${ev.id}:pdf`) ? 'Téléchargement en cours…' : 'Télécharger PDF'}
                       </button>
                     </div>
                   )}

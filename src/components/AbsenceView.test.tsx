@@ -4,7 +4,135 @@ import { within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AbsenceView from './AbsenceView';
 
+const { downloadAbsenceJustificationMock } = vi.hoisted(() => ({
+  downloadAbsenceJustificationMock: vi.fn(),
+}));
+
+vi.mock('../lib/api.ts', () => ({
+  downloadAbsenceJustification: downloadAbsenceJustificationMock,
+}));
+
 afterEach(() => cleanup());
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
+const renderJustificationDownloads = () => render(
+  <AbsenceView
+    userRole="school_admin"
+    absencesList={[
+      {
+        id: 44,
+        studentId: 12,
+        studentName: 'Awa Exemple',
+        classId: 10,
+        className: '6e A',
+        date: '2026-09-02',
+        period: 'morning',
+        isJustified: true,
+        justificationFileName: 'justificatif-awa.pdf',
+      },
+      {
+        id: 45,
+        studentId: 13,
+        studentName: 'Kossi Exemple',
+        classId: 10,
+        className: '6e A',
+        date: '2026-09-03',
+        period: 'morning',
+        isJustified: true,
+        justificationFileName: 'justificatif-kossi.pdf',
+      },
+    ] as any}
+    studentsList={[]}
+    classesList={[]}
+    schoolsList={[]}
+    teachersList={[]}
+    approvedSubjectsList={[]}
+    onAddAbsence={vi.fn()}
+    onJustifyAbsence={vi.fn()}
+  />,
+);
+
+describe('téléchargement des justificatifs d’absence', () => {
+  afterEach(() => {
+    downloadAbsenceJustificationMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it('affiche le chargement, ignore le double clic et suit chaque justificatif indépendamment', async () => {
+    const firstDownload = createDeferred<Blob>();
+    const secondDownload = createDeferred<Blob>();
+    downloadAbsenceJustificationMock
+      .mockReturnValueOnce(firstDownload.promise)
+      .mockReturnValueOnce(secondDownload.promise);
+    const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:justification') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    try {
+      renderJustificationDownloads();
+      const downloadButtons = screen.getAllByRole('button', { name: 'Télécharger' }) as HTMLButtonElement[];
+      expect(downloadButtons).toHaveLength(2);
+
+      fireEvent.click(downloadButtons[0]);
+      const firstLoadingButton = screen.getByRole('button', { name: 'Téléchargement en cours…' }) as HTMLButtonElement;
+      expect(firstLoadingButton.disabled).toBe(true);
+      expect(screen.getAllByRole('button', { name: 'Télécharger' })[0]).toBeEnabled();
+
+      fireEvent.click(firstLoadingButton);
+      expect(downloadAbsenceJustificationMock).toHaveBeenCalledTimes(1);
+      expect(downloadAbsenceJustificationMock).toHaveBeenCalledWith(44);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger' }));
+      expect(downloadAbsenceJustificationMock).toHaveBeenCalledTimes(2);
+      expect(screen.getAllByRole('button', { name: 'Téléchargement en cours…' })).toHaveLength(2);
+
+      firstDownload.resolve(new Blob(['file']));
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Télécharger' })).toHaveLength(1);
+      });
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+
+      secondDownload.resolve(new Blob(['file']));
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Télécharger' })).toHaveLength(2);
+      });
+      expect(anchorClick).toHaveBeenCalledTimes(2);
+    } finally {
+      if (createObjectUrlDescriptor) Object.defineProperty(URL, 'createObjectURL', createObjectUrlDescriptor);
+      else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+      if (revokeObjectUrlDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrlDescriptor);
+      else delete (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+    }
+  });
+
+  it('réactive le bouton si le téléchargement échoue', async () => {
+    const failedDownload = createDeferred<Blob>();
+    downloadAbsenceJustificationMock.mockReturnValueOnce(failedDownload.promise);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderJustificationDownloads();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Télécharger' })[0]);
+    expect((screen.getByRole('button', { name: 'Téléchargement en cours…' }) as HTMLButtonElement).disabled).toBe(true);
+
+    failedDownload.reject(new Error('Download failed'));
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Télécharger' })).toHaveLength(2);
+    });
+    expect(screen.getAllByRole('button', { name: 'Télécharger' }).every((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
+    expect(consoleError).toHaveBeenCalledWith('Impossible de télécharger le justificatif', expect.any(Error));
+  });
+});
 
 describe('visibilite du bouton Justifier', () => {
   it.each([

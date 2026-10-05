@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
-import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown } from 'lucide-react';
+import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown, LoaderCircle } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
@@ -102,6 +102,8 @@ export default function AbsenceView({
   const [filterDate, setFilterDate] = useState('');
   const [filterJustification, setFilterJustification] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [downloadingJustificationIds, setDownloadingJustificationIds] = useState<Set<number>>(() => new Set());
+  const downloadingJustificationIdsRef = useRef(new Set<number>());
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
   const [justificationText, setJustificationText] = useState('');
@@ -134,6 +136,27 @@ export default function AbsenceView({
     if (bytes < 1024) return `${bytes} o`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  };
+
+  const handleDownloadJustification = async (absence: Absence) => {
+    if (downloadingJustificationIdsRef.current.has(absence.id)) return;
+    downloadingJustificationIdsRef.current.add(absence.id);
+    setDownloadingJustificationIds(new Set(downloadingJustificationIdsRef.current));
+
+    try {
+      const blob = await downloadAbsenceJustification(absence.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = absence.justificationFileName || 'justification';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Impossible de télécharger le justificatif', error);
+    } finally {
+      downloadingJustificationIdsRef.current.delete(absence.id);
+      setDownloadingJustificationIds(new Set(downloadingJustificationIdsRef.current));
+    }
   };
 
   const appendJustificationFiles = (incomingFiles: File[]) => {
@@ -1446,23 +1469,15 @@ export default function AbsenceView({
                     {/* Only specific roles or Parent themselves can justify absences */}
                     {abs.kind === 'absence' && abs.justificationFileName ? (
                     <button
-                      onClick={async () => {
-                        try {
-                          const blob = await downloadAbsenceJustification(abs.id);
-                          const url = URL.createObjectURL(blob);
-                          const anchor = document.createElement('a');
-                          anchor.href = url;
-                          anchor.download = abs.justificationFileName || 'justification';
-                          anchor.click();
-                          URL.revokeObjectURL(url);
-                        } catch (error) {
-                          console.error('Impossible de télécharger le justificatif', error);
-                        }
-                      }}
-                      className="p-1.5 px-3 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100/80 rounded-lg text-xs font-bold transition-all cursor-pointer mr-2"
+                      type="button"
+                      onClick={() => void handleDownloadJustification(abs)}
+                      disabled={downloadingJustificationIds.has(abs.id)}
+                      className="inline-flex items-center justify-center p-1.5 px-3 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100/80 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition-all cursor-pointer mr-2"
                     >
-                      <Download className="inline-block h-3.5 w-3.5 mr-1 align-text-bottom" />
-                      Télécharger
+                      {downloadingJustificationIds.has(abs.id)
+                        ? <LoaderCircle className="inline-block h-3.5 w-3.5 mr-1 animate-spin" aria-hidden="true" />
+                        : <Download className="inline-block h-3.5 w-3.5 mr-1" aria-hidden="true" />}
+                      {downloadingJustificationIds.has(abs.id) ? 'Téléchargement en cours…' : 'Télécharger'}
                     </button>
                   ) : null}
                   {abs.kind === 'absence' && canReviewJustification && getJustificationStatus(abs) === 'PENDING' && (

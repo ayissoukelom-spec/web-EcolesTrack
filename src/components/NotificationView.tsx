@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Class, Parent, Student, SystemNotification, User, UserRole } from '../types.ts';
 import { apiFetch, apiFetchBlob } from '../lib/api.ts';
-import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail } from 'lucide-react';
+import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail, LoaderCircle } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
 import { getPublicationLabel } from '../lib/dateFormatting';
 
@@ -42,7 +42,8 @@ export default function NotificationView({
   const [isParentSearchLoading, setIsParentSearchLoading] = useState(false);
   const parentSearchRequestRef = useRef(0);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null);
+  const [downloadingAttachmentKeys, setDownloadingAttachmentKeys] = useState<Set<string>>(() => new Set());
+  const downloadingAttachmentKeysRef = useRef(new Set<string>());
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const activeParentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false && student.parentId != null).map((student) => student.parentId!)), [studentsList]);
 
@@ -132,8 +133,11 @@ export default function NotificationView({
   };
 
   const handleAttachmentDownload = async (notificationId: number, attachmentId: number, fileName: string) => {
+    const key = `${notificationId}:${attachmentId}`;
+    if (downloadingAttachmentKeysRef.current.has(key)) return;
+    downloadingAttachmentKeysRef.current.add(key);
+    setDownloadingAttachmentKeys(new Set(downloadingAttachmentKeysRef.current));
     setAttachmentError(null);
-    setDownloadingAttachmentId(attachmentId);
 
     try {
       const blob = await apiFetchBlob(`/api/notifications/${notificationId}/attachments/${attachmentId}`);
@@ -158,7 +162,8 @@ export default function NotificationView({
               : 'Le téléchargement de la pièce jointe a échoué.'
       );
     } finally {
-      setDownloadingAttachmentId(null);
+      downloadingAttachmentKeysRef.current.delete(key);
+      setDownloadingAttachmentKeys(new Set(downloadingAttachmentKeysRef.current));
     }
   };
 
@@ -267,21 +272,27 @@ export default function NotificationView({
           <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{notif.body}</p>
           {notif.attachments && notif.attachments.length > 0 && (
             <div className="pt-1 space-y-1">
-              {notif.attachments.map((attachment) => (
-                <button
-                  type="button"
-                  key={attachment.id}
-                  className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 underline underline-offset-2 disabled:cursor-wait disabled:opacity-60"
-                  disabled={downloadingAttachmentId === attachment.id}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void handleAttachmentDownload(notif.id, attachment.id, attachment.fileName);
-                  }}
-                >
-                  <Mail className="h-3 w-3" />
-                  {downloadingAttachmentId === attachment.id ? 'Téléchargement...' : attachment.fileName}
-                </button>
-              ))}
+              {notif.attachments.map((attachment) => {
+                const key = `${notif.id}:${attachment.id}`;
+                const isDownloading = downloadingAttachmentKeys.has(key);
+                return (
+                  <button
+                    type="button"
+                    key={attachment.id}
+                    className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 underline underline-offset-2 disabled:cursor-wait disabled:opacity-60"
+                    disabled={isDownloading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleAttachmentDownload(notif.id, attachment.id, attachment.fileName);
+                    }}
+                  >
+                    {isDownloading
+                      ? <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      : <Mail className="h-3 w-3" aria-hidden="true" />}
+                    {isDownloading ? 'Téléchargement en cours…' : attachment.fileName}
+                  </button>
+                );
+              })}
             </div>
           )}
           {attachmentError && (

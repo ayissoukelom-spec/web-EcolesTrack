@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { downloadBulletinPdf, downloadBulletinsPdfBatch } from '../lib/api.ts';
 
 export function useDownloadBulletinPDF() {
-  const [loading, setLoading] = useState(false);
+  const [downloadingIds, setDownloadingIds] = useState<Set<number>>(() => new Set());
+  const downloadingIdsRef = useRef(new Set<number>());
+  const [batchLoading, setBatchLoading] = useState(false);
+  const batchLoadingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const downloadOne = async (id: number) => {
@@ -18,22 +21,26 @@ export function useDownloadBulletinPDF() {
   };
 
   const run = async (id: number) => {
-    setLoading(true);
+    if (downloadingIdsRef.current.has(id)) return;
+    downloadingIdsRef.current.add(id);
+    setDownloadingIds(new Set(downloadingIdsRef.current));
     setError(null);
     try {
       await downloadOne(id);
     } catch (err: any) {
       setError(err?.message || 'Impossible de telecharger le PDF.');
     } finally {
-      setLoading(false);
+      downloadingIdsRef.current.delete(id);
+      setDownloadingIds(new Set(downloadingIdsRef.current));
     }
   };
 
   const runMany = async (ids: number[]) => {
     const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isInteger(id) && id > 0)));
-    if (uniqueIds.length === 0) return;
+    if (uniqueIds.length === 0 || batchLoadingRef.current) return;
 
-    setLoading(true);
+    batchLoadingRef.current = true;
+    setBatchLoading(true);
     setError(null);
     try {
       const blob = await downloadBulletinsPdfBatch(uniqueIds);
@@ -48,12 +55,14 @@ export function useDownloadBulletinPDF() {
     } catch (err: any) {
       setError(err?.message || 'Impossible de telecharger les PDF selectionnes.');
     } finally {
-      setLoading(false);
+      batchLoadingRef.current = false;
+      setBatchLoading(false);
     }
   };
 
   return {
-    loading,
+    batchLoading,
+    isDownloading: (id: number) => downloadingIds.has(id),
     error,
     setError,
     run,

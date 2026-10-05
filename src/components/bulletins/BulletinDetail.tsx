@@ -1,6 +1,6 @@
 import React from 'react';
 import { calculateFinalSubjectAverage } from '../../lib/bulletinService';
-import { Download, Eye } from 'lucide-react';
+import { Download, Eye, LoaderCircle } from 'lucide-react';
 import { getTeacherDisplayName, type BulletinDetail as BulletinDetailType } from '../../types.ts';
 import { getGradeBadgeClass, getGradeBand } from '../../lib/gradeColor';
 
@@ -39,8 +39,10 @@ export default function BulletinDetail({
           onClick={onDownloadPdf}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50"
         >
-          <Download className="h-3.5 w-3.5" />
-          {pdfLoading ? 'Chargement PDF...' : 'Telecharger PDF'}
+          {pdfLoading
+            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            : <Download className="h-3.5 w-3.5" aria-hidden="true" />}
+          {pdfLoading ? 'Téléchargement en cours…' : 'Telecharger PDF'}
         </button>
       </div>
 
