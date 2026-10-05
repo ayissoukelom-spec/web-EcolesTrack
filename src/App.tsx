@@ -46,6 +46,7 @@ import ParentNotesView from './components/ParentNotesView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
 import BulletinsView from './components/BulletinsView.tsx';
 import ClassResultsView from './components/ClassResultsView.tsx';
+import ClassSubjectPivotView from './components/ClassSubjectPivotView.tsx';
 import GlobalErrorToast from './components/GlobalErrorToast.tsx';
 import HomeroomView from './components/HomeroomView.tsx';
 
@@ -61,6 +62,7 @@ import {
   FileText,
   ClipboardCheck,
   ClipboardList,
+  Table2,
   LogOut,
   RefreshCw,
   AlertCircle
@@ -1324,6 +1326,21 @@ export default function App() {
                 </button>
               )}
 
+              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+                <button
+                  onClick={() => setActiveTab('class-subject-pivot')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'class-subject-pivot'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-class-subject-pivot"
+                >
+                  <Table2 className="h-4.5 w-4.5" />
+                  <span>Résultats par matière</span>
+                </button>
+              )}
+
               {currentRole === 'super_admin' && (
                 <button
                   onClick={() => setActiveTab('audit')}
@@ -1576,6 +1593,13 @@ export default function App() {
 
               {activeTab === 'class-results' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
                 <ClassResultsView
+                  schoolsList={schoolsList}
+                  currentSchoolId={currentSchoolId}
+                />
+              )}
+
+              {activeTab === 'class-subject-pivot' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+                <ClassSubjectPivotView
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
                 />
