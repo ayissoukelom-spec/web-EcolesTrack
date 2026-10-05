@@ -64,11 +64,11 @@ export interface SchoolHomeroomAssignment {
 }
 
 // Client-side name validation utils
-const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/\-]+$/u;
+const NAME_CHARACTERS_REGEX = /^[\p{L}\p{N} '’().&/-]+$/u;
 
 export function validateClientNames(payload: any) {
   if (!payload || typeof payload !== 'object') return null;
-  const fields = ['name', 'firstName', 'lastName'];
+  const fields = ['name', 'firstName', 'firstNames', 'lastName'];
   for (const field of fields) {
     if (!(field in payload)) continue;
     const v = payload[field];
@@ -77,7 +77,7 @@ export function validateClientNames(payload: any) {
     const trimmed = v.trim();
     if (trimmed.length === 0) continue;
     if (!NAME_CHARACTERS_REGEX.test(trimmed)) {
-      const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres, les chiffres et les espaces sont autorisés.`);
+      const err: any = new Error(`Le champ '${field}' contient des caractères invalides. Seules les lettres, les chiffres, les espaces et la ponctuation courante sont autorisés.`);
       err.field = field;
       throw err;
     }

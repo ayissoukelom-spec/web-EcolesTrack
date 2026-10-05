@@ -2344,7 +2344,23 @@ export default function AdminView({
   const [multiSchoolSelectedSchoolId, setMultiSchoolSelectedSchoolId] = useState<number | ''>('');
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
-  const [userForm, setUserForm] = useState({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '' as string | string[], gender: '', address: '', studentId: '', assignedClassIds: [] as number[], teachingAssignments: [] as TeachingAssignmentDraft[] });
+  const [userForm, setUserForm] = useState<{
+    email: string;
+    name: string;
+    role: string;
+    schoolId: string;
+    schoolSearch: string;
+    academicYearId: string;
+    phone: string;
+    specialization: string | string[];
+    gender: string;
+    address: string;
+    studentId: string;
+    assignedClassIds: number[];
+    teachingAssignments: TeachingAssignmentDraft[];
+    lastName?: string;
+    firstNames?: string;
+  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [] });
   const [userParentPhonePrefix, setUserParentPhonePrefix] = useState('');
 
   useEffect(() => {
@@ -3406,7 +3422,24 @@ export default function AdminView({
               <h3 className="font-bold mb-3">Modifier le compte</h3>
               <div className="space-y-3 text-sm">
                 <input className="w-full p-2 border rounded" placeholder="Email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
-                <input className="w-full p-2 border rounded" placeholder="M. Koffi" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
+                {userToEdit.role === 'teacher' ? (
+                  <>
+                    <input
+                      className="w-full p-2 border rounded"
+                      placeholder="Nom de famille"
+                      value={userForm.lastName ?? ''}
+                      onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })}
+                    />
+                    <input
+                      className="w-full p-2 border rounded"
+                      placeholder="Prénoms"
+                      value={userForm.firstNames ?? ''}
+                      onChange={(e) => setUserForm({ ...userForm, firstNames: e.target.value })}
+                    />
+                  </>
+                ) : (
+                  <input className="w-full p-2 border rounded" placeholder="M. Koffi" value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
+                )}
                 {userToEdit.role === 'teacher' ? (
                   <div className="w-full p-2 border rounded bg-slate-50 text-slate-700">Enseignant</div>
                 ) : (
@@ -3640,13 +3673,22 @@ export default function AdminView({
                       if (!onUpdateUser || !userToEdit) return;
                       setEditUserError(null);
                       const email = String(userForm.email ?? '').trim();
-                      const name = String(userForm.name ?? '').trim();
+                      const isTeacher = userToEdit.role === 'teacher';
+                      const lastName = String(userForm.lastName ?? '').trim();
+                      const firstNames = String(userForm.firstNames ?? '').trim();
+                      const name = isTeacher
+                        ? `${lastName} ${firstNames}`.trim()
+                        : String(userForm.name ?? '').trim();
                       if (userForm.role !== 'parent' && !email) {
                         setEditUserError("L'email est requis");
                         return;
                       }
                       if (!name) {
                         setEditUserError('Le nom complet est requis');
+                        return;
+                      }
+                      if (isTeacher && (!lastName || !firstNames)) {
+                        setEditUserError('Le nom et les prénoms de l’enseignant sont requis.');
                         return;
                       }
                       const rawPhoneDigits = userForm.phone.replace(/\D/g, '');
@@ -3681,6 +3723,7 @@ export default function AdminView({
                       await onUpdateUser(userToEdit.id, {
                         email,
                         name,
+                        ...(isTeacher ? { lastName, firstNames } : {}),
                         role: updatedRole,
                         schoolId: userForm.schoolId ? parseInt(userForm.schoolId) : undefined,
                         academicYearId: updatedRole === 'school_admin' && userForm.academicYearId ? parseInt(userForm.academicYearId) : undefined,
@@ -5704,6 +5747,8 @@ export default function AdminView({
                                 setUserForm({
                                   email: user.email ?? '',
                                   name: user.name,
+                                  lastName: user.lastName ?? tc.lastName ?? '',
+                                  firstNames: user.firstNames ?? tc.firstNames ?? '',
                                   role: 'teacher',
                                   schoolId: user.schoolId ? String(user.schoolId) : '',
                                   schoolSearch: '',
@@ -6349,6 +6394,8 @@ export default function AdminView({
                             setUserForm({
                               email: user.email ?? '',
                               name: user.name,
+                              lastName: user.role === 'teacher' ? user.lastName ?? teacherProfile?.lastName ?? '' : undefined,
+                              firstNames: user.role === 'teacher' ? user.firstNames ?? teacherProfile?.firstNames ?? '' : undefined,
                               role: user.role,
                               schoolId: user.schoolId ? String(user.schoolId) : '',
                               schoolSearch: '',

@@ -1844,11 +1844,14 @@ export async function createApp() {
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
       if (role !== 'parent' && !email) return res.status(400).json({ error: 'Missing required field: email' });
-      if (role === 'teacher' && ((lastName && !firstNames) || (firstNames && !lastName))) {
+      const teacherIdentityProvided = role === 'teacher' && (lastName !== undefined || firstNames !== undefined);
+      const normalizedTeacherLastName = teacherIdentityProvided ? String(lastName ?? '').trim().toUpperCase() : '';
+      const normalizedTeacherFirstNames = teacherIdentityProvided ? String(firstNames ?? '').trim() : '';
+      if (teacherIdentityProvided && (!normalizedTeacherLastName || !normalizedTeacherFirstNames)) {
         return res.status(400).json({ error: 'lastName and firstNames must be provided together' });
       }
-      const teacherDisplayName = role === 'teacher' && lastName && firstNames
-        ? `${String(lastName).trim()} ${String(firstNames).trim()}`
+      const teacherDisplayName = teacherIdentityProvided
+        ? `${normalizedTeacherLastName} ${normalizedTeacherFirstNames}`
         : String(name ?? '').trim();
       if (!teacherDisplayName) return res.status(400).json({ error: 'Missing required name' });
 
@@ -1996,9 +1999,9 @@ export async function createApp() {
       if (role !== targetUser.role && !canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
 
       const updatedValues: any = { email: normalizedIncomingEmail, name: teacherDisplayName, role, gender: gender ?? null };
-      if (role === 'teacher' && lastName && firstNames) {
-        updatedValues.lastName = String(lastName).trim().toUpperCase();
-        updatedValues.firstNames = String(firstNames).trim();
+      if (teacherIdentityProvided) {
+        updatedValues.lastName = normalizedTeacherLastName;
+        updatedValues.firstNames = normalizedTeacherFirstNames;
       }
       if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
       if (phone !== undefined) updatedValues.phone = canonicalPhoneForUpdate;

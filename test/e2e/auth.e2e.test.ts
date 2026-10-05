@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import ExcelJS from 'exceljs';
+import { getTeacherDisplayName } from '../../src/types.ts';
 
 // Mock DB and Auth middleware before importing the server so the real server
 // uses our test doubles when startServer() runs on import.
@@ -669,6 +670,12 @@ function createMockDb() {
       const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
         if (selectedAlias === 'user' && baseRow._joinedUser) return baseRow._joinedUser;
+        if (resolveTableName(builder._table) === 'teachers'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'users')
+          && ['uid', 'name', 'lastName', 'firstNames', 'email', 'gender'].includes(String(selectedAlias))) {
+          const user = FIXTURES.users.find((row: any) => Number(row.id) === Number(baseRow.userId));
+          return user?.[String(selectedAlias)] ?? null;
+        }
         if (resolveTableName(builder._table) === 'grades' && selectedAlias === 'subject') {
           const evaluation = FIXTURES.evaluations.find((row: any) => Number(row.id) === Number(baseRow.evaluationId));
           const subject = FIXTURES.subjects.find((row: any) => Number(row.id) === Number(evaluation?.subjectId));
@@ -1792,6 +1799,84 @@ describe('E2E security: auth & privilege checks', () => {
     });
   });
 
+  it('updates a teacher family name and returns the coherent name in the teacher list', async () => {
+    const teacher = FIXTURES.users.find((user) => user.id === 3)!;
+    Object.assign(teacher, {
+      name: 'KANGNI SOUKPE Parfait',
+      lastName: 'KANGNI SOUKPE',
+      firstNames: 'Parfait',
+    });
+
+    const update = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({
+        email: teacher.email,
+        name: 'KANGNI-SOUKPE Parfait',
+        lastName: 'KANGNI-SOUKPE',
+        firstNames: 'Parfait',
+        role: 'teacher',
+        schoolId: 10,
+      });
+
+    expect(update.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 3)).toMatchObject({
+      name: 'KANGNI-SOUKPE Parfait',
+      lastName: 'KANGNI-SOUKPE',
+      firstNames: 'Parfait',
+    });
+
+    const list = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(list.status).toBe(200);
+    const listedTeacher = list.body.find((row: any) => row.userId === 3);
+    expect(listedTeacher).toMatchObject({
+      name: 'KANGNI-SOUKPE Parfait',
+      lastName: 'KANGNI-SOUKPE',
+      firstNames: 'Parfait',
+    });
+    expect(getTeacherDisplayName(listedTeacher)).toBe('KANGNI-SOUKPE Parfait');
+  });
+
+  it('updates teacher first names and keeps the full name synchronized', async () => {
+    const teacher = FIXTURES.users.find((user) => user.id === 3)!;
+    Object.assign(teacher, {
+      name: 'KANGNI-SOUKPE Parfait',
+      lastName: 'KANGNI-SOUKPE',
+      firstNames: 'Parfait',
+    });
+
+    const update = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({
+        email: teacher.email,
+        name: 'KANGNI-SOUKPE Jean-Pierre',
+        lastName: 'KANGNI-SOUKPE',
+        firstNames: 'Jean-Pierre',
+        role: 'teacher',
+        schoolId: 10,
+      });
+
+    expect(update.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 3)).toMatchObject({
+      name: 'KANGNI-SOUKPE Jean-Pierre',
+      lastName: 'KANGNI-SOUKPE',
+      firstNames: 'Jean-Pierre',
+    });
+
+    const list = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    const listedTeacher = list.body.find((row: any) => row.userId === 3);
+    expect(getTeacherDisplayName(listedTeacher)).toBe('KANGNI-SOUKPE Jean-Pierre');
+  });
+
   it('3d. parent can access own parent details via GET /api/parents/:id', async () => {
     const res = await request(app)
       .get('/api/parents/1')
@@ -2336,14 +2421,23 @@ describe('E2E security: auth & privilege checks', () => {
     const res = await request(app)
       .post('/api/teachers')
       .set('Authorization', 'Bearer token-school')
-      .send({ name: 'dUpOnT Jean', lastName: 'dUpOnT', firstNames: 'Jean', email: 'newteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
+      .send({ name: 'KANGNI - SOUKPE Parfait', lastName: 'KANGNI - SOUKPE', firstNames: 'Parfait', email: 'newteacher@x.test', phone: '+22912345678', specialization: 'Science', schoolId: 10 });
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ email: 'newteacher@x.test', schoolId: 10 });
-    expect(FIXTURES.users.find((user) => user.email === 'newteacher@x.test')).toMatchObject({
-      lastName: 'DUPONT',
-      firstNames: 'Jean',
+    const createdUser = FIXTURES.users.find((user) => user.email === 'newteacher@x.test')!;
+    expect(createdUser).toMatchObject({
+      name: 'KANGNI - SOUKPE Parfait',
+      lastName: 'KANGNI - SOUKPE',
+      firstNames: 'Parfait',
     });
+    const list = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(list.status).toBe(200);
+    const listedTeacher = list.body.find((row: any) => row.userId === createdUser.id);
+    expect(getTeacherDisplayName(listedTeacher)).toBe('KANGNI - SOUKPE Parfait');
   });
 
   it('3i. teacher cannot create a teacher via POST /api/teachers', async () => {

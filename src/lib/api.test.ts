@@ -19,6 +19,17 @@ describe('validateClientNames', () => {
     expect(() => validateClientNames({ name: "École Notre-Dame" })).not.toThrow();
     expect(() => validateClientNames({ name: 'CP1-B' })).not.toThrow();
   });
+
+  it('accepts hyphens in given and family names', () => {
+    expect(() => validateClientNames({ lastName: 'Jean-Pierre' })).not.toThrow();
+    expect(() => validateClientNames({ firstName: 'Marie-Claire' })).not.toThrow();
+    expect(() => validateClientNames({ firstNames: 'Koffi-Afi' })).not.toThrow();
+  });
+
+  it('continues rejecting characters outside the existing name policy', () => {
+    expect(() => validateClientNames({ lastName: 'Jean<Pierre' })).toThrow(/caractères invalides/);
+    expect(() => validateClientNames({ firstNames: 'Marie@Claire' })).toThrow(/caractères invalides/);
+  });
 });
 
 describe('getSimulationHeaders', () => {

@@ -480,6 +480,75 @@ describe('AdminView create-user teacher form', () => {
     expect(onUpdateUser).toHaveBeenCalledWith(6, expect.objectContaining({ phone: '+229 78234567' }));
   });
 
+  it('sends updated teacher family and given names separately when editing', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const user: User = {
+      id: 702,
+      uid: 'teacher_702',
+      email: 'teacher@example.test',
+      name: 'KANGNI SOUKPE Parfait',
+      lastName: 'KANGNI SOUKPE',
+      firstNames: 'Parfait',
+      role: 'teacher',
+      schoolId: 1,
+      phone: '+22890000000',
+    };
+    const teacher: Teacher = {
+      id: 32,
+      userId: 702,
+      email: user.email!,
+      name: user.name,
+      lastName: user.lastName,
+      firstNames: user.firstNames,
+      schoolId: 1,
+      phone: user.phone,
+      classIds: [],
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[teacher]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[user]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onUpdateUser={onUpdateUser}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+      const editDialog = screen.getByRole('dialog');
+      fireEvent.change(within(editDialog).getByPlaceholderText('Nom de famille'), { target: { value: 'KANGNI-SOUKPE' } });
+      fireEvent.click(within(editDialog).getByRole('button', { name: 'Enregistrer' }));
+
+      await waitFor(() => {
+        expect(onUpdateUser).toHaveBeenCalledWith(702, expect.objectContaining({
+          name: 'KANGNI-SOUKPE Parfait',
+          lastName: 'KANGNI-SOUKPE',
+          firstNames: 'Parfait',
+        }));
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('updates a parent without an email or student without calling trim on null', async () => {
     const onUpdateUser = vi.fn().mockResolvedValue({});
     const parent: Parent = {
