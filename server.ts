@@ -885,6 +885,7 @@ function verifyInternalNotificationAttachmentRequest(req: any, res: any): boolea
 export async function createApp() {
   assertSimulatedAuthConfiguration();
   const app = express();
+  app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
 
   // JSON parsing middleware
   app.use(express.json());

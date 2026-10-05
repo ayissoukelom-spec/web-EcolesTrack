@@ -2699,17 +2699,60 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('enforces the local login rate limit after five attempts', async () => {
+    expect(app.get('trust proxy')).toBe(false);
+
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const res = await request(app)
         .post('/api/auth/local-login')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
         .send({ email: 'missing@x.test', password: 'incorrect' });
       expect(res.status).not.toBe(429);
     }
 
     const limited = await request(app)
       .post('/api/auth/local-login')
+      .set('X-Forwarded-For', '198.51.100.99')
       .send({ email: 'missing@x.test', password: 'incorrect' });
     expect(limited.status).toBe(429);
+  });
+
+  it("uses Render's single trusted proxy hop for production login rate limiting", async () => {
+    const originalFileStorageProvider = process.env.FILE_STORAGE_PROVIDER;
+    const originalS3Bucket = process.env.S3_BUCKET;
+    process.env.NODE_ENV = 'production';
+    process.env.FILE_STORAGE_PROVIDER = 's3';
+    process.env.S3_BUCKET = 'test-bucket';
+
+    try {
+      const productionApp = await serverModule.createApp();
+      expect(productionApp.get('trust proxy')).toBe(1);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(productionApp)
+          .post('/api/auth/local-login')
+          .set('X-Forwarded-For', `198.51.100.${attempt + 1}, 203.0.113.77`)
+          .send({ email: 'missing@x.test', password: 'incorrect' });
+        expect(res.status).not.toBe(429);
+      }
+
+      const limited = await request(productionApp)
+        .post('/api/auth/local-login')
+        .set('X-Forwarded-For', '192.0.2.250, 203.0.113.77')
+        .send({ email: 'missing@x.test', password: 'incorrect' });
+      expect(limited.status).toBe(429);
+
+      const differentClient = await request(productionApp)
+        .post('/api/auth/local-login')
+        .set('X-Forwarded-For', '192.0.2.250, 203.0.113.78')
+        .send({ email: 'missing@x.test', password: 'incorrect' });
+      expect(differentClient.status).not.toBe(429);
+    } finally {
+      process.env.NODE_ENV = 'test';
+      if (originalFileStorageProvider === undefined) delete process.env.FILE_STORAGE_PROVIDER;
+      else process.env.FILE_STORAGE_PROVIDER = originalFileStorageProvider;
+      if (originalS3Bucket === undefined) delete process.env.S3_BUCKET;
+      else process.env.S3_BUCKET = originalS3Bucket;
+    }
   });
 
   it('creates local accounts with unique one-time temporary passwords and stores only hashes', async () => {
