@@ -7141,25 +7141,29 @@ export async function createApp() {
         throw new Error('Plusieurs admins école existent pour cette école. Veuillez sélectionner explicitement un compte Admin École.');
       })();
 
-      const result = await db.insert(students).values({
-        firstName: normalizedFirstName,
-        lastName: normalizedLastName,
-        birthDate,
-        gender: normalizedGender,
-        schoolId: effectiveSchoolId,
-        classId: parsedClassId,
-        parentId: parsedParentId,
-        schoolAdminId: resolvedSchoolAdminId,
-        enrolledAt: parsedEnrolledAt,
-      }).returning();
+      const createdStudent = await db.transaction(async (tx) => {
+        const [student] = await tx.insert(students).values({
+          firstName: normalizedFirstName,
+          lastName: normalizedLastName,
+          birthDate,
+          gender: normalizedGender,
+          schoolId: effectiveSchoolId,
+          classId: parsedClassId,
+          parentId: parsedParentId,
+          schoolAdminId: resolvedSchoolAdminId,
+          enrolledAt: parsedEnrolledAt,
+        }).returning();
 
-      await db.insert(studentAcademicYearStatuses).values({
-        studentId: result[0].id,
-        academicYearId: selectedAcademicYearId,
-        status: normalizedStudentStatus,
+        await tx.insert(studentAcademicYearStatuses).values({
+          studentId: student.id,
+          academicYearId: selectedAcademicYearId,
+          status: normalizedStudentStatus,
+        });
+
+        return student;
       });
 
-      res.status(201).json(result[0]);
+      res.status(201).json(createdStudent);
     } catch (err: any) {
       console.error('Error creating student profile:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -7340,22 +7344,35 @@ export async function createApp() {
         return res.status(200).json(existingStudent);
       }
 
-      const result = await db
+      const studentValues = {
+        firstName: normalizedFirstName,
+        lastName: normalizedLastName,
+        birthDate,
+        gender: newGender,
+        schoolId: resolvedSchoolId,
+        classId: parsedClassId,
+        parentId: parsedParentId,
+        schoolAdminId: parsedSchoolAdminId,
+      };
+      const updateStudent = async (executor: typeof db) => executor
         .update(students)
-        .set({ firstName: normalizedFirstName, lastName: normalizedLastName, birthDate, gender: newGender, schoolId: resolvedSchoolId, classId: parsedClassId, parentId: parsedParentId, schoolAdminId: parsedSchoolAdminId })
+        .set(studentValues)
         .where(eq(students.id, studentId))
         .returning();
-
-      if (statusWasProvided) {
-        await db.insert(studentAcademicYearStatuses).values({
-          studentId,
-          academicYearId: selectedAcademicYearId,
-          status: newStudentStatus,
-        }).onConflictDoUpdate({
-          target: [studentAcademicYearStatuses.studentId, studentAcademicYearStatuses.academicYearId],
-          set: { status: newStudentStatus, updatedAt: new Date() },
-        });
-      }
+      const result = statusWasProvided
+        ? await db.transaction(async (tx) => {
+          const updated = await updateStudent(tx);
+          await tx.insert(studentAcademicYearStatuses).values({
+            studentId,
+            academicYearId: selectedAcademicYearId,
+            status: newStudentStatus,
+          }).onConflictDoUpdate({
+            target: [studentAcademicYearStatuses.studentId, studentAcademicYearStatuses.academicYearId],
+            set: { status: newStudentStatus, updatedAt: new Date() },
+          });
+          return updated;
+        })
+        : await updateStudent(db);
 
       await logAuditEvent(
         actor,

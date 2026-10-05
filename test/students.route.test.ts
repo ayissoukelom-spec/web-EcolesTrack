@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { students, teachers, classes, classTeachers, classHomeroomAssignments, parents, users, schools, grades, evaluations, schoolClasses, teacherSubjects, userSchools } from '../src/db/schema.ts';
+import { students, studentAcademicYearStatuses, teachers, classes, classTeachers, classHomeroomAssignments, parents, users, schools, grades, evaluations, schoolClasses, teacherSubjects, userSchools } from '../src/db/schema.ts';
 
 const mockState = {
   actorRole: 'super_admin' as string,
@@ -18,6 +18,7 @@ const mockState = {
   dashboardEvaluations: [] as Array<any>,
   dashboardGrades: [] as Array<any>,
   users: [] as Array<any>,  // Separate mock data for users table
+  studentStatuses: [] as Array<any>,
   studentGenderSelected: false,
 };
 
@@ -71,6 +72,8 @@ const createBuilder = (rows: any[], projection?: any) => {
         builder._rows = Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
           ? [{ count: rows.length }]
           : rows;
+      } else if (table === studentAcademicYearStatuses) {
+        builder._rows = mockState.studentStatuses;
       } else if (table === grades) {
         if (projection?.schoolId === evaluations.schoolId) {
           throw new Error('column evaluations.school_id does not exist');
@@ -316,6 +319,7 @@ describe('GET /api/students (scope)', () => {
     mockState.dashboardEvaluations = [];
     mockState.dashboardGrades = [];
     mockState.users = [];  // Reset users mock data
+    mockState.studentStatuses = [];
     mockState.studentGenderSelected = false;
   });
 
@@ -581,6 +585,187 @@ describe('GET /api/students (scope)', () => {
       .send([row]);
     return { res, insertedRows };
   };
+
+  it('rolls back a student if its academic-year status insert fails and allows a retry', async () => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.actorId = 2;
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
+
+    let failStatusInsert = true;
+    mockDb.transaction = async (callback: (tx: any) => Promise<any>) => {
+      const studentsBefore = structuredClone(mockState.students);
+      const statusesBefore = structuredClone(mockState.studentStatuses);
+      try {
+        return await callback(mockDb);
+      } catch (error) {
+        mockState.students.splice(0, mockState.students.length, ...studentsBefore);
+        mockState.studentStatuses.splice(0, mockState.studentStatuses.length, ...statusesBefore);
+        throw error;
+      }
+    };
+    mockDb.insert = (table: any) => ({
+      values: (values: any) => {
+        const execute = async () => {
+          if (table === students) {
+            const row = { id: 123, ...values };
+            mockState.students.push(row);
+            return [row];
+          }
+          if (table === studentAcademicYearStatuses) {
+            if (failStatusInsert) {
+              failStatusInsert = false;
+              throw new Error('Simulated academic-year status insert failure');
+            }
+            mockState.studentStatuses.push({ id: 1, ...values });
+          }
+          return [];
+        };
+        return {
+          returning: execute,
+          then: (resolve: (result: any) => void, reject: (error: unknown) => void) => execute().then(resolve, reject),
+        };
+      },
+    });
+
+    const payload = {
+      firstName: 'Atomic',
+      lastName: 'Student',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      parentId: 7,
+      academicYearId: 2,
+      schoolAdminId: 2,
+      gender: 'F',
+      studentStatus: 'Nouveau',
+    };
+    const failed = await request(app)
+      .post('/api/students')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send(payload);
+
+    expect(failed.status).toBe(500);
+    expect(mockState.students).toHaveLength(0);
+    expect(mockState.studentStatuses).toHaveLength(0);
+
+    const retried = await request(app)
+      .post('/api/students')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send(payload);
+
+    expect(retried.status).toBe(201);
+    expect(mockState.students).toHaveLength(1);
+    expect(mockState.studentStatuses).toEqual([expect.objectContaining({
+      studentId: 123,
+      academicYearId: 2,
+      status: 'Nouveau',
+    })]);
+  });
+
+  it('rolls back student updates when the academic-year status upsert fails', async () => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.actorId = 2;
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
+    mockState.students = [{
+      id: 123,
+      firstName: 'Initial',
+      lastName: 'STUDENT',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      parentId: 7,
+      schoolAdminId: 2,
+      gender: 'F',
+      enrolledAt: new Date('2015-04-12'),
+      isActive: true,
+    }];
+    mockState.studentStatuses = [{ id: 1, studentId: 123, academicYearId: 2, status: 'Nouveau' }];
+
+    let failStatusUpsert = true;
+    mockDb.transaction = async (callback: (tx: any) => Promise<any>) => {
+      const studentsBefore = structuredClone(mockState.students);
+      const statusesBefore = structuredClone(mockState.studentStatuses);
+      try {
+        return await callback(mockDb);
+      } catch (error) {
+        mockState.students.splice(0, mockState.students.length, ...studentsBefore);
+        mockState.studentStatuses.splice(0, mockState.studentStatuses.length, ...statusesBefore);
+        throw error;
+      }
+    };
+    mockDb.update = (table: any) => ({
+      set: (values: any) => ({
+        where: () => ({
+          returning: async () => {
+            if (table !== students) return [];
+            mockState.students[0] = { ...mockState.students[0], ...values };
+            return [mockState.students[0]];
+          },
+        }),
+      }),
+    });
+    mockDb.insert = (table: any) => ({
+      values: (values: any) => ({
+        onConflictDoUpdate: () => ({
+          then: (resolve: (result: any) => void, reject: (error: unknown) => void) => {
+            if (failStatusUpsert) {
+              failStatusUpsert = false;
+              return Promise.reject(new Error('Simulated academic-year status upsert failure')).catch(reject);
+            }
+            mockState.studentStatuses[0] = { ...mockState.studentStatuses[0], ...values };
+            return Promise.resolve([]).then(resolve, reject);
+          },
+        }),
+        returning: async () => [],
+      }),
+    });
+
+    const payload = {
+      firstName: 'Updated',
+      lastName: 'STUDENT',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      parentId: 7,
+      academicYearId: 2,
+      schoolAdminId: 2,
+      gender: 'F',
+      studentStatus: 'Doublant',
+    };
+    const failed = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send(payload);
+
+    expect(failed.status).toBe(500);
+    expect(mockState.students[0].firstName).toBe('Initial');
+    expect(mockState.studentStatuses[0].status).toBe('Nouveau');
+
+    const retried = await request(app)
+      .put('/api/students/123')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send(payload);
+
+    expect(retried.status).toBe(200);
+    expect(mockState.students[0].firstName).toBe('Updated');
+    expect(mockState.studentStatuses[0].status).toBe('Doublant');
+  });
 
   it.each(['dupont', 'Dupont', 'dUpOnT', 'DUPONT'])('uppercases lastName on student creation for %s and leaves firstName casing alone', async (lastName) => {
     const insertedRows: any[] = [];
