@@ -1094,12 +1094,15 @@ export default function AdminView({
     return parent.schoolId === schoolId;
   };
 
-  const filteredTeachersList = sortTeachersAlphabetically(teachersList.filter((t) => {
+  const teachersInCurrentScope = teachersList.filter((t) => {
     const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || teacherBelongsToSchool(t, superAdminSchoolFilterId);
     const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
     const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && (t.classIds || []).some((classId) => currentTeacherClassIds.includes(classId)));
-    return matchesSchool && matchesClassFilter && matchesTeacherScope && filterBySearch(t.name);
-  }));
+    return matchesSchool && matchesClassFilter && matchesTeacherScope;
+  });
+  const filteredTeachersList = sortTeachersAlphabetically(
+    teachersInCurrentScope.filter((teacher) => filterBySearch(teacher.name))
+  );
 
   const currentParent = (() => {
     if (userRole !== 'parent') return undefined;
@@ -1143,6 +1146,7 @@ export default function AdminView({
   });
 
   const isStudentExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
+  const isTeacherExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
 
   const runAdminDownload = async (key: string, downloadFile: () => void | Promise<void>) => {
     if (downloadingAdminActionsRef.current.has(key)) return;
@@ -1231,6 +1235,34 @@ export default function AdminView({
     const link = document.createElement('a');
     link.href = url;
     link.download = 'liste-parents.xlsx';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportTeachersExcel = async () => {
+    if (!isTeacherExportAllowed) return;
+
+    const rows = filteredTeachersList.map((teacher) => ({
+      'Nom complet': getTeacherDisplayName(teacher),
+      'Adresse Email': teacher.email || '',
+      École: schoolsList.find((school) => school.id === teacher.schoolId)?.name || '',
+      'Spécialité enseignée': Array.isArray(teacher.specialization)
+        ? teacher.specialization.join(', ')
+        : teacher.specialization || 'Général',
+      Téléphone: teacher.phone || '',
+    }));
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Enseignants');
+    worksheet.columns = Object.keys(rows[0] || {}).map((header) => ({ header, key: header }));
+    worksheet.addRows(rows.map((row) => Object.values(row)));
+    const excelBuffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'liste-enseignants.xlsx';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -5706,10 +5738,26 @@ export default function AdminView({
                 </button>
               </div>
             )}
-            
             {/* List view - teachers table */}
             {!['super_admin', 'school_admin'].includes(userRole) || assignmentMode === 'list' ? (
-              <div className="overflow-x-auto">
+              <>
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm font-semibold text-slate-700" data-testid="teachers-total-count">
+                    Effectif total : {teachersInCurrentScope.length} enseignants
+                  </div>
+                  {isTeacherExportAllowed && (
+                    <button
+                      type="button"
+                      onClick={() => void runAdminDownload('teachers-export', exportTeachersExcel)}
+                      disabled={downloadingAdminActions.has('teachers-export')}
+                      className="inline-flex items-center gap-2 self-start bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3 py-2 rounded-lg border border-emerald-700 shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {downloadingAdminActions.has('teachers-export') && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                      {downloadingAdminActions.has('teachers-export') ? 'Téléchargement en cours…' : 'Télécharger Excel'}
+                    </button>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs sm:text-sm text-slate-600">
                   <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
                     <tr>
@@ -5784,7 +5832,8 @@ export default function AdminView({
                     )}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              </>
             ) : (
               /* Assignment view - assign principal teachers to classes */
               <div className="space-y-4">

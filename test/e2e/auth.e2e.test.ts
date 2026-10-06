@@ -1877,6 +1877,37 @@ describe('E2E security: auth & privilege checks', () => {
     expect(getTeacherDisplayName(listedTeacher)).toBe('KANGNI-SOUKPE Jean-Pierre');
   });
 
+  it('limits the teacher list returned to a school admin to their school', async () => {
+    FIXTURES.users.push({
+      id: 20,
+      uid: 'other-school-teacher',
+      email: 'other-school-teacher@example.test',
+      name: 'Other School Teacher',
+      role: 'teacher',
+      schoolId: 20,
+      isDeleted: false,
+    });
+    FIXTURES.teachers.push({
+      id: 200,
+      userId: 20,
+      schoolId: 20,
+      phone: '+22955555555',
+      specialization: 'Science',
+    });
+
+    const response = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid')
+      .set('x-simulated-email', 'admin@school.test')
+      .set('x-simulated-school-id', '10');
+
+    expect(response.status).toBe(200);
+    expect(response.body.length).toBeGreaterThan(0);
+    expect(response.body.every((teacher: any) => teacher.schoolId === 10)).toBe(true);
+    expect(response.body.some((teacher: any) => teacher.userId === 20)).toBe(false);
+  });
+
   it('3d. parent can access own parent details via GET /api/parents/:id', async () => {
     const res = await request(app)
       .get('/api/parents/1')

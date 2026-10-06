@@ -860,6 +860,86 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
+  it('counts teachers by scope and exports only the filtered visible teachers as Excel', async () => {
+    const schools: School[] = [
+      { id: 1, name: 'École du Lac', address: '', phone: '' },
+      { id: 2, name: 'École du Nord', address: '', phone: '' },
+    ];
+    const teachers: Teacher[] = [
+      { id: 11, userId: 101, name: 'ZOU Jean', lastName: 'ZOU', firstNames: 'Jean', email: 'jean@example.com', phone: '+22890000011', specialization: 'Mathématiques', schoolId: 1 },
+      { id: 12, userId: 102, name: 'KOFFI Awa', lastName: 'KOFFI', firstNames: 'Awa', email: 'awa@example.com', phone: '+22890000012', specialization: 'Sciences', schoolId: 1 },
+      { id: 21, userId: 201, name: 'YAO Kossi', lastName: 'YAO', firstNames: 'Kossi', email: 'kossi@example.com', phone: '+22890000021', specialization: 'Histoire', schoolId: 2 },
+    ];
+    const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+    const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:teachers');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify([]), { status: 200 }));
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={schools}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={teachers}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      expect(screen.getByTestId('teachers-total-count').textContent).toContain('3 enseignants');
+
+      fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+      expect(screen.getByTestId('teachers-total-count').textContent).toContain('2 enseignants');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      const blob = createObjectURL.mock.calls[0][0] as Blob;
+      const rows = await readFirstExcelSheetRecords(await blob.arrayBuffer());
+
+      expect(click).toHaveBeenCalledTimes(1);
+      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-enseignants.xlsx');
+      expect(rows).toEqual([
+        {
+          'Nom complet': 'KOFFI Awa',
+          'Adresse Email': 'awa@example.com',
+          École: 'École du Lac',
+          'Spécialité enseignée': 'Sciences',
+          Téléphone: '+22890000012',
+        },
+        {
+          'Nom complet': 'ZOU Jean',
+          'Adresse Email': 'jean@example.com',
+          École: 'École du Lac',
+          'Spécialité enseignée': 'Mathématiques',
+          Téléphone: '+22890000011',
+        },
+      ]);
+    } finally {
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+      click.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('counts parents by selected school for super admin', () => {
     const schools: School[] = [
       { id: 1, name: 'École du Lac', address: '', phone: '' },
