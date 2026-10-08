@@ -145,7 +145,7 @@ const extractPdfText = (pdfBytes: Uint8Array): string => {
     .replace(/Tj/g, ' ');
 };
 
-const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: number; y: number } | null => {
+const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: number; y: number; fontSize: number | null } | null => {
   const pdfBuffer = Buffer.from(pdfBytes);
   const raw = pdfBuffer.toString('latin1');
   const streamPattern = /stream\r?\n/g;
@@ -171,7 +171,15 @@ const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: numb
       textPositionPattern.lastIndex = positionMatch.index + positionMatch[0].length;
       const textEnd = nextPosition?.index ?? content.indexOf('ET', textPositionPattern.lastIndex);
       const text = content.slice(textPositionPattern.lastIndex, textEnd < 0 ? content.length : textEnd);
-      if (target.test(text)) return { x: Number(positionMatch[1]), y: Number(positionMatch[2]) };
+      if (target.test(text)) {
+        const textStateStart = content.lastIndexOf('BT', positionMatch.index);
+        const fontSize = /([\d.]+)\s+Tf/.exec(content.slice(textStateStart, positionMatch.index))?.[1];
+        return {
+          x: Number(positionMatch[1]),
+          y: Number(positionMatch[2]),
+          fontSize: fontSize == null ? null : Number(fontSize),
+        };
+      }
     }
     const endMarker = /^\r?\nendstream/.exec(raw.slice(streamEnd));
     streamPattern.lastIndex = streamEnd + (endMarker?.[0].length ?? 0);
@@ -484,6 +492,7 @@ describe('décision de fin d année', () => {
     expect(mentionPosition!.y).toBeLessThan(annualRankPosition!.y - 10);
     expect(mentionPosition!.x).toBeGreaterThanOrEqual(decisionPosition!.x);
     expect(mentionPosition!.x).toBeGreaterThan(annualRankPosition!.x + 55);
+    expect(mentionPosition!.fontSize).toBe(13);
   });
 
   it('n’affiche pas de mention vide pour un élève admis sans mention enregistrée', async () => {

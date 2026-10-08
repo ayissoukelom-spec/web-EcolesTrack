@@ -2758,7 +2758,8 @@ export const createBulletinPdfDocument = async (
     drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
     drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
     if (annualExamMention) {
-      const examMentionFontSize = 9;
+      const examMentionPositionFontSize = 9;
+      const examMentionFontSize = examMentionPositionFontSize + 4;
       const examMentionX = Math.max(examDecisionTextX ?? summaryLeftX, annualBoxRight + 14);
       const availableWidth = Math.max(0, page.getWidth() - margin - 4 - examMentionX);
       const examMentionWidth = fontBold.widthOfTextAtSize(annualExamMention, examMentionFontSize);
@@ -2766,7 +2767,7 @@ export const createBulletinPdfDocument = async (
         examMentionFontSize,
         examMentionFontSize * availableWidth / Math.max(1, examMentionWidth),
       );
-      const examMentionY = annualBoxBottom - fontBold.heightAtSize(examMentionFontSize, { descender: false }) - 5;
+      const examMentionY = annualBoxBottom - fontBold.heightAtSize(examMentionPositionFontSize, { descender: false }) - 5;
       drawText(page, annualExamMention, examMentionX, examMentionY, fittedExamMentionFontSize, text, fontBold);
     }
   }
