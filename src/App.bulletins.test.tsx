@@ -260,7 +260,60 @@ describe('App navigation', () => {
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
   });
 
-  it('routes school_admin from the actual sidebar Comptabilité entry to AccountingView', async () => {
+  it('routes super_admin from the actual sidebar Comptabilité entry to AccountingView', async () => {
+    mockGetSimulatedRole.mockReturnValue('super_admin');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-super-admin',
+      email: 'superadmin@example.com',
+      name: 'Super Admin',
+      role: 'super_admin',
+      id: 1,
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const accountingButton = within(navigation).getByRole('button', { name: 'Comptabilité' });
+    expect(accountingButton).toBeEnabled();
+    fireEvent.click(accountingButton);
+
+    expect(await screen.findByTestId('accounting-view')).toHaveTextContent('super_admin');
+  });
+
+  it.each(['school_admin', 'teacher', 'parent', 'surveillant'] as const)(
+    'shows Comptabilité disabled and does not open AccountingView for %s',
+    async (role) => {
+      mockGetSimulatedRole.mockReturnValue(role);
+      mockGetSimulatedUser.mockReturnValue({
+        uid: `sim-${role}`,
+        email: `${role}@example.com`,
+        name: role,
+        schoolId: 1,
+        role,
+        id: 1,
+      });
+
+      render(
+        <AuthProvider>
+          <App />
+        </AuthProvider>,
+      );
+
+      const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+      const accountingButton = within(navigation).getByRole('button', { name: 'Comptabilité' });
+      expect(accountingButton).toBeDisabled();
+      expect(accountingButton).toHaveAttribute('aria-disabled', 'true');
+
+      fireEvent.click(accountingButton);
+      expect(screen.queryByTestId('accounting-view')).toBeNull();
+    },
+  );
+
+  it('does not render AccountingView for school_admin when accounting is selected', async () => {
     mockGetSimulatedRole.mockReturnValue('school_admin');
     mockGetSimulatedUser.mockReturnValue({
       uid: 'sim-school-admin',
@@ -277,12 +330,7 @@ describe('App navigation', () => {
       </AuthProvider>,
     );
 
-    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
-    const accountingButton = within(navigation).getByRole('button', { name: 'Comptabilité' });
-    expect(accountingButton).toBeTruthy();
-    fireEvent.click(accountingButton);
-
-    expect(await screen.findByTestId('accounting-view')).toHaveTextContent('school_admin');
+    expect(screen.queryByTestId('accounting-view')).toBeNull();
   });
 
   it('refreshes after reset without unmounting the admin view or losing its temporary password result', async () => {

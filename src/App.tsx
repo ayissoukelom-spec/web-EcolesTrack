@@ -1141,20 +1141,24 @@ export default function App() {
                 <span>Administration</span>
               </button>}
 
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
-                <button
-                  onClick={() => setActiveTab('accounting')}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'accounting'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-accounting"
-                >
-                  <Wallet className="h-4.5 w-4.5" />
-                  <span>Comptabilité</span>
-                </button>
-              )}
+              <button
+                disabled={currentRole !== 'super_admin'}
+                onClick={() => {
+                  if (currentRole === 'super_admin') setActiveTab('accounting');
+                }}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                  currentRole === 'super_admin'
+                    ? activeTab === 'accounting'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10 cursor-pointer'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 cursor-pointer'
+                    : 'cursor-not-allowed opacity-60 text-slate-400'
+                }`}
+                id="sidebar-nav-accounting"
+                aria-disabled={currentRole !== 'super_admin'}
+              >
+                <Wallet className="h-4.5 w-4.5" />
+                <span>Comptabilité</span>
+              </button>
 
               {currentRole === 'teacher' && homeroomClassesList.length > 0 && (
                 <button
@@ -1623,7 +1627,7 @@ export default function App() {
 
               {activeTab === 'bulletins' && currentRole !== 'super_admin' && currentRole !== 'school_admin' && null}
 
-              {activeTab === 'accounting' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {activeTab === 'accounting' && currentRole === 'super_admin' && (
                 <AccountingView
                   userRole={currentRole}
                   currentSchoolId={currentSchoolId ?? null}
