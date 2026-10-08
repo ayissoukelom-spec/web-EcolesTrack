@@ -711,6 +711,21 @@ export default function AbsenceView({
     return true;
   });
 
+  const sortedFilteredAbsences = [...filteredAbsences].sort((left, right) => {
+    const dateOrder = String(right.date).localeCompare(String(left.date));
+    if (dateOrder !== 0) return dateOrder;
+
+    const leftStartTime = left.kind === 'late' ? left.arrivalTime : left.startTime || '';
+    const rightStartTime = right.kind === 'late' ? right.arrivalTime : right.startTime || '';
+    const startTimeOrder = rightStartTime.localeCompare(leftStartTime);
+    if (startTimeOrder !== 0) return startTimeOrder;
+
+    const idOrder = Number(right.id) - Number(left.id);
+    if (idOrder !== 0) return idOrder;
+
+    return left.kind.localeCompare(right.kind);
+  });
+
   return (
     <div className="space-y-6" id="absence-view">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -1388,7 +1403,7 @@ export default function AbsenceView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAbsences.map((abs) => (
+              {sortedFilteredAbsences.map((abs) => (
                 <tr key={`${abs.kind}-${abs.id}`} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-6 py-4 font-bold text-slate-800">{abs.studentName}</td>
                   <td className="px-6 py-4 text-slate-500 font-semibold">{abs.className}</td>

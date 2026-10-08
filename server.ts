@@ -8447,6 +8447,12 @@ export async function createApp() {
         }
       }
 
+      query = query.orderBy(
+        desc(absences.date),
+        sql`CASE WHEN ${absences.startTime} IS NULL THEN 1 ELSE 0 END`,
+        desc(absences.startTime),
+        desc(absences.id),
+      ) as any;
       let list = await query;
       if (actor.role === 'teacher') {
         const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
