@@ -320,12 +320,14 @@ export async function ensureSchoolsTableSchema() {
       academic_year_id INTEGER NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
       exam_type TEXT NOT NULL CHECK (exam_type IN ('CEPD', 'BEPC', 'BAC_I', 'BAC_II')),
       result_status TEXT NOT NULL CHECK (result_status IN ('ADMITTED', 'NOT_ADMITTED', 'ABSENT')),
+      mention TEXT,
       exam_session TEXT,
       recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMP NOT NULL DEFAULT now(),
       updated_at TIMESTAMP NOT NULL DEFAULT now(),
       CONSTRAINT exam_results_student_year_type_unique UNIQUE (student_id, academic_year_id, exam_type)
     );`);
+    await db.execute(sql`ALTER TABLE exam_results ADD COLUMN IF NOT EXISTS mention TEXT;`);
   } catch (err: any) {
     console.error('Failed to ensure schools table schema (students_creation_locked) exists:', err?.message || err);
     throw err;

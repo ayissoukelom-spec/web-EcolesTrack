@@ -1,0 +1,2 @@
+ALTER TABLE exam_results
+  ADD COLUMN IF NOT EXISTS mention TEXT;

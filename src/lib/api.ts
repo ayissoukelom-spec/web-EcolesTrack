@@ -1,5 +1,6 @@
 import type { BulletinDetail, BulletinListFilters, BulletinListResponse } from '../types.ts';
 import type { ExamResultStatus, ExamType } from './examDecision.ts';
+import type { ExamMention } from './examMention.ts';
 
 export interface ClassExamConfiguration {
   id: number;
@@ -16,6 +17,7 @@ export interface ExamResultRow {
   academicYearId: number;
   examType: ExamType;
   resultStatus: ExamResultStatus;
+  mention?: ExamMention | null;
   examSession?: string | null;
 }
 
@@ -609,7 +611,7 @@ export async function deleteExamResult(id: number): Promise<{ success: boolean }
   return apiFetch(`/api/exam-results/${id}`, { method: 'DELETE' });
 }
 
-export async function saveExamResultsBatch(payload: { classId: number; schoolId?: number | null; academicYearId: number; examType: ExamType; results: Array<{ studentId: number; resultStatus: ExamResultStatus; examSession?: string | null }> }): Promise<ExamResultRow[]> {
+export async function saveExamResultsBatch(payload: { classId: number; schoolId?: number | null; academicYearId: number; examType: ExamType; results: Array<{ studentId: number; resultStatus: ExamResultStatus; mention?: ExamMention | null; examSession?: string | null }> }): Promise<ExamResultRow[]> {
   return apiFetch('/api/exam-results/batch', { method: 'PUT', body: JSON.stringify(payload) });
 }
 

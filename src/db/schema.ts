@@ -397,6 +397,7 @@ export const examResults = pgTable('exam_results', {
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   examType: text('exam_type').notNull(),
   resultStatus: text('result_status').notNull(),
+  mention: text('mention'),
   examSession: text('exam_session'),
   recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),

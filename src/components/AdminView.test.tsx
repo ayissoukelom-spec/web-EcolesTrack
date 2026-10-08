@@ -2273,4 +2273,87 @@ describe('AdminView create-user teacher form', () => {
     expect(studentRows().some((text) => text.includes('Alice') && text.includes('CM1'))).toBe(true);
     expect(studentRows().some((text) => text.includes('Bob'))).toBe(false);
   });
+
+  it('saves and reloads an exam mention only while the student is admitted', async () => {
+    let savedResult: { resultStatus: string; mention: string | null } = {
+      resultStatus: 'ADMITTED',
+      mention: 'Bien',
+    };
+    const batchRequests: Array<{ results: Array<{ resultStatus: string; mention: string | null }> }> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/class-exam-configurations')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes('/api/exam-results/batch') && init?.method === 'PUT') {
+        const payload = JSON.parse(String(init.body));
+        batchRequests.push(payload);
+        savedResult = payload.results[0];
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes('/api/exam-results?')) {
+        return new Response(JSON.stringify([{
+          id: 101,
+          firstName: 'Alice',
+          lastName: 'Dupont',
+          result: { id: 501, ...savedResult },
+        }]), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[{ id: 1, name: '2025-2026', isActive: true, schoolId: 1 }]}
+          classesList={[{ id: 10, name: '3ème A', schoolId: 1, academicYearId: 1 }]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Classes' }));
+      fireEvent.change(screen.getByRole('combobox', { name: 'Année scolaire de l’examen' }), { target: { value: '1' } });
+      fireEvent.change(screen.getByRole('combobox', { name: 'Classe d’examen' }), { target: { value: '10' } });
+
+      const mentionSelect = await screen.findByRole('combobox', { name: 'Mention de Alice Dupont' }) as HTMLSelectElement;
+      expect(mentionSelect.value).toBe('Bien');
+      expect(within(mentionSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
+        'Mention (facultatif)',
+        'Passable',
+        'Assez bien',
+        'Bien',
+        'Très bien',
+        'Excellent',
+      ]);
+
+      fireEvent.change(mentionSelect, { target: { value: 'Excellent' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Sauvegarder les résultats' }));
+      await waitFor(() => expect(batchRequests).toHaveLength(1));
+      expect(batchRequests[0].results[0]).toMatchObject({ resultStatus: 'ADMITTED', mention: 'Excellent' });
+      const refreshedMentionSelect = await screen.findByRole('combobox', { name: 'Mention de Alice Dupont' }) as HTMLSelectElement;
+      await waitFor(() => expect(refreshedMentionSelect.value).toBe('Excellent'));
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Résultat de Alice Dupont' }), { target: { value: 'NOT_ADMITTED' } });
+      expect(screen.queryByRole('combobox', { name: 'Mention de Alice Dupont' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Sauvegarder les résultats' }));
+      await waitFor(() => expect(batchRequests).toHaveLength(2));
+      expect(batchRequests[1].results[0]).toMatchObject({ resultStatus: 'NOT_ADMITTED', mention: null });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

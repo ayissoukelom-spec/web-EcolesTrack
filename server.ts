@@ -107,6 +107,7 @@ import { filterAvailableSchoolTerms, getPeriodTypeShortName, getSchoolPeriodType
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
 import { isExamResultStatus, isExamType } from './src/lib/examDecision.ts';
+import { isExamMention } from './src/lib/examMention.ts';
 import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfiguration.ts';
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
@@ -4899,9 +4900,12 @@ export async function createApp() {
       for (const entry of entries) {
         const studentId = parsePositiveInteger(entry.studentId);
         if (studentId == null || !isExamResultStatus(entry.resultStatus)) return res.status(400).json({ error: 'Invalid studentId or resultStatus' });
-        const [row] = await db.insert(examResults).values({ studentId, academicYearId, examType, resultStatus: entry.resultStatus, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() }).onConflictDoUpdate({
+        const mention = entry.mention == null || entry.mention === '' ? null : entry.mention;
+        if (mention != null && !isExamMention(mention)) return res.status(400).json({ error: 'Invalid exam mention' });
+        const applicableMention = entry.resultStatus === 'ADMITTED' ? mention : null;
+        const [row] = await db.insert(examResults).values({ studentId, academicYearId, examType, resultStatus: entry.resultStatus, mention: applicableMention, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() }).onConflictDoUpdate({
           target: [examResults.studentId, examResults.academicYearId, examResults.examType],
-          set: { resultStatus: entry.resultStatus, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() },
+          set: { resultStatus: entry.resultStatus, mention: applicableMention, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() },
         }).returning();
         saved.push(row);
       }

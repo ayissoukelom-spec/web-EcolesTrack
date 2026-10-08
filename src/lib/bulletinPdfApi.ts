@@ -204,6 +204,7 @@ export interface BulletinPdfData {
   annualRank?: number | null;
   promotionThreshold?: number | null;
   promotionDecision?: string | null;
+  examMention?: string | null;
   mention: string | null;
   appreciation: string | null;
   absences: number;
@@ -1237,7 +1238,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       ? examConfiguration.examType
       : null;
     const [examResult] = examType
-      ? await db.select({ resultStatus: examResults.resultStatus })
+      ? await db.select({ resultStatus: examResults.resultStatus, mention: examResults.mention })
         .from(examResults)
         .where(and(
           eq(examResults.studentId, header.studentId),
@@ -1401,6 +1402,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       annualRank: annualResults.annualRank,
       promotionThreshold: header.promotionThreshold == null ? null : Number(header.promotionThreshold),
       promotionDecision,
+      examMention: examResult?.resultStatus === 'ADMITTED' ? examResult.mention : null,
       mention: header.mention,
       appreciation: header.appreciation,
       absences: absencesCount,
@@ -2700,6 +2702,11 @@ export const createBulletinPdfDocument = async (
         thickness: 1,
       });
       decisionClassBottomY = decisionResultY;
+      if (data.examMention && /^admis\b/i.test(data.promotionDecision)) {
+        const examMentionY = decisionResultY - previousDecisionTextHeight - 5;
+        drawText(page, `Mention : ${data.examMention}`, decisionX, examMentionY, 9, text, fontBold);
+        decisionClassBottomY = examMentionY;
+      }
     }
   }
 

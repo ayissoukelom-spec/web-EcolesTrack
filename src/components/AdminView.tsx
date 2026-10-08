@@ -40,6 +40,7 @@ import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImp
 import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import { buildTemporaryCredentialsWorkbook, mapTemporaryCredentialAccounts } from '../lib/temporaryCredentialsWorkbook';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
+import { EXAM_MENTIONS, type ExamMention } from '../lib/examMention';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -714,6 +715,8 @@ export default function AdminView({
   const [examStudents, setExamStudents] = useState<any[]>([]);
   const [examResultStatuses, setExamResultStatuses] = useState<Record<number, ExamResultStatus | ''>>({});
   const [examInitialResultStatuses, setExamInitialResultStatuses] = useState<Record<number, ExamResultStatus | ''>>({});
+  const [examResultMentions, setExamResultMentions] = useState<Record<number, ExamMention | ''>>({});
+  const [examInitialResultMentions, setExamInitialResultMentions] = useState<Record<number, ExamMention | ''>>({});
   const [examNotice, setExamNotice] = useState<string | null>(null);
   const [examSaving, setExamSaving] = useState(false);
   const [teacherForm, setTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], teachingAssignments: [] as TeachingAssignmentDraft[], gender: '' });
@@ -820,18 +823,29 @@ export default function AdminView({
       setExamStudents([]);
       setExamResultStatuses({});
       setExamInitialResultStatuses({});
+      setExamResultMentions({});
+      setExamInitialResultMentions({});
       return;
     }
     fetchExamResults({ classId, academicYearId: yearId, examType, schoolId: examSchoolId ?? undefined })
       .then((rows) => {
         setExamStudents(Array.isArray(rows) ? rows : []);
         const statuses = Object.fromEntries((Array.isArray(rows) ? rows : []).map((row: any) => [row.id, row.result?.resultStatus ?? '']));
+        const mentions = Object.fromEntries((Array.isArray(rows) ? rows : []).map((row: any) => [
+          row.id,
+          row.result?.resultStatus === 'ADMITTED' ? row.result?.mention ?? '' : '',
+        ]));
         setExamResultStatuses(statuses);
         setExamInitialResultStatuses(statuses);
+        setExamResultMentions(mentions);
+        setExamInitialResultMentions(mentions);
       })
       .catch((error: any) => {
         setExamStudents([]);
         setExamResultStatuses({});
+        setExamInitialResultStatuses({});
+        setExamResultMentions({});
+        setExamInitialResultMentions({});
         setExamNotice(error?.message || 'Impossible de charger les élèves et leurs résultats.');
       });
   }, [examClassId, examAcademicYearId, examType, examSchoolId, userRole]);
@@ -847,8 +861,19 @@ export default function AdminView({
     setExamNotice(null);
     try {
       const pendingResults = examStudents
-        .filter((student) => examResultStatuses[student.id] && examResultStatuses[student.id] !== examInitialResultStatuses[student.id])
-        .map((student) => ({ studentId: student.id, resultStatus: examResultStatuses[student.id] as ExamResultStatus }));
+        .filter((student) => {
+          const resultStatus = examResultStatuses[student.id];
+          const mention = resultStatus === 'ADMITTED' ? examResultMentions[student.id] || '' : '';
+          return resultStatus && (
+            resultStatus !== examInitialResultStatuses[student.id]
+            || mention !== examInitialResultMentions[student.id]
+          );
+        })
+        .map((student) => ({
+          studentId: student.id,
+          resultStatus: examResultStatuses[student.id] as ExamResultStatus,
+          mention: examResultStatuses[student.id] === 'ADMITTED' ? examResultMentions[student.id] || null : null,
+        }));
       const resultsToDelete = examStudents.filter((student) => !examResultStatuses[student.id] && examInitialResultStatuses[student.id] && student.result?.id);
       if (pendingResults.length === 0 && resultsToDelete.length === 0) {
         setExamNotice('Aucune modification à enregistrer.');
@@ -867,8 +892,14 @@ export default function AdminView({
       const refreshedRows = await fetchExamResults({ classId: Number(examClassId), schoolId: examSchoolId ?? undefined, academicYearId: Number(examAcademicYearId), examType });
       setExamStudents(refreshedRows);
       const refreshedStatuses = Object.fromEntries(refreshedRows.map((row: any) => [row.id, row.result?.resultStatus ?? '']));
+      const refreshedMentions = Object.fromEntries(refreshedRows.map((row: any) => [
+        row.id,
+        row.result?.resultStatus === 'ADMITTED' ? row.result?.mention ?? '' : '',
+      ]));
       setExamResultStatuses(refreshedStatuses);
       setExamInitialResultStatuses(refreshedStatuses);
+      setExamResultMentions(refreshedMentions);
+      setExamInitialResultMentions(refreshedMentions);
       setExamNotice('Résultats enregistrés avec succès.');
     } catch (error: any) {
       setExamNotice(`Impossible d'enregistrer les résultats : ${error?.message || 'erreur inconnue'}`);
@@ -5439,11 +5470,11 @@ export default function AdminView({
                 <h3 className="text-sm font-semibold text-slate-700">Classes d examen et résultats officiels</h3>
                 <p className="mt-1 text-xs text-slate-500">La configuration est explicite par école, classe et année. Aucun résultat absent n est interprété comme un échec.</p>
                 <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                  <select value={examAcademicYearId} onChange={(event) => { setExamAcademicYearId(event.target.value); setExamClassId(''); setExamNotice(null); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <select aria-label="Année scolaire de l’examen" value={examAcademicYearId} onChange={(event) => { setExamAcademicYearId(event.target.value); setExamClassId(''); setExamNotice(null); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                     <option value="">Année scolaire</option>
                     {yearsList.map((year) => <option key={year.id} value={String(year.id)}>{year.name}</option>)}
                   </select>
-                  <select value={examClassId} onChange={(event) => {
+                  <select aria-label="Classe d’examen" value={examClassId} onChange={(event) => {
                     const nextClassId = event.target.value;
                     const selectedConfiguration = examConfigurations.find((configuration: any) => Number(configuration.classId) === Number(nextClassId));
                     setExamClassId(nextClassId);
@@ -5490,12 +5521,41 @@ export default function AdminView({
                   </div>
                   {examStudents.length === 0 ? <p className="text-xs text-slate-500">Aucun élève trouvé pour cette classe.</p> : examStudents.map((student: any) => <div key={student.id} className="flex items-center justify-between gap-3 border-t border-slate-100 py-2 text-sm">
                     <span>{student.firstName} {student.lastName}</span>
-                    <select value={examResultStatuses[student.id] || ''} onChange={(event) => setExamResultStatuses((previous) => ({ ...previous, [student.id]: event.target.value as ExamResultStatus | '' }))} className="rounded border border-slate-200 px-2 py-1 text-xs">
-                      <option value="">Résultat non disponible</option>
-                      <option value="ADMITTED">ADMIS</option>
-                      <option value="NOT_ADMITTED">NON ADMIS</option>
-                      <option value="ABSENT">ABSENT</option>
-                    </select>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <select
+                        aria-label={`Résultat de ${student.firstName} ${student.lastName}`}
+                        value={examResultStatuses[student.id] || ''}
+                        onChange={(event) => {
+                          const resultStatus = event.target.value as ExamResultStatus | '';
+                          setExamResultStatuses((previous) => ({ ...previous, [student.id]: resultStatus }));
+                          if (resultStatus !== 'ADMITTED') {
+                            setExamResultMentions((previous) => ({ ...previous, [student.id]: '' }));
+                          }
+                        }}
+                        className="rounded border border-slate-200 px-2 py-1 text-xs"
+                      >
+                        <option value="">Résultat non disponible</option>
+                        <option value="ADMITTED">ADMIS</option>
+                        <option value="NOT_ADMITTED">NON ADMIS</option>
+                        <option value="ABSENT">ABSENT</option>
+                      </select>
+                      {examResultStatuses[student.id] === 'ADMITTED' && (
+                        <select
+                          aria-label={`Mention de ${student.firstName} ${student.lastName}`}
+                          value={examResultMentions[student.id] || ''}
+                          onChange={(event) => setExamResultMentions((previous) => ({
+                            ...previous,
+                            [student.id]: event.target.value as ExamMention | '',
+                          }))}
+                          className="rounded border border-slate-200 px-2 py-1 text-xs"
+                        >
+                          <option value="">Mention (facultatif)</option>
+                          {EXAM_MENTIONS.map((mention) => (
+                            <option key={mention} value={mention}>{mention}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
                   </div>)}
                 </div>}
                 {examNotice && <p className="mt-2 text-xs text-slate-600">{examNotice}</p>}

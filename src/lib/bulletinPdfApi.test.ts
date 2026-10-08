@@ -422,6 +422,31 @@ describe('décision de fin d année', () => {
     expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('ADMIS'));
   });
 
+  it('affiche la mention de l’examen sous la décision d’admission', async () => {
+    const text = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Trimestre 3',
+      promotionDecision: 'Admis au BEPC',
+      examMention: 'Très bien',
+    })));
+
+    expect(text).toContain('ADMIS');
+    expect(text).toContain('Mention : Tres bien');
+  });
+
+  it('n’affiche pas de mention d’examen pour un élève non admis', async () => {
+    const text = normalizePdfTextForAssertion(extractPdfText(await createBulletinPdfDocument({
+      ...snapshotData,
+      termName: 'Trimestre 3',
+      promotionDecision: 'Non admis au BEPC',
+      examMention: 'Bien',
+    })));
+
+    expect(text).toContain('NON');
+    expect(text).toContain('ADMIS');
+    expect(text).not.toContain('Mention : Bien');
+  });
+
   it('prépare le libellé d examen avant son rendu PDF', () => {
     expect(formatPromotionDecisionForPdf('Admis au BEPC')).toBe('ADMIS AU BEPC');
     expect(formatPromotionDecisionForPdf('Non admis au BAC II')).toBe('NON ADMIS AU BAC II');
