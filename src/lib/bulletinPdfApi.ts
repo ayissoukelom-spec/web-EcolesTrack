@@ -2703,9 +2703,7 @@ export const createBulletinPdfDocument = async (
       });
       decisionClassBottomY = decisionResultY;
       if (data.examMention && /^admis\b/i.test(data.promotionDecision)) {
-        const examMentionY = decisionResultY - previousDecisionTextHeight - 5;
-        drawText(page, `Mention : ${data.examMention}`, decisionX, examMentionY, 9, text, fontBold);
-        decisionClassBottomY = examMentionY;
+        decisionClassBottomY = decisionResultY - previousDecisionTextHeight - 5;
       }
     }
   }
@@ -2727,13 +2725,28 @@ export const createBulletinPdfDocument = async (
     const annualAverageText = `Moy. Ann = ${data.annualAverage == null ? '-' : formatPdfDisplayNumberFixed(data.annualAverage).replace('.', ',')}`;
     const annualRankText = `Rang : ${data.annualRank == null ? '-' : formatGeneralRankLabel(data.annualRank)}`;
     const annualFontSize = 10;
+    const annualExamMention = data.examMention && /^admis\b/i.test(data.promotionDecision ?? '')
+      ? `Mention : ${data.examMention}`
+      : null;
     const annualAverageWidth = fontBold.widthOfTextAtSize(annualAverageText, annualFontSize);
     const annualRankWidth = fontBold.widthOfTextAtSize(annualRankText, annualFontSize);
     const annualRankGap = 6;
     const annualRankX = summaryLeftX + annualAverageWidth + annualRankGap;
+    const annualExamMentionGap = 18;
+    const annualExamMentionX = annualRankX + annualRankWidth + annualExamMentionGap;
+    const annualExamMentionFontSize = annualExamMention
+      ? Math.min(
+        annualFontSize,
+        annualFontSize * Math.max(0, page.getWidth() - margin - 4 - annualExamMentionX)
+          / Math.max(1, fontBold.widthOfTextAtSize(annualExamMention, annualFontSize)),
+      )
+      : annualFontSize;
+    const annualExamMentionWidth = annualExamMention
+      ? fontBold.widthOfTextAtSize(annualExamMention, annualExamMentionFontSize)
+      : 0;
     const annualTextBounds = {
       left: summaryLeftX,
-      right: annualRankX + annualRankWidth,
+      right: annualExamMention ? annualExamMentionX + annualExamMentionWidth : annualRankX + annualRankWidth,
       top: annualY + fontBold.heightAtSize(annualFontSize, { descender: false }),
       bottom: annualY,
     };
@@ -2757,6 +2770,9 @@ export const createBulletinPdfDocument = async (
     );
     drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
     drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
+    if (annualExamMention) {
+      drawText(page, annualExamMention, annualExamMentionX, annualY, annualExamMentionFontSize, text, fontBold);
+    }
   }
 
   const decisionProfessorText = 'DECISION DU CONSEIL DES PROFESSEURS';
