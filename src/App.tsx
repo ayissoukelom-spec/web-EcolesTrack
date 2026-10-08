@@ -46,6 +46,7 @@ import MobileParentView from './components/MobileParentView.tsx';
 import ParentNotesView from './components/ParentNotesView.tsx';
 import ArchiveView from './components/ArchiveView.tsx';
 import BulletinsView from './components/BulletinsView.tsx';
+import AccountingView from './components/AccountingView.tsx';
 import ClassResultsView from './components/ClassResultsView.tsx';
 import ClassSubjectPivotView from './components/ClassSubjectPivotView.tsx';
 import GlobalErrorToast from './components/GlobalErrorToast.tsx';
@@ -66,7 +67,8 @@ import {
   Table2,
   LogOut,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Wallet,
 } from 'lucide-react';
 
 export default function App() {
@@ -1110,7 +1112,7 @@ export default function App() {
               <p className="text-xs text-slate-400">Cliquez pour basculer d'un module à l'autre</p>
             </div>
 
-            <nav className="space-y-1">
+            <nav className="space-y-1" aria-label="Navigation principale">
               {/* Tab 1: Dashboard */}
               <button
                 onClick={() => setActiveTab('tableau-de-bord')}
@@ -1138,6 +1140,21 @@ export default function App() {
                 <Building2 className="h-4.5 w-4.5" />
                 <span>Administration</span>
               </button>}
+
+              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+                <button
+                  onClick={() => setActiveTab('accounting')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'accounting'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-accounting"
+                >
+                  <Wallet className="h-4.5 w-4.5" />
+                  <span>Comptabilité</span>
+                </button>
+              )}
 
               {currentRole === 'teacher' && homeroomClassesList.length > 0 && (
                 <button
@@ -1605,6 +1622,17 @@ export default function App() {
               )}
 
               {activeTab === 'bulletins' && currentRole !== 'super_admin' && currentRole !== 'school_admin' && null}
+
+              {activeTab === 'accounting' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+                <AccountingView
+                  userRole={currentRole}
+                  currentSchoolId={currentSchoolId ?? null}
+                  schools={schoolsList}
+                  years={yearsList}
+                  classes={classesList}
+                  students={studentsList}
+                />
+              )}
 
               {activeTab === 'class-results' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
                 <ClassResultsView

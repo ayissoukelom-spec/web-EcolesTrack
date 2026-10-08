@@ -423,6 +423,9 @@ function createMockDb() {
       if (drizzleName === 'teacher_class_subjects') return 'teacherClassSubjects';
       if (drizzleName === 'evaluations') return 'evaluations';
       if (drizzleName === 'absence_declarations') return 'absenceDeclarations';
+      if (drizzleName === 'financial_obligations') return 'financialObligations';
+      if (drizzleName === 'accounting_tariffs') return 'accountingTariffs';
+      if (drizzleName === 'accounting_fee_definitions') return 'accountingFeeDefinitions';
       if (drizzleName === 'subjects') return 'subjects';
       if (drizzleName === 'subject_types') return 'subjectTypes';
       if (drizzleName === 'school_subjects') return 'schoolSubjects';
@@ -509,6 +512,9 @@ function createMockDb() {
       : tableName === 'absences' ? FIXTURES.absences
       : tableName === 'lateArrivals' ? FIXTURES.lateArrivals
       : tableName === 'absenceDeclarations' ? FIXTURES.absenceDeclarations
+      : tableName === 'financialObligations' ? []
+      : tableName === 'accountingTariffs' ? []
+      : tableName === 'accountingFeeDefinitions' ? []
       : tableName === 'evaluations' ? FIXTURES.evaluations
       : tableName === 'grades' ? FIXTURES.grades
       : tableName === 'examResults' ? FIXTURES.examResults
