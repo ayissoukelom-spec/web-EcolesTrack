@@ -27,11 +27,15 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
     schoolPhone: null,
     cycleCode: classSummary.id === 30 ? 'lycee' : 'college',
   },
-  students: [
-    { id: 1, firstName: 'Jean', lastName: 'Dupont', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
-    { id: 2, firstName: 'Alice', lastName: 'Martin', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
-    { id: 3, firstName: 'Paul', lastName: 'Koffi', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
-  ],
+  students: classSummary.id === 20
+    ? [
+      { id: 4, firstName: 'Moussa', lastName: 'Traore', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
+    ]
+    : [
+      { id: 1, firstName: 'Jean', lastName: 'Dupont', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
+      { id: 2, firstName: 'Alice', lastName: 'Martin', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
+      { id: 3, firstName: 'Paul', lastName: 'Koffi', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
+    ],
   evaluations: classSummary.id === 10
     ? [
       { id: 101, termId: 1, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, subject: 'Mathématiques', title: 'Devoir de maths T1', type: 'devoir', date: '2025-10-01', teacherName: 'Prof A' },
@@ -74,7 +78,26 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
       { id: 502, studentId: 2, studentName: 'Martin Alice', date: '2025-10-09', period: 'Après-midi', lateMinutes: 8, reason: 'Rendez-vous', subjectName: 'Français' },
     ]
     : [],
-  bulletins: [],
+  bulletins: classSummary.id === 10
+    ? [
+      {
+        id: 601, studentId: 1, studentName: 'Dupont Jean', termName: 'Trimestre 1',
+        average: '15.5', rank: 1, appreciation: 'Très bon travail.',
+        lines: [{ id: 611, subjectName: 'Mathématiques', average: '16', teacherComment: 'Excellent' }],
+      },
+      {
+        id: 602, studentId: 2, studentName: 'Martin Alice', termName: 'Trimestre 1',
+        average: '13.5', rank: 2, appreciation: 'Bon travail.',
+        lines: [{ id: 612, subjectName: 'Français', average: '14', teacherComment: 'Continue ainsi' }],
+      },
+    ]
+    : classSummary.id === 20
+      ? [{
+        id: 603, studentId: 4, studentName: 'Traore Moussa', termName: 'Trimestre 1',
+        average: '12', rank: 1, appreciation: 'Encouragements.',
+        lines: [{ id: 613, subjectName: 'Histoire', average: '12', teacherComment: null }],
+      }]
+      : [],
   examResults: [],
 });
 
@@ -107,6 +130,72 @@ describe('HomeroomView', () => {
 
     expect(await screen.findByText('5ème B')).toBeTruthy();
     expect(fetchHomeroomClass).toHaveBeenLastCalledWith(20);
+  });
+
+  it('filters all bulletin information by the selected class student', async () => {
+    fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
+    render(<HomeroomView classes={[homeroomClasses[0]]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Bulletins' }));
+    const studentFilter = screen.getByRole('combobox', { name: 'Élève' });
+    expect(studentFilter).toHaveValue('');
+    expect(Array.from(studentFilter.querySelectorAll('option'), (option) => option.textContent)).toEqual([
+      'Tous les élèves', 'Dupont Jean', 'Martin Alice', 'Koffi Paul',
+    ]);
+    let bulletinArticles = screen.getAllByRole('article');
+    expect(bulletinArticles).toHaveLength(2);
+    expect(bulletinArticles[0].textContent).toContain('Moyenne 15.5');
+    expect(bulletinArticles[1].textContent).toContain('Moyenne 13.5');
+    expect(screen.getByText('Mathématiques: 16 · Excellent')).toBeTruthy();
+    expect(screen.getByText('Français: 14 · Continue ainsi')).toBeTruthy();
+
+    fireEvent.change(studentFilter, { target: { value: '1' } });
+    bulletinArticles = screen.getAllByRole('article');
+    expect(bulletinArticles).toHaveLength(1);
+    expect(bulletinArticles[0].textContent).toContain('Moyenne 15.5');
+    expect(screen.getByText('Mathématiques: 16 · Excellent')).toBeTruthy();
+    expect(screen.queryByText('Français: 14 · Continue ainsi')).toBeNull();
+
+    fireEvent.change(studentFilter, { target: { value: '' } });
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+  });
+
+  it('resets the bulletin student filter and options when another homeroom class is selected', async () => {
+    fetchHomeroomClass.mockImplementation(async (classId: number) =>
+      detailFor(homeroomClasses.find((item) => item.id === classId)!));
+    render(<HomeroomView classes={homeroomClasses} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Bulletins' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Élève' }), { target: { value: '1' } });
+    expect(screen.queryByText('13.5')).toBeNull();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Classe' }), { target: { value: '20' } });
+    expect(await screen.findByText('Encouragements.')).toBeTruthy();
+
+    const studentFilter = screen.getByRole('combobox', { name: 'Élève' });
+    expect(studentFilter).toHaveValue('');
+    expect(Array.from(studentFilter.querySelectorAll('option'), (option) => option.textContent)).toEqual([
+      'Tous les élèves', 'Traore Moussa',
+    ]);
+    const bulletinArticles = screen.getAllByRole('article');
+    expect(bulletinArticles).toHaveLength(1);
+    expect(bulletinArticles[0].textContent).toContain('Moyenne 12');
+    expect(bulletinArticles[0].textContent).not.toContain('Moyenne 15.5');
+  });
+
+  it('keeps the bulletin student selection isolated from other homeroom sections', async () => {
+    fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
+    render(<HomeroomView classes={[homeroomClasses[0]]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Bulletins' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Élève' }), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Élèves et responsables' }));
+
+    expect(screen.getByText('Martin Alice')).toBeTruthy();
+    expect(screen.getByText('Koffi Paul')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Évaluations et notes' }));
+    expect(displayedEvaluationRows()).toHaveLength(4);
+    expect(displayedGradeRows()).toHaveLength(5);
   });
 
   it('shows combined absence and late-arrival totals for every student', async () => {

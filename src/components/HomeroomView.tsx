@@ -20,6 +20,7 @@ export default function HomeroomView({ classes }: Props) {
   const [section, setSection] = useState<HomeroomSection>('students');
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedBulletinStudentId, setSelectedBulletinStudentId] = useState('');
   const [selectedPeriod, setSelectedPeriod] = useState('');
   const [selectedEvaluationType, setSelectedEvaluationType] = useState('');
   const [loading, setLoading] = useState(false);
@@ -28,6 +29,7 @@ export default function HomeroomView({ classes }: Props) {
   useEffect(() => {
     setSelectedSubject('');
     setSelectedStudentId('');
+    setSelectedBulletinStudentId('');
     setSelectedPeriod('');
     setSelectedEvaluationType('');
   }, [selectedClassId]);
@@ -94,6 +96,9 @@ export default function HomeroomView({ classes }: Props) {
   const filteredGrades = (detail?.grades ?? []).filter((grade) =>
     filteredEvaluationIds.has(grade.evaluationId)
       && (!selectedStudentId || grade.studentId === Number(selectedStudentId)),
+  );
+  const filteredBulletins = (detail?.bulletins ?? []).filter((bulletin) =>
+    !selectedBulletinStudentId || bulletin.studentId === Number(selectedBulletinStudentId),
   );
   const absenceCounts = new Map<number, number>();
   for (const absence of detail?.absences ?? []) {
@@ -272,7 +277,20 @@ export default function HomeroomView({ classes }: Props) {
 
           {section === 'bulletins' && (
             <div className="space-y-3">
-              {detail.bulletins.map((bulletin: any) => (
+              <label className="block max-w-sm text-sm font-medium text-slate-700">
+                Élève
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                  value={selectedBulletinStudentId}
+                  onChange={(event) => setSelectedBulletinStudentId(event.target.value)}
+                >
+                  <option value="">Tous les élèves</option>
+                  {detail.students.map((student) => (
+                    <option key={student.id} value={student.id}>{student.lastName} {student.firstName}</option>
+                  ))}
+                </select>
+              </label>
+              {filteredBulletins.map((bulletin: any) => (
                 <article key={bulletin.id} className="rounded-lg border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="font-semibold text-slate-900">{bulletin.studentName}</h3>
@@ -284,7 +302,7 @@ export default function HomeroomView({ classes }: Props) {
                   {bulletin.appreciation && <p className="mt-2 text-sm text-slate-600">{bulletin.appreciation}</p>}
                 </article>
               ))}
-              {detail.bulletins.length === 0 && <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">Aucun bulletin enregistré.</p>}
+              {filteredBulletins.length === 0 && <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">Aucun bulletin enregistré.</p>}
             </div>
           )}
 
