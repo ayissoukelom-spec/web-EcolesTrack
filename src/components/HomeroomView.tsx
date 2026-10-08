@@ -17,8 +17,17 @@ export default function HomeroomView({ classes }: Props) {
   const [selectedClassId, setSelectedClassId] = useState<number | null>(classes[0]?.id ?? null);
   const [detail, setDetail] = useState<HomeroomClassDetail | null>(null);
   const [section, setSection] = useState<HomeroomSection>('students');
+  const [selectedSubject, setSelectedSubject] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedPeriod, setSelectedPeriod] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedSubject('');
+    setSelectedStudentId('');
+    setSelectedPeriod('');
+  }, [selectedClassId]);
 
   useEffect(() => {
     if (!classes.some((item) => item.id === selectedClassId)) {
@@ -53,6 +62,35 @@ export default function HomeroomView({ classes }: Props) {
       cancelled = true;
     };
   }, [selectedClassId]);
+
+  const availableSubjects = Array.from(new Set(
+    (detail?.evaluations ?? [])
+      .map((evaluation) => evaluation.subject)
+      .filter((subject): subject is string => typeof subject === 'string' && subject.trim().length > 0),
+  )).sort((left, right) => left.localeCompare(right, 'fr'));
+  const periodType = detail?.class.cycleCode === 'college'
+    ? 'trimester'
+    : detail?.class.cycleCode === 'lycee'
+      ? 'semester'
+      : null;
+  const periodCount = periodType === 'trimester' ? 3 : periodType === 'semester' ? 2 : 0;
+  const periodOptions = Array.from({ length: periodCount }, (_, index) => ({
+    value: `${periodType}:${index + 1}`,
+    label: `${index === 0 ? '1er' : `${index + 1}e`} ${periodType === 'trimester' ? 'trimestre' : 'semestre'}`,
+  }));
+  const filteredEvaluations = (detail?.evaluations ?? []).filter((evaluation) => {
+    if (selectedSubject && evaluation.subject !== selectedSubject) return false;
+    if (selectedPeriod) {
+      const [selectedPeriodType, selectedOrderIndex] = selectedPeriod.split(':');
+      if (evaluation.periodType !== selectedPeriodType || evaluation.orderIndex !== Number(selectedOrderIndex)) return false;
+    }
+    return true;
+  });
+  const filteredEvaluationIds = new Set(filteredEvaluations.map((evaluation) => evaluation.id));
+  const filteredGrades = (detail?.grades ?? []).filter((grade) =>
+    filteredEvaluationIds.has(grade.evaluationId)
+      && (!selectedStudentId || grade.studentId === Number(selectedStudentId)),
+  );
 
   const sections: Array<{ id: HomeroomSection; label: string }> = [
     { id: 'students', label: 'Élèves et responsables' },
@@ -133,12 +171,49 @@ export default function HomeroomView({ classes }: Props) {
 
           {section === 'evaluations' && (
             <div className="space-y-4">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3">
+                <label className="text-sm font-medium text-slate-700">
+                  Matière
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    value={selectedSubject}
+                    onChange={(event) => setSelectedSubject(event.target.value)}
+                  >
+                    <option value="">Toutes les matières</option>
+                    {availableSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Élève
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    value={selectedStudentId}
+                    onChange={(event) => setSelectedStudentId(event.target.value)}
+                  >
+                    <option value="">Tous les élèves</option>
+                    {(detail?.students ?? []).map((student) => (
+                      <option key={student.id} value={student.id}>{student.lastName} {student.firstName}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Période
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    value={selectedPeriod}
+                    onChange={(event) => setSelectedPeriod(event.target.value)}
+                  >
+                    <option value="">Toutes les périodes</option>
+                    {periodOptions.map((period) => <option key={period.value} value={period.value}>{period.label}</option>)}
+                  </select>
+                </label>
+              </div>
               <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Date</th><th className="p-3">Matière</th><th className="p-3">Évaluation</th><th className="p-3">Enseignant</th></tr></thead>
                   <tbody className="divide-y divide-slate-100">
-                    {detail.evaluations.map((evaluation: any) => <tr key={evaluation.id}><td className="p-3">{formatDate(evaluation.date)}</td><td className="p-3">{evaluation.subject}</td><td className="p-3">{evaluation.title}</td><td className="p-3">{evaluation.teacherName}</td></tr>)}
-                    {detail.evaluations.length === 0 && <tr><td className="p-4 text-slate-500" colSpan={4}>Aucune évaluation.</td></tr>}
+                    {filteredEvaluations.map((evaluation: any) => <tr key={evaluation.id}><td className="p-3">{formatDate(evaluation.date)}</td><td className="p-3">{evaluation.subject}</td><td className="p-3">{evaluation.title}</td><td className="p-3">{evaluation.teacherName}</td></tr>)}
+                    {filteredEvaluations.length === 0 && <tr><td className="p-4 text-slate-500" colSpan={4}>Aucune évaluation.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -146,8 +221,8 @@ export default function HomeroomView({ classes }: Props) {
                 <table className="w-full text-left text-sm">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-3">Élève</th><th className="p-3">Matière</th><th className="p-3">Évaluation</th><th className="p-3">Note</th><th className="p-3">Remarque</th></tr></thead>
                   <tbody className="divide-y divide-slate-100">
-                    {detail.grades.map((grade: any) => <tr key={grade.id}><td className="p-3">{grade.studentName}</td><td className="p-3">{grade.subject}</td><td className="p-3">{grade.evaluationTitle}</td><td className="p-3 font-semibold">{grade.score}</td><td className="p-3">{grade.remarks || '—'}</td></tr>)}
-                    {detail.grades.length === 0 && <tr><td className="p-4 text-slate-500" colSpan={5}>Aucune note enregistrée.</td></tr>}
+                    {filteredGrades.map((grade: any) => <tr key={grade.id}><td className="p-3">{grade.studentName}</td><td className="p-3">{grade.subject}</td><td className="p-3">{grade.evaluationTitle}</td><td className="p-3 font-semibold">{grade.score}</td><td className="p-3">{grade.remarks || '—'}</td></tr>)}
+                    {filteredGrades.length === 0 && <tr><td className="p-4 text-slate-500" colSpan={5}>Aucune note enregistrée.</td></tr>}
                   </tbody>
                 </table>
               </div>

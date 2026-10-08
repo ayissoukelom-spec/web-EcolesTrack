@@ -42,7 +42,7 @@ export interface HomeroomClassSummary {
 }
 
 export interface HomeroomClassDetail {
-  class: HomeroomClassSummary & { schoolAddress: string | null; schoolPhone: string | null };
+  class: HomeroomClassSummary & { schoolAddress: string | null; schoolPhone: string | null; cycleCode: string | null };
   students: Array<{
     id: number; firstName: string; lastName: string; birthDate: string | null; gender: string | null;
     isActive: boolean; withdrawnAt: string | null; studentStatus: string | null;

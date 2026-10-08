@@ -4975,6 +4975,7 @@ export async function createApp() {
         yearName: academicYears.name,
         levelId: classes.levelId,
         levelName: levels.name,
+        cycleCode: cycles.code,
         teacherId: classHomeroomAssignments.teacherId,
         teacherName: users.name,
       })
@@ -4983,6 +4984,7 @@ export async function createApp() {
         .innerJoin(schools, eq(schools.id, classHomeroomAssignments.schoolId))
         .innerJoin(academicYears, eq(academicYears.id, classes.academicYearId))
         .leftJoin(levels, eq(levels.id, classes.levelId))
+        .leftJoin(cycles, eq(cycles.id, levels.cycleId))
         .innerJoin(teachers, eq(teachers.id, classHomeroomAssignments.teacherId))
         .innerJoin(users, eq(users.id, teachers.userId))
         .where(and(
@@ -5031,6 +5033,8 @@ export async function createApp() {
         teacherName: users.name,
         termId: evaluations.termId,
         termName: schoolTerms.name,
+        periodType: schoolTerms.periodType,
+        orderIndex: schoolTerms.orderIndex,
         subjectId: evaluations.subjectId,
         subject: sql<string>`COALESCE(${subjects.name}, ${evaluations.subject})`,
         title: evaluations.title,
