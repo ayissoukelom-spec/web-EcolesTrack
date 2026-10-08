@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchMyHomeroomClass, type HomeroomClassDetail, type HomeroomClassSummary } from '../lib/api.ts';
 
-type HomeroomSection = 'students' | 'evaluations' | 'attendance' | 'bulletins' | 'exams';
+type HomeroomSection = 'students' | 'evaluations' | 'absences' | 'lateArrivals' | 'bulletins' | 'exams';
 
 interface Props {
   classes: HomeroomClassSummary[];
@@ -95,7 +95,8 @@ export default function HomeroomView({ classes }: Props) {
   const sections: Array<{ id: HomeroomSection; label: string }> = [
     { id: 'students', label: 'Élèves et responsables' },
     { id: 'evaluations', label: 'Évaluations et notes' },
-    { id: 'attendance', label: 'Absences et retards' },
+    { id: 'absences', label: 'Absences' },
+    { id: 'lateArrivals', label: 'Retards' },
     { id: 'bulletins', label: 'Bulletins' },
     { id: 'exams', label: 'Résultats officiels' },
   ];
@@ -229,11 +230,12 @@ export default function HomeroomView({ classes }: Props) {
             </div>
           )}
 
-          {section === 'attendance' && (
-            <div className="grid gap-4 xl:grid-cols-2">
-              <ReadOnlyRows title="Absences" emptyLabel="Aucune absence." rows={detail.absences} columns={['date', 'studentName', 'period', 'subjectName']} labels={['Date', 'Élève', 'Période', 'Matière']} />
-              <ReadOnlyRows title="Retards" emptyLabel="Aucun retard." rows={detail.lateArrivals} columns={['date', 'studentName', 'period', 'lateMinutes']} labels={['Date', 'Élève', 'Période', 'Minutes']} />
-            </div>
+          {section === 'absences' && (
+            <ReadOnlyRows title="Absences" emptyLabel="Aucune absence." rows={detail.absences} columns={['date', 'studentName', 'period', 'subjectName']} labels={['Date', 'Élève', 'Période', 'Matière']} />
+          )}
+
+          {section === 'lateArrivals' && (
+            <ReadOnlyRows title="Retards" emptyLabel="Aucun retard." rows={detail.lateArrivals} columns={['date', 'studentName', 'period', 'lateMinutes']} labels={['Date', 'Élève', 'Période', 'Minutes']} />
           )}
 
           {section === 'bulletins' && (

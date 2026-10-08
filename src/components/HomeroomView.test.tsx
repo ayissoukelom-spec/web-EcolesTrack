@@ -58,8 +58,12 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
         { id: 3002, evaluationId: 302, studentId: 2, studentName: 'Martin Alice', subject: 'Français', evaluationTitle: 'Dissertation S2', score: '12' },
       ]
       : [{ id: 2001, evaluationId: 201, studentId: 1, studentName: 'Dupont Jean', subject: 'Histoire', evaluationTitle: 'Devoir histoire', score: '12' }],
-  absences: [],
-  lateArrivals: [],
+  absences: classSummary.id === 10
+    ? [{ id: 401, studentId: 1, studentName: 'Dupont Jean', date: '2025-10-07', period: 'Matin', subjectName: 'Mathématiques' }]
+    : [],
+  lateArrivals: classSummary.id === 10
+    ? [{ id: 501, studentId: 2, studentName: 'Martin Alice', date: '2025-10-08', period: 'Matin', lateMinutes: 12, reason: 'Transport' }]
+    : [],
   bulletins: [],
   examResults: [],
 });
@@ -93,6 +97,33 @@ describe('HomeroomView', () => {
 
     expect(await screen.findByText('5ème B')).toBeTruthy();
     expect(fetchHomeroomClass).toHaveBeenLastCalledWith(20);
+  });
+
+  it('shows absences and late arrivals in separate class sections', async () => {
+    fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
+    render(<HomeroomView classes={[homeroomClasses[0]]} />);
+
+    expect(await screen.findByText('6ème A')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Absences' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retards' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Absences et retards' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Absences' }));
+    expect(screen.queryByText('Aucune absence.')).toBeNull();
+    expect(screen.getByText('Mathématiques')).toBeTruthy();
+    const absenceTable = screen.getByRole('table');
+    expect(absenceTable.textContent).toContain('Dupont Jean');
+    expect(absenceTable.textContent).not.toContain('Martin Alice');
+    expect(absenceTable.textContent).not.toContain('Minutes');
+    expect(absenceTable.textContent).not.toContain('Transport');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retards' }));
+    expect(screen.queryByText('Aucun retard.')).toBeNull();
+    const lateArrivalTable = screen.getByRole('table');
+    expect(lateArrivalTable.textContent).toContain('Martin Alice');
+    expect(lateArrivalTable.textContent).toContain('12');
+    expect(lateArrivalTable.textContent).not.toContain('Dupont Jean');
+    expect(lateArrivalTable.textContent).not.toContain('Mathématiques');
   });
 
   it('filters evaluations and their grades by subjects present in the class evaluations', async () => {
