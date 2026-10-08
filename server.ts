@@ -44,6 +44,7 @@ import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import { registerClassSubjectPivotRoute } from './src/lib/classSubjectPivotApi.ts';
 import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAdminWhatsAppApi.ts';
+import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
 import {
   schools,
   academicYears,
@@ -81,6 +82,12 @@ import {
   notificationAttachments,
   notifications,
   auditEvents,
+  accountingCategories,
+  accountingFeeDefinitions,
+  accountingScheduleTemplates,
+  accountingTariffs,
+  financialObligations,
+  financialPayments,
   schoolTerms,
   levels,
   cycles,
@@ -1278,6 +1285,8 @@ export async function createApp() {
   registerClassRankingRoute(app, { resolveActor });
   registerClassSubjectPivotRoute(app, { resolveActor });
   registerParentSchoolAdminWhatsAppRoute(app, { resolveActor });
+  app.use('/api/accounting', requireAuth);
+  registerAccountingRoutes(app, { resolveActor, isApprovedClassForSchool });
 
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {
@@ -3967,6 +3976,20 @@ export async function createApp() {
         return res.status(404).json({ error: 'École introuvable.' });
       }
 
+      const [financialHistory] = await db.select({ id: financialObligations.id })
+        .from(financialObligations)
+        .where(eq(financialObligations.schoolId, id))
+        .limit(1);
+      const [paymentHistory] = await db.select({ id: financialPayments.id })
+        .from(financialPayments)
+        .where(eq(financialPayments.schoolId, id))
+        .limit(1);
+      if (financialHistory || paymentHistory) {
+        return res.status(409).json({
+          error: 'Cette école possède un historique comptable et ne peut pas être supprimée.',
+        });
+      }
+
       await db.transaction(async (tx) => {
         const schoolUserIds = (await tx.select({ id: users.id }).from(users).where(eq(users.schoolId, id))).map((u) => u.id);
         const classIds = (await tx.select({ id: classes.id }).from(classes).where(eq(classes.schoolId, id))).map((c) => c.id);
@@ -3977,6 +4000,11 @@ export async function createApp() {
           : [];
 
         console.log('School deletion transaction started');
+
+        await tx.delete(accountingScheduleTemplates).where(eq(accountingScheduleTemplates.schoolId, id));
+        await tx.delete(accountingTariffs).where(eq(accountingTariffs.schoolId, id));
+        await tx.delete(accountingFeeDefinitions).where(eq(accountingFeeDefinitions.schoolId, id));
+        await tx.delete(accountingCategories).where(eq(accountingCategories.schoolId, id));
 
         if (schoolUserIds.length > 0) {
           console.log('Deleting school notifications');
@@ -5223,6 +5251,8 @@ export async function createApp() {
         name: classes.name,
         schoolId: classes.schoolId,
         academicYearId: classes.academicYearId,
+        levelId: classes.levelId,
+        progressionCode: classes.progressionCode,
         yearName: academicYears.name,
         teacherId: classes.teacherId,
         teacherName: users.name,
@@ -5695,6 +5725,28 @@ export async function createApp() {
         if (classToDelete.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot delete class in another school' });
         }
+      }
+
+      const [accountingHistory] = await db.select({ id: financialObligations.id })
+        .from(financialObligations)
+        .where(eq(financialObligations.classId, id))
+        .limit(1);
+      const [accountingTariff] = await db.select({ id: accountingTariffs.id })
+        .from(accountingTariffs)
+        .where(or(
+          eq(accountingTariffs.classId, id),
+          eq(accountingTariffs.classFromId, id),
+          eq(accountingTariffs.classToId, id),
+        ))
+        .limit(1);
+      const [accountingFee] = await db.select({ id: accountingFeeDefinitions.id })
+        .from(accountingFeeDefinitions)
+        .where(eq(accountingFeeDefinitions.classId, id))
+        .limit(1);
+      if (accountingHistory || accountingTariff || accountingFee) {
+        return res.status(409).json({
+          error: 'Cette classe est référencée par des données comptables et ne peut pas être supprimée.',
+        });
       }
 
       await db.delete(classes).where(eq(classes.id, id));

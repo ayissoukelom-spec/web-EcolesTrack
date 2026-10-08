@@ -16,6 +16,7 @@ import AuditView from './AuditView.tsx';
 import MobileParentView from './MobileParentView.tsx';
 import ArchiveView from './ArchiveView.tsx';
 import BulletinsView from './BulletinsView.tsx';
+import AccountingView from './AccountingView.tsx';
 import { useAdminDashboard } from '../hooks/useAdminDashboard.ts';
 import { useStudents } from '../hooks/useStudents.ts';
 import { useClasses } from '../hooks/useClasses.ts';
@@ -518,6 +519,19 @@ export default function AppShell() {
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {
       return <AuditView auditEvents={auditEvents} isLoading={isAuditLoading} onReload={fetchAuditEvents} />;
+    }
+
+    if (activeTab === 'accounting' && (currentRole === 'super_admin' || currentRole === 'school_admin')) {
+      return (
+        <AccountingView
+          userRole={currentRole}
+          currentSchoolId={currentSchoolId ?? null}
+          schools={schoolsList}
+          years={yearsList}
+          classes={classesList}
+          students={studentsList}
+        />
+      );
     }
 
     if (activeTab === 'notifications') {

@@ -134,8 +134,11 @@ vi.mock('./components/AuditView.tsx', () => ({ default: () => <div>AuditView</di
 vi.mock('./components/MobileParentView.tsx', () => ({ default: () => <div>MobileParentView</div> }));
 vi.mock('./components/ArchiveView.tsx', () => ({ default: () => <div>ArchiveView</div> }));
 vi.mock('./components/BulletinsView.tsx', () => ({ default: () => <div>BulletinsView</div> }));
+vi.mock('./components/AccountingView.tsx', () => ({
+  default: ({ userRole }: { userRole: string }) => <div data-testid="accounting-view">{userRole}</div>,
+}));
 
-describe('App bulletin navigation', () => {
+describe('App navigation', () => {
   afterEach(() => {
     cleanup();
     localStorageMock.clear();
@@ -255,6 +258,31 @@ describe('App bulletin navigation', () => {
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('routes school_admin from the actual sidebar Comptabilité entry to AccountingView', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-school-admin',
+      email: 'admin@example.com',
+      name: 'Admin',
+      schoolId: 1,
+      role: 'school_admin',
+      id: 1,
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const accountingButton = within(navigation).getByRole('button', { name: 'Comptabilité' });
+    expect(accountingButton).toBeTruthy();
+    fireEvent.click(accountingButton);
+
+    expect(await screen.findByTestId('accounting-view')).toHaveTextContent('school_admin');
   });
 
   it('refreshes after reset without unmounting the admin view or losing its temporary password result', async () => {

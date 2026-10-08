@@ -3,7 +3,7 @@ import request from 'supertest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals } from '../src/db/schema.ts';
+import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations } from '../src/db/schema.ts';
 
 const schoolLogoS3 = vi.hoisted(() => ({
   send: vi.fn(),
@@ -32,6 +32,7 @@ const mockState = {
   periodApprovals: [] as Array<{ id: number; schoolId: number; periodType: string; status: string }>,
   subjects: [] as Array<{ id: number; name: string; schoolId: number | null }>,
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
+  financialObligations: [] as Array<{ id: number; schoolId: number }>,
 };
 
 const normalizeColumnName = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
@@ -100,6 +101,12 @@ const createBuilder = () => {
       }
       if (builder.table === schools) {
         return Promise.resolve(mockState.schools).then(resolve);
+      }
+      if (builder.table === financialObligations) {
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        const rows = mockState.financialObligations.filter((row) =>
+          conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+        return Promise.resolve(rows).then(resolve);
       }
       if (builder.table === classes) {
         const conditions = builder.conditions.flatMap((condition) => extractConditionPairs(condition));
@@ -395,6 +402,15 @@ describe('POST /api/schools', () => {
     mockState.periodApprovals = [];
     mockState.subjects = [];
     mockState.createdClasses = [];
+    mockState.financialObligations = [];
+  });
+
+  it('refuses to delete a school that has an accounting obligation history', async () => {
+    mockState.schools = [{ id: 1, name: 'École avec historique' }];
+    mockState.financialObligations = [{ id: 7, schoolId: 1 }];
+
+    await request(app).delete('/api/schools/1').expect(409);
+    expect(mockState.schools).toHaveLength(1);
   });
 
   it('rejects creating a school without classNames', async () => {

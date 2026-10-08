@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, customType, index, integer, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -560,9 +560,13 @@ export const notifications = pgTable('notifications', {
   title: text('title').notNull(),
   body: text('body').notNull(),
   type: text('type').notNull(), // 'absence' | 'grade' | 'info'
+  dedupeKey: text('dedupe_key'),
   isRead: boolean('is_read').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (table) => ({
+  dedupeKeyUniqueIdx: uniqueIndex('notifications_dedupe_key_idx').on(table.dedupeKey)
+    .where(sql`${table.dedupeKey} IS NOT NULL`),
+}));
 
 // 12b. Notification attachments
 export const notificationAttachments = pgTable('notification_attachments', {
@@ -641,6 +645,209 @@ export const auditEvents = pgTable('audit_events', {
   description: text('description').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const accountingCategories = pgTable('accounting_categories', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  code: text('code').notNull(),
+  label: text('label').notNull(),
+  isEnabled: boolean('is_enabled').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolCodeUniqueIdx: uniqueIndex('accounting_categories_school_code_idx').on(table.schoolId, table.code),
+}));
+
+export const accountingTariffs = pgTable('accounting_tariffs', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }),
+  classFromId: integer('class_from_id').references(() => classes.id, { onDelete: 'restrict' }),
+  classToId: integer('class_to_id').references(() => classes.id, { onDelete: 'restrict' }),
+  categoryId: integer('category_id').references(() => accountingCategories.id, { onDelete: 'restrict' }).notNull(),
+  label: text('label').notNull(),
+  amount: integer('amount').notNull(),
+  currency: text('currency').default('XOF').notNull(),
+  isEnabled: boolean('is_enabled').default(true).notNull(),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolYearClassCategoryUniqueIdx: uniqueIndex('accounting_tariffs_school_year_class_category_idx').on(
+    table.schoolId, table.academicYearId, table.classId, table.categoryId,
+  ),
+  schoolYearRangeCategoryUniqueIdx: uniqueIndex('accounting_tariffs_school_year_class_range_category_idx').on(
+    table.schoolId, table.academicYearId, table.classFromId, table.classToId, table.categoryId,
+  ).where(sql`${table.classId} IS NULL`),
+  classScopeCheck: check('accounting_tariffs_class_scope_check', sql`
+    (${table.classId} IS NOT NULL AND ${table.classFromId} IS NULL AND ${table.classToId} IS NULL)
+    OR (${table.classId} IS NULL AND ${table.classFromId} IS NOT NULL AND ${table.classToId} IS NOT NULL)
+  `),
+  amountCheck: check('accounting_tariffs_amount_check', sql`${table.amount} > 0`),
+  currencyCheck: check('accounting_tariffs_currency_check', sql`${table.currency} = 'XOF'`),
+}));
+
+export const accountingScheduleTemplates = pgTable('accounting_schedule_templates', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }).notNull(),
+  categoryId: integer('category_id').references(() => accountingCategories.id, { onDelete: 'restrict' }).notNull(),
+  periodType: text('period_type').notNull(),
+  installments: jsonb('installments').$type<Array<{ label: string; dueDate: string; basisPoints: number }>>().notNull(),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolYearClassCategoryUniqueIdx: uniqueIndex('accounting_schedule_templates_scope_idx').on(
+    table.schoolId, table.academicYearId, table.classId, table.categoryId,
+  ),
+  periodTypeCheck: check('accounting_schedule_templates_period_check', sql`${table.periodType} IN ('annual', 'trimester', 'semester')`),
+}));
+
+export const accountingFeeDefinitions = pgTable('accounting_fee_definitions', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'restrict' }),
+  categoryId: integer('category_id').references(() => accountingCategories.id, { onDelete: 'restrict' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }),
+  label: text('label').notNull(),
+  description: text('description'),
+  amount: integer('amount').notNull(),
+  currency: text('currency').default('XOF').notNull(),
+  isMandatory: boolean('is_mandatory').default(false).notNull(),
+  dueDate: text('due_date'),
+  status: text('status').default('pending').notNull(),
+  proposedBy: integer('proposed_by').references(() => users.id, { onDelete: 'set null' }),
+  validatedBy: integer('validated_by').references(() => users.id, { onDelete: 'set null' }),
+  validatedAt: timestamp('validated_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolYearIdx: index('accounting_fee_definitions_school_year_idx').on(table.schoolId, table.academicYearId),
+  amountCheck: check('accounting_fee_definitions_amount_check', sql`${table.amount} > 0`),
+  statusCheck: check('accounting_fee_definitions_status_check', sql`${table.status} IN ('pending', 'validated', 'active', 'rejected', 'disabled')`),
+  currencyCheck: check('accounting_fee_definitions_currency_check', sql`${table.currency} = 'XOF'`),
+}));
+
+export const financialObligations = pgTable('financial_obligations', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }).notNull(),
+  categoryId: integer('category_id').references(() => accountingCategories.id, { onDelete: 'restrict' }).notNull(),
+  tariffId: integer('tariff_id').references(() => accountingTariffs.id, { onDelete: 'restrict' }),
+  feeDefinitionId: integer('fee_definition_id').references(() => accountingFeeDefinitions.id, { onDelete: 'restrict' }),
+  label: text('label').notNull(),
+  amount: integer('amount').notNull(),
+  currency: text('currency').default('XOF').notNull(),
+  classNameSnapshot: text('class_name_snapshot').notNull(),
+  enrollmentKind: text('enrollment_kind'),
+  sourceKey: text('source_key').notNull(),
+  status: text('status').default('active').notNull(),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  sourceKeyUniqueIdx: uniqueIndex('financial_obligations_school_source_key_idx').on(table.schoolId, table.sourceKey),
+  studentYearIdx: index('financial_obligations_student_year_idx').on(table.schoolId, table.studentId, table.academicYearId),
+  amountCheck: check('financial_obligations_amount_check', sql`${table.amount} > 0`),
+  currencyCheck: check('financial_obligations_currency_check', sql`${table.currency} = 'XOF'`),
+  enrollmentKindCheck: check('financial_obligations_enrollment_kind_check', sql`${table.enrollmentKind} IS NULL OR ${table.enrollmentKind} IN ('first_enrollment', 're_enrollment', 'ordinary')`),
+  statusCheck: check('financial_obligations_status_check', sql`${table.status} IN ('active', 'cancelled')`),
+}));
+
+export const financialInstallments = pgTable('financial_installments', {
+  id: serial('id').primaryKey(),
+  obligationId: integer('obligation_id').references(() => financialObligations.id, { onDelete: 'restrict' }).notNull(),
+  label: text('label').notNull(),
+  orderIndex: integer('order_index').notNull(),
+  amount: integer('amount').notNull(),
+  dueDate: text('due_date').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  obligationOrderUniqueIdx: uniqueIndex('financial_installments_obligation_order_idx').on(table.obligationId, table.orderIndex),
+  amountCheck: check('financial_installments_amount_check', sql`${table.amount} > 0`),
+}));
+
+export const financialPayments = pgTable('financial_payments', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  studentId: integer('student_id').references(() => students.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  amount: integer('amount').notNull(),
+  currency: text('currency').default('XOF').notNull(),
+  method: text('method').notNull(),
+  reference: text('reference'),
+  requestFingerprint: text('request_fingerprint').notNull(),
+  paidAt: timestamp('paid_at').defaultNow().notNull(),
+  status: text('status').default('posted').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  idempotencyUniqueIdx: uniqueIndex('financial_payments_school_idempotency_idx').on(table.schoolId, table.idempotencyKey),
+  schoolPaidAtIdx: index('financial_payments_school_paid_at_idx').on(table.schoolId, table.paidAt),
+  amountCheck: check('financial_payments_amount_check', sql`${table.amount} > 0`),
+  methodCheck: check('financial_payments_method_check', sql`${table.method} IN ('cash', 'tmoney', 'flooz', 'bank_transfer', 'check', 'other')`),
+  statusCheck: check('financial_payments_status_check', sql`${table.status} IN ('posted', 'cancelled')`),
+  currencyCheck: check('financial_payments_currency_check', sql`${table.currency} = 'XOF'`),
+}));
+
+export const financialPaymentAllocations = pgTable('financial_payment_allocations', {
+  id: serial('id').primaryKey(),
+  paymentId: integer('payment_id').references(() => financialPayments.id, { onDelete: 'restrict' }).notNull(),
+  obligationId: integer('obligation_id').references(() => financialObligations.id, { onDelete: 'restrict' }).notNull(),
+  installmentId: integer('installment_id').references(() => financialInstallments.id, { onDelete: 'restrict' }),
+  amount: integer('amount').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  paymentIdx: index('financial_payment_allocations_payment_idx').on(table.paymentId),
+  obligationIdx: index('financial_payment_allocations_obligation_idx').on(table.obligationId),
+  amountCheck: check('financial_payment_allocations_amount_check', sql`${table.amount} > 0`),
+}));
+
+export const financialAdjustments = pgTable('financial_adjustments', {
+  id: serial('id').primaryKey(),
+  paymentId: integer('payment_id').references(() => financialPayments.id, { onDelete: 'restrict' }).notNull(),
+  kind: text('kind').notNull(),
+  amount: integer('amount').notNull(),
+  reason: text('reason').notNull(),
+  sourceKey: text('source_key').notNull(),
+  recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  sourceKeyUniqueIdx: uniqueIndex('financial_adjustments_source_key_idx').on(table.sourceKey),
+  paymentIdx: index('financial_adjustments_payment_idx').on(table.paymentId),
+  kindCheck: check('financial_adjustments_kind_check', sql`${table.kind} IN ('cancellation', 'refund')`),
+  amountCheck: check('financial_adjustments_amount_check', sql`${table.amount} > 0`),
+}));
+
+export const financialAdjustmentAllocations = pgTable('financial_adjustment_allocations', {
+  id: serial('id').primaryKey(),
+  adjustmentId: integer('adjustment_id').references(() => financialAdjustments.id, { onDelete: 'restrict' }).notNull(),
+  paymentAllocationId: integer('payment_allocation_id').references(() => financialPaymentAllocations.id, { onDelete: 'restrict' }).notNull(),
+  amount: integer('amount').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  adjustmentIdx: index('financial_adjustment_allocations_adjustment_idx').on(table.adjustmentId),
+  allocationIdx: index('financial_adjustment_allocations_payment_allocation_idx').on(table.paymentAllocationId),
+  amountCheck: check('financial_adjustment_allocations_amount_check', sql`${table.amount} > 0`),
+}));
+
+export const financialReceipts = pgTable('financial_receipts', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  paymentId: integer('payment_id').references(() => financialPayments.id, { onDelete: 'restrict' }).notNull(),
+  receiptNumber: text('receipt_number').notNull(),
+  snapshot: jsonb('snapshot').$type<Record<string, unknown>>().notNull(),
+  issuedAt: timestamp('issued_at').defaultNow().notNull(),
+}, (table) => ({
+  paymentUniqueIdx: uniqueIndex('financial_receipts_payment_idx').on(table.paymentId),
+  schoolNumberUniqueIdx: uniqueIndex('financial_receipts_school_number_idx').on(table.schoolId, table.receiptNumber),
+}));
 
 // Define Relationships for Drizzle
 export const schoolsRelations = relations(schools, ({ many }) => ({
