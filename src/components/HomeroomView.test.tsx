@@ -30,6 +30,7 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
   students: [
     { id: 1, firstName: 'Jean', lastName: 'Dupont', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
     { id: 2, firstName: 'Alice', lastName: 'Martin', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
+    { id: 3, firstName: 'Paul', lastName: 'Koffi', birthDate: null, gender: null, isActive: true, withdrawnAt: null, studentStatus: null, parentId: null, parentName: null, parentEmail: null, parentPhone: null, parentAddress: null },
   ],
   evaluations: classSummary.id === 10
     ? [
@@ -59,10 +60,19 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
       ]
       : [{ id: 2001, evaluationId: 201, studentId: 1, studentName: 'Dupont Jean', subject: 'Histoire', evaluationTitle: 'Devoir histoire', score: '12' }],
   absences: classSummary.id === 10
-    ? [{ id: 401, studentId: 1, studentName: 'Dupont Jean', date: '2025-10-07', period: 'Matin', subjectName: 'Mathématiques' }]
+    ? [
+      { id: 401, studentId: 1, studentName: 'Dupont Jean', date: '2025-10-07', period: 'Matin', subjectName: 'Mathématiques' },
+      { id: 402, studentId: 1, studentName: 'Dupont Jean', date: '2025-10-08', period: 'Après-midi', subjectName: 'Français' },
+      { id: 403, studentId: 1, studentName: 'Dupont Jean', date: '2025-10-09', period: 'Matin', subjectName: 'Histoire' },
+      { id: 404, studentId: 2, studentName: 'Martin Alice', date: '2025-10-10', period: 'Matin', subjectName: 'Mathématiques' },
+      { id: 405, studentId: 2, studentName: 'Martin Alice', date: '2025-10-11', period: 'Après-midi', subjectName: 'Français' },
+    ]
     : [],
   lateArrivals: classSummary.id === 10
-    ? [{ id: 501, studentId: 2, studentName: 'Martin Alice', date: '2025-10-08', period: 'Matin', lateMinutes: 12, reason: 'Transport' }]
+    ? [
+      { id: 501, studentId: 2, studentName: 'Martin Alice', date: '2025-10-08', period: 'Matin', lateMinutes: 12, reason: 'Transport', subjectName: 'Mathématiques' },
+      { id: 502, studentId: 2, studentName: 'Martin Alice', date: '2025-10-09', period: 'Après-midi', lateMinutes: 8, reason: 'Rendez-vous', subjectName: 'Français' },
+    ]
     : [],
   bulletins: [],
   examResults: [],
@@ -99,31 +109,28 @@ describe('HomeroomView', () => {
     expect(fetchHomeroomClass).toHaveBeenLastCalledWith(20);
   });
 
-  it('shows absences and late arrivals in separate class sections', async () => {
+  it('shows combined absence and late-arrival totals for every student', async () => {
     fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
     render(<HomeroomView classes={[homeroomClasses[0]]} />);
 
     expect(await screen.findByText('6ème A')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Absences' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retards' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Absences et retards' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Absences et retards' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Absences' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retards' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Absences' }));
-    expect(screen.queryByText('Aucune absence.')).toBeNull();
-    expect(screen.getByText('Mathématiques')).toBeTruthy();
-    const absenceTable = screen.getByRole('table');
-    expect(absenceTable.textContent).toContain('Dupont Jean');
-    expect(absenceTable.textContent).not.toContain('Martin Alice');
-    expect(absenceTable.textContent).not.toContain('Minutes');
-    expect(absenceTable.textContent).not.toContain('Transport');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Retards' }));
-    expect(screen.queryByText('Aucun retard.')).toBeNull();
-    const lateArrivalTable = screen.getByRole('table');
-    expect(lateArrivalTable.textContent).toContain('Martin Alice');
-    expect(lateArrivalTable.textContent).toContain('12');
-    expect(lateArrivalTable.textContent).not.toContain('Dupont Jean');
-    expect(lateArrivalTable.textContent).not.toContain('Mathématiques');
+    fireEvent.click(screen.getByRole('button', { name: 'Absences et retards' }));
+    const reportTable = screen.getByRole('table');
+    const reportRows = Array.from(reportTable.querySelectorAll('tbody tr'), (row) => row.textContent ?? '');
+    expect(Array.from(reportTable.querySelectorAll('thead th'), (cell) => cell.textContent)).toEqual([
+      'Élève', "Total d'absences", 'Total de retards',
+    ]);
+    expect(reportRows).toEqual(['Jean Dupont30', 'Alice Martin22', 'Paul Koffi00']);
+    expect(reportTable.textContent).not.toContain('2025-10-');
+    expect(reportTable.textContent).not.toContain('Mathématiques');
+    expect(reportTable.textContent).not.toContain('Français');
+    expect(reportTable.textContent).not.toContain('Histoire');
+    expect(reportTable.textContent).not.toContain('Transport');
+    expect(reportTable.textContent).not.toContain('Rendez-vous');
   });
 
   it('filters evaluations and their grades by subjects present in the class evaluations', async () => {
@@ -186,7 +193,7 @@ describe('HomeroomView', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Évaluations et notes' }));
     const studentFilter = screen.getByRole('combobox', { name: 'Élève' });
-    expect(studentFilter.querySelectorAll('option')).toHaveLength(3);
+    expect(studentFilter.querySelectorAll('option')).toHaveLength(4);
     expect(studentFilter.querySelector('option')?.textContent).toBe('Tous les élèves');
     expect(displayedEvaluationRows()).toHaveLength(4);
     expect(displayedGradeRows().some((row) => row.includes('Dupont Jean'))).toBe(true);

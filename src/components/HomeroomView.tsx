@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchMyHomeroomClass, type HomeroomClassDetail, type HomeroomClassSummary } from '../lib/api.ts';
 
-type HomeroomSection = 'students' | 'evaluations' | 'absences' | 'lateArrivals' | 'bulletins' | 'exams';
+type HomeroomSection = 'students' | 'evaluations' | 'attendance' | 'bulletins' | 'exams';
 
 interface Props {
   classes: HomeroomClassSummary[];
@@ -91,12 +91,25 @@ export default function HomeroomView({ classes }: Props) {
     filteredEvaluationIds.has(grade.evaluationId)
       && (!selectedStudentId || grade.studentId === Number(selectedStudentId)),
   );
+  const absenceCounts = new Map<number, number>();
+  for (const absence of detail?.absences ?? []) {
+    absenceCounts.set(absence.studentId, (absenceCounts.get(absence.studentId) ?? 0) + 1);
+  }
+  const lateArrivalCounts = new Map<number, number>();
+  for (const lateArrival of detail?.lateArrivals ?? []) {
+    lateArrivalCounts.set(lateArrival.studentId, (lateArrivalCounts.get(lateArrival.studentId) ?? 0) + 1);
+  }
+  const attendanceSummary = (detail?.students ?? []).map((student) => ({
+    id: student.id,
+    studentName: `${student.firstName} ${student.lastName}`,
+    totalAbsences: absenceCounts.get(student.id) ?? 0,
+    totalLateArrivals: lateArrivalCounts.get(student.id) ?? 0,
+  }));
 
   const sections: Array<{ id: HomeroomSection; label: string }> = [
     { id: 'students', label: 'Élèves et responsables' },
     { id: 'evaluations', label: 'Évaluations et notes' },
-    { id: 'absences', label: 'Absences' },
-    { id: 'lateArrivals', label: 'Retards' },
+    { id: 'attendance', label: 'Absences et retards' },
     { id: 'bulletins', label: 'Bulletins' },
     { id: 'exams', label: 'Résultats officiels' },
   ];
@@ -230,12 +243,14 @@ export default function HomeroomView({ classes }: Props) {
             </div>
           )}
 
-          {section === 'absences' && (
-            <ReadOnlyRows title="Absences" emptyLabel="Aucune absence." rows={detail.absences} columns={['date', 'studentName', 'period', 'subjectName']} labels={['Date', 'Élève', 'Période', 'Matière']} />
-          )}
-
-          {section === 'lateArrivals' && (
-            <ReadOnlyRows title="Retards" emptyLabel="Aucun retard." rows={detail.lateArrivals} columns={['date', 'studentName', 'period', 'lateMinutes']} labels={['Date', 'Élève', 'Période', 'Minutes']} />
+          {section === 'attendance' && (
+            <ReadOnlyRows
+              title="Absences et retards"
+              emptyLabel="Aucun élève dans cette classe."
+              rows={attendanceSummary}
+              columns={['studentName', 'totalAbsences', 'totalLateArrivals']}
+              labels={['Élève', "Total d'absences", 'Total de retards']}
+            />
           )}
 
           {section === 'bulletins' && (
