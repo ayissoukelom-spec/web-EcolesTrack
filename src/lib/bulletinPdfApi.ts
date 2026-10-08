@@ -2619,6 +2619,7 @@ export const createBulletinPdfDocument = async (
   const periodMatch = currentSummaryLabel.match(/^(\d+)(er|ème)\s+(Semestre|Trimestre)$/i);
   let decisionBaselineY: number | null = null;
   let decisionClassBottomY: number | null = null;
+  let examDecisionTextX: number | null = null;
   if (periodMatch) {
     const periodNumber = periodMatch[1];
     const periodSuffix = periodMatch[2];
@@ -2675,6 +2676,7 @@ export const createBulletinPdfDocument = async (
     const decisionTextWidth = fontBold.widthOfTextAtSize(decisionText, decisionFontSize);
     const previousDecisionTextHeight = fontBold.heightAtSize(previousDecisionFontSize, { descender: false });
     const decisionX = tableX + columns.slice(0, 4).reduce((total, column) => total + column.width, 0);
+    examDecisionTextX = decisionX;
     const decisionGap = 6;
     const halfCentimeterInPdfPoints = 14.17;
     const decisionY = boxBottom - decisionGap - previousDecisionTextHeight - halfCentimeterInPdfPoints;
@@ -2702,9 +2704,6 @@ export const createBulletinPdfDocument = async (
         thickness: 1,
       });
       decisionClassBottomY = decisionResultY;
-      if (data.examMention && /^admis\b/i.test(data.promotionDecision)) {
-        decisionClassBottomY = decisionResultY - previousDecisionTextHeight - 5;
-      }
     }
   }
 
@@ -2732,25 +2731,13 @@ export const createBulletinPdfDocument = async (
     const annualRankWidth = fontBold.widthOfTextAtSize(annualRankText, annualFontSize);
     const annualRankGap = 6;
     const annualRankX = summaryLeftX + annualAverageWidth + annualRankGap;
-    const annualExamMentionGap = 18;
-    const annualExamMentionX = annualRankX + annualRankWidth + annualExamMentionGap;
-    const annualExamMentionFontSize = annualExamMention
-      ? Math.min(
-        annualFontSize,
-        annualFontSize * Math.max(0, page.getWidth() - margin - 4 - annualExamMentionX)
-          / Math.max(1, fontBold.widthOfTextAtSize(annualExamMention, annualFontSize)),
-      )
-      : annualFontSize;
-    const annualExamMentionWidth = annualExamMention
-      ? fontBold.widthOfTextAtSize(annualExamMention, annualExamMentionFontSize)
-      : 0;
+    const annualHorizontalPadding = 4;
     const annualTextBounds = {
       left: summaryLeftX,
-      right: annualExamMention ? annualExamMentionX + annualExamMentionWidth : annualRankX + annualRankWidth,
+      right: annualRankX + annualRankWidth,
       top: annualY + fontBold.heightAtSize(annualFontSize, { descender: false }),
       bottom: annualY,
     };
-    const annualHorizontalPadding = 4;
     const annualVerticalPadding = 4;
     annualBoxLeft = annualTextBounds.left - annualHorizontalPadding;
     const annualBoxRight = annualTextBounds.right + annualHorizontalPadding;
@@ -2771,7 +2758,16 @@ export const createBulletinPdfDocument = async (
     drawText(page, annualAverageText, summaryLeftX, annualY, annualFontSize, text, fontBold);
     drawText(page, annualRankText, annualRankX, annualY, annualFontSize, text, fontBold);
     if (annualExamMention) {
-      drawText(page, annualExamMention, annualExamMentionX, annualY, annualExamMentionFontSize, text, fontBold);
+      const examMentionFontSize = 9;
+      const examMentionX = Math.max(examDecisionTextX ?? summaryLeftX, annualBoxRight + 14);
+      const availableWidth = Math.max(0, page.getWidth() - margin - 4 - examMentionX);
+      const examMentionWidth = fontBold.widthOfTextAtSize(annualExamMention, examMentionFontSize);
+      const fittedExamMentionFontSize = Math.min(
+        examMentionFontSize,
+        examMentionFontSize * availableWidth / Math.max(1, examMentionWidth),
+      );
+      const examMentionY = annualBoxBottom - fontBold.heightAtSize(examMentionFontSize, { descender: false }) - 5;
+      drawText(page, annualExamMention, examMentionX, examMentionY, fittedExamMentionFontSize, text, fontBold);
     }
   }
 

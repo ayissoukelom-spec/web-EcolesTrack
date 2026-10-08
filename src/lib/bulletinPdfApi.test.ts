@@ -145,7 +145,7 @@ const extractPdfText = (pdfBytes: Uint8Array): string => {
     .replace(/Tj/g, ' ');
 };
 
-const extractPdfTextBaseline = (pdfBytes: Uint8Array, target: RegExp): number | null => {
+const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: number; y: number } | null => {
   const pdfBuffer = Buffer.from(pdfBytes);
   const raw = pdfBuffer.toString('latin1');
   const streamPattern = /stream\r?\n/g;
@@ -163,10 +163,15 @@ const extractPdfTextBaseline = (pdfBytes: Uint8Array, target: RegExp): number | 
     } catch {
       content = pdfBuffer.subarray(streamStart, streamEnd).toString('latin1');
     }
-    const linePattern = /1 0 0 1 [-\d.]+ ([-\d.]+) Tm ([\s\S]*?) T\* ET/g;
-    let lineMatch: RegExpExecArray | null;
-    while ((lineMatch = linePattern.exec(content)) != null) {
-      if (target.test(lineMatch[2])) return Number(lineMatch[1]);
+    content = content.replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+    const textPositionPattern = /1 0 0 1 ([-\d.]+) ([-\d.]+) Tm/g;
+    let positionMatch: RegExpExecArray | null;
+    while ((positionMatch = textPositionPattern.exec(content)) != null) {
+      const nextPosition = textPositionPattern.exec(content);
+      textPositionPattern.lastIndex = positionMatch.index + positionMatch[0].length;
+      const textEnd = nextPosition?.index ?? content.indexOf('ET', textPositionPattern.lastIndex);
+      const text = content.slice(textPositionPattern.lastIndex, textEnd < 0 ? content.length : textEnd);
+      if (target.test(text)) return { x: Number(positionMatch[1]), y: Number(positionMatch[2]) };
     }
     const endMarker = /^\r?\nendstream/.exec(raw.slice(streamEnd));
     streamPattern.lastIndex = streamEnd + (endMarker?.[0].length ?? 0);
@@ -451,20 +456,34 @@ describe('décision de fin d année', () => {
     expect(text.indexOf('conseil de la classe')).toBeLessThan(text.indexOf('ADMIS'));
   });
 
-  it('affiche la mention d’examen sur la même ligne que la moyenne annuelle pour un élève admis', async () => {
+  it('affiche la mention d’examen sous la décision, hors du rectangle annuel', async () => {
     const pdf = await createBulletinPdfDocument({
       ...snapshotData,
       termName: 'Trimestre 3',
-      promotionDecision: 'Admis au BEPC',
-      examMention: 'Très bien',
-      annualAverage: 12.5,
-      annualRank: 4,
+      promotionDecision: 'Admis au BAC I',
+      examMention: 'Bien',
+      annualAverage: 13,
+      annualRank: 1,
     });
     const text = normalizePdfTextForAssertion(extractPdfText(pdf));
+    const annualAveragePosition = extractPdfTextPosition(pdf, /Moy\. Ann = 13,00/);
+    const annualRankPosition = extractPdfTextPosition(pdf, /Rang : 1er/);
+    const mentionPosition = extractPdfTextPosition(pdf, /Mention : Bien/);
+    const decisionPosition = extractPdfTextPosition(pdf, /ADMIS/);
 
     expect(text).toContain('ADMIS');
-    expect(text).toContain('Mention : Tres bien');
-    expect(extractPdfTextBaseline(pdf, /Moy\. Ann = 12,50/)).toBe(extractPdfTextBaseline(pdf, /Mention : Tres bien/));
+    expect(text).toContain('BAC');
+    expect(text).toContain('Moy. Ann = 13,00');
+    expect(text).toContain('Rang : 1er');
+    expect(text).toContain('Mention : Bien');
+    expect(annualAveragePosition).not.toBeNull();
+    expect(annualRankPosition).not.toBeNull();
+    expect(mentionPosition).not.toBeNull();
+    expect(decisionPosition).not.toBeNull();
+    expect(mentionPosition!.y).toBeLessThan(annualAveragePosition!.y - 10);
+    expect(mentionPosition!.y).toBeLessThan(annualRankPosition!.y - 10);
+    expect(mentionPosition!.x).toBeGreaterThanOrEqual(decisionPosition!.x);
+    expect(mentionPosition!.x).toBeGreaterThan(annualRankPosition!.x + 55);
   });
 
   it('n’affiche pas de mention vide pour un élève admis sans mention enregistrée', async () => {
