@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchMyHomeroomClass, type HomeroomClassDetail, type HomeroomClassSummary } from '../lib/api.ts';
+import { normalizeEvaluationType } from '../lib/bulletinService.ts';
 
 type HomeroomSection = 'students' | 'evaluations' | 'attendance' | 'bulletins' | 'exams';
 
@@ -20,6 +21,7 @@ export default function HomeroomView({ classes }: Props) {
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedPeriod, setSelectedPeriod] = useState('');
+  const [selectedEvaluationType, setSelectedEvaluationType] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,6 +29,7 @@ export default function HomeroomView({ classes }: Props) {
     setSelectedSubject('');
     setSelectedStudentId('');
     setSelectedPeriod('');
+    setSelectedEvaluationType('');
   }, [selectedClassId]);
 
   useEffect(() => {
@@ -80,6 +83,7 @@ export default function HomeroomView({ classes }: Props) {
   }));
   const filteredEvaluations = (detail?.evaluations ?? []).filter((evaluation) => {
     if (selectedSubject && evaluation.subject !== selectedSubject) return false;
+    if (selectedEvaluationType && normalizeEvaluationType(evaluation.type) !== selectedEvaluationType) return false;
     if (selectedPeriod) {
       const [selectedPeriodType, selectedOrderIndex] = selectedPeriod.split(':');
       if (evaluation.periodType !== selectedPeriodType || evaluation.orderIndex !== Number(selectedOrderIndex)) return false;
@@ -185,7 +189,7 @@ export default function HomeroomView({ classes }: Props) {
 
           {section === 'evaluations' && (
             <div className="space-y-4">
-              <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
                 <label className="text-sm font-medium text-slate-700">
                   Matière
                   <select
@@ -219,6 +223,19 @@ export default function HomeroomView({ classes }: Props) {
                   >
                     <option value="">Toutes les périodes</option>
                     {periodOptions.map((period) => <option key={period.value} value={period.value}>{period.label}</option>)}
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Type d’évaluation
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    value={selectedEvaluationType}
+                    onChange={(event) => setSelectedEvaluationType(event.target.value)}
+                  >
+                    <option value="">Toutes</option>
+                    <option value="devoir">Devoir</option>
+                    <option value="interrogation">Interrogation</option>
+                    <option value="composition">Composition</option>
                   </select>
                 </label>
               </div>

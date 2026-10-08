@@ -34,17 +34,17 @@ const detailFor = (classSummary: HomeroomClassSummary): HomeroomClassDetail => (
   ],
   evaluations: classSummary.id === 10
     ? [
-      { id: 101, termId: 1, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, subject: 'Mathématiques', title: 'Devoir de maths T1', date: '2025-10-01', teacherName: 'Prof A' },
-      { id: 102, termId: 2, termName: 'Trimestre 2', periodType: 'trimester', orderIndex: 2, subject: 'Français', title: 'Dictée T2', date: '2025-10-02', teacherName: 'Prof B' },
-      { id: 103, termId: 3, termName: 'Trimestre 3', periodType: 'trimester', orderIndex: 3, subject: 'Mathématiques', title: 'Interrogation de maths T3', date: '2025-10-03', teacherName: 'Prof C' },
-      { id: 104, termId: 2, termName: 'Trimestre 2', periodType: 'trimester', orderIndex: 2, subject: 'Mathématiques', title: 'Devoir de maths T2', date: '2025-10-04', teacherName: 'Prof D' },
+      { id: 101, termId: 1, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, subject: 'Mathématiques', title: 'Devoir de maths T1', type: 'devoir', date: '2025-10-01', teacherName: 'Prof A' },
+      { id: 102, termId: 2, termName: 'Trimestre 2', periodType: 'trimester', orderIndex: 2, subject: 'Français', title: 'Dictée T2', type: 'Composition', date: '2025-10-02', teacherName: 'Prof B' },
+      { id: 103, termId: 3, termName: 'Trimestre 3', periodType: 'trimester', orderIndex: 3, subject: 'Mathématiques', title: 'Interrogation de maths T3', type: ' INTERROGATION ', date: '2025-10-03', teacherName: 'Prof C' },
+      { id: 104, termId: 2, termName: 'Trimestre 2', periodType: 'trimester', orderIndex: 2, subject: 'Mathématiques', title: 'Devoir de maths T2', type: 'devoir', date: '2025-10-04', teacherName: 'Prof D' },
     ]
     : classSummary.id === 30
       ? [
-        { id: 301, termId: 11, termName: 'Semestre 1', periodType: 'semester', orderIndex: 1, subject: 'Mathématiques', title: 'Devoir de maths S1', date: '2025-10-05', teacherName: 'Prof E' },
-        { id: 302, termId: 12, termName: 'Semestre 2', periodType: 'semester', orderIndex: 2, subject: 'Français', title: 'Dissertation S2', date: '2025-10-06', teacherName: 'Prof F' },
+        { id: 301, termId: 11, termName: 'Semestre 1', periodType: 'semester', orderIndex: 1, subject: 'Mathématiques', title: 'Devoir de maths S1', type: 'devoir', date: '2025-10-05', teacherName: 'Prof E' },
+        { id: 302, termId: 12, termName: 'Semestre 2', periodType: 'semester', orderIndex: 2, subject: 'Français', title: 'Dissertation S2', type: 'composition', date: '2025-10-06', teacherName: 'Prof F' },
       ]
-      : [{ id: 201, termId: 4, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, subject: 'Histoire', title: 'Devoir histoire', date: '2025-10-04', teacherName: 'Prof D' }],
+      : [{ id: 201, termId: 4, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1, subject: 'Histoire', title: 'Devoir histoire', type: 'devoir', date: '2025-10-04', teacherName: 'Prof D' }],
   grades: classSummary.id === 10
     ? [
       { id: 1001, evaluationId: 101, studentId: 1, studentName: 'Dupont Jean', subject: 'Mathématiques', evaluationTitle: 'Devoir de maths T1', score: '15' },
@@ -142,6 +142,7 @@ describe('HomeroomView', () => {
     expect(screen.getByRole('combobox', { name: 'Matière' })).toHaveValue('');
     expect(screen.getByRole('combobox', { name: 'Élève' })).toHaveValue('');
     expect(screen.getByRole('combobox', { name: 'Période' })).toHaveValue('');
+    expect(screen.getByRole('combobox', { name: 'Type d’évaluation' })).toHaveValue('');
     const subjectFilter = screen.getByRole('combobox', { name: 'Matière' });
 
     expect(subjectFilter.querySelectorAll('option')).toHaveLength(3);
@@ -162,6 +163,37 @@ describe('HomeroomView', () => {
     expect(displayedGradeRows()).toHaveLength(5);
   });
 
+  it('filters evaluations and associated grades by normalized evaluation type', async () => {
+    fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
+    render(<HomeroomView classes={[homeroomClasses[0]]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Évaluations et notes' }));
+    const typeFilter = screen.getByRole('combobox', { name: 'Type d’évaluation' });
+    expect(Array.from(typeFilter.querySelectorAll('option'), (option) => option.textContent)).toEqual([
+      'Toutes', 'Devoir', 'Interrogation', 'Composition',
+    ]);
+    expect(displayedEvaluationRows()).toHaveLength(4);
+    expect(displayedGradeRows()).toHaveLength(5);
+
+    fireEvent.change(typeFilter, { target: { value: 'devoir' } });
+    expect(displayedEvaluationRows()).toHaveLength(2);
+    expect(displayedEvaluationRows().every((row) => row.includes('Devoir'))).toBe(true);
+    expect(displayedGradeRows()).toHaveLength(3);
+    expect(displayedGradeRows().every((row) => row.includes('Devoir'))).toBe(true);
+
+    fireEvent.change(typeFilter, { target: { value: 'interrogation' } });
+    expect(displayedEvaluationRows()).toHaveLength(1);
+    expect(displayedEvaluationRows()[0]).toContain('Interrogation de maths T3');
+    expect(displayedGradeRows()).toHaveLength(1);
+    expect(displayedGradeRows()[0]).toContain('Interrogation de maths T3');
+
+    fireEvent.change(typeFilter, { target: { value: 'composition' } });
+    expect(displayedEvaluationRows()).toHaveLength(1);
+    expect(displayedEvaluationRows()[0]).toContain('Dictée T2');
+    expect(displayedGradeRows()).toHaveLength(1);
+    expect(displayedGradeRows()[0]).toContain('Dictée T2');
+  });
+
   it('resets the subject filter when another homeroom class is selected', async () => {
     fetchHomeroomClass.mockImplementation(async (classId: number) =>
       detailFor(homeroomClasses.find((item) => item.id === classId)!));
@@ -177,6 +209,9 @@ describe('HomeroomView', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Période' }), {
       target: { value: 'trimester:3' },
     });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Type d’évaluation' }), {
+      target: { value: 'composition' },
+    });
     fireEvent.change(screen.getByRole('combobox', { name: 'Classe' }), { target: { value: '20' } });
 
     expect(await screen.findAllByText('Devoir histoire')).toHaveLength(2);
@@ -184,6 +219,7 @@ describe('HomeroomView', () => {
     expect(displayedEvaluationRows()).toHaveLength(1);
     expect(screen.getByRole('combobox', { name: 'Élève' })).toHaveValue('');
     expect(screen.getByRole('combobox', { name: 'Période' })).toHaveValue('');
+    expect(screen.getByRole('combobox', { name: 'Type d’évaluation' })).toHaveValue('');
     expect(displayedGradeRows()).toHaveLength(1);
   });
 
@@ -257,7 +293,7 @@ describe('HomeroomView', () => {
     expect(displayedGradeRows()).toHaveLength(1);
   });
 
-  it('combines subject, student, and period filters independently', async () => {
+  it('combines subject, student, period, and type filters independently', async () => {
     fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
     render(<HomeroomView classes={[homeroomClasses[0]]} />);
 
@@ -265,6 +301,7 @@ describe('HomeroomView', () => {
     const subjectFilter = screen.getByRole('combobox', { name: 'Matière' });
     const studentFilter = screen.getByRole('combobox', { name: 'Élève' });
     const periodFilter = screen.getByRole('combobox', { name: 'Période' });
+    const typeFilter = screen.getByRole('combobox', { name: 'Type d’évaluation' });
 
     fireEvent.change(subjectFilter, { target: { value: 'Mathématiques' } });
     expect(displayedGradeRows()).toHaveLength(4);
@@ -288,6 +325,14 @@ describe('HomeroomView', () => {
     expect(displayedGradeRows()[0]).toContain('Mathématiques');
     expect(displayedGradeRows()[0]).toContain('Devoir de maths T2');
     expect(displayedEvaluationRows()).toHaveLength(1);
+
+    fireEvent.change(typeFilter, { target: { value: 'composition' } });
+    expect(displayedEvaluationRows()).toEqual(['Aucune évaluation.']);
+    expect(displayedGradeRows()).toEqual(['Aucune note enregistrée.']);
+
+    fireEvent.change(typeFilter, { target: { value: 'devoir' } });
+    expect(displayedEvaluationRows()).toHaveLength(1);
+    expect(displayedGradeRows()).toHaveLength(1);
 
     fireEvent.change(studentFilter, { target: { value: '' } });
     expect(displayedGradeRows()).toHaveLength(2);
