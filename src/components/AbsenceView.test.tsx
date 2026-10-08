@@ -84,7 +84,9 @@ describe('téléchargement des justificatifs d’absence', () => {
       const downloadButtons = screen.getAllByRole('button', { name: 'Télécharger' }) as HTMLButtonElement[];
       expect(downloadButtons).toHaveLength(2);
 
-      fireEvent.click(downloadButtons[0]);
+      const awaRow = screen.getByText('Awa Exemple').closest('tr');
+      expect(awaRow).not.toBeNull();
+      fireEvent.click(within(awaRow as HTMLElement).getByRole('button', { name: 'Télécharger' }));
       const firstLoadingButton = screen.getByRole('button', { name: 'Téléchargement en cours…' }) as HTMLButtonElement;
       expect(firstLoadingButton.disabled).toBe(true);
       expect(screen.getAllByRole('button', { name: 'Télécharger' })[0]).toBeEnabled();
@@ -391,6 +393,52 @@ describe('AbsenceView surveillant', () => {
     expect(screen.getByText('Grace Injustifiee')).toBeTruthy();
     expect(screen.queryByText('Ada Justifiee')).toBeNull();
     expect(screen.queryByText('Alan Justifie')).toBeNull();
+  });
+
+  it('ordonne la liste par date, heure de début puis identifiant, y compris après filtrage', () => {
+    const { container } = render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[
+          { id: 1, studentId: 1, studentName: 'Absence du 6 octobre', classId: 10, className: '6e A', date: '2026-10-06', period: 'morning', startTime: '08:00', isJustified: false },
+          { id: 2, studentId: 1, studentName: 'Absence du 8 octobre matin ID 2', classId: 10, className: '6e A', date: '2026-10-08', period: 'morning', startTime: '08:00', isJustified: false },
+          { id: 3, studentId: 1, studentName: 'Absence du 8 octobre après-midi', classId: 10, className: '6e A', date: '2026-10-08', period: 'afternoon', startTime: '12:00', isJustified: false },
+          { id: 4, studentId: 1, studentName: 'Absence du 7 octobre', classId: 10, className: '6e A', date: '2026-10-07', period: 'morning', startTime: '08:00', isJustified: false },
+          { id: 5, studentId: 1, studentName: 'Absence du 8 octobre matin ID 5', classId: 10, className: '6e A', date: '2026-10-08', period: 'morning', startTime: '08:00', isJustified: false },
+        ] as any}
+        studentsList={[]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onJustifyAbsence={vi.fn()}
+        onRecordAbsenceControl={vi.fn()}
+      />
+    );
+
+    const getDisplayedStudentNames = () => Array.from(
+      container.querySelectorAll('#absences-table-container tbody tr'),
+      (row) => row.querySelector('td')?.textContent?.trim(),
+    );
+
+    expect(getDisplayedStudentNames()).toEqual([
+      'Absence du 8 octobre après-midi',
+      'Absence du 8 octobre matin ID 5',
+      'Absence du 8 octobre matin ID 2',
+      'Absence du 7 octobre',
+      'Absence du 6 octobre',
+    ]);
+
+    fireEvent.change(container.querySelector('input[type="date"]') as HTMLInputElement, {
+      target: { value: '2026-10-08' },
+    });
+
+    expect(getDisplayedStudentNames()).toEqual([
+      'Absence du 8 octobre après-midi',
+      'Absence du 8 octobre matin ID 5',
+      'Absence du 8 octobre matin ID 2',
+    ]);
   });
 
   it('filtre les retards par statut avec les filtres existants', () => {
