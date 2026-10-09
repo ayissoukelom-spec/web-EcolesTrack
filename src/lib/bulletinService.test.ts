@@ -207,6 +207,38 @@ describe('bulletinService', () => {
     });
   });
 
+  it('calcule une évaluation mensuelle comme un Devoir, y compris quand elle est seule', () => {
+    const monthlyEvaluation: Evaluation = {
+      id: 10, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Évaluation mensuelle',
+      type: 'evaluation_mensuelle', coefficient: 2, maxScore: 40, countInBulletin: true, date: '2026-06-10',
+    };
+    const equivalentHomework: Evaluation = { ...monthlyEvaluation, id: 11, type: 'devoir' };
+    const monthlyResult = calculateStudentTermAverage({
+      term,
+      student,
+      evaluations: [monthlyEvaluation],
+      grades: [{ id: 10, evaluationId: 10, studentId: 1, score: '30' }],
+    });
+    const homeworkResult = calculateStudentTermAverage({
+      term,
+      student,
+      evaluations: [equivalentHomework],
+      grades: [{ id: 11, evaluationId: 11, studentId: 1, score: '30' }],
+    });
+
+    expect(monthlyResult.average).toBe(15);
+    expect(monthlyResult.totalCoefficient).toBe(2);
+    expect(monthlyResult.snapshots[0]?.type).toBe('evaluation_mensuelle');
+    expect(summarizeTypeAveragesBySubject(monthlyResult.snapshots)).toEqual({
+      interrogation: null,
+      devoir: 15,
+      composition: null,
+    });
+    expect(monthlyResult.average).toBe(homeworkResult.average);
+    expect(monthlyResult.totalCoefficient).toBe(homeworkResult.totalCoefficient);
+    expect(summarizeTypeAveragesBySubject(monthlyResult.snapshots)).toEqual(summarizeTypeAveragesBySubject(homeworkResult.snapshots));
+  });
+
   it('calcule la moyenne d interrogations et de devoirs uniquement à partir des évaluations retenues pour le bulletin', () => {
     const evaluations: Evaluation[] = [
       { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'Interro 1', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },

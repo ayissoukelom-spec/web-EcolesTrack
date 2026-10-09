@@ -24,6 +24,7 @@ import {
   calculateTypeWeightedAverage,
   calculateWeightedSubjectAverage,
   findSubjectsMissingValidComposition,
+  getBulletinCalculationType,
   formatMissingCompositionMessage,
   resolveSubjectCoefficientFromPublishedComposition,
   type BulletinEvaluationLike,
@@ -564,9 +565,9 @@ const computeSubjectLines = (
     current.weighted += snapshot.normalizedScore * snapshot.coefficient;
     current.weightedCoefficient += snapshot.coefficient;
 
-    const type = snapshot.type as 'interrogation' | 'devoir' | 'composition' | null;
-    if (type && (type === 'interrogation' || type === 'devoir' || type === 'composition')) {
-      current.byType[type].push({ coefficient: snapshot.coefficient, score: snapshot.normalizedScore });
+    const calculationType = getBulletinCalculationType(snapshot.type);
+    if (calculationType) {
+      current.byType[calculationType].push({ coefficient: snapshot.coefficient, score: snapshot.normalizedScore });
     }
     bySubject.set(snapshot.subject, current);
   }
@@ -687,9 +688,9 @@ const computeSubjectRank = (
       // Normalize to /20 scale
       const normalized = (rawScore / (evaluation.maxScore || 20)) * 20;
       const coefficient = Number(evaluation.coefficient || 0);
-      const type = evaluation.type as 'interrogation' | 'devoir' | 'composition' | null;
+      const type = getBulletinCalculationType(evaluation.type);
       if (!Number.isFinite(coefficient) || coefficient <= 0) continue;
-      if (type === 'interrogation' || type === 'devoir' || type === 'composition') {
+      if (type) {
         entriesByType[type].push({ coefficient, score: normalized });
       }
     }

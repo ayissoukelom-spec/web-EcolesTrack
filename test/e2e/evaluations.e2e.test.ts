@@ -604,6 +604,72 @@ describe('POST /api/evaluations security', () => {
     expect(res.body).toMatchObject({ classId: 100, subject: 'Science', coefficient: 2, maxScore: 20 });
   });
 
+  it('creates a monthly evaluation and generates its French display title', async () => {
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-uid')
+      .set('x-simulated-user-id', '3')
+      .set('x-simulated-school-id', '10')
+      .send({
+        classId: '100',
+        subjectId: 2,
+        subject: 'Science',
+        type: 'evaluation_mensuelle',
+        date: '2026-09-15',
+        coefficient: 2,
+        maxScore: 20,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.type).toBe('evaluation_mensuelle');
+    expect(res.body.title).toMatch(/^Évaluation mensuelle /);
+    expect(FIXTURES.evaluations.at(-1)).toMatchObject({
+      type: 'evaluation_mensuelle',
+      coefficient: 2,
+      maxScore: 20,
+    });
+  });
+
+  it('rejects an unsupported evaluation type through the API', async () => {
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-uid')
+      .set('x-simulated-user-id', '3')
+      .set('x-simulated-school-id', '10')
+      .send({
+        classId: '100',
+        subject: 'Science',
+        type: 'quiz',
+        date: '2026-09-15',
+      });
+
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toContain('Invalid evaluation type');
+  });
+
+  it('keeps teacher class authorization in force for monthly evaluations', async () => {
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-uid', 'teacher-uid')
+      .set('x-simulated-user-id', '3')
+      .set('x-simulated-school-id', '10')
+      .send({
+        classId: '200',
+        subjectId: 2,
+        subject: 'Science',
+        type: 'evaluation_mensuelle',
+        date: '2026-09-15',
+        coefficient: 1,
+        maxScore: 20,
+      });
+
+    expect(res.status).toBe(403);
+    expect(String(res.body.error)).toContain('another school');
+  });
+
   it('rejects teacher with assigned class when the subject is not assigned', async () => {
     FIXTURES.subjects.push({ id: 6, name: 'History', schoolId: 10 });
     FIXTURES.schoolSubjects.push({ id: 4, subjectId: 6, schoolId: 10, status: 'approved' });

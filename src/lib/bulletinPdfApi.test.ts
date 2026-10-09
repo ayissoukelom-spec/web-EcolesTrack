@@ -1089,6 +1089,21 @@ describe('bulletin PDF API', () => {
     expect(breakdown.interrogation).toBe(11);
   });
 
+  it('regroupe les évaluations mensuelles avec les Devoirs dans les moyennes PDF', () => {
+    const monthlyRows = [
+      { subject: 'Mathématique', studentId: 26, type: 'evaluation_mensuelle', coefficient: 2, maxScore: 40, score: '30' },
+    ];
+    const homeworkRows = [
+      { subject: 'Mathématique', studentId: 26, type: 'devoir', coefficient: 2, maxScore: 40, score: '30' },
+    ];
+
+    const monthlyBreakdown = calculateStudentSubjectTypeAverages(monthlyRows, 26, 'Mathématique');
+    const homeworkBreakdown = calculateStudentSubjectTypeAverages(homeworkRows, 26, 'Mathématique');
+
+    expect(monthlyBreakdown).toEqual({ interrogation: null, devoir: 15, composition: null });
+    expect(monthlyBreakdown).toEqual(homeworkBreakdown);
+  });
+
   it('prend le coefficient de la composition publiée, jamais la somme des évaluations', () => {
     const rows = [
       { subject: 'Mathématique', type: 'interrogation', coefficient: 3, maxScore: 20, score: '12' },

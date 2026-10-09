@@ -239,6 +239,7 @@ export default function HomeroomView({ classes }: Props) {
                   >
                     <option value="">Toutes</option>
                     <option value="devoir">Devoir</option>
+                    <option value="evaluation_mensuelle">Évaluation mensuelle</option>
                     <option value="interrogation">Interrogation</option>
                     <option value="composition">Composition</option>
                   </select>

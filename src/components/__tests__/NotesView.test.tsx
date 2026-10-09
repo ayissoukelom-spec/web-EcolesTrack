@@ -202,6 +202,37 @@ test('teacher subject picker excludes approved subjects that are not assigned by
   expect(screen.queryByRole('option', { name: 'Science' })).toBeNull();
 });
 
+test('allows creating an evaluation with the monthly evaluation type', () => {
+  const onAddEvaluation = vi.fn();
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      approvedSubjectsList={[{ id: 10, name: 'Math' }]}
+      onAddEvaluation={onAddEvaluation}
+    /> as any,
+    'school_admin',
+    1,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
+  const [classSelect, subjectSelect, typeSelect] = Array.from(document.querySelectorAll('#box-eval-form select'));
+  if (!classSelect || !subjectSelect || !typeSelect) throw new Error('Could not locate evaluation form selectors');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+  fireEvent.change(subjectSelect, { target: { value: 'Math' } });
+  fireEvent.change(typeSelect, { target: { value: 'evaluation_mensuelle' } });
+  expect(screen.getByRole('option', { name: 'Évaluation mensuelle' })).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Publier le Devoir' }));
+
+  expect(onAddEvaluation).toHaveBeenCalledWith(expect.objectContaining({
+    classId: 85,
+    subject: 'Math',
+    subjectId: 10,
+    type: 'evaluation_mensuelle',
+    coefficient: 1,
+    maxScore: 20,
+  }));
+});
+
 test('sorts students in the grade-entry table by family name and first name', () => {
   renderWithAuth(
     <NotesView

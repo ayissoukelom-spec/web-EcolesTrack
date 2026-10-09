@@ -86,6 +86,33 @@ describe('calculateOfficialClassResults', () => {
     expect(semester[0].average).toBe(11);
   });
 
+  it('inclut les évaluations mensuelles dans la moyenne de devoir du classement officiel', () => {
+    const evaluations: BulletinEvaluationLike[] = [
+      {
+        ...makeEvaluation(31, 1),
+        title: 'Évaluation mensuelle',
+        type: 'evaluation_mensuelle',
+        coefficient: 2,
+        maxScore: 40,
+      },
+      { ...makeEvaluation(32, 1), title: 'Composition', type: 'composition' },
+    ];
+    const grades = [
+      makeGrade(31, 31, 1, '30'),
+      makeGrade(32, 31, 2, '20'),
+      makeGrade(33, 32, 1, '10'),
+      makeGrade(34, 32, 2, '10'),
+    ];
+
+    const rankedStudents = students.filter((student) => student.id === 1 || student.id === 2);
+    const results = calculateOfficialClassResults(rankedStudents, 1, evaluations, grades);
+
+    expect(results.map(({ studentId, average, rank }) => ({ studentId, average, rank }))).toEqual([
+      { studentId: 1, average: 12.5, rank: 1 },
+      { studentId: 2, average: 10, rank: 2 },
+    ]);
+  });
+
   it('stabilise les ex æquo alphabétiquement et laisse les élèves sans moyenne en fin de liste', () => {
     const evaluation = makeEvaluation(11, 1);
     const results = calculateOfficialClassResults(students, 1, [evaluation], [

@@ -861,6 +861,32 @@ describe('generateBulletinSnapshot', () => {
     expect(state.bulletinLines[0]?.classAverage).toBe(13);
   });
 
+  it('inclut une matière uniquement évaluée mensuellement dans la moyenne officielle et le classement', async () => {
+    const { persistence, state } = createFakePersistence({
+      ...baseState,
+      students: [
+        { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
+        { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
+      ],
+      evaluations: [
+        { id: 31, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'Évaluation mensuelle T1.1', type: 'evaluation_mensuelle', coefficient: 2, maxScore: 40, countInBulletin: true },
+      ],
+      grades: [
+        { id: 31, evaluationId: 31, studentId: 1, score: '30' },
+        { id: 32, evaluationId: 31, studentId: 2, score: '20' },
+      ],
+    });
+
+    await generateBulletinSnapshot(1, 7, persistence);
+    await generateBulletinSnapshot(2, 7, persistence);
+
+    const aliceLine = state.bulletinLines.find((line) => line.bulletinId === 1 && line.subjectName === 'Math');
+    const bobLine = state.bulletinLines.find((line) => line.bulletinId === 2 && line.subjectName === 'Math');
+    expect(aliceLine).toMatchObject({ devoir: 15, classAverage: 15, average: 15, rank: 1 });
+    expect(bobLine).toMatchObject({ devoir: 10, classAverage: 10, average: 10, rank: 2 });
+    expect(state.bulletins).toHaveLength(2);
+  });
+
   it('exclut les évaluations non retenues de Moy. Clas', async () => {
     const { persistence, state } = createFakePersistence({
       ...baseState,

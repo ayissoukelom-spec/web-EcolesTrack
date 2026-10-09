@@ -417,7 +417,7 @@ export const evaluations = pgTable('evaluations', {
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
   subject: text('subject').notNull(), // e.g. "Mathématiques"
   title: text('title').notNull(), // e.g. "Devoir surveillé 1"
-  type: text('type'), // 'interrogation', 'devoir', or 'composition'
+  type: text('type'), // 'interrogation', 'devoir', 'evaluation_mensuelle', or 'composition'
   sequenceNumber: integer('sequence_number'), // Unique per (termId, classId)
   generatedName: text('generated_name'), // Automatically generated: "Devoir S1.3"
   coefficient: integer('coefficient').default(1).notNull(),

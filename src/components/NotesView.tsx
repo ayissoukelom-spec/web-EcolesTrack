@@ -130,7 +130,7 @@ export default function NotesView({
   const [newEvalClassId, setNewEvalClassId] = useState('');
   const [newEvalSubject, setNewEvalSubject] = useState('');
   const [newEvalSubjectId, setNewEvalSubjectId] = useState<number | null>(null);
-  const [newEvalType, setNewEvalType] = useState(''); // 'interrogation', 'devoir', 'composition'
+  const [newEvalType, setNewEvalType] = useState('');
   const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
@@ -138,6 +138,7 @@ export default function NotesView({
   const evaluationTypes = [
     { value: 'interrogation', label: 'Interrogation' },
     { value: 'devoir', label: 'Devoir' },
+    { value: 'evaluation_mensuelle', label: 'Évaluation mensuelle' },
     { value: 'composition', label: 'Composition' },
   ];
 

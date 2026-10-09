@@ -221,7 +221,7 @@ export interface Evaluation {
   subjectId?: number | null;
   subject: string;
   title: string;
-  type?: string; // 'interrogation', 'devoir', 'composition'
+  type?: string; // 'interrogation', 'devoir', 'evaluation_mensuelle', 'composition'
   sequenceNumber?: number | null; // Unique per (termId, classId)
   generatedName?: string; // Auto-generated name like "Devoir S1.3"
   coefficient: number;

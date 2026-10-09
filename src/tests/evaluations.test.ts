@@ -157,7 +157,7 @@ describe('Evaluation Type & Sequence - 7 Core Requirements', () => {
   });
 
   it('Test 5: Invalid types are rejected', () => {
-    const validTypes = ['interrogation', 'devoir', 'composition'];
+    const validTypes = ['interrogation', 'devoir', 'evaluation_mensuelle', 'composition'];
     const invalidTypes = ['quiz', 'test', 'exam', 'xyz'];
 
     invalidTypes.forEach(type => {

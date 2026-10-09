@@ -190,6 +190,30 @@ describe('BulletinsView', () => {
     });
   });
 
+  it('recognizes monthly evaluations for bulletin generation without replacing composition', async () => {
+    render(
+      <BulletinsView
+        schoolsList={[{ id: 1, name: 'École A' }]}
+        classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '2nde CD' }]}
+        studentsList={[{ id: 1, schoolId: 1, classId: 10, className: '2nde CD', firstName: 'Alice', lastName: 'Dupont' }]}
+        evaluationsList={[
+          { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Mathématiques', title: 'Évaluation mensuelle', type: 'evaluation_mensuelle', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },
+          { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Mathématiques', title: 'Composition', type: 'composition', coefficient: 2, maxScore: 20, countInBulletin: true, date: '2026-06-11' },
+        ]}
+        gradesList={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('2nde CD'));
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Generer le bulletin' })).toBeEnabled();
+    });
+  });
+
   it('keeps parent notes limited to attached children while showing per-evaluation bounds', () => {
     render(
       <ParentNotesView

@@ -10299,7 +10299,7 @@ export async function createApp() {
       }
 
       // Validate evaluation type
-      const validTypes = ['interrogation', 'devoir', 'composition'];
+      const validTypes = ['interrogation', 'devoir', 'evaluation_mensuelle', 'composition'];
       const normalizedType = String(type).toLowerCase().trim();
       if (!validTypes.includes(normalizedType)) {
         return res.status(400).json({ error: `Invalid evaluation type. Must be one of: ${validTypes.join(', ')}` });
@@ -10546,7 +10546,10 @@ export async function createApp() {
         .where(eq(schoolTerms.id, resolvedTermId));
 
       const termShortName = getPeriodTypeShortName(selectedTermInfo?.periodType, selectedTermInfo?.orderIndex || 1, selectedTermInfo?.name);
-      const generatedName = `${normalizedType.charAt(0).toUpperCase()}${normalizedType.slice(1)} ${termShortName}.${sequenceNumber}`;
+      const evaluationTypeLabel = normalizedType === 'evaluation_mensuelle'
+        ? 'Évaluation mensuelle'
+        : `${normalizedType.charAt(0).toUpperCase()}${normalizedType.slice(1)}`;
+      const generatedName = `${evaluationTypeLabel} ${termShortName}.${sequenceNumber}`;
 
       const result = await db.insert(evaluations).values({
         classId: parseInt(classId),

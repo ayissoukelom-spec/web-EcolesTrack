@@ -26,6 +26,7 @@ import {
   calculateTypeWeightedAverage,
   findSubjectsMissingValidComposition,
   formatMissingCompositionMessage,
+  getBulletinCalculationType,
   normalizeEvaluationType,
 } from '../lib/bulletinService.ts';
 
@@ -473,7 +474,7 @@ export default function BulletinsView({
       };
 
       for (const ev of relevantEvaluations.filter((evaluation) => evaluation.subject === subjectName)) {
-        const type = normalizeEvaluationType(ev.type);
+        const type = getBulletinCalculationType(ev.type);
         if (!type) continue;
 
         const scoreForStudent = gradesList.find((grade) => grade.evaluationId === ev.id && grade.studentId === detail.studentId);

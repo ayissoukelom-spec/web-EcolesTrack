@@ -253,16 +253,31 @@ describe('HomeroomView', () => {
   });
 
   it('filters evaluations and associated grades by normalized evaluation type', async () => {
-    fetchHomeroomClass.mockResolvedValue(detailFor(homeroomClasses[0]));
+    const detail = detailFor(homeroomClasses[0]);
+    detail.evaluations.push({
+      id: 105, termId: 1, termName: 'Trimestre 1', periodType: 'trimester', orderIndex: 1,
+      subject: 'Mathématiques', title: 'Évaluation mensuelle T1.1', type: 'evaluation_mensuelle',
+      date: '2025-10-05', teacherName: 'Prof A',
+    });
+    detail.grades.push({
+      id: 1006, evaluationId: 105, studentId: 1, studentName: 'Dupont Jean',
+      subject: 'Mathématiques', evaluationTitle: 'Évaluation mensuelle T1.1', score: '15',
+    });
+    fetchHomeroomClass.mockResolvedValue(detail);
     render(<HomeroomView classes={[homeroomClasses[0]]} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Évaluations et notes' }));
     const typeFilter = screen.getByRole('combobox', { name: 'Type d’évaluation' });
     expect(Array.from(typeFilter.querySelectorAll('option'), (option) => option.textContent)).toEqual([
-      'Toutes', 'Devoir', 'Interrogation', 'Composition',
+      'Toutes', 'Devoir', 'Évaluation mensuelle', 'Interrogation', 'Composition',
     ]);
-    expect(displayedEvaluationRows()).toHaveLength(4);
-    expect(displayedGradeRows()).toHaveLength(5);
+    expect(displayedEvaluationRows()).toHaveLength(5);
+    expect(displayedGradeRows()).toHaveLength(6);
+
+    fireEvent.change(typeFilter, { target: { value: 'evaluation_mensuelle' } });
+    expect(displayedEvaluationRows()).toHaveLength(1);
+    expect(displayedEvaluationRows()[0]).toContain('Évaluation mensuelle T1.1');
+    expect(displayedGradeRows()).toHaveLength(1);
 
     fireEvent.change(typeFilter, { target: { value: 'devoir' } });
     expect(displayedEvaluationRows()).toHaveLength(2);

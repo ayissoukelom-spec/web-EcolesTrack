@@ -46,6 +46,7 @@ import {
   calculateClassAverage,
   calculateFinalSubjectAverage,
   calculateTypeWeightedAverage,
+  getBulletinCalculationType,
   resolveSubjectCoefficientFromPublishedComposition,
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
@@ -500,7 +501,7 @@ export const calculateStudentSubjectTypeAverages = (
 
   for (const type of ['interrogation', 'devoir', 'composition'] as const) {
     const entries = rows
-      .filter((row) => row.subject === subjectName && row.studentId === studentId && (row.type ?? '').trim().toLowerCase() === type)
+      .filter((row) => row.subject === subjectName && row.studentId === studentId && getBulletinCalculationType(row.type) === type)
       .map((row) => {
         const rawScore = parseNumericScore(String(row.score ?? ''));
         const maxScore = Number(row.maxScore);
@@ -529,8 +530,7 @@ const buildFallbackLinesFromGrades = (
     const rawScore = parseNumericScore(row.score);
     if (!(coefficient > 0) || !(maxScore > 0) || rawScore == null) continue;
     const normalizedScore = (rawScore / maxScore) * 20;
-    const type = row.type?.trim().toLowerCase();
-    const key = type === 'interrogation' || type === 'devoir' || type === 'composition' ? type : null;
+    const key = getBulletinCalculationType(row.type);
     const current = bySubject.get(row.subject) ?? { coefficient: 0, weighted: 0, weightedCoefficient: 0, groups: { interrogation: [], devoir: [], composition: [] } };
     current.weighted += normalizedScore * coefficient;
     current.weightedCoefficient += coefficient;
@@ -644,8 +644,7 @@ const computeSubjectBreakdown = async (
     const maxScore = Number(row.maxScore || 0);
     if (rawScore == null || maxScore <= 0) continue;
     const normalizedScore = (rawScore / maxScore) * 20;
-    const type = (row.type ?? '').trim().toLowerCase();
-    const asType = type === 'interrogation' || type === 'devoir' || type === 'composition' ? type : null;
+    const asType = getBulletinCalculationType(row.type);
 
     const current = bySubject.get(subjectName) ?? { studentEntries: [], byType: { interrogation: [], devoir: [], composition: [] }, allStudentAverages: [] };
     current.studentEntries.push({ coefficient: Number(row.coefficient || 0), score: normalizedScore });

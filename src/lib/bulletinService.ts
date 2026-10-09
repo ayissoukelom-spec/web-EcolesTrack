@@ -20,7 +20,8 @@ export interface BulletinStudentLike {
   lastName?: string;
 }
 
-export type BulletinEvaluationType = 'interrogation' | 'devoir' | 'composition';
+export type BulletinEvaluationType = 'interrogation' | 'devoir' | 'evaluation_mensuelle' | 'composition';
+export type BulletinCalculationType = Exclude<BulletinEvaluationType, 'evaluation_mensuelle'>;
 
 export interface BulletinEvaluationLike {
   id: number;
@@ -67,8 +68,14 @@ export const normalizeEvaluationType = (value?: string | null): BulletinEvaluati
   const normalized = String(value ?? '').trim().toLowerCase();
   if (normalized === 'interrogation') return 'interrogation';
   if (normalized === 'devoir') return 'devoir';
+  if (normalized === 'evaluation_mensuelle') return 'evaluation_mensuelle';
   if (normalized === 'composition') return 'composition';
   return null;
+};
+
+export const getBulletinCalculationType = (value?: string | null): BulletinCalculationType | null => {
+  const type = normalizeEvaluationType(value);
+  return type === 'evaluation_mensuelle' ? 'devoir' : type;
 };
 
 export const calculateTypeWeightedAverage = (entries: Array<{ coefficient: number; normalizedScore: number | null }>): number | null => {
@@ -207,14 +214,14 @@ export const calculateSubjectBreakdown = (
 };
 
 export const summarizeTypeAveragesBySubject = (subjectSnapshots: BulletinEvaluationSnapshot[]): BulletinTypeAverageSummary => {
-  const grouped: Record<BulletinEvaluationType, Array<{ coefficient: number; normalizedScore: number | null }>> = {
+  const grouped: Record<BulletinCalculationType, Array<{ coefficient: number; normalizedScore: number | null }>> = {
     interrogation: [],
     devoir: [],
     composition: [],
   };
 
   for (const snapshot of subjectSnapshots) {
-    const type = snapshot.type ?? normalizeEvaluationType((snapshot as any).evaluationType ?? null);
+    const type = getBulletinCalculationType(snapshot.type ?? (snapshot as any).evaluationType ?? null);
     if (!type) continue;
     grouped[type].push({
       coefficient: Number(snapshot.coefficient ?? 0),
