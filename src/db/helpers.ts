@@ -64,6 +64,7 @@ export async function ensureEducationStructureSchema() {
 
   await db.insert(cycles).values([
     { code: 'college', name: 'Collège' },
+    { code: 'primaire', name: 'Primaire' },
     { code: 'lycee', name: 'Lycée' },
   ]).onConflictDoNothing({ target: cycles.code });
 
@@ -72,7 +73,11 @@ export async function ensureEducationStructureSchema() {
   const levelDefaults = [
     ['college', '6e', '6ème', 1], ['college', '5e', '5ème', 2],
     ['college', '4e', '4ème', 3], ['college', '3e', '3ème', 4],
-    ['lycee', '2nde', '2nde', 5], ['lycee', '1ere', '1ère', 6], ['lycee', 'tle', 'Tle', 7],
+    ['primaire', 'maternelle1', 'Maternelle 1', 5], ['primaire', 'maternelle2', 'Maternelle 2', 6],
+    ['primaire', 'cp1', 'CP1', 7], ['primaire', 'cp2', 'CP2', 8],
+    ['primaire', 'ce1', 'CE1', 9], ['primaire', 'ce2', 'CE2', 10],
+    ['primaire', 'cm1', 'CM1', 11], ['primaire', 'cm2', 'CM2', 12],
+    ['lycee', '2nde', '2nde', 13], ['lycee', '1ere', '1ère', 14], ['lycee', 'tle', 'Tle', 15],
   ] as const;
   for (const [cycleCode, code, name, orderIndex] of levelDefaults) {
     const cycleId = cycleByCode.get(cycleCode);
@@ -82,6 +87,7 @@ export async function ensureEducationStructureSchema() {
 
   const templateDefaults = [
     ['college', 'trimester', 'Trimestre 1', 1], ['college', 'trimester', 'Trimestre 2', 2], ['college', 'trimester', 'Trimestre 3', 3],
+    ['primaire', 'trimester', 'Trimestre 1', 1], ['primaire', 'trimester', 'Trimestre 2', 2], ['primaire', 'trimester', 'Trimestre 3', 3],
     ['lycee', 'semester', 'Semestre 1', 1], ['lycee', 'semester', 'Semestre 2', 2],
   ] as const;
   for (const [cycleCode, periodType, name, orderIndex] of templateDefaults) {
@@ -100,6 +106,14 @@ export async function ensureEducationStructureSchema() {
       (lvl.code = '5e' AND lower(cls.name) ~ '^(5e|5eme|5ème)([[:space:]]|$)') OR
       (lvl.code = '4e' AND lower(cls.name) ~ '^(4e|4eme|4ème)([[:space:]]|$)') OR
       (lvl.code = '3e' AND lower(cls.name) ~ '^(3e|3eme|3ème)([[:space:]]|$)') OR
+      (lvl.code = 'maternelle1' AND lower(cls.name) ~ '^(maternelle[[:space:]]*1|m[[:space:]]*1)([[:space:]]|$)') OR
+      (lvl.code = 'maternelle2' AND lower(cls.name) ~ '^(maternelle[[:space:]]*2|m[[:space:]]*2)([[:space:]]|$)') OR
+      (lvl.code = 'cp1' AND lower(cls.name) ~ '^(cp[[:space:]]*1)([[:space:]]|$)') OR
+      (lvl.code = 'cp2' AND lower(cls.name) ~ '^(cp[[:space:]]*2)([[:space:]]|$)') OR
+      (lvl.code = 'ce1' AND lower(cls.name) ~ '^(ce[[:space:]]*1)([[:space:]]|$)') OR
+      (lvl.code = 'ce2' AND lower(cls.name) ~ '^(ce[[:space:]]*2)([[:space:]]|$)') OR
+      (lvl.code = 'cm1' AND lower(cls.name) ~ '^(cm[[:space:]]*1)([[:space:]]|$)') OR
+      (lvl.code = 'cm2' AND lower(cls.name) ~ '^(cm[[:space:]]*2)([[:space:]]|$)') OR
       (lvl.code = '2nde' AND lower(cls.name) ~ '^(2de|2nde)([[:space:]]|$)') OR
       (lvl.code = '1ere' AND lower(cls.name) ~ '^(1ere|1ère)([[:space:]]|$)') OR
       (lvl.code = 'tle' AND lower(cls.name) ~ '^(tle|terminale)([[:space:]]|$)')

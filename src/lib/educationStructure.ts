@@ -2,19 +2,20 @@ import { and, eq, or, sql, count } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { classes, cycles, levels, schoolCycles, schoolPeriodTypeApprovals, schoolTerms } from '../db/schema.ts';
 
-export type EducationCycleCode = 'college' | 'lycee';
+export type EducationCycleCode = 'college' | 'lycee' | 'primaire';
 export type PeriodType = 'trimester' | 'semester';
 export type PeriodApprovalStatus = 'pending' | 'approved' | 'rejected';
 
-const PERIOD_CYCLE_CODES: Record<PeriodType, EducationCycleCode> = {
-  trimester: 'college',
-  semester: 'lycee',
+const PERIOD_CYCLE_CODES: Record<PeriodType, EducationCycleCode[]> = {
+  trimester: ['college', 'primaire'],
+  semester: ['lycee'],
 };
 
 export interface SchoolPeriodTypeState {
   periodType: PeriodType;
   cycleCode: EducationCycleCode;
   cycleId: number | null;
+  activeCycleIds: number[];
   cycleActive: boolean;
   status: PeriodApprovalStatus;
   available: boolean;
@@ -24,17 +25,20 @@ export function resolveSchoolPeriodTypeStates(
   activeCycles: Array<{ id: number; code: string }>,
   approvals: Array<{ periodType: string; status: string }>,
 ): SchoolPeriodTypeState[] {
-  return (Object.entries(PERIOD_CYCLE_CODES) as Array<[PeriodType, EducationCycleCode]>).map(([periodType, cycleCode]) => {
-    const cycle = activeCycles.find((entry) => entry.code === cycleCode);
+  return (Object.entries(PERIOD_CYCLE_CODES) as Array<[PeriodType, EducationCycleCode[]]>).map(([periodType, cycleCodes]) => {
+    const matchingCycles = activeCycles.filter((entry) => cycleCodes.includes(entry.code as EducationCycleCode));
+    const cycle = matchingCycles[0];
     const approval = approvals.find((entry) => entry.periodType === periodType);
     const status: PeriodApprovalStatus = approval?.status === 'approved' || approval?.status === 'rejected'
       ? approval.status
       : 'pending';
-    const cycleActive = cycle != null;
+    const cycleActive = matchingCycles.length > 0;
+    const cycleCode = (cycle?.code as EducationCycleCode | undefined) ?? cycleCodes[0];
     return {
       periodType,
       cycleCode,
       cycleId: cycle?.id ?? null,
+      activeCycleIds: matchingCycles.map((entry) => entry.id),
       cycleActive,
       status,
       available: cycleActive && status === 'approved',
@@ -59,7 +63,11 @@ export function filterAvailableSchoolTerms<T extends {
     if (periodType !== 'trimester' && periodType !== 'semester') return false;
     const state = stateByType.get(periodType);
     if (!state?.available) return false;
-    if (term.cycleId != null && term.cycleId !== state.cycleId) return false;
+    if (education) {
+      if (education.cycleId == null || !state.activeCycleIds.includes(education.cycleId)) return false;
+    } else if (term.cycleId != null && term.cycleId !== state.cycleId) {
+      return false;
+    }
     return !education || isTermCompatibleWithCycle(term, education);
   });
 }
@@ -86,6 +94,14 @@ const LEVEL_ALIASES: Array<{ code: string; cycle: EducationCycleCode; pattern: R
   { code: '5e', cycle: 'college', pattern: /^(5e|5eme|5ème)(?:\b|\s)/i },
   { code: '4e', cycle: 'college', pattern: /^(4e|4eme|4ème)(?:\b|\s)/i },
   { code: '3e', cycle: 'college', pattern: /^(3e|3eme|3ème)(?:\b|\s)/i },
+  { code: 'maternelle1', cycle: 'primaire', pattern: /^(maternelle\s*1|m\s*1)(?:\b|\s)/i },
+  { code: 'maternelle2', cycle: 'primaire', pattern: /^(maternelle\s*2|m\s*2)(?:\b|\s)/i },
+  { code: 'cp1', cycle: 'primaire', pattern: /^(cp\s*1)(?:\b|\s|$)/i },
+  { code: 'cp2', cycle: 'primaire', pattern: /^(cp\s*2)(?:\b|\s|$)/i },
+  { code: 'ce1', cycle: 'primaire', pattern: /^(ce\s*1)(?:\b|\s|$)/i },
+  { code: 'ce2', cycle: 'primaire', pattern: /^(ce\s*2)(?:\b|\s|$)/i },
+  { code: 'cm1', cycle: 'primaire', pattern: /^(cm\s*1)(?:\b|\s|$)/i },
+  { code: 'cm2', cycle: 'primaire', pattern: /^(cm\s*2)(?:\b|\s|$)/i },
   { code: '2nde', cycle: 'lycee', pattern: /^(2de|2nde)(?:\b|\s)/i },
   { code: '1ere', cycle: 'lycee', pattern: /^(1ere|1ère)(?:\b|\s)/i },
   { code: 'tle', cycle: 'lycee', pattern: /^(tle|terminale)(?:\b|\s|$)/i },
@@ -97,7 +113,7 @@ export function inferLevelCodeFromClassName(name: string | null | undefined): st
 }
 
 export function getExpectedPeriodTypeForCycle(cycleCode: EducationCycleCode | string | null | undefined): PeriodType | null {
-  if (cycleCode === 'college') return 'trimester';
+  if (cycleCode === 'college' || cycleCode === 'primaire') return 'trimester';
   if (cycleCode === 'lycee') return 'semester';
   return null;
 }

@@ -1345,6 +1345,9 @@ export default function AdminView({
     if (state.status === 'pending') return { label: 'Type en attente', className: 'bg-amber-50 text-amber-700' };
     if (state.status === 'rejected') return { label: 'Type refusé', className: 'bg-rose-50 text-rose-700' };
     if (!state.cycleActive) return { label: 'Cycle inactif', className: 'bg-slate-100 text-slate-600' };
+    if (term.cycleId != null && !state.activeCycleIds?.includes(Number(term.cycleId))) {
+      return { label: 'Cycle inactif', className: 'bg-slate-100 text-slate-600' };
+    }
     return { label: 'Type approuvé · classes compatibles', className: 'bg-emerald-50 text-emerald-700' };
   };
   useEffect(() => {
@@ -5129,7 +5132,7 @@ export default function AdminView({
                     const isApproved = state.status === 'approved';
                     const isRejected = state.status === 'rejected';
                     const schoolTargetId = adminEducationSchoolId;
-                    const cycleLabel = state.cycleActive ? `Cycle ${state.cycleCode === 'college' ? 'collège' : 'lycée'} actif` : `Cycle ${state.cycleCode === 'college' ? 'collège' : 'lycée'} inactif`;
+                    const cycleLabel = state.cycleActive ? `Cycle ${state.cycleCode === 'college' ? 'collège' : state.cycleCode === 'primaire' ? 'primaire' : 'lycée'} actif` : `Cycle ${state.cycleCode === 'college' ? 'collège' : state.cycleCode === 'primaire' ? 'primaire' : 'lycée'} inactif`;
                     const statusClass = isApproved ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : isRejected ? 'bg-rose-50 text-rose-700 border-rose-100' : 'bg-amber-50 text-amber-700 border-amber-100';
                     const statusLabel = isApproved ? 'Approuvé' : isRejected ? 'Refusé' : 'En attente';
 

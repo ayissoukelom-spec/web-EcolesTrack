@@ -11,6 +11,104 @@ import { apiFetch } from '../lib/api';
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 const getPrimarySchoolPhoneInput = () => screen.getAllByPlaceholderText('90000000')[0] as HTMLInputElement;
 
+describe('AdminView school term cycle availability', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', {
+      value: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+      },
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('does not label a period available when its cycle is inactive for the school', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      let payload: unknown = [];
+      if (url.endsWith('/api/education/cycles')) {
+        payload = [
+          { id: 1, code: 'college', name: 'Collège' },
+          { id: 2, code: 'primaire', name: 'Primaire' },
+        ];
+      } else if (url.endsWith('/api/schools/1/cycles')) {
+        payload = [{ schoolId: 1, cycleId: 1, cycleCode: 'college', isActive: true }];
+      } else if (url.endsWith('/api/schools/1/period-type-approvals')) {
+        payload = [
+          {
+            periodType: 'trimester',
+            cycleCode: 'college',
+            cycleId: 1,
+            activeCycleIds: [1],
+            cycleActive: true,
+            status: 'approved',
+            available: true,
+          },
+          {
+            periodType: 'semester',
+            cycleCode: 'lycee',
+            cycleId: null,
+            activeCycleIds: [],
+            cycleActive: false,
+            status: 'pending',
+            available: false,
+          },
+        ];
+      } else if (url.endsWith('/api/education/cycle-period-templates')) {
+        payload = [
+          { id: 1, cycleId: 1, periodType: 'trimester', name: 'Trimestre 1', orderIndex: 1 },
+          { id: 2, cycleId: 2, periodType: 'trimester', name: 'Trimestre 1', orderIndex: 1 },
+        ];
+      } else if (url.includes('/api/school-terms?academicYearId=1')) {
+        payload = [
+          { id: 1, name: 'Collège - Trimestre 1', schoolId: null, academicYearId: 1, cycleId: 1, periodType: 'trimester', isActive: true },
+          { id: 2, name: 'Primaire - Trimestre 1', schoolId: null, academicYearId: 1, cycleId: 2, periodType: 'trimester', isActive: true },
+        ];
+      }
+      return new Response(JSON.stringify(payload), { status: 200 });
+    });
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="school_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[{ id: 1, name: '2026-2027', isActive: true, schoolId: 1 }]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Années Scolaires/i }));
+      const primaryPeriod = await screen.findByText('Primaire - Trimestre 1');
+      const collegePeriod = await screen.findByText('Collège - Trimestre 1');
+
+      expect(within(primaryPeriod.closest('li')!).getByText('Cycle inactif')).toBeTruthy();
+      expect(within(collegePeriod.closest('li')!).getByText('Type approuvé · classes compatibles')).toBeTruthy();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
 describe('AdminView create-user teacher form', () => {
   afterEach(() => {
     cleanup();

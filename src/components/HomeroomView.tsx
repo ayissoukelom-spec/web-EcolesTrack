@@ -73,7 +73,7 @@ export default function HomeroomView({ classes }: Props) {
       .map((evaluation) => evaluation.subject)
       .filter((subject): subject is string => typeof subject === 'string' && subject.trim().length > 0),
   )).sort((left, right) => left.localeCompare(right, 'fr'));
-  const periodType = detail?.class.cycleCode === 'college'
+  const periodType = detail?.class.cycleCode === 'college' || detail?.class.cycleCode === 'primaire'
     ? 'trimester'
     : detail?.class.cycleCode === 'lycee'
       ? 'semester'

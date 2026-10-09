@@ -4,6 +4,7 @@ import { filterAvailableSchoolTerms, getExpectedPeriodTypeForCycle, getPeriodTyp
 describe('educationStructure', () => {
   it('maps each cycle to its expected period type', () => {
     expect(getExpectedPeriodTypeForCycle('college')).toBe('trimester');
+    expect(getExpectedPeriodTypeForCycle('primaire')).toBe('trimester');
     expect(getExpectedPeriodTypeForCycle('lycee')).toBe('semester');
     expect(getExpectedPeriodTypeForCycle(null)).toBeNull();
   });
@@ -17,6 +18,15 @@ describe('educationStructure', () => {
       ],
     );
     expect(cegOnly.map((state) => state.available)).toEqual([true, false]);
+
+    const primaireOnly = resolveSchoolPeriodTypeStates(
+      [{ id: 3, code: 'primaire' }],
+      [
+        { periodType: 'trimester', status: 'approved' },
+        { periodType: 'semester', status: 'rejected' },
+      ],
+    );
+    expect(primaireOnly.map((state) => state.available)).toEqual([true, false]);
 
     const lyceeOnly = resolveSchoolPeriodTypeStates(
       [{ id: 2, code: 'lycee' }],
@@ -61,15 +71,91 @@ describe('educationStructure', () => {
     expect(filterAvailableSchoolTerms(terms, cegStates).map((term) => term.id)).toEqual([1]);
   });
 
+  it('filters shared trimester approvals by each active class cycle, regardless of cycle order', () => {
+    const terms = [
+      { id: 1, cycleId: 1, periodType: 'trimester', isActive: true },
+      { id: 2, cycleId: 2, periodType: 'trimester', isActive: true },
+      { id: 3, cycleId: 3, periodType: 'trimester', isActive: true },
+      { id: 4, cycleId: 2, periodType: 'trimester', isActive: false },
+    ];
+    const approvals = [{ periodType: 'trimester', status: 'approved' }];
+    const activeCycles = [{ id: 1, code: 'college' }, { id: 2, code: 'primaire' }];
+    const reversedCycles = [...activeCycles].reverse();
+
+    for (const cycles of [activeCycles, reversedCycles]) {
+      const states = resolveSchoolPeriodTypeStates(cycles, approvals);
+      expect(filterAvailableSchoolTerms(terms, states, { cycleId: 1, cycleCode: 'college' }).map((term) => term.id)).toEqual([1]);
+      expect(filterAvailableSchoolTerms(terms, states, { cycleId: 2, cycleCode: 'primaire' }).map((term) => term.id)).toEqual([2]);
+    }
+  });
+
+  it.each([
+    ['absent', []],
+    ['pending', [{ periodType: 'trimester', status: 'pending' }]],
+    ['rejected', [{ periodType: 'trimester', status: 'rejected' }]],
+  ])('does not make shared trimesters available when approval is %s', (_label, approvals) => {
+    const states = resolveSchoolPeriodTypeStates(
+      [{ id: 2, code: 'primaire' }],
+      approvals,
+    );
+    expect(filterAvailableSchoolTerms(
+      [{ id: 2, cycleId: 2, periodType: 'trimester', isActive: true }],
+      states,
+      { cycleId: 2, cycleCode: 'primaire' },
+    )).toEqual([]);
+  });
+
+  it('keeps all three approved college trimesters and lycée semesters available to their own cycles', () => {
+    const activeCycles = [{ id: 1, code: 'college' }, { id: 2, code: 'primaire' }, { id: 3, code: 'lycee' }];
+    const states = resolveSchoolPeriodTypeStates(activeCycles, [
+      { periodType: 'trimester', status: 'approved' },
+      { periodType: 'semester', status: 'approved' },
+    ]);
+    const terms = [
+      { id: 1, cycleId: 1, periodType: 'trimester', isActive: true },
+      { id: 2, cycleId: 1, periodType: 'trimester', isActive: true },
+      { id: 3, cycleId: 1, periodType: 'trimester', isActive: true },
+      { id: 4, cycleId: 3, periodType: 'semester', isActive: true },
+      { id: 5, cycleId: 3, periodType: 'semester', isActive: true },
+    ];
+
+    expect(filterAvailableSchoolTerms(terms, states, { cycleId: 1, cycleCode: 'college' }).map((term) => term.id)).toEqual([1, 2, 3]);
+    expect(filterAvailableSchoolTerms(terms, states, { cycleId: 3, cycleCode: 'lycee' }).map((term) => term.id)).toEqual([4, 5]);
+  });
+
+  it('keeps legacy terms without a cycleId compatible only for active cycles with approved period types', () => {
+    const terms = [{ id: 1, cycleId: null, periodType: 'trimester', isActive: true }];
+    const approvedStates = resolveSchoolPeriodTypeStates(
+      [{ id: 1, code: 'college' }, { id: 2, code: 'primaire' }],
+      [{ periodType: 'trimester', status: 'approved' }],
+    );
+    const primaryOnlyStates = resolveSchoolPeriodTypeStates(
+      [{ id: 1, code: 'college' }],
+      [{ periodType: 'trimester', status: 'approved' }],
+    );
+    const pendingStates = resolveSchoolPeriodTypeStates(
+      [{ id: 1, code: 'college' }, { id: 2, code: 'primaire' }],
+      [],
+    );
+
+    expect(filterAvailableSchoolTerms(terms, approvedStates, { cycleId: 2, cycleCode: 'primaire' })).toEqual(terms);
+    expect(filterAvailableSchoolTerms(terms, primaryOnlyStates, { cycleId: 2, cycleCode: 'primaire' })).toEqual([]);
+    expect(filterAvailableSchoolTerms(terms, pendingStates, { cycleId: 2, cycleCode: 'primaire' })).toEqual([]);
+  });
+
   it('maps structured class levels to their canonical level codes', () => {
     expect(inferLevelCodeFromClassName('6ème A')).toBe('6e');
     expect(inferLevelCodeFromClassName('3ème B')).toBe('3e');
+    expect(inferLevelCodeFromClassName('Maternelle 1 A')).toBe('maternelle1');
+    expect(inferLevelCodeFromClassName('CP1 A')).toBe('cp1');
+    expect(inferLevelCodeFromClassName('CM2 B')).toBe('cm2');
     expect(inferLevelCodeFromClassName('2nde A4')).toBe('2nde');
     expect(inferLevelCodeFromClassName('Tle D')).toBe('tle');
   });
 
   it('keeps historical terms compatible when they have no cycleId but match the right period type', () => {
     expect(isTermCompatibleWithCycle({ cycleId: null, periodType: 'trimester' }, { cycleId: 9, cycleCode: 'college' })).toBe(true);
+    expect(isTermCompatibleWithCycle({ cycleId: null, periodType: 'trimester' }, { cycleId: 9, cycleCode: 'primaire' })).toBe(true);
     expect(isTermCompatibleWithCycle({ cycleId: null, periodType: 'semester' }, { cycleId: 9, cycleCode: 'lycee' })).toBe(true);
     expect(isTermCompatibleWithCycle({ cycleId: null, periodType: 'semester' }, { cycleId: 9, cycleCode: 'college' })).toBe(false);
     expect(isTermCompatibleWithCycle({ cycleId: 42, periodType: 'trimester' }, { cycleId: 9, cycleCode: 'college' })).toBe(false);

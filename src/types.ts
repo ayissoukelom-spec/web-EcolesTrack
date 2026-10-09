@@ -34,7 +34,7 @@ export interface AcademicYear {
 
 export interface EducationCycle {
   id: number;
-  code: 'college' | 'lycee' | string;
+  code: 'college' | 'lycee' | 'primaire' | string;
   name: string;
   isActive: boolean;
 }

@@ -55,6 +55,7 @@ describe('GET /api/results/class-subject-pivot', () => {
       periodType: 'trimester',
       cycleCode: 'college',
       cycleId: 4,
+      activeCycleIds: [4],
       cycleActive: true,
       status: 'approved',
       available: true,
