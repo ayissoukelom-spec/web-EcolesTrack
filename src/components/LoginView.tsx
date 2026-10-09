@@ -26,7 +26,7 @@ export default function LoginView({ onLogin }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [schools, setSchools] = useState<Array<{ id: number; name: string }>>([]);
+  const [schools, setSchools] = useState<Array<{ id: number; name: string; isSuspended: boolean }>>([]);
   const [selectedSchoolId, setSelectedSchoolId] = useState<number | ''>('');
   const [loggedInUser, setLoggedInUser] = useState<any | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -50,7 +50,7 @@ export default function LoginView({ onLogin }: Props) {
       if (data.activeSchoolId != null) {
         setSelectedSchoolId(data.activeSchoolId);
       } else {
-        setSelectedSchoolId('');
+        setSelectedSchoolId(data.schools?.find((school: { isSuspended?: boolean }) => !school.isSuspended)?.id ?? '');
       }
       return data;
     } finally {
@@ -94,8 +94,6 @@ export default function LoginView({ onLogin }: Props) {
       setActiveSchoolId(null);
       setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
 
-      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
-
       if (user.role === 'super_admin') {
         window.history.pushState(null, '', '/');
         onLogin(user.role || 'parent');
@@ -104,13 +102,17 @@ export default function LoginView({ onLogin }: Props) {
 
       const schoolData = await loadSchools();
 
-      if (Array.isArray(schoolData.schools) && schoolData.schools.length > 1) {
+      if (Array.isArray(schoolData.schools)
+        && (schoolData.schools.length > 1 || schoolData.schools[0]?.isSuspended)) {
         setSelectionPending(true);
         return;
       }
 
-      const activeSchoolId = Number(schoolData.activeSchoolId ?? schoolData.schools?.[0]?.id ?? null);
-      if (Number.isFinite(activeSchoolId)) {
+      const selectedSchool = schoolData.schools?.find((school: { id: number; isSuspended?: boolean }) => (
+        school.id === schoolData.activeSchoolId && !school.isSuspended
+      )) ?? schoolData.schools?.find((school: { isSuspended?: boolean }) => !school.isSuspended);
+      const activeSchoolId = Number(selectedSchool?.id);
+      if (selectedSchool && Number.isInteger(activeSchoolId)) {
         setActiveSchoolId(activeSchoolId);
         setSimulatedUser({
           id: user.id,
@@ -119,6 +121,7 @@ export default function LoginView({ onLogin }: Props) {
           name: user.name,
           schoolId: activeSchoolId,
         });
+        await apiFetch('/api/auth/register-or-login', { method: 'POST' });
         window.history.pushState(null, '', '/');
         onLogin(user.role || 'parent');
         return;
@@ -159,10 +162,12 @@ export default function LoginView({ onLogin }: Props) {
         name: loggedInUser?.name,
         schoolId: activeSchoolId,
       });
+      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
 
       window.history.pushState(null, '', '/');
       onLogin(loggedInUser?.role || 'parent');
     } catch (err: any) {
+      setActiveSchoolId(null);
       setError(err?.message || 'Impossible de sélectionner l’école.');
     } finally {
       setLoading(false);
@@ -175,7 +180,6 @@ export default function LoginView({ onLogin }: Props) {
       setSimulatedRole(user.role || 'parent');
       setActiveSchoolId(null);
       setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
-      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
       if (user.role === 'super_admin') {
         window.history.pushState(null, '', '/');
         onLogin(user.role || 'parent');
@@ -195,6 +199,12 @@ export default function LoginView({ onLogin }: Props) {
           <h2 className="text-lg font-bold mb-2">Choisir votre école</h2>
           <p className="text-sm text-slate-400 mb-4">Sélectionnez l’école à utiliser pour cette session.</p>
           {sessionExpiredMessage && <div className="text-amber-300 mb-2">{sessionExpiredMessage}</div>}
+          {(schools.find((school) => school.id === selectedSchoolId)?.isSuspended
+            || (schools.length > 0 && schools.every((school) => school.isSuspended))) && (
+            <div className="mb-3 rounded border border-amber-700 bg-amber-950/50 p-3 text-sm text-amber-200">
+              Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.
+            </div>
+          )}
           {error && <div className="text-rose-400 mb-2">{error}</div>}
           {schoolsLoading ? (
             <div className="text-sm text-slate-400">Chargement des écoles...</div>
@@ -211,15 +221,15 @@ export default function LoginView({ onLogin }: Props) {
                 >
                   <option value="">-- Choisissez une école --</option>
                   {schools.map((school) => (
-                    <option key={school.id} value={school.id}>
-                      {school.name}
+                    <option key={school.id} value={school.id} disabled={school.isSuspended}>
+                      {school.name}{school.isSuspended ? ' (suspendue)' : ''}
                     </option>
                   ))}
                 </select>
               </label>
               <button
                 type="button"
-                disabled={loading || schoolsLoading}
+                disabled={loading || schoolsLoading || !schools.some((school) => school.id === selectedSchoolId && !school.isSuspended)}
                 onClick={confirmSchoolSelection}
                 className="w-full px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >

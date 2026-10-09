@@ -32,6 +32,7 @@ import {
 } from './bulletinService';
 import { getGradeAppreciation } from './gradeColor';
 import { resolveSchoolTermForClass } from './educationStructure.ts';
+import { assertSchoolActiveInTransaction, SchoolSuspendedError } from './schoolSuspension.ts';
 import { sortStudentsAlphabetically } from './studentOrdering';
 
 export interface BulletinLineSnapshotInput {
@@ -858,6 +859,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             firstName: students.firstName,
             lastName: students.lastName,
           }).from(students).where(eq(students.id, studentId));
+          if (row?.schoolId != null) await assertSchoolActiveInTransaction(tx, row.schoolId);
           return row ?? null;
         },
         async getClassById(classId) {
@@ -876,6 +878,7 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           return row ?? null;
         },
         async getClassStudents(classId, schoolId) {
+          await assertSchoolActiveInTransaction(tx, schoolId);
           return tx.select({
             id: students.id,
             classId: students.classId,
@@ -1331,6 +1334,9 @@ export const registerBulletinGenerateRoute = (
         appreciation: result.appreciation,
       });
     } catch (err: any) {
+      if (err instanceof SchoolSuspendedError) {
+        return res.status(err.statusCode).json({ error: err.message, code: err.code, schoolId: err.schoolId });
+      }
       if (generationId != null) {
         await updateBulletinGeneration(generationId, { completedCount: 0, status: 'failed' }).catch(() => undefined);
       }
@@ -1451,6 +1457,7 @@ export const registerBulletinGenerateRoute = (
           bulletinIds.push(result.bulletinId);
           generatedBulletins.push({ id: result.bulletinId, studentId });
         } catch (error: any) {
+          if (error instanceof SchoolSuspendedError) throw error;
           console.warn('Failed to generate bulletin for class generation', { studentId, classId, termId, error: error?.message || error });
         }
       }
@@ -1472,6 +1479,9 @@ export const registerBulletinGenerateRoute = (
         bulletins: generatedBulletins,
       });
     } catch (err: any) {
+      if (err instanceof SchoolSuspendedError) {
+        return res.status(err.statusCode).json({ error: err.message, code: err.code, schoolId: err.schoolId });
+      }
       if (generationId != null) {
         await updateBulletinGeneration(generationId, { completedCount, status: 'failed' }).catch(() => undefined);
       }

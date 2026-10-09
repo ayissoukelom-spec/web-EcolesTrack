@@ -21,6 +21,7 @@ import {
   clearSimulatedRole,
   clearSimulatedUser,
   setSimulatedUser,
+  setActiveSchoolId,
   findTeacherProfileFromSimulatedUser,
   type HomeroomClassSummary,
 } from './lib/api.ts';
@@ -84,6 +85,11 @@ export default function App() {
   const [importResult, setImportResult] = useState<any | null>(null);
   const importCredentialsSessionRef = useRef(`${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [suspendedSchoolId, setSuspendedSchoolId] = useState<number | null>(null);
+  const [availableSchools, setAvailableSchools] = useState<School[]>([]);
+  const [schoolToSwitchTo, setSchoolToSwitchTo] = useState<number | ''>('');
+  const [isSwitchingSchool, setIsSwitchingSchool] = useState(false);
+  const suspendedSchoolNoticeRef = useRef<number | null>(null);
 
   useEffect(() => {
     const sessionKey = `${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`;
@@ -92,6 +98,60 @@ export default function App() {
       setImportResult(null);
     }
   }, [authenticatedUser?.id, authenticatedUser?.uid, role, token]);
+
+  useEffect(() => {
+    const handleSchoolSuspended = (event: Event) => {
+      const detail = (event as CustomEvent<{ schoolId?: number }>).detail;
+      const schoolId = Number.isInteger(detail?.schoolId) ? Number(detail.schoolId) : activeSchoolId;
+      if (schoolId != null && suspendedSchoolNoticeRef.current === schoolId) return;
+      suspendedSchoolNoticeRef.current = schoolId;
+      setSuspendedSchoolId(schoolId);
+      setSchoolsList([]);
+      setYearsList([]);
+      setClassesList([]);
+      setTeachersList([]);
+      setStudentsList([]);
+      setParentsList([]);
+      setHomeroomClassesList([]);
+      setAbsencesList([]);
+      setAbsenceDeclarationsList([]);
+      setAbsenceControlsList([]);
+      setSummaryRecentAbsences([]);
+      setEvaluationsList([]);
+      setGradesList([]);
+      setSummaryRecentGrades([]);
+      setNotificationsList([]);
+      setAuditEvents([]);
+      setUsersList([]);
+      setSubjectsList([]);
+      setApprovedSubjectsList([]);
+      setSubjectTypesList([]);
+      setEducationLevels([]);
+      setLateArrivals([]);
+      setStats({
+        totalStudents: 0,
+        totalAbsences: 0,
+        totalClasses: 0,
+        totalTeachers: 0,
+        attendanceRate: 0,
+        absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 },
+      });
+      setChartData([]);
+      setSchoolToSwitchTo('');
+      void apiFetch('/api/auth/schools')
+        .then((payload) => {
+          const schools = Array.isArray(payload?.schools) ? payload.schools : [];
+          setAvailableSchools(schools);
+          setSchoolToSwitchTo(schools.find((school: School) => !school.isSuspended)?.id ?? '');
+        })
+        .catch((error) => {
+          console.error('Failed to load available schools after suspension:', error);
+          setErrorMsg('Impossible de charger les autres écoles autorisées.');
+        });
+    };
+    window.addEventListener('schoolSuspended', handleSchoolSuspended);
+    return () => window.removeEventListener('schoolSuspended', handleSchoolSuspended);
+  }, [activeSchoolId, setLateArrivals]);
 
   // States loaded from backend
   const [stats, setStats] = useState({
@@ -492,6 +552,34 @@ export default function App() {
     window.location.replace('/login');
   };
 
+  const handleSwitchFromSuspendedSchool = async () => {
+    if (!schoolToSwitchTo || availableSchools.some((school) => (
+      school.id === schoolToSwitchTo && school.isSuspended
+    ))) return;
+
+    setIsSwitchingSchool(true);
+    setErrorMsg(null);
+    try {
+      const result = await apiFetch('/api/auth/schools/active', {
+        method: 'POST',
+        body: JSON.stringify({ schoolId: Number(schoolToSwitchTo) }),
+      });
+      const selectedSchoolId = Number(result?.schoolId ?? schoolToSwitchTo);
+      setActiveSchoolId(selectedSchoolId);
+      if (authenticatedUser) {
+        setSimulatedUser({ ...authenticatedUser, schoolId: selectedSchoolId });
+      }
+      suspendedSchoolNoticeRef.current = null;
+      setSuspendedSchoolId(null);
+      setAvailableSchools([]);
+      await fetchAllData(false);
+    } catch (error: any) {
+      setErrorMsg(error?.message || 'Impossible de sélectionner cette école.');
+    } finally {
+      setIsSwitchingSchool(false);
+    }
+  };
+
   // ==========================================
   // HANDLERS FOR CREATIONS (POSTS REST API)
   // ==========================================
@@ -507,6 +595,19 @@ export default function App() {
     } catch (err: any) {
       setErrorMsg(err.message || 'Impossible d\'ajouter l\'école');
       throw err;
+    }
+  };
+
+  const handleSetSchoolSuspended = async (schoolId: number, isSuspended: boolean) => {
+    try {
+      await apiFetch(`/api/schools/${schoolId}/suspension`, {
+        method: 'PUT',
+        body: JSON.stringify({ isSuspended }),
+      });
+      await fetchAllData(false);
+    } catch (error: any) {
+      setErrorMsg(error?.message || 'Impossible de modifier l’état de l’école.');
+      throw error;
     }
   };
 
@@ -1054,6 +1155,53 @@ export default function App() {
   };
 
   // If not authenticated, render SPA login view
+  if (suspendedSchoolId != null) {
+    const eligibleSchools = availableSchools.filter((school) => !school.isSuspended);
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+        <div className="w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-100 shadow-2xl">
+          <h1 className="mb-3 text-lg font-bold">Accès à l’école suspendu</h1>
+          <p role="alert" className="mb-5 rounded border border-amber-700 bg-amber-950/50 p-3 text-sm text-amber-200">
+            Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.
+          </p>
+          {eligibleSchools.length > 0 && (
+            <div className="mb-5">
+              <label className="mb-2 block text-sm" htmlFor="suspended-school-switch">École autorisée</label>
+              <select
+                id="suspended-school-switch"
+                className="w-full rounded border border-slate-700 bg-slate-800 p-2"
+                value={schoolToSwitchTo}
+                onChange={(event) => setSchoolToSwitchTo(Number(event.target.value))}
+              >
+                {eligibleSchools.map((school) => (
+                  <option key={school.id} value={school.id}>{school.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="mt-3 w-full rounded bg-indigo-600 px-4 py-2 font-medium hover:bg-indigo-700 disabled:opacity-50"
+                onClick={handleSwitchFromSuspendedSchool}
+                disabled={isSwitchingSchool || !schoolToSwitchTo}
+              >
+                {isSwitchingSchool ? 'Ouverture...' : 'Accéder à cette école'}
+              </button>
+            </div>
+          )}
+          {eligibleSchools.length === 0 && (
+            <p className="mb-5 text-sm text-slate-400">Aucune autre école autorisée n’est disponible.</p>
+          )}
+          {errorMsg && <p className="mb-4 text-sm text-rose-300">{errorMsg}</p>}
+          <button
+            type="button"
+            className="w-full rounded bg-slate-700 px-4 py-2 font-medium hover:bg-slate-600"
+            onClick={handleLogout}
+          >
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!authenticatedUser || (!token && currentRole !== 'super_admin') || (currentRole !== 'super_admin' && !activeSchoolId)) {
     return <LoginView onLogin={(role) => { setSimulatedRole(role); }} />;
   }
@@ -1510,6 +1658,7 @@ export default function App() {
                   onDeleteUser={handleDeleteUser}
                   onDeleteClass={handleDeleteClass}
                   onDeleteSchool={handleDeleteSchool}
+                  onSetSchoolSuspended={handleSetSchoolSuspended}
                   onAddSubject={handleAddSubject}
                   onUpdateSubject={handleUpdateSubject}
                   onDeleteSubject={handleDeleteSubject}

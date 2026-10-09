@@ -3,7 +3,7 @@ import request from 'supertest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations } from '../src/db/schema.ts';
+import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations, auditEvents } from '../src/db/schema.ts';
 
 const schoolLogoS3 = vi.hoisted(() => ({
   send: vi.fn(),
@@ -17,7 +17,7 @@ const mockState = {
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
-  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null }>,
+  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null; isSuspended?: boolean }>,
   lastSchoolUpdate: null as Record<string, any> | null,
   schoolUpdateError: null as Error | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null; cycleId?: number | null; cycleCode?: string | null }>,
@@ -33,6 +33,7 @@ const mockState = {
   subjects: [] as Array<{ id: number; name: string; schoolId: number | null }>,
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   financialObligations: [] as Array<{ id: number; schoolId: number }>,
+  auditEvents: [] as Array<Record<string, any>>,
 };
 
 const normalizeColumnName = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
@@ -152,6 +153,7 @@ const createBuilder = () => {
             const cycle = mockState.cycles.find((item) => item.id === assignment.cycleId && item.isActive);
             return cycle ? [{ id: cycle.id, code: cycle.code }] : [];
           });
+
           return Promise.resolve(rows).then(resolve);
         }
         return Promise.resolve(assignments).then(resolve);
@@ -234,6 +236,9 @@ const mockDb = {
           },
         };
       }
+      if (table === auditEvents) {
+        mockState.auditEvents.push({ id: mockState.auditEvents.length + 1, ...values });
+      }
       return {
         returning: async () => [{ id: 1 }],
       };
@@ -263,10 +268,18 @@ const mockDb = {
         if (table === schools) {
           mockState.lastSchoolUpdate = values;
           if (!mockState.schoolUpdateError) {
-            mockState.schools = mockState.schools.map((item) => (item.id === values.id || (values.id == null && item.id === 1) ? { ...item, ...values } : item));
+            const conditionPairs = conditions.flatMap((condition) => extractConditionPairs(condition));
+            mockState.schools = mockState.schools.map((item) => (
+              conditionPairs.every((entry) => item[entry.column] === entry.value)
+                ? { ...item, ...values }
+                : item
+            ));
           }
         }
-        const result = [{ id: 1, ...values }];
+        const result = table === schools
+          ? mockState.schools.filter((item) => conditions.flatMap((condition) => extractConditionPairs(condition))
+            .every((entry) => item[entry.column] === entry.value))
+          : [{ id: 1, ...values }];
         return {
           then(resolve: (value: any) => void) {
             return Promise.resolve(result).then(resolve);
@@ -290,6 +303,12 @@ const mockDb = {
     },
   }),
   execute: async (_sql: any) => [],
+  transaction: async (run: (tx: any) => Promise<any>) => run({
+    ...mockDb,
+    execute: async () => ({
+      rows: mockState.schools.map((school) => ({ id: school.id, is_suspended: Boolean((school as any).isSuspended) })),
+    }),
+  }),
 };
 
 vi.mock('@aws-sdk/client-s3', () => ({
@@ -403,6 +422,7 @@ describe('POST /api/schools', () => {
     mockState.subjects = [];
     mockState.createdClasses = [];
     mockState.financialObligations = [];
+    mockState.auditEvents = [];
   });
 
   it('refuses to delete a school that has an accounting obligation history', async () => {
@@ -411,6 +431,56 @@ describe('POST /api/schools', () => {
 
     await request(app).delete('/api/schools/1').expect(409);
     expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('suspends and reopens a school idempotently without changing retained data', async () => {
+    mockState.schools = [{
+      id: 1,
+      name: 'École à conserver',
+      isSuspended: false,
+    }];
+    mockState.financialObligations = [{ id: 7, schoolId: 1 }];
+
+    await request(app)
+      .put('/api/schools/1/suspension')
+      .send({ isSuspended: true })
+      .expect(200, { id: 1, isSuspended: true });
+    await request(app)
+      .put('/api/schools/1/suspension')
+      .send({ isSuspended: true })
+      .expect(200, { id: 1, isSuspended: true });
+    await request(app)
+      .put('/api/schools/1/suspension')
+      .send({ isSuspended: false })
+      .expect(200, { id: 1, isSuspended: false });
+
+    expect(mockState.schools).toEqual([{ id: 1, name: 'École à conserver', isSuspended: false }]);
+    expect(mockState.financialObligations).toEqual([{ id: 7, schoolId: 1 }]);
+    expect(mockState.auditEvents.map((event) => event.action)).toEqual(['suspend', 'reopen']);
+  });
+
+  it('blocks a school account from protected APIs while its school is suspended', async () => {
+    mockState.users = [
+      { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'school_admin', schoolId: 1 },
+    ];
+    mockState.schools = [{ id: 1, name: 'École suspendue', isSuspended: true }];
+
+    const response = await request(app).get('/api/students').expect(423);
+    expect(response.body.code).toBe('SCHOOL_SUSPENDED');
+    expect(response.body.error).toContain('Votre école a été suspendue.');
+  });
+
+  it('keeps suspension management restricted to super administrators', async () => {
+    mockState.users = [
+      { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'school_admin', schoolId: 1 },
+    ];
+    mockState.schools = [{ id: 1, name: 'École active', isSuspended: false }];
+
+    await request(app)
+      .put('/api/schools/1/suspension')
+      .send({ isSuspended: true })
+      .expect(403);
+    expect(mockState.schools[0].isSuspended).toBe(false);
   });
 
   it('rejects creating a school without classNames', async () => {

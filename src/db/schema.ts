@@ -26,6 +26,7 @@ export const schools = pgTable('schools', {
   logoPath: text('logo_path'),
   promotionThreshold: numeric('promotion_threshold', { precision: 5, scale: 2 }).default('10.00').notNull(),
   studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),
+  isSuspended: boolean('is_suspended').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

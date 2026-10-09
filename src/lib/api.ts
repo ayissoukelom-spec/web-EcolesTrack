@@ -425,6 +425,11 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     const errBody = await response.json().catch(() => ({}));
     const error = new Error(errBody.error || `HTTP error! status: ${response.status}`);
     (error as any).status = response.status;
+    if (typeof errBody.code === 'string') (error as any).code = errBody.code;
+    if (typeof errBody.schoolId === 'number') (error as any).schoolId = errBody.schoolId;
+    if (errBody.code === 'SCHOOL_SUSPENDED' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: errBody.schoolId } }));
+    }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
       const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');
@@ -486,6 +491,11 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     const errBody = await response.json().catch(() => ({}));
     const error = new Error(errBody.error || `HTTP error! status: ${response.status}`);
     (error as any).status = response.status;
+    if (typeof errBody.code === 'string') (error as any).code = errBody.code;
+    if (typeof errBody.schoolId === 'number') (error as any).schoolId = errBody.schoolId;
+    if (errBody.code === 'SCHOOL_SUSPENDED' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: errBody.schoolId } }));
+    }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
       const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');

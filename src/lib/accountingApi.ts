@@ -26,6 +26,7 @@ import {
   students,
 } from '../db/schema.ts';
 import { readStoredFile } from './fileStorage.ts';
+import { assertSchoolActiveInTransaction, SchoolSuspendedError } from './schoolSuspension.ts';
 import {
   allocateToOldestInstallments,
   calculateStudentFeeBalance,
@@ -1882,6 +1883,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       }
 
       const result = await db.transaction(async (tx) => {
+        await assertSchoolActiveInTransaction(tx, schoolId);
         await tx.execute(sql`SELECT id FROM academic_years WHERE id = ${academicYearId} FOR UPDATE`);
         const [existing] = await tx.select().from(financialPayments).where(and(
           eq(financialPayments.schoolId, schoolId),
@@ -2091,7 +2093,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       return res.status(result.duplicate ? 200 : 201).json(result);
     } catch (error) {
       const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
-      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      if (statusCode !== 500) {
+        return res.status(statusCode).json({
+          error: (error as Error).message,
+          ...(error instanceof SchoolSuspendedError ? { code: error.code, schoolId: error.schoolId } : {}),
+        });
+      }
       console.error('Failed to record accounting payment:', error);
       return res.status(500).json({ error: 'Failed to record accounting payment' });
     }
@@ -2497,6 +2504,7 @@ async function handlePaymentAdjustment(
       return res.status(400).json({ error: 'Reason, idempotency key, and valid refund amount are required' });
     }
     const result = await db.transaction(async (tx) => {
+      await assertSchoolActiveInTransaction(tx, schoolId);
       await tx.execute(sql`SELECT id FROM financial_payments WHERE id = ${paymentId} FOR UPDATE`);
       const [existing] = await tx.select().from(financialAdjustments).where(eq(
         financialAdjustments.sourceKey,
@@ -2562,7 +2570,12 @@ async function handlePaymentAdjustment(
     return res.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) {
     const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
-    if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+    if (statusCode !== 500) {
+      return res.status(statusCode).json({
+        error: (error as Error).message,
+        ...(error instanceof SchoolSuspendedError ? { code: error.code, schoolId: error.schoolId } : {}),
+      });
+    }
     console.error(`Failed to ${kind} accounting payment:`, error);
     return res.status(500).json({ error: `Failed to ${kind} accounting payment` });
   }

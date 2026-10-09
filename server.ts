@@ -1085,6 +1085,27 @@ export async function createApp() {
         .from(notificationAttachments)
         .where(eq(notificationAttachments.id, attachmentId));
       if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+      const [attachmentScope] = await db.select({
+        schoolId: sql<number | null>`COALESCE(${evaluations.schoolId}, ${users.schoolId})`,
+      }).from(notificationAttachments)
+        .innerJoin(notifications, eq(notifications.id, notificationAttachments.notificationId))
+        .innerJoin(users, eq(users.id, notifications.userId))
+        .leftJoin(evaluations, eq(evaluations.id, notifications.evaluationId))
+        .where(eq(notificationAttachments.id, attachmentId))
+        .limit(1);
+      if (attachmentScope?.schoolId != null) {
+        const [school] = await db.select({ isSuspended: schools.isSuspended })
+          .from(schools)
+          .where(eq(schools.id, attachmentScope.schoolId))
+          .limit(1);
+        if (school?.isSuspended) {
+          return res.status(423).json({
+            error: schoolSuspendedMessage,
+            code: 'SCHOOL_SUSPENDED',
+            schoolId: attachmentScope.schoolId,
+          });
+        }
+      }
 
       const storedReference = String(attachment.filePath || '');
       const routed = await streamStoredFileToResponse(storedReference, 'notification-attachments', attachment.fileName, attachment.mimeType, res as any);
@@ -1278,6 +1299,63 @@ export async function createApp() {
   // Health check endpoint
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
+  });
+
+  const suspensionExemptPaths = new Set([
+    '/api/auth/local-login',
+    '/api/auth/logout',
+    '/api/auth/change-password',
+    '/api/auth/schools',
+    '/api/auth/schools/active',
+    '/api/students/template',
+    '/api/parents/template',
+  ]);
+  const schoolSuspendedMessage = 'Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.';
+  const isSchoolSuspended = async (schoolId: number) => {
+    const [school] = await db.select({ isSuspended: schools.isSuspended })
+      .from(schools)
+      .where(eq(schools.id, schoolId))
+      .limit(1);
+    return Boolean(school?.isSuspended);
+  };
+
+  app.use(async (req: AuthRequest, res, next) => {
+    if (!req.path.startsWith('/api/') || req.path.startsWith('/api/internal/')) return next();
+    if (req.path === '/api/health' || suspensionExemptPaths.has(req.path)) return next();
+
+    requireAuth(req, res, async (authError?: unknown) => {
+      if (res.headersSent) return;
+      if (authError) return next(authError);
+      if (!req.user) return next();
+
+      try {
+        const actor = await resolveActor(req);
+        if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
+        if (actor.role === 'super_admin') return next();
+
+        const memberships = actor.id == null ? [] : await getUserSchoolMemberships(actor.id);
+        const schoolId = memberships.find((membership) => membership.isActive)?.schoolId
+          ?? actor.schoolId
+          ?? null;
+        if (schoolId == null) return next();
+
+        const [school] = await db.select({ isSuspended: schools.isSuspended })
+          .from(schools)
+          .where(eq(schools.id, schoolId))
+          .limit(1);
+        if (school?.isSuspended) {
+          return res.status(423).json({
+            error: schoolSuspendedMessage,
+            code: 'SCHOOL_SUSPENDED',
+            schoolId,
+          });
+        }
+        return next();
+      } catch (error) {
+        console.error('Failed to verify school suspension:', error);
+        return res.status(503).json({ error: 'Unable to verify school access' });
+      }
+    });
   });
 
   registerBulletinGenerateRoute(app, { resolveActor });
@@ -2543,8 +2621,14 @@ export async function createApp() {
           ?? null;
 
       res.json({
-        schools: schoolsList.map((school) => ({ id: school.id, name: school.name })),
-        activeSchoolId,
+        schools: schoolsList.map((school) => ({
+          id: school.id,
+          name: school.name,
+          isSuspended: Boolean(school.isSuspended),
+        })),
+        activeSchoolId: schoolsList.find((school) => school.id === activeSchoolId)?.isSuspended
+          ? null
+          : activeSchoolId,
       });
     } catch (err: any) {
       console.error('Error fetching user schools:', err);
@@ -2641,6 +2725,19 @@ export async function createApp() {
         });
         return res.status(403).json({ error: 'School membership not found for this user' });
       }
+
+      const [selectedSchool] = await db.select({
+        id: schools.id,
+        isSuspended: schools.isSuspended,
+      }).from(schools).where(eq(schools.id, parsedSchoolId)).limit(1);
+      if (!selectedSchool) return res.status(404).json({ error: 'School not found' });
+      if (selectedSchool.isSuspended) {
+        return res.status(423).json({
+          error: schoolSuspendedMessage,
+          code: 'SCHOOL_SUSPENDED',
+          schoolId: parsedSchoolId,
+        });
+      }
       
       // Membership exists, set it as active
       await setActiveUserSchool(actor.id ?? null, parsedSchoolId);
@@ -2649,6 +2746,66 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Error setting active school:', err);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.put('/api/schools/:id/suspension', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden: only super_admin can change school suspension' });
+      }
+
+      const schoolId = parsePositiveInteger(req.params.id);
+      const isSuspended = req.body?.isSuspended;
+      if (!schoolId || typeof isSuspended !== 'boolean') {
+        return res.status(400).json({ error: 'A valid school id and isSuspended boolean are required' });
+      }
+
+      const updatedSchool = await db.transaction(async (tx) => {
+        const lockedRows = await tx.execute(sql`
+          SELECT id, is_suspended
+          FROM schools
+          WHERE id = ${schoolId}
+          FOR UPDATE
+        `);
+        const lockedSchool = Array.isArray(lockedRows)
+          ? lockedRows[0] as { id: number; is_suspended: boolean } | undefined
+          : (lockedRows as any).rows?.[0] as { id: number; is_suspended: boolean } | undefined;
+        if (!lockedSchool) return null;
+        if (Boolean(lockedSchool.is_suspended) === isSuspended) {
+          const [school] = await tx.select().from(schools).where(eq(schools.id, schoolId)).limit(1);
+          return school ?? null;
+        }
+
+        const [school] = await tx.update(schools)
+          .set({ isSuspended })
+          .where(eq(schools.id, schoolId))
+          .returning();
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name ?? null,
+          action: isSuspended ? 'suspend' : 'reopen',
+          resourceType: 'school',
+          resourceId: schoolId,
+          schoolId,
+          description: isSuspended
+            ? `School ${schoolId} suspended by super administrator`
+            : `School ${schoolId} reopened by super administrator`,
+        });
+        return school ?? null;
+      });
+
+      if (!updatedSchool) return res.status(404).json({ error: 'School not found' });
+      return res.json({
+        id: updatedSchool.id,
+        isSuspended: updatedSchool.isSuspended,
+      });
+    } catch (error) {
+      console.error('Failed to update school suspension:', error);
+      return res.status(500).json({ error: 'Failed to update school suspension' });
     }
   });
 
@@ -7525,7 +7682,15 @@ export async function createApp() {
           inArray(absenceDeclarations.studentId, childStudentIds),
         ))
         .orderBy(desc(absenceDeclarations.date), desc(absenceDeclarations.createdAt));
-      return { status: 200, body: rows };
+      const rowSchoolIds = Array.from(new Set(rows.map((row) => row.schoolId)
+        .filter((id): id is number => id != null)));
+      const suspendedSchoolIds = rowSchoolIds.length > 0
+        ? new Set((await db.select({ id: schools.id }).from(schools).where(and(
+          inArray(schools.id, rowSchoolIds),
+          eq(schools.isSuspended, true),
+        ))).map((school) => school.id))
+        : new Set<number>();
+      return { status: 200, body: rows.filter((row) => !suspendedSchoolIds.has(row.schoolId)) };
     }
 
     const studentId = Number(input?.studentId);
@@ -7548,6 +7713,15 @@ export async function createApp() {
     }
 
     if (action === 'create') {
+      const [targetStudent] = await db.select({
+        schoolId: students.schoolId,
+      }).from(students).where(eq(students.id, studentId));
+      if (targetStudent?.schoolId != null && await isSchoolSuspended(targetStudent.schoolId)) {
+        return {
+          status: 423,
+          body: { error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED', schoolId: targetStudent.schoolId },
+        };
+      }
       const [created] = await db.insert(absenceDeclarations).values({
         studentId,
         parentId: parentRecord.id,
@@ -7580,6 +7754,20 @@ export async function createApp() {
     if (!declaration) return { status: 404, body: { error: 'Declaration not found' } };
     if (!childStudentIds.includes(declaration.studentId)) {
       return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
+    }
+    const affectedStudentIds = action === 'update'
+      ? [declaration.studentId, studentId]
+      : [declaration.studentId];
+    const affectedStudents = await db.select({
+      schoolId: students.schoolId,
+    }).from(students).where(inArray(students.id, affectedStudentIds));
+    for (const affectedStudent of affectedStudents) {
+      if (affectedStudent.schoolId != null && await isSchoolSuspended(affectedStudent.schoolId)) {
+        return {
+          status: 423,
+          body: { error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED', schoolId: affectedStudent.schoolId },
+        };
+      }
     }
     if (declaration.date < todayIsoDate()) {
       return { status: 409, body: { error: 'A past declaration cannot be changed' } };
@@ -8981,10 +9169,18 @@ export async function createApp() {
       if (!absence) return res.status(404).json({ error: 'Absence not found' });
 
       const [absenceStudent] = await db
-        .select({ id: students.id })
+        .select({ id: students.id, schoolId: students.schoolId })
         .from(students)
+        .innerJoin(schools, eq(schools.id, students.schoolId))
         .where(eq(students.id, absence.studentId));
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
+      if (absenceStudent.schoolId != null && await isSchoolSuspended(absenceStudent.schoolId)) {
+        return res.status(423).json({
+          error: schoolSuspendedMessage,
+          code: 'SCHOOL_SUSPENDED',
+          schoolId: absenceStudent.schoolId,
+        });
+      }
 
       const childStudentIds = await getParentChildStudentIds(parentId);
       if (!childStudentIds.includes(absenceStudent.id)) {

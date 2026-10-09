@@ -20,6 +20,7 @@ export interface School {
   logoPath?: string | null;
   promotionThreshold?: string | number | null;
   studentsCreationLocked?: boolean;
+  isSuspended?: boolean;
   createdAt?: string;
 }
 

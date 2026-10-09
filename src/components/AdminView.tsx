@@ -443,6 +443,7 @@ interface AdminViewProps {
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number) => void;
+  onSetSchoolSuspended?: (id: number, isSuspended: boolean) => Promise<void>;
   onAddSubject?: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => Promise<any>;
   onUpdateSubject?: (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => Promise<any>;
   onAddSubjectType?: (data: { name: string; description?: string | null; sortOrder?: number }) => Promise<any>;
@@ -486,6 +487,7 @@ export default function AdminView({
   usersList,
   onDeleteClass,
   onDeleteSchool,
+  onSetSchoolSuspended,
   onUpdateUser,
   onSetPassword,
   onDeleteUser,
@@ -2575,6 +2577,7 @@ export default function AdminView({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [confirmMessage, setConfirmMessage] = React.useState('');
   const [onConfirmAction, setOnConfirmAction] = React.useState<() => void>(() => () => {});
+  const [schoolSuspensionError, setSchoolSuspensionError] = useState<string | null>(null);
 
   const performCloseAllModals = () => {
     setShowImportDetails(false);
@@ -4826,6 +4829,11 @@ export default function AdminView({
         {/* TAB 1: SCHOOLS */}
         {activeTab === 'schools' && (
           <div>
+            {schoolSuspensionError && (
+              <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                {schoolSuspensionError}
+              </div>
+            )}
             {userRole === 'super_admin' && (
               <div className="flex justify-end mb-3">
                 <button
@@ -4882,12 +4890,44 @@ export default function AdminView({
                 <tbody className="divide-y divide-slate-100">
                   {schoolsList.filter((s) => filterBySearch(s.name)).map((sc) => (
                     <tr key={sc.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{sc.name}</td>
+                      <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">
+                        {sc.name}
+                        {sc.isSuspended && (
+                          <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800">
+                            Suspendue
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.address || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-slate-500">{sc.phone || '—'}</td>
                       <td className="px-3 sm:px-6 py-4 text-right">
                         {userRole === 'super_admin' || (userRole === 'school_admin' && sc.id === currentSchoolId) ? (
                           <div className="flex items-center justify-end gap-2">
+                            {userRole === 'super_admin' && onSetSchoolSuspended && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextSuspendedState = !sc.isSuspended;
+                                  setSchoolSuspensionError(null);
+                                  setConfirmMessage(nextSuspendedState
+                                    ? `Confirmer la suspension de « ${sc.name} » ? Les comptes et les données de l’école seront conservés.`
+                                    : `Confirmer la réouverture de « ${sc.name} » ?`);
+                                  setOnConfirmAction(() => () => {
+                                    void onSetSchoolSuspended(sc.id, nextSuspendedState).catch((error: any) => {
+                                      setSchoolSuspensionError(error?.message || 'Impossible de modifier l’état de l’école.');
+                                    });
+                                  });
+                                  setConfirmOpen(true);
+                                }}
+                                className={`rounded-lg border px-2.5 py-1 text-xs font-semibold ${
+                                  sc.isSuspended
+                                    ? 'border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                    : 'border-amber-100 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                                }`}
+                              >
+                                {sc.isSuspended ? 'Rouvrir' : 'Fermer l’école'}
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setSchoolToEdit(sc);
