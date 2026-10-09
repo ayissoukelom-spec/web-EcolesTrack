@@ -1,7 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { SCHOOL_SUSPENDED_MESSAGE } from './schoolSuspensionMessage.ts';
 
-export const SCHOOL_SUSPENDED_MESSAGE =
-  'Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.';
+export { SCHOOL_SUSPENDED_MESSAGE } from './schoolSuspensionMessage.ts';
 
 type SchoolStateTransaction = {
   execute(query: SQL): Promise<unknown>;

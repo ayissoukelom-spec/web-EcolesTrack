@@ -112,6 +112,7 @@ import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfig
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
 import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
+import { SCHOOL_SUSPENDED_MESSAGE } from './src/lib/schoolSuspensionMessage.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 
 const parsePositiveInteger = (value: unknown): number | null => {
@@ -1310,7 +1311,7 @@ export async function createApp() {
     '/api/students/template',
     '/api/parents/template',
   ]);
-  const schoolSuspendedMessage = 'Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.';
+  const schoolSuspendedMessage = SCHOOL_SUSPENDED_MESSAGE;
   const isSchoolSuspended = async (schoolId: number) => {
     const [school] = await db.select({ isSuspended: schools.isSuspended })
       .from(schools)

@@ -467,7 +467,7 @@ describe('POST /api/schools', () => {
 
     const response = await request(app).get('/api/students').expect(423);
     expect(response.body.code).toBe('SCHOOL_SUSPENDED');
-    expect(response.body.error).toContain('Votre école a été suspendue.');
+    expect(response.body.error).toContain('temporairement suspendu');
   });
 
   it('keeps suspension management restricted to super administrators', async () => {

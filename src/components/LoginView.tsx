@@ -4,6 +4,7 @@ import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
 import logoImage from '../assets/logo.png';
 import togoFlag from '../assets/flags/togo_drap.jpg';
+import SchoolSuspensionNotice from './SchoolSuspensionNotice';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'ecoletrack_jwt_access';
 
@@ -201,9 +202,7 @@ export default function LoginView({ onLogin }: Props) {
           {sessionExpiredMessage && <div className="text-amber-300 mb-2">{sessionExpiredMessage}</div>}
           {(schools.find((school) => school.id === selectedSchoolId)?.isSuspended
             || (schools.length > 0 && schools.every((school) => school.isSuspended))) && (
-            <div className="mb-3 rounded border border-amber-700 bg-amber-950/50 p-3 text-sm text-amber-200">
-              Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.
-            </div>
+            <SchoolSuspensionNotice />
           )}
           {error && <div className="text-rose-400 mb-2">{error}</div>}
           {schoolsLoading ? (

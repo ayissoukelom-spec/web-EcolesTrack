@@ -52,6 +52,7 @@ import ClassResultsView from './components/ClassResultsView.tsx';
 import ClassSubjectPivotView from './components/ClassSubjectPivotView.tsx';
 import GlobalErrorToast from './components/GlobalErrorToast.tsx';
 import HomeroomView from './components/HomeroomView.tsx';
+import SchoolSuspensionNotice from './components/SchoolSuspensionNotice.tsx';
 
 import {
   LayoutDashboard,
@@ -1160,10 +1161,7 @@ export default function App() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
         <div className="w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-100 shadow-2xl">
-          <h1 className="mb-3 text-lg font-bold">Accès à l’école suspendu</h1>
-          <p role="alert" className="mb-5 rounded border border-amber-700 bg-amber-950/50 p-3 text-sm text-amber-200">
-            Votre école a été suspendue. Veuillez contacter l’administration de la plateforme.
-          </p>
+          <SchoolSuspensionNotice />
           {eligibleSchools.length > 0 && (
             <div className="mb-5">
               <label className="mb-2 block text-sm" htmlFor="suspended-school-switch">École autorisée</label>
