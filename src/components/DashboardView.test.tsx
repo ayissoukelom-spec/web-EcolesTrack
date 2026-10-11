@@ -139,12 +139,48 @@ describe('DashboardView class age statistics', () => {
     );
 
     const ageSection = screen.getByRole('region', { name: 'Âges des élèves par classe' });
-    expect(within(ageSection).getByText('Âge calculé au 2026-10-11 (UTC) · élèves actifs affectés à une classe')).toBeTruthy();
-    expect(within(ageSection).getByText('Âge moyen :', { exact: false }).textContent).toContain('16 ans');
-    expect(within(ageSection).getByText('Effectif pris en compte : 2')).toBeTruthy();
-    expect(within(ageSection).getByText('Répartition : 15 ans : 1 · 16 ans : 1')).toBeTruthy();
+    expect(within(ageSection).getByText('Calculé le 2026-10-11')).toBeTruthy();
+    expect(within(ageSection).getByText('Élèves pris en compte')).toBeTruthy();
+    expect(within(ageSection).getByText('Âge moyen').parentElement?.textContent).toContain('16 ans');
+    expect(within(ageSection).getByText('Classes représentées')).toBeTruthy();
+    expect(within(ageSection).getByRole('progressbar', { name: '1 élève âgé de 15 ans' })).toBeTruthy();
+    expect(within(ageSection).getByRole('progressbar', { name: '1 élève âgé de 16 ans' })).toBeTruthy();
     expect(screen.getByText('Fréquentation par Division (%)')).toBeTruthy();
     expect(screen.getByText('92.5%')).toBeTruthy();
+  });
+
+  it('calculates the global average from age distributions instead of rounded class averages', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 4, totalAbsences: 0, totalClasses: 2, totalTeachers: 1, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        ageStatsByClass={[
+          {
+            schoolId: 10,
+            classId: 5,
+            className: '6ème A',
+            averageAge: 10,
+            includedStudents: 3,
+            distribution: [{ age: 10, count: 2 }, { age: 11, count: 1 }],
+          },
+          {
+            schoolId: 10,
+            classId: 6,
+            className: '6ème B',
+            averageAge: 11,
+            includedStudents: 1,
+            distribution: [{ age: 11, count: 1 }],
+          },
+        ]}
+      />
+    );
+
+    const ageSection = screen.getByRole('region', { name: 'Âges des élèves par classe' });
+    const averageSummary = within(ageSection).getByText('Âge moyen global').parentElement;
+    expect(averageSummary?.querySelector('.text-xl')?.textContent).toBe('11 ans');
+    expect(within(ageSection).getByText('4')).toBeTruthy();
+    expect(within(ageSection).getByText('2', { selector: '.text-xl' })).toBeTruthy();
   });
 
   it('shows an explicit message when a class has no usable birth dates', () => {
@@ -164,8 +200,22 @@ describe('DashboardView class age statistics', () => {
       />
     );
 
-    expect(screen.getByText('Aucune date de naissance exploitable. Effectif pris en compte : 0.')).toBeTruthy();
+    expect(screen.getByText('Aucune date de naissance exploitable dans les classes affichées.')).toBeTruthy();
     expect(screen.queryByText(/Âge moyen :/)).toBeNull();
+  });
+
+  it('shows an explicit empty state when there are no represented classes', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 0, totalAbsences: 0, totalClasses: 0, totalTeachers: 0, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        ageStatsByClass={[]}
+      />
+    );
+
+    expect(screen.getByText('Aucune statistique d’âge disponible')).toBeTruthy();
+    expect(screen.getByText('Aucune classe ne contient actuellement d’élèves actifs affectés.')).toBeTruthy();
   });
 });
 

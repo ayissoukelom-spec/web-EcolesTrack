@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, AlertTriangle, Percent, GraduationCap, Clock, CheckCircle, XCircle, Award } from 'lucide-react';
+import { Users, AlertTriangle, Percent, GraduationCap, Clock, CheckCircle, XCircle, Award, CalendarDays, ChartNoAxesColumn, School, UserRound } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, PieChart, Pie, Cell, Legend } from 'recharts';
 
 import { UserRole } from '../types.ts';
@@ -88,6 +88,46 @@ export default function DashboardView({
   const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => a.justificationStatus === 'REJECTED' || (!a.justificationStatus && !a.isJustified && !a.declarationId)).length;
   const declaredCount = absenceStatusCounts?.declared ?? recentAbsences.filter((a) => a.declarationId && !a.justificationStatus && !a.isJustified).length;
   const totalAbsenceCount = justifiedCount + unjustifiedCount + pendingCount + declaredCount;
+  const ageStatsSummary = ageStatsByClass.reduce((summary, classStats) => {
+    summary.students += classStats.includedStudents;
+    for (const item of classStats.distribution) {
+      summary.ageTotal += item.age * item.count;
+    }
+    return summary;
+  }, { students: 0, ageTotal: 0 });
+  const overallAverageAge = ageStatsSummary.students > 0
+    ? Math.round(ageStatsSummary.ageTotal / ageStatsSummary.students)
+    : null;
+  const ageSummaryCards = [
+    {
+      label: 'Élèves pris en compte',
+      value: ageStatsSummary.students.toLocaleString('fr-FR'),
+      icon: Users,
+      style: 'border-sky-200 bg-sky-50 text-sky-900',
+      iconStyle: 'bg-sky-100 text-sky-700',
+    },
+    {
+      label: 'Âge moyen global',
+      value: overallAverageAge == null ? '—' : `${overallAverageAge} ans`,
+      icon: UserRound,
+      style: 'border-violet-200 bg-violet-50 text-violet-900',
+      iconStyle: 'bg-violet-100 text-violet-700',
+    },
+    {
+      label: 'Classes représentées',
+      value: ageStatsByClass.length.toLocaleString('fr-FR'),
+      icon: School,
+      style: 'border-teal-200 bg-teal-50 text-teal-900',
+      iconStyle: 'bg-teal-100 text-teal-700',
+    },
+    {
+      label: 'Date de référence',
+      value: ageStatsAsOf || '—',
+      icon: CalendarDays,
+      style: 'border-orange-200 bg-orange-50 text-orange-900',
+      iconStyle: 'bg-orange-100 text-orange-700',
+    },
+  ];
   const pieData = [
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
@@ -278,44 +318,106 @@ export default function DashboardView({
         </div>
       </div>
 
-      <section className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-amber-50/50 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]" aria-labelledby="class-age-statistics-title" id="class-age-statistics">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <section className="overflow-hidden rounded-3xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-cyan-50 p-4 shadow-sm sm:p-6" aria-labelledby="class-age-statistics-title" id="class-age-statistics">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 id="class-age-statistics-title" className="text-lg font-bold text-slate-800">Âges des élèves par classe</h3>
-            <p className="text-xs text-slate-500">
-              {ageStatsAsOf ? `Âge calculé au ${ageStatsAsOf} (UTC) · élèves actifs affectés à une classe` : 'Élèves actifs affectés à une classe'}
-            </p>
+            <div className="mb-1 flex items-center gap-2">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
+                <ChartNoAxesColumn className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <h3 id="class-age-statistics-title" className="text-lg font-bold text-slate-800">Âges des élèves par classe</h3>
+            </div>
+            <p className="text-xs text-slate-500">Âges révolus des élèves actifs affectés à une classe · référence UTC</p>
           </div>
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-amber-700">
-            Âges
+          <span className="rounded-full border border-indigo-100 bg-white/80 px-3 py-1 text-xs font-medium text-indigo-800">
+            {ageStatsAsOf ? `Calculé le ${ageStatsAsOf}` : 'Date de calcul indisponible'}
           </span>
         </div>
-        {ageStatsByClass.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {ageStatsByClass.map((classStats) => (
-              <article key={`${classStats.schoolId}-${classStats.classId}`} className="rounded-2xl border border-slate-200 bg-white/80 p-4">
-                <h4 className="font-bold text-slate-800">{classStats.className}</h4>
-                {(userRole === 'super_admin' || userRole === 'parent') && (
-                  <p className="text-xs text-slate-500">Établissement {classStats.schoolId}</p>
-                )}
-                {classStats.averageAge == null ? (
-                  <p className="mt-3 text-sm text-slate-500">Aucune date de naissance exploitable. Effectif pris en compte : 0.</p>
-                ) : (
-                  <>
-                    <p className="mt-3 text-sm text-slate-700">
-                      Âge moyen : <strong>{classStats.averageAge} ans</strong>
-                    </p>
-                    <p className="text-xs text-slate-500">Effectif pris en compte : {classStats.includedStudents}</p>
-                    <p className="mt-2 text-xs text-slate-600">
-                      Répartition : {classStats.distribution.map(({ age, count }) => `${age} ans : ${count}`).join(' · ')}
-                    </p>
-                  </>
-                )}
-              </article>
-            ))}
+
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {ageSummaryCards.map(({ label, value, icon: Icon, style, iconStyle }) => (
+            <div key={label} className={`flex min-w-0 items-center gap-3 rounded-2xl border p-4 shadow-sm ${style}`}>
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconStyle}`}>
+                <Icon className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-medium opacity-75">{label}</p>
+                <p className="mt-0.5 break-words text-xl font-bold leading-tight">{value}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {ageStatsByClass.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-8 text-center">
+            <p className="font-semibold text-slate-700">Aucune statistique d’âge disponible</p>
+            <p className="mt-1 text-sm text-slate-500">Aucune classe ne contient actuellement d’élèves actifs affectés.</p>
           </div>
-        ) : (
-          <p className="py-4 text-center text-sm text-slate-500">Aucune classe avec des élèves actifs affectés.</p>
+        ) : ageStatsSummary.students === 0 ? (
+          <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900" role="status">
+            Aucune date de naissance exploitable dans les classes affichées.
+          </div>
+        ) : null}
+
+        {ageStatsByClass.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {ageStatsByClass.map((classStats, classIndex) => {
+              const classPopulation = Math.max(1, classStats.includedStudents);
+              const palette = [
+                { card: 'border-sky-100 bg-sky-50/80', bar: 'bg-sky-500', badge: 'bg-sky-100 text-sky-800' },
+                { card: 'border-violet-100 bg-violet-50/80', bar: 'bg-violet-500', badge: 'bg-violet-100 text-violet-800' },
+                { card: 'border-teal-100 bg-teal-50/80', bar: 'bg-teal-500', badge: 'bg-teal-100 text-teal-800' },
+                { card: 'border-orange-100 bg-orange-50/80', bar: 'bg-orange-500', badge: 'bg-orange-100 text-orange-800' },
+              ][classIndex % 4];
+
+              return (
+                <article key={`${classStats.schoolId}-${classStats.classId}`} className={`min-w-0 rounded-2xl border p-4 shadow-sm ${palette.card}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h4 className="break-words font-bold text-slate-800">{classStats.className}</h4>
+                      {(userRole === 'super_admin' || userRole === 'parent') && (
+                        <p className="mt-0.5 text-xs text-slate-500">Établissement {classStats.schoolId}</p>
+                      )}
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${palette.badge}`}>
+                      {classStats.includedStudents} élève{classStats.includedStudents === 1 ? '' : 's'}
+                    </span>
+                  </div>
+
+                  {classStats.averageAge == null ? (
+                    <p className="mt-4 rounded-xl border border-white/80 bg-white/70 p-3 text-sm text-slate-600">
+                      Aucune date de naissance exploitable pour cette classe.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="mt-4 flex items-end justify-between gap-3">
+                        <span className="text-sm text-slate-600">Âge moyen</span>
+                        <strong className="text-2xl font-bold leading-none text-slate-900">{classStats.averageAge} <span className="text-sm font-semibold">ans</span></strong>
+                      </div>
+                      <div className="mt-4 space-y-2" aria-label={`Répartition des âges, classe ${classStats.className}`}>
+                        {classStats.distribution.map(({ age, count }) => (
+                          <div key={age} className="grid grid-cols-[3.5rem_minmax(0,1fr)_2rem] items-center gap-2 text-xs">
+                            <span className="text-slate-600">{age} ans</span>
+                            <div
+                              className="h-2.5 overflow-hidden rounded-full bg-white/90"
+                              role="progressbar"
+                              aria-label={`${count} élève${count === 1 ? '' : 's'} âgé${count === 1 ? '' : 's'} de ${age} ans`}
+                              aria-valuemin={0}
+                              aria-valuemax={classStats.includedStudents}
+                              aria-valuenow={count}
+                            >
+                              <div className={`h-full rounded-full ${palette.bar}`} style={{ width: `${(count / classPopulation) * 100}%` }} />
+                            </div>
+                            <span className="text-right font-semibold text-slate-700">{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </article>
+              );
+            })}
+          </div>
         )}
       </section>
 
