@@ -543,7 +543,7 @@ export interface RegisterAccountingApiOptions {
     title: string;
     message: string;
     category: 'info';
-    metadata: { target: 'home'; paymentId: string };
+    metadata: { target: 'payment'; paymentId: string };
     dedupeKey: string;
   }) => Promise<number>;
   database?: typeof defaultDb;
@@ -2148,7 +2148,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
               title,
               message: 'Un paiement a été enregistré. Consultez l’application pour le détail.',
               category: 'info' as const,
-              metadata: { target: 'home' as const, paymentId: String(payment.id) },
+              metadata: { target: 'payment' as const, paymentId: String(payment.id) },
               dedupeKey,
             },
           };

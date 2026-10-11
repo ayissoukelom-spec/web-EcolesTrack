@@ -1033,7 +1033,7 @@ describe('accounting API', () => {
       title: 'Paiement enregistré',
       message: 'Un paiement a été enregistré. Consultez l’application pour le détail.',
       category: 'info',
-      metadata: { target: 'home', paymentId: '100' },
+      metadata: { target: 'payment', paymentId: '100' },
       dedupeKey: 'accounting-payment-100',
     });
   });
