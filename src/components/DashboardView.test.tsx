@@ -75,6 +75,48 @@ describe('DashboardView gender distribution', () => {
   });
 });
 
+describe('DashboardView attendance rate', () => {
+  it.each([
+    [92.5, '92.5%'],
+    [1234567890, '1234567890%'],
+  ])('keeps the rate content visible for %s', (attendanceRate, expectedRate) => {
+    const { container } = render(
+      <DashboardView
+        stats={{
+          totalStudents: 0,
+          totalAbsences: 0,
+          totalClasses: 0,
+          totalTeachers: 0,
+          attendanceRate,
+        }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="school_admin"
+      />
+    );
+
+    const rateCard = container.querySelector<HTMLElement>('#card-stats-rate');
+    expect(rateCard).not.toBeNull();
+    if (!rateCard) throw new Error('Attendance rate card was not rendered');
+
+    expect(within(rateCard).getByText('Taux de Fréquentation')).toBeTruthy();
+    expect(within(rateCard).getByText(expectedRate, { exact: true }).classList.contains('text-4xl')).toBe(true);
+    expect(within(rateCard).getByText('Taux moyen de présence')).toBeTruthy();
+    expect(rateCard.querySelector('svg.lucide-percent')).not.toBeNull();
+
+    const contentRow = rateCard.querySelector<HTMLElement>('.flex.flex-wrap');
+    expect(contentRow).not.toBeNull();
+    if (!contentRow) throw new Error('Attendance rate content row was not rendered');
+
+    const textContent = contentRow.querySelector<HTMLElement>('.min-w-0');
+    const iconContainer = contentRow.querySelector<HTMLElement>('.shrink-0');
+    expect(textContent?.classList.contains('flex-[1_1_12rem]')).toBe(true);
+    expect(textContent?.querySelector('.break-all')).not.toBeNull();
+    expect(textContent?.querySelector('.break-words')).not.toBeNull();
+    expect(iconContainer).not.toBeNull();
+  });
+});
+
 describe('DashboardView absence status counts', () => {
   it('shows login statistics only for super admins', () => {
     const loginStats = {

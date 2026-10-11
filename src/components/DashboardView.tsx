@@ -166,13 +166,13 @@ export default function DashboardView({
           id="card-stats-rate"
         >
           <div className="absolute right-0 top-0 h-20 w-20 rounded-full bg-white/10 blur-2xl" />
-          <div className="relative flex items-center justify-between gap-4">
-            <div className="space-y-2">
+          <div className="relative flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0 flex-[1_1_12rem] space-y-2">
               <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-emerald-50">Taux de Fréquentation</span>
-              <p className="text-4xl font-black leading-none text-white">{stats.attendanceRate}%</p>
-              <p className="text-xs font-semibold tracking-tight text-emerald-50/90">Taux moyen de présence</p>
+              <p className="break-all text-4xl font-black leading-none text-white">{stats.attendanceRate}%</p>
+              <p className="break-words text-xs font-semibold tracking-tight text-emerald-50/90">Taux moyen de présence</p>
             </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/25 bg-white/10 text-white shadow-inner">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/10 text-white shadow-inner">
               <Percent className="h-6 w-6" />
             </div>
           </div>
