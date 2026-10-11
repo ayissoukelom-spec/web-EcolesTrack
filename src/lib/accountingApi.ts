@@ -2694,48 +2694,358 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
   if (!snapshot || typeof snapshot !== 'object') throw new Error('Receipt snapshot is invalid');
   const data = snapshot as Record<string, any>;
   const pdf = await PDFDocument.create();
-  const page = pdf.addPage([595, 842]);
+  const pageWidth = 595.28;
+  const pageHeight = 419.53;
+  const margin = 28;
+  const bottomLimit = margin;
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const formatReceiptAmount = (amount: number) => Number(amount || 0)
     .toLocaleString('fr-FR')
     .replace(/[\u00a0\u202f]/g, ' ');
-  let y = 790;
-  const draw = (text: string, size = 11, isBold = false) => {
-    page.drawText(text, { x: 48, y, size, font: isBold ? bold : font, color: rgb(0.1, 0.12, 0.18), maxWidth: 500 });
-    y -= size + 12;
-  };
   const school = data.school ?? {};
-  draw(String(school.name ?? 'Établissement'), 18, true);
-  if (school.address) draw(String(school.address));
-  if (school.phone) draw(`Tél. ${school.phone}`);
-  if (school.email) draw(String(school.email));
-  y -= 14;
-  draw('REÇU DE PAIEMENT', 16, true);
-  draw(`Numéro : ${String(data.receiptNumber ?? '')}`, 12, true);
   const payment = data.payment ?? {};
-  draw(`Date : ${String(payment.paidAt ?? '')}`);
   const student = data.student ?? {};
-  draw(`Élève : ${String(student.firstName ?? '')} ${String(student.lastName ?? '')}`);
-  draw(`Matricule : ${String(student.matricule ?? '—')}  |  Classe : ${String(student.className ?? '—')}`);
-  draw(`Année scolaire : ${String(data.academicYearName ?? '—')}`);
-  y -= 10;
-  for (const allocation of Array.isArray(data.allocations) ? data.allocations : []) {
-    draw(formatAccountingReceiptAllocationLine(allocation));
-  }
-  y -= 8;
-  draw(`Montant encaissé : ${formatReceiptAmount(payment.amount)} FCFA`, 13, true);
-  draw(`Total dû : ${formatReceiptAmount(data.totalDue)} FCFA`);
-  draw(`Déjà payé avant ce règlement : ${formatReceiptAmount(data.paidBeforePayment)} FCFA`);
-  draw(`Reste dû après paiement : ${formatReceiptAmount(data.remainingAfterPayment)} FCFA`);
-  draw(`Mode : ${String(payment.method ?? '')}`);
-  if (payment.reference) draw(`Référence : ${String(payment.reference)}`);
-  draw(`Enregistré par : ${String(data.recordedBy ?? '—')}`);
+  const receiptNumber = String(data.receiptNumber ?? '');
+  const formatReceiptDate = (value: unknown) => {
+    const date = String(value ?? '');
+    const isoDate = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return isoDate ? `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}` : date;
+  };
+  const ink = rgb(0.1, 0.12, 0.18);
+  const wrapText = (text: string, selectedFont: typeof font, size: number, maxWidth: number) => {
+    const tokens = text.match(/\S+\s*/gu) ?? [text];
+    const lines: string[] = [];
+    let line = '';
+    for (const token of tokens) {
+      if (selectedFont.widthOfTextAtSize(line + token, size) <= maxWidth) {
+        line += token;
+        continue;
+      }
+      if (line) {
+        lines.push(line);
+        line = '';
+      }
+      if (selectedFont.widthOfTextAtSize(token, size) <= maxWidth) {
+        line = token;
+        continue;
+      }
+      for (const character of Array.from(token)) {
+        if (line && selectedFont.widthOfTextAtSize(line + character, size) > maxWidth) {
+          lines.push(line);
+          line = '';
+        }
+        line += character;
+      }
+    }
+    if (line || lines.length === 0) lines.push(line);
+    return lines;
+  };
+  const allocationSize = 9.5;
+  const allocationLineHeight = 12;
+  const allocationX = margin;
+  const allocationWidth = pageWidth - margin * 2;
   const logoData = typeof school.logoData === 'string' ? school.logoData : '';
+  let logo: Awaited<ReturnType<typeof pdf.embedPng>> | Awaited<ReturnType<typeof pdf.embedJpg>> | null = null;
   if (logoData) {
     const bytes = Uint8Array.from(Buffer.from(logoData, 'base64'));
-    const image = school.logoMimeType === 'image/png' ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
-    page.drawImage(image, { x: 450, y: 730, width: Math.min(90, image.width), height: Math.min(70, image.height) });
+    logo = school.logoMimeType === 'image/png' ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
   }
+
+  let page = pdf.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+  const drawLines = (
+    text: string,
+    x: number,
+    top: number,
+    maxWidth: number,
+    size: number,
+    isBold = false,
+    lineHeight = size + 3,
+  ) => {
+    const selectedFont = isBold ? bold : font;
+    const lines = wrapText(text, selectedFont, size, maxWidth);
+    lines.forEach((line, index) => {
+      page.drawText(line, {
+        x,
+        y: top - index * lineHeight,
+        size,
+        font: selectedFont,
+        color: ink,
+      });
+    });
+    return top - lines.length * lineHeight;
+  };
+  const drawRightLines = (
+    text: string,
+    right: number,
+    top: number,
+    maxWidth: number,
+    size: number,
+    isBold = false,
+    lineHeight = size + 3,
+  ) => {
+    const selectedFont = isBold ? bold : font;
+    const lines = wrapText(text, selectedFont, size, maxWidth);
+    lines.forEach((line, index) => {
+      page.drawText(line, {
+        x: right - selectedFont.widthOfTextAtSize(line, size),
+        y: top - index * lineHeight,
+        size,
+        font: selectedFont,
+        color: ink,
+      });
+    });
+    return top - lines.length * lineHeight;
+  };
+  const startContinuationPage = () => {
+    page = pdf.addPage([pageWidth, pageHeight]);
+    y = pageHeight - margin;
+    const continuationLogoZone = logo ? 112 : 0;
+    const continuationGap = logo ? 18 : 24;
+    const columnWidth = logo
+      ? (pageWidth - margin * 2 - continuationLogoZone - continuationGap * 2) / 2
+      : (pageWidth - margin * 2 - continuationGap) / 2;
+    const rightEdge = pageWidth - margin;
+    let leftBottom = drawLines(String(school.name ?? 'Établissement'), margin, y, columnWidth, 10, true);
+    for (const detail of [
+      school.address ? String(school.address) : null,
+      school.phone ? `Tél. ${school.phone}` : null,
+      school.email ? String(school.email) : null,
+    ]) {
+      if (detail) {
+        leftBottom = drawLines(detail, margin, leftBottom - 1, columnWidth, 8, false, 10);
+      }
+    }
+    let rightBottom = drawRightLines('REÇU DE PAIEMENT', rightEdge, y, columnWidth, 10, true);
+    rightBottom = drawRightLines(`Numéro : ${receiptNumber}`, rightEdge, rightBottom - 1, columnWidth, 9, true, 12);
+    rightBottom = drawRightLines(
+      `Date : ${formatReceiptDate(payment.paidAt)}`,
+      rightEdge,
+      rightBottom - 1,
+      columnWidth,
+      9,
+      false,
+      12,
+    );
+    rightBottom = drawRightLines(
+      `Année scolaire : ${String(data.academicYearName ?? '—')}`,
+      rightEdge,
+      rightBottom - 1,
+      columnWidth,
+      9,
+      false,
+      12,
+    );
+    const contentBottom = Math.min(leftBottom, rightBottom);
+    if (logo) {
+      const logoSize = logo.scaleToFit(98, 82);
+      const headerCenterY = (y + contentBottom) / 2;
+      page.drawImage(logo, {
+        x: (pageWidth - logoSize.width) / 2,
+        y: headerCenterY - logoSize.height / 2,
+        ...logoSize,
+      });
+      y = Math.min(contentBottom, headerCenterY - logoSize.height / 2) - 8;
+    } else {
+      y = contentBottom - 8;
+    }
+    y = drawLines('Suite du reçu', margin, y, allocationWidth, 10, true) - 5;
+  };
+  const ensureSpace = (height: number) => {
+    if (y - height < bottomLimit) startContinuationPage();
+  };
+  const drawWrapped = (text: string, size = 9.5, isBold = false, lineHeight = size + 3) => {
+    const selectedFont = isBold ? bold : font;
+    const lines = wrapText(text, selectedFont, size, allocationWidth);
+    for (const line of lines) {
+      ensureSpace(lineHeight);
+      page.drawText(line, { x: allocationX, y, size, font: selectedFont, color: ink });
+      y -= lineHeight;
+    }
+  };
+  const drawFieldRow = (leftText: string, rightText?: string) => {
+    const columnGap = 18;
+    const columnWidth = rightText == null
+      ? allocationWidth
+      : (allocationWidth - columnGap) / 2;
+    const leftLines = wrapText(leftText, font, 9.5, columnWidth);
+    const rightLines = rightText == null ? [] : wrapText(rightText, font, 9.5, columnWidth);
+    const lineCount = Math.max(leftLines.length, rightLines.length, 1);
+    for (let index = 0; index < lineCount; index++) {
+      ensureSpace(12);
+      if (leftLines[index]) {
+        page.drawText(leftLines[index], { x: margin, y, size: 9.5, font, color: ink });
+      }
+      if (rightLines[index]) {
+        page.drawText(rightLines[index], {
+          x: margin + columnWidth + columnGap,
+          y,
+          size: 9.5,
+          font,
+          color: ink,
+        });
+      }
+      y -= 12;
+    }
+    y -= 2;
+  };
+
+  const headerTop = y;
+  const headerGap = 24;
+  const logoZoneWidth = logo ? 112 : 0;
+  const columnGap = logo ? 18 : headerGap;
+  const headerColumnWidth = logo
+    ? (allocationWidth - logoZoneWidth - columnGap * 2) / 2
+    : (allocationWidth - headerGap) / 2;
+  const leftHeaderX = margin;
+  const rightHeaderEdge = pageWidth - margin;
+  let leftHeaderTextX = leftHeaderX;
+  let leftHeaderTextWidth = headerColumnWidth;
+  let schoolBottom = drawLines(
+    String(school.name ?? 'Établissement'),
+    leftHeaderTextX,
+    headerTop,
+    leftHeaderTextWidth,
+    12,
+    true,
+  );
+  for (const detail of [
+    school.address ? String(school.address) : null,
+    school.phone ? `Tél. ${school.phone}` : null,
+    school.email ? String(school.email) : null,
+  ]) {
+    if (detail) {
+      schoolBottom = drawLines(detail, leftHeaderTextX, schoolBottom - 1, leftHeaderTextWidth, 9, false, 11);
+    }
+  }
+  const displayPaidAt = formatReceiptDate(payment.paidAt);
+  let receiptBottom = drawRightLines(
+    'REÇU DE PAIEMENT',
+    rightHeaderEdge,
+    headerTop,
+    headerColumnWidth,
+    12,
+    true,
+  );
+  receiptBottom = drawRightLines(
+    `Numéro : ${receiptNumber}`,
+    rightHeaderEdge,
+    receiptBottom - 1,
+    headerColumnWidth,
+    9.5,
+    true,
+    12,
+  );
+  receiptBottom = drawRightLines(
+    `Date : ${displayPaidAt}`,
+    rightHeaderEdge,
+    receiptBottom - 1,
+    headerColumnWidth,
+    9.5,
+    false,
+    12,
+  );
+  receiptBottom = drawRightLines(
+    `Année scolaire : ${String(data.academicYearName ?? '—')}`,
+    rightHeaderEdge,
+    receiptBottom - 1,
+    headerColumnWidth,
+    9.5,
+    false,
+    12,
+  );
+  const headerContentBottom = Math.min(schoolBottom, receiptBottom);
+  if (logo) {
+    const logoSize = logo.scaleToFit(98, 82);
+    const headerCenterY = (headerTop + headerContentBottom) / 2;
+    page.drawImage(logo, {
+      x: (pageWidth - logoSize.width) / 2,
+      y: headerCenterY - logoSize.height / 2,
+      ...logoSize,
+    });
+    y = Math.min(headerContentBottom, headerCenterY - logoSize.height / 2) - 7;
+  } else {
+    y = headerContentBottom - 7;
+  }
+
+  const studentCardFontSize = 10.5;
+  const studentCardLineHeight = 13;
+  const studentCardPaddingX = 12;
+  const studentCardPaddingY = 9;
+  const studentCardTextWidth = allocationWidth - studentCardPaddingX * 2;
+  const studentCardLines = [
+    ...wrapText(
+      `Élève : ${String(student.firstName ?? '')} ${String(student.lastName ?? '')}`,
+      bold,
+      studentCardFontSize,
+      studentCardTextWidth,
+    ),
+    ...wrapText(
+      `Matricule : ${String(student.matricule ?? '—')}  |  Classe : ${String(student.className ?? '—')}`,
+      bold,
+      studentCardFontSize,
+      studentCardTextWidth,
+    ),
+  ];
+  const studentCardWidth = Math.min(
+    allocationWidth,
+    Math.max(...studentCardLines.map(line => bold.widthOfTextAtSize(line, studentCardFontSize)))
+      + studentCardPaddingX * 2,
+  );
+  const studentCardHeight = studentCardLines.length * studentCardLineHeight + studentCardPaddingY * 2;
+  ensureSpace(studentCardHeight + 8);
+  const studentCardTop = y;
+  const studentCardBottom = studentCardTop - studentCardHeight;
+  const cornerRadius = Math.min(7, studentCardHeight / 4, studentCardWidth / 4);
+  const cornerCurve = cornerRadius * 0.5523;
+  const studentCardPath = [
+    `M ${cornerRadius} 0`,
+    `H ${studentCardWidth - cornerRadius}`,
+    `C ${studentCardWidth - cornerRadius + cornerCurve} 0 ${studentCardWidth} ${cornerRadius - cornerCurve} ${studentCardWidth} ${cornerRadius}`,
+    `V ${studentCardHeight - cornerRadius}`,
+    `C ${studentCardWidth} ${studentCardHeight - cornerRadius + cornerCurve} ${studentCardWidth - cornerRadius + cornerCurve} ${studentCardHeight} ${studentCardWidth - cornerRadius} ${studentCardHeight}`,
+    `H ${cornerRadius}`,
+    `C ${cornerRadius - cornerCurve} ${studentCardHeight} 0 ${studentCardHeight - cornerRadius + cornerCurve} 0 ${studentCardHeight - cornerRadius}`,
+    `V ${cornerRadius}`,
+    `C 0 ${cornerRadius - cornerCurve} ${cornerRadius - cornerCurve} 0 ${cornerRadius} 0`,
+    'Z',
+  ].join(' ');
+  page.drawSvgPath(studentCardPath, {
+    x: margin,
+    y: studentCardBottom + studentCardHeight,
+    borderColor: rgb(0.72, 0.76, 0.82),
+    borderWidth: 0.8,
+  });
+  studentCardLines.forEach((line, index) => {
+    page.drawText(line, {
+      x: margin + studentCardPaddingX,
+      y: studentCardTop - studentCardPaddingY - studentCardFontSize - index * studentCardLineHeight,
+      size: studentCardFontSize,
+      font: bold,
+      color: ink,
+    });
+  });
+  y = studentCardBottom - 8;
+  y -= 2;
+  drawWrapped('Allocations', 10, true, 13);
+  y -= 2;
+  for (const allocation of Array.isArray(data.allocations) ? data.allocations : []) {
+    drawWrapped(formatAccountingReceiptAllocationLine(allocation), allocationSize, false, allocationLineHeight);
+  }
+  y -= 5;
+  drawFieldRow(
+    `Montant encaissé : ${formatReceiptAmount(payment.amount)} FCFA`,
+    `Total dû : ${formatReceiptAmount(data.totalDue)} FCFA`,
+  );
+  drawFieldRow(
+    `Déjà payé avant ce règlement : ${formatReceiptAmount(data.paidBeforePayment)} FCFA`,
+    `Reste dû après paiement : ${formatReceiptAmount(data.remainingAfterPayment)} FCFA`,
+  );
+  drawFieldRow(
+    `Mode : ${String(payment.method ?? '')}`,
+    payment.reference ? `Référence : ${String(payment.reference)}` : undefined,
+  );
+  drawFieldRow(`Enregistré par : ${String(data.recordedBy ?? '—')}`);
   return pdf.save();
 }
