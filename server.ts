@@ -37,7 +37,7 @@ import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gr
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
-import { generateTemporaryLocalPassword, hashLocalPassword } from './src/lib/localPassword.ts';
+import { generateTemporaryLocalPassword, hashLocalPassword, verifyLocalPassword } from './src/lib/localPassword.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
@@ -4129,6 +4129,26 @@ export async function createApp() {
 
       if (actor.role !== 'super_admin') {
         return res.status(403).json({ error: 'Seul un super administrateur peut supprimer un établissement.' });
+      }
+
+      if (!req.user.id || actor.id !== req.user.id) {
+        return res.status(403).json({ error: 'Impossible de vérifier l’identité du compte authentifié.' });
+      }
+
+      const password = req.body?.password;
+      if (typeof password !== 'string' || password.length === 0 || password.length > 1024) {
+        return res.status(400).json({ error: 'Le mot de passe du compte est requis.' });
+      }
+
+      const [localAuth] = await db.select({
+        passwordHash: localAuths.passwordHash,
+        salt: localAuths.salt,
+      }).from(localAuths).where(eq(localAuths.userId, actor.id));
+      if (!localAuth) {
+        return res.status(409).json({ error: 'Ce compte ne dispose pas d’un mot de passe local vérifiable.' });
+      }
+      if (!verifyLocalPassword(password, localAuth.salt, localAuth.passwordHash)) {
+        return res.status(401).json({ error: 'Mot de passe incorrect.' });
       }
 
       const [school] = await db.select().from(schools).where(eq(schools.id, id));

@@ -20,6 +20,7 @@ import {
   UserPlus,
   Settings,
   Eye,
+  EyeOff,
   BookOpen,
   LoaderCircle,
 } from 'lucide-react';
@@ -442,7 +443,7 @@ interface AdminViewProps {
   onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }>;
   onDeleteUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
-  onDeleteSchool: (id: number) => void;
+  onDeleteSchool: (id: number, password: string) => void | Promise<void>;
   onSetSchoolSuspended?: (id: number, isSuspended: boolean) => Promise<void>;
   onAddSubject?: (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => Promise<any>;
   onUpdateSubject?: (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => Promise<any>;
@@ -2476,6 +2477,11 @@ export default function AdminView({
   // States for school editing
   const [editSchoolOpen, setEditSchoolOpen] = useState(false);
   const [schoolToEdit, setSchoolToEdit] = useState<School | null>(null);
+  const [schoolToDelete, setSchoolToDelete] = useState<School | null>(null);
+  const [deleteSchoolPassword, setDeleteSchoolPassword] = useState('');
+  const [showDeleteSchoolPassword, setShowDeleteSchoolPassword] = useState(false);
+  const [deleteSchoolError, setDeleteSchoolError] = useState<string | null>(null);
+  const [isDeletingSchool, setIsDeletingSchool] = useState(false);
   const [schoolLogoFile, setSchoolLogoFile] = useState<File | null>(null);
   const [schoolLogoPreview, setSchoolLogoPreview] = useState<string | null>(null);
   const [schoolLogoBusy, setSchoolLogoBusy] = useState(false);
@@ -2486,6 +2492,13 @@ export default function AdminView({
   const [editSchoolSubjects, setEditSchoolSubjects] = useState<Subject[]>([]);
   const [editSchoolAssociationsLoading, setEditSchoolAssociationsLoading] = useState(false);
   const [editSchoolAssociationsError, setEditSchoolAssociationsError] = useState<string | null>(null);
+  const closeSchoolDeleteDialog = () => {
+    if (isDeletingSchool) return;
+    setSchoolToDelete(null);
+    setDeleteSchoolPassword('');
+    setShowDeleteSchoolPassword(false);
+    setDeleteSchoolError(null);
+  };
 
   const existingEditSchoolClassNames = Array.from(new Set(editSchoolClasses
     .filter((klass) => schoolToEdit && isClassVisibleToSchool(klass, schoolToEdit.id))
@@ -4120,6 +4133,103 @@ export default function AdminView({
           </ModalSurface>
         )}
       </div>
+      {schoolToDelete && (
+        <ModalSurface
+          isOpen={Boolean(schoolToDelete)}
+          onClose={closeSchoolDeleteDialog}
+          contentClassName="max-w-md rounded-2xl shadow-xl"
+          overlayClassName="z-[60]"
+          closeOnOverlayClick={!isDeletingSchool}
+          closeOnEscape={!isDeletingSchool}
+          ariaLabel="Confirmation de suppression de l’école"
+        >
+          <form
+            className="w-full space-y-5"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!schoolToDelete || !deleteSchoolPassword || isDeletingSchool) return;
+
+              setIsDeletingSchool(true);
+              setDeleteSchoolError(null);
+              try {
+                await onDeleteSchool(schoolToDelete.id, deleteSchoolPassword);
+                setSchoolToDelete(null);
+                setDeleteSchoolPassword('');
+                setShowDeleteSchoolPassword(false);
+              } catch (error: any) {
+                setDeleteSchoolError(error?.message || 'Impossible de supprimer cette école.');
+              } finally {
+                setIsDeletingSchool(false);
+              }
+            }}
+          >
+            <div>
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <Trash2 className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <h2 className="text-lg font-bold text-slate-900">Confirmer la suppression</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Vous allez supprimer définitivement l’école <strong className="text-slate-900">« {schoolToDelete.name} »</strong>.
+                Entrez le mot de passe de votre compte pour confirmer cette opération.
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="delete-school-password" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                Mot de passe du compte
+              </label>
+              <div className="relative">
+                <input
+                  id="delete-school-password"
+                  type={showDeleteSchoolPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  required
+                  value={deleteSchoolPassword}
+                  onChange={(event) => setDeleteSchoolPassword(event.target.value)}
+                  disabled={isDeletingSchool}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-11 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteSchoolPassword((visible) => !visible)}
+                  disabled={isDeletingSchool}
+                  aria-label={showDeleteSchoolPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 hover:text-slate-800 disabled:opacity-50"
+                >
+                  {showDeleteSchoolPassword
+                    ? <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    : <Eye className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              </div>
+            </div>
+
+            {deleteSchoolError && (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800" role="alert">
+                {deleteSchoolError}
+              </p>
+            )}
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeSchoolDeleteDialog}
+                disabled={isDeletingSchool}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={isDeletingSchool || !deleteSchoolPassword}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isDeletingSchool && <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                {isDeletingSchool ? 'Suppression...' : 'Confirmer la suppression'}
+              </button>
+            </div>
+          </form>
+        </ModalSurface>
+      )}
       {/* Confirmation modal (replace window.confirm) */}
       {confirmOpen && (
         <ModalSurface
@@ -4946,9 +5056,16 @@ export default function AdminView({
                               <Settings className="h-3.5 w-3.5 inline" />
                             </button>
                             <button
-                              onClick={() => onDeleteSchool(sc.id)}
+                              type="button"
+                              onClick={() => {
+                                setSchoolToDelete(sc);
+                                setDeleteSchoolPassword('');
+                                setShowDeleteSchoolPassword(false);
+                                setDeleteSchoolError(null);
+                              }}
                               className="p-1 px-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 text-rose-600 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
                               title="Supprimer"
+                              aria-label={`Supprimer ${sc.name}`}
                             >
                               <Trash2 className="h-3.5 w-3.5 inline" />
                             </button>

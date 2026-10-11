@@ -3,7 +3,8 @@ import request from 'supertest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { schools, academicYears, users, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations, auditEvents } from '../src/db/schema.ts';
+import { schools, academicYears, users, localAuths, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations, auditEvents } from '../src/db/schema.ts';
+import { hashLocalPassword } from '../src/lib/localPassword.ts';
 
 const schoolLogoS3 = vi.hoisted(() => ({
   send: vi.fn(),
@@ -14,6 +15,8 @@ const mockState = {
   users: [
     { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'super_admin', schoolId: null },
   ],
+  localAuths: [] as Array<{ userId: number; passwordHash: string; salt: string }>,
+  authenticated: true,
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
@@ -34,6 +37,15 @@ const mockState = {
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   financialObligations: [] as Array<{ id: number; schoolId: number }>,
   auditEvents: [] as Array<Record<string, any>>,
+};
+
+const setSuperAdminPassword = () => {
+  const salt = 'test-salt';
+  mockState.localAuths = [{
+    userId: 1,
+    salt,
+    passwordHash: hashLocalPassword('unit-test-password', salt),
+  }];
 };
 
 const normalizeColumnName = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
@@ -96,6 +108,11 @@ const createBuilder = () => {
     then(resolve: (value: any) => void) {
       if (builder.table === users) {
         return Promise.resolve(mockState.users).then(resolve);
+      }
+      if (builder.table === localAuths) {
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        const rows = mockState.localAuths.filter((row) => conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+        return Promise.resolve(rows).then(resolve);
       }
       if (builder.table === academicYears) {
         return Promise.resolve(mockState.academicYears).then(resolve);
@@ -294,6 +311,10 @@ const mockDb = {
   }),
   delete: (table: any) => ({
     where: async (...conditions: any[]) => {
+      if (table === schools) {
+        const pairs = conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        mockState.schools = mockState.schools.filter((row) => !pairs.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+      }
       if (table === schoolTerms) {
         const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
         mockState.schoolTerms = mockState.schoolTerms.filter((row) => !pairs.every((entry) => row[entry.column] === entry.value));
@@ -332,6 +353,7 @@ vi.mock('../src/middleware/auth.ts', async () => {
   return {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
+      if (!mockState.authenticated) return _res.status(401).json({ error: 'Unauthorized: Missing token' });
       req.user = {
         uid: 'sim-admin',
         email: 'admin@example.com',
@@ -349,6 +371,7 @@ vi.mock('src/middleware/auth', async () => {
   return {
     ...actual,
     requireAuth(req: any, _res: any, next: () => void) {
+      if (!mockState.authenticated) return _res.status(401).json({ error: 'Unauthorized: Missing token' });
       req.user = {
         uid: 'sim-admin',
         email: 'admin@example.com',
@@ -403,6 +426,8 @@ describe('POST /api/schools', () => {
     mockState.users = [
       { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'super_admin', schoolId: null },
     ];
+    mockState.localAuths = [];
+    mockState.authenticated = true;
     mockState.academicYears = [
       { id: 1, name: '2024-2025', isActive: true, schoolId: null },
     ];
@@ -427,10 +452,53 @@ describe('POST /api/schools', () => {
 
   it('refuses to delete a school that has an accounting obligation history', async () => {
     mockState.schools = [{ id: 1, name: 'École avec historique' }];
+    setSuperAdminPassword();
     mockState.financialObligations = [{ id: 7, schoolId: 1 }];
 
-    await request(app).delete('/api/schools/1').expect(409);
+    await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' }).expect(409);
     expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('rejects school deletion when the password is incorrect', async () => {
+    mockState.schools = [{ id: 1, name: 'École à conserver' }];
+    setSuperAdminPassword();
+
+    await request(app).delete('/api/schools/1').send({ password: 'wrong-password' })
+      .expect(401, { error: 'Mot de passe incorrect.' });
+    expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('does not permit an unauthenticated request even when it includes a password', async () => {
+    mockState.schools = [{ id: 1, name: 'École à conserver' }];
+    setSuperAdminPassword();
+    mockState.authenticated = false;
+
+    await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' })
+      .expect(401, { error: 'Unauthorized: Missing token' });
+    expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('does not permit an authenticated non-super-admin to delete a school with a correct password', async () => {
+    mockState.schools = [{ id: 1, name: 'École à conserver' }];
+    setSuperAdminPassword();
+    mockState.users[0].role = 'school_admin';
+
+    await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' })
+      .expect(403);
+    expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('deletes a school after the authenticated super-admin password is verified', async () => {
+    mockState.schools = [{ id: 1, name: 'École autorisée' }];
+    setSuperAdminPassword();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' })
+      .expect(200, { message: 'School deleted successfully' });
+
+    expect(mockState.schools).toHaveLength(0);
+    expect(JSON.stringify(response.body)).not.toContain('passwordHash');
+    expect(JSON.stringify(response.body)).not.toContain('salt');
   });
 
   it('suspends and reopens a school idempotently without changing retained data', async () => {

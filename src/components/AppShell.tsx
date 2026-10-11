@@ -219,9 +219,12 @@ export default function AppShell() {
     await fetchAllData();
   };
 
-  const handleDeleteSchool = async (id: number) => {
+  const handleDeleteSchool = async (id: number, password: string) => {
     try {
-      await apiFetch(`/api/schools/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/schools/${id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ password }),
+      });
       await fetchAllData();
     } catch (error: any) {
       if (error.message && error.message.includes('École introuvable')) {
@@ -230,6 +233,7 @@ export default function AppShell() {
       } else {
         setErrorMsg(error.message || 'Impossible de supprimer l’école.');
       }
+      throw error;
     }
   };
 

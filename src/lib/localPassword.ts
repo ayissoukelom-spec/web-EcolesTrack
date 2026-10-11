@@ -1,4 +1,4 @@
-import { pbkdf2Sync, randomBytes, randomInt } from 'node:crypto';
+import { pbkdf2Sync, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
 const PBKDF2_ITERATIONS = 310000;
 const PBKDF2_KEY_LENGTH = 64;
@@ -7,6 +7,14 @@ const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstu
 
 export function hashLocalPassword(password: string, salt: string): string {
   return pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, PBKDF2_KEY_LENGTH, PBKDF2_DIGEST).toString('hex');
+}
+
+export function verifyLocalPassword(password: string, salt: string, passwordHash: string): boolean {
+  if (!/^[a-f0-9]{128}$/i.test(passwordHash)) return false;
+
+  const expectedHash = Buffer.from(passwordHash, 'hex');
+  const actualHash = Buffer.from(hashLocalPassword(password, salt), 'hex');
+  return expectedHash.length === actualHash.length && timingSafeEqual(actualHash, expectedHash);
 }
 
 export function generateTemporaryLocalPassword() {

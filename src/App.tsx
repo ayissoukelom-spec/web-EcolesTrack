@@ -714,10 +714,13 @@ export default function App() {
     }
   };
 
-  const handleDeleteSchool = async (id: number) => {
+  const handleDeleteSchool = async (id: number, password: string) => {
     try {
-      await apiFetch(`/api/schools/${id}`, { method: 'DELETE' });
-      fetchAllData();
+      await apiFetch(`/api/schools/${id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ password }),
+      });
+      await fetchAllData();
     } catch (err: any) {
       if (err.message && err.message.includes('École introuvable')) {
         setErrorMsg('L’école demandée n’existe plus. Rafraîchissez la page puis réessayez.');
@@ -725,6 +728,7 @@ export default function App() {
       } else {
         setErrorMsg(err.message || 'Impossible de supprimer l’école.');
       }
+      throw err;
     }
   };
   const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone?: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => {

@@ -109,6 +109,99 @@ describe('AdminView school term cycle availability', () => {
   });
 });
 
+describe('AdminView school deletion confirmation', () => {
+  const onDeleteSchool = vi.fn();
+
+  beforeEach(() => {
+    onDeleteSchool.mockReset();
+    Object.defineProperty(window, 'localStorage', {
+      value: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+      },
+      configurable: true,
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const renderSchoolList = () => renderWithAuth(
+    <AdminView
+      userRole="super_admin"
+      schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+      yearsList={[]}
+      classesList={[]}
+      teachersList={[]}
+      studentsList={[]}
+      parentsList={[]}
+      usersList={[]}
+      onAddSchool={async () => ({})}
+      onAddYear={() => undefined}
+      onAddClass={async () => undefined}
+      onAddTeacher={async () => ({})}
+      onAddParent={async () => ({})}
+      onAddStudent={() => undefined}
+      onDeleteClass={() => undefined}
+      onDeleteSchool={onDeleteSchool}
+    />,
+  );
+
+  it('opens a named confirmation dialog and cancellation does not request deletion', () => {
+    renderSchoolList();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Supprimer École du Lac' }));
+
+    expect(screen.getByRole('dialog', { name: 'Confirmation de suppression de l’école' })).toBeTruthy();
+    expect(screen.getByText(/« École du Lac »/)).toBeTruthy();
+    const passwordInput = screen.getByLabelText('Mot de passe du compte') as HTMLInputElement;
+    expect(passwordInput.type).toBe('password');
+    fireEvent.click(screen.getByRole('button', { name: 'Afficher le mot de passe' }));
+    expect(passwordInput.type).toBe('text');
+    fireEvent.click(screen.getByRole('button', { name: 'Masquer le mot de passe' }));
+    expect(passwordInput.type).toBe('password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Annuler' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Confirmation de suppression de l’école' })).toBeNull();
+    expect(onDeleteSchool).not.toHaveBeenCalled();
+  });
+
+  it('submits the password to the delete handler and displays server errors', async () => {
+    onDeleteSchool.mockRejectedValueOnce(new Error('Mot de passe incorrect.'));
+    renderSchoolList();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Supprimer École du Lac' }));
+    fireEvent.change(screen.getByLabelText('Mot de passe du compte'), { target: { value: 'test-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer la suppression' }));
+
+    await waitFor(() => expect(onDeleteSchool).toHaveBeenCalledWith(1, 'test-password'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Mot de passe incorrect.');
+    expect(screen.getByRole('button', { name: 'Confirmer la suppression' })).toBeEnabled();
+  });
+
+  it('disables confirmation during the delete request and closes after success', async () => {
+    let resolveDelete: (() => void) | undefined;
+    onDeleteSchool.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    }));
+    renderSchoolList();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Supprimer École du Lac' }));
+    fireEvent.change(screen.getByLabelText('Mot de passe du compte'), { target: { value: 'test-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer la suppression' }));
+
+    expect(await screen.findByRole('button', { name: 'Suppression...' })).toBeDisabled();
+    resolveDelete?.();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Confirmation de suppression de l’école' })).toBeNull());
+  });
+});
+
 describe('AdminView create-user teacher form', () => {
   afterEach(() => {
     cleanup();
