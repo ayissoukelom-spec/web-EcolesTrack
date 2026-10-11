@@ -27,6 +27,54 @@ describe('normalizeDashboardChartData', () => {
   });
 });
 
+describe('DashboardView gender distribution', () => {
+  it.each([
+    [4, 4],
+    [1234, 5678],
+    [12345, 67890],
+    [12345678, 87654321],
+  ])('preserves %s and %s with intrinsic responsive sizing', (maleStudents, femaleStudents) => {
+    const { container } = render(
+      <DashboardView
+        stats={{
+          totalStudents: maleStudents + femaleStudents,
+          totalAbsences: 0,
+          totalClasses: 1,
+          totalTeachers: 1,
+          attendanceRate: 100,
+          maleStudents,
+          femaleStudents,
+        }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="school_admin"
+      />
+    );
+
+    const genderCard = container.querySelector<HTMLElement>('#card-stats-gender');
+    expect(genderCard).not.toBeNull();
+    if (!genderCard) throw new Error('Gender distribution card was not rendered');
+
+    const numberLayout = genderCard.querySelector<HTMLElement>('.flex.flex-wrap');
+    expect(numberLayout).not.toBeNull();
+    if (!numberLayout) throw new Error('Gender number layout was not rendered');
+
+    const [maleNumber, femaleNumber] = Array.from(numberLayout.querySelectorAll<HTMLElement>('p.text-3xl'));
+    if (!maleNumber || !femaleNumber) throw new Error('Both gender counts were not rendered');
+
+    expect(maleNumber.textContent).toBe(String(maleStudents));
+    expect(femaleNumber.textContent).toBe(String(femaleStudents));
+    expect(maleNumber.classList.contains('text-3xl')).toBe(true);
+    expect(femaleNumber.classList.contains('text-3xl')).toBe(true);
+    expect(maleNumber.classList.contains('break-all')).toBe(true);
+    expect(femaleNumber.classList.contains('break-all')).toBe(true);
+    expect(genderCard.classList.contains('min-w-0')).toBe(true);
+    expect(genderCard.classList.contains('sm:col-span-2')).toBe(true);
+    expect(Array.from(numberLayout.children)).toHaveLength(2);
+    expect(Array.from(numberLayout.children).every((tile) => tile.classList.contains('flex-[1_1_max-content]'))).toBe(true);
+  });
+});
+
 describe('DashboardView absence status counts', () => {
   it('shows login statistics only for super admins', () => {
     const loginStats = {

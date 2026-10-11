@@ -120,7 +120,7 @@ export default function DashboardView({
 
         {userRole !== 'parent' && (
           <div
-            className="relative overflow-hidden rounded-3xl border border-fuchsia-500/20 bg-gradient-to-br from-[#12031f] via-[#3d0d45] to-[#62125d] p-5 shadow-[0_22px_50px_rgba(99,35,126,0.22)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_24px_55px_rgba(99,35,126,0.32)]"
+            className="relative min-w-0 overflow-hidden rounded-3xl border border-fuchsia-500/20 bg-gradient-to-br from-[#12031f] via-[#3d0d45] to-[#62125d] p-5 shadow-[0_22px_50px_rgba(99,35,126,0.22)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_24px_55px_rgba(99,35,126,0.32)] sm:col-span-2"
             id="card-stats-gender"
           >
             <div className="pointer-events-none absolute -right-12 top-0 h-36 w-36 rounded-full bg-fuchsia-500/15 blur-3xl" />
@@ -130,14 +130,14 @@ export default function DashboardView({
                 <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-100">Répartition par genre</span>
                 <div className="rounded-full bg-fuchsia-500/15 px-2 py-1 text-[0.6rem] font-semibold text-fuchsia-200 ring-1 ring-white/10">Live</div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-500 p-4 text-white shadow-[0_12px_24px_rgba(14,116,144,0.25)] ring-1 ring-white/10">
+              <div className="flex flex-wrap gap-3">
+                <div className="min-w-0 flex-[1_1_max-content] rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-500 p-4 text-white shadow-[0_12px_24px_rgba(14,116,144,0.25)] ring-1 ring-white/10">
                   <p className="text-[0.6rem] uppercase tracking-[0.18em] text-sky-100">Garçons</p>
-                  <p className="mt-2 text-3xl font-black leading-none">{stats.maleStudents || 0}</p>
+                  <p className="mt-2 break-all text-3xl font-black leading-none">{stats.maleStudents || 0}</p>
                 </div>
-                <div className="rounded-2xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-4 text-white shadow-[0_12px_24px_rgba(217,70,239,0.22)] ring-1 ring-white/10">
+                <div className="min-w-0 flex-[1_1_max-content] rounded-2xl bg-gradient-to-br from-pink-400 to-fuchsia-500 p-4 text-white shadow-[0_12px_24px_rgba(217,70,239,0.22)] ring-1 ring-white/10">
                   <p className="text-[0.6rem] uppercase tracking-[0.18em] text-pink-100">Filles</p>
-                  <p className="mt-2 text-3xl font-black leading-none">{stats.femaleStudents || 0}</p>
+                  <p className="mt-2 break-all text-3xl font-black leading-none">{stats.femaleStudents || 0}</p>
                 </div>
               </div>
             </div>
