@@ -49,6 +49,8 @@ export default function AppShell() {
   const {
     stats,
     loginStats,
+    ageStatsByClass,
+    ageStatsAsOf,
     recentAbsences: summaryRecentAbsences,
     recentGrades: summaryRecentGrades,
     refresh: refreshDashboard,
@@ -413,7 +415,7 @@ export default function AppShell() {
     });
 
     if (activeTab === 'tableau-de-bord') {
-      return <DashboardView stats={stats} loginStats={loginStats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} />;
+      return <DashboardView stats={stats} loginStats={loginStats} recentAbsences={summaryRecentAbsences} recentGrades={summaryRecentGrades} userRole={currentRole} ageStatsByClass={ageStatsByClass} ageStatsAsOf={ageStatsAsOf} />;
     }
 
     if (activeTab === 'administration') {

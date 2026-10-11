@@ -30,6 +30,7 @@ import { useAbsences } from './hooks/useAbsences.ts';
 import { useLateArrivals } from './hooks/useLateArrivals.ts';
 import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
+import type { ClassAgeStats } from './lib/studentAgeStats.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
 import SimulatorHeader from './components/SimulatorHeader.tsx';
 import ParentWhatsAppButton from './components/ParentWhatsAppButton.tsx';
@@ -169,6 +170,8 @@ export default function App() {
     },
   });
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
+  const [ageStatsByClass, setAgeStatsByClass] = useState<ClassAgeStats[]>([]);
+  const [ageStatsAsOf, setAgeStatsAsOf] = useState('');
   const [schoolsList, setSchoolsList] = useState<School[]>([]);
   const [yearsList, setYearsList] = useState<AcademicYear[]>([]);
   const [classesList, setClassesList] = useState<Class[]>([]);
@@ -316,6 +319,8 @@ export default function App() {
         } else {
           setChartData([]);
         }
+        setAgeStatsByClass(Array.isArray((summary as any).ageStatsByClass) ? (summary as any).ageStatsByClass : []);
+        setAgeStatsAsOf(typeof (summary as any).ageStatsAsOf === 'string' ? (summary as any).ageStatsAsOf : '');
       }
 
       if (currentRole === 'super_admin') {
@@ -1611,6 +1616,8 @@ export default function App() {
                   recentGrades={summaryRecentGrades}
                   userRole={currentRole}
                   chartData={chartData}
+                  ageStatsByClass={ageStatsByClass}
+                  ageStatsAsOf={ageStatsAsOf}
                   absenceStatusCounts={stats.absenceStatusCounts}
                 />
               )}

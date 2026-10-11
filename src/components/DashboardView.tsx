@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { UserRole } from '../types.ts';
 import type { LoginStats } from '../hooks/useAdminDashboard.ts';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
+import type { ClassAgeStats } from '../lib/studentAgeStats.ts';
 
 export function normalizeDashboardChartData(rawData: unknown): Array<{ name: string; taux: number }> {
   if (!Array.isArray(rawData)) return [];
@@ -53,6 +54,8 @@ interface DashboardViewProps {
   recentGrades: any[];
   userRole?: UserRole;
   chartData?: Array<{ name: string; taux: number }>;
+  ageStatsByClass?: ClassAgeStats[];
+  ageStatsAsOf?: string;
   absenceStatusCounts?: {
     justified: number;
     unjustified: number;
@@ -68,6 +71,8 @@ export default function DashboardView({
   recentGrades,
   userRole,
   chartData = [],
+  ageStatsByClass = [],
+  ageStatsAsOf,
   absenceStatusCounts,
   loginStats,
 }: DashboardViewProps) {
@@ -272,6 +277,47 @@ export default function DashboardView({
           </div>
         </div>
       </div>
+
+      <section className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-amber-50/50 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]" aria-labelledby="class-age-statistics-title" id="class-age-statistics">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 id="class-age-statistics-title" className="text-lg font-bold text-slate-800">Âges des élèves par classe</h3>
+            <p className="text-xs text-slate-500">
+              {ageStatsAsOf ? `Âge calculé au ${ageStatsAsOf} (UTC) · élèves actifs affectés à une classe` : 'Élèves actifs affectés à une classe'}
+            </p>
+          </div>
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-amber-700">
+            Âges
+          </span>
+        </div>
+        {ageStatsByClass.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {ageStatsByClass.map((classStats) => (
+              <article key={`${classStats.schoolId}-${classStats.classId}`} className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <h4 className="font-bold text-slate-800">{classStats.className}</h4>
+                {(userRole === 'super_admin' || userRole === 'parent') && (
+                  <p className="text-xs text-slate-500">Établissement {classStats.schoolId}</p>
+                )}
+                {classStats.averageAge == null ? (
+                  <p className="mt-3 text-sm text-slate-500">Aucune date de naissance exploitable. Effectif pris en compte : 0.</p>
+                ) : (
+                  <>
+                    <p className="mt-3 text-sm text-slate-700">
+                      Âge moyen : <strong>{classStats.averageAge} ans</strong>
+                    </p>
+                    <p className="text-xs text-slate-500">Effectif pris en compte : {classStats.includedStudents}</p>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Répartition : {classStats.distribution.map(({ age, count }) => `${age} ans : ${count}`).join(' · ')}
+                    </p>
+                  </>
+                )}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="py-4 text-center text-sm text-slate-500">Aucune classe avec des élèves actifs affectés.</p>
+        )}
+      </section>
 
       {userRole === 'super_admin' && loginStats && (
         <section className="space-y-5" aria-labelledby="login-statistics-title" id="login-statistics">

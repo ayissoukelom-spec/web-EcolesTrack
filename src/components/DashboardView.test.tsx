@@ -117,6 +117,58 @@ describe('DashboardView attendance rate', () => {
   });
 });
 
+describe('DashboardView class age statistics', () => {
+  it('shows the rounded average, included count, distribution, and reference date', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 2, totalAbsences: 0, totalClasses: 1, totalTeachers: 1, attendanceRate: 92.5 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="school_admin"
+        chartData={[{ name: '6ème A', taux: 92.5 }]}
+        ageStatsAsOf="2026-10-11"
+        ageStatsByClass={[{
+          schoolId: 10,
+          classId: 5,
+          className: '6ème A',
+          averageAge: 16,
+          includedStudents: 2,
+          distribution: [{ age: 15, count: 1 }, { age: 16, count: 1 }],
+        }]}
+      />
+    );
+
+    const ageSection = screen.getByRole('region', { name: 'Âges des élèves par classe' });
+    expect(within(ageSection).getByText('Âge calculé au 2026-10-11 (UTC) · élèves actifs affectés à une classe')).toBeTruthy();
+    expect(within(ageSection).getByText('Âge moyen :', { exact: false }).textContent).toContain('16 ans');
+    expect(within(ageSection).getByText('Effectif pris en compte : 2')).toBeTruthy();
+    expect(within(ageSection).getByText('Répartition : 15 ans : 1 · 16 ans : 1')).toBeTruthy();
+    expect(screen.getByText('Fréquentation par Division (%)')).toBeTruthy();
+    expect(screen.getByText('92.5%')).toBeTruthy();
+  });
+
+  it('shows an explicit message when a class has no usable birth dates', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 1, totalAbsences: 0, totalClasses: 1, totalTeachers: 1, attendanceRate: 100 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        ageStatsByClass={[{
+          schoolId: 10,
+          classId: 5,
+          className: '6ème A',
+          averageAge: null,
+          includedStudents: 0,
+          distribution: [],
+        }]}
+      />
+    );
+
+    expect(screen.getByText('Aucune date de naissance exploitable. Effectif pris en compte : 0.')).toBeTruthy();
+    expect(screen.queryByText(/Âge moyen :/)).toBeNull();
+  });
+});
+
 describe('DashboardView absence status counts', () => {
   it('shows login statistics only for super admins', () => {
     const loginStats = {

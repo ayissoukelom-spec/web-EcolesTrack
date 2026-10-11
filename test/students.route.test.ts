@@ -99,7 +99,10 @@ const createBuilder = (rows: any[], projection?: any) => {
     },
     innerJoin(joinedTable?: any) {
       if (builder.table === students && joinedTable === classes) {
-        builder._rows = builder._rows.filter((student: any) => student.classId != null);
+        builder._rows = builder._rows
+          .filter((student: any) => student.classId != null)
+          .filter((student: any) => student.classSchoolId == null || student.classSchoolId === student.schoolId)
+          .map((student: any) => ({ ...student, className: student.className ?? `Classe ${student.classId}` }));
       } else if (builder.table === classTeachers && joinedTable === classes) {
         builder._rows = builder._rows.map((assignment: any) => ({
           ...assignment,
@@ -148,6 +151,15 @@ const createBuilder = (rows: any[], projection?: any) => {
           && query.params.includes(true)) {
           builder._rows = builder._rows.filter((student: any) => student.isActive === true);
         }
+        if (!Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
+          && query.sql.includes('"students"."school_id"')) {
+          const schoolId = (query.params as any[]).find((value) => value === 10 || value === 20);
+          if (schoolId != null) builder._rows = builder._rows.filter((student: any) => student.schoolId === schoolId);
+        }
+        if (!Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
+          && query.sql.toLowerCase().includes('"students"."class_id" is not null')) {
+          builder._rows = builder._rows.filter((student: any) => student.classId != null);
+        }
         if (Object.prototype.hasOwnProperty.call(projection ?? {}, 'count')
           && query.sql.includes('"students"."is_active"')
           && query.params.includes(true)) {
@@ -184,6 +196,7 @@ const createBuilder = (rows: any[], projection?: any) => {
 
 const mockDb = {
   select: (projection?: any) => createBuilder(mockState.students, projection),
+  selectDistinct: (projection?: any) => createBuilder(mockState.students, projection),
   insert: () => ({ values: () => ({ returning: async () => [] }) }),
   transaction: async (callback: (tx: any) => Promise<any>) => callback(mockDb),
   update: () => ({ set: () => ({ where: async () => [] }) }),
@@ -940,13 +953,99 @@ describe('GET /api/students (scope)', () => {
     expect(res.body.stats.totalStudents).toBe(1);
   });
 
+  it('returns age aggregates only for active, assigned students in the school scope', async () => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.users = [{ id: 2, uid: 'school-a-admin', role: 'school_admin', schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 5, className: '6ème A', birthDate: '2010-01-01', isActive: true },
+      { id: 201, schoolId: 20, classId: 5, className: '6ème A', birthDate: '2010-01-01', isActive: true },
+      { id: 102, schoolId: 10, classId: null, birthDate: '2010-01-01', isActive: true },
+      { id: 103, schoolId: 10, classId: 5, birthDate: '2010-01-01', isActive: false },
+      { id: 104, schoolId: 10, classId: 5, classSchoolId: 20, birthDate: '2010-01-01', isActive: true },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-a-admin')
+      .set('x-simulated-user-id', '2')
+      .set('x-simulated-school-id', '10')
+      .expect(200);
+
+    expect(response.body.ageStatsByClass).toHaveLength(1);
+    expect(response.body.ageStatsByClass[0]).toMatchObject({
+      classId: 5,
+      className: '6ème A',
+      schoolId: 10,
+      includedStudents: 1,
+      distribution: [{ count: 1 }],
+    });
+    expect(response.body.ageStatsAsOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(JSON.stringify(response.body.ageStatsByClass)).not.toContain('2010-01-01');
+    expect(JSON.stringify(response.body.ageStatsByClass)).not.toContain('Awa');
+    expect(Object.keys(response.body.ageStatsByClass[0]).sort()).toEqual([
+      'averageAge',
+      'classId',
+      'className',
+      'distribution',
+      'includedStudents',
+      'schoolId',
+    ]);
+  });
+
+  it('limits parent age aggregates to the parent-linked active children', async () => {
+    mockState.actorRole = 'parent';
+    mockState.actorSchoolId = 10;
+    mockState.users = [{ id: 9, uid: 'parent-a', role: 'parent', schoolId: 10 }];
+    mockState.parentRows = [{ id: 7, userId: 9, schoolId: 10 }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 5, className: '6ème A', parentId: 7, birthDate: '2010-01-01', isActive: true },
+      { id: 102, schoolId: 10, classId: 5, className: '6ème A', parentId: 8, birthDate: '2010-01-01', isActive: true },
+      { id: 201, schoolId: 20, classId: 5, className: '6ème A', parentId: 7, birthDate: '2010-01-01', isActive: true },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'parent')
+      .set('x-simulated-uid', 'parent-a')
+      .set('x-simulated-user-id', '9')
+      .set('x-simulated-school-id', '10')
+      .expect(200);
+
+    expect(response.body.ageStatsByClass).toHaveLength(1);
+    expect(response.body.ageStatsByClass[0]).toMatchObject({
+      classId: 5,
+      schoolId: 10,
+      includedStudents: 1,
+    });
+  });
+
+  it('keeps super-admin aggregates separate when a class id is shared across schools', async () => {
+    mockState.users = [{ id: 1, uid: 'global-admin', role: 'super_admin', schoolId: null }];
+    mockState.students = [
+      { id: 101, schoolId: 10, classId: 300, className: '6ème A', birthDate: '2010-01-01', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, className: '6ème A', birthDate: '2010-01-01', isActive: true },
+    ];
+
+    const response = await request(app)
+      .get('/api/dashboard/summary')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'global-admin')
+      .set('x-simulated-user-id', '1')
+      .expect(200);
+
+    expect(response.body.ageStatsByClass.map((entry: any) => entry.schoolId)).toEqual([10, 20]);
+    expect(response.body.ageStatsByClass.map((entry: any) => entry.includedStudents)).toEqual([1, 1]);
+  });
+
   it('returns only school A dashboard grades for a shared global class without querying evaluations.school_id', async () => {
     mockState.actorRole = 'school_admin';
     mockState.actorSchoolId = 10;
     mockState.users = [{ id: 2, uid: 'school-a-admin', role: 'school_admin', schoolId: 10 }];
     mockState.students = [
-      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
-      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', isActive: true },
+      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', birthDate: '2010-01-01', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', birthDate: '2010-01-01', isActive: true },
     ];
     mockState.dashboardEvaluations = [
       { id: 901, classId: 300, title: 'Evaluation A', subjectId: 11, subject: 'Math', date: '2026-09-20' },
@@ -966,6 +1065,8 @@ describe('GET /api/students (scope)', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.stats.totalStudents).toBe(1);
+    expect(response.body.ageStatsByClass).toHaveLength(1);
+    expect(response.body.ageStatsByClass[0]).toMatchObject({ schoolId: 10, includedStudents: 1 });
     expect(response.body.recentGrades.map((grade: any) => grade.id)).toEqual([1001]);
     expect(response.body.recentGrades.map((grade: any) => grade.studentId)).not.toContain(201);
   });
@@ -1005,8 +1106,8 @@ describe('GET /api/students (scope)', () => {
     mockState.classAssignments = [{ id: 1, teacherId: 42, classId: 300, schoolId: 10, classSchoolId: null, approvedForSchoolIds: [10] }];
     mockState.teacherSubjectRows = [{ teacherId: 42, subjectId: 11, schoolId: 10 }];
     mockState.students = [
-      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', isActive: true },
-      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', isActive: true },
+      { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', birthDate: '2010-01-01', isActive: true },
+      { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', birthDate: '2010-01-01', isActive: true },
     ];
     mockState.dashboardEvaluations = [
       { id: 901, classId: 300, title: 'Evaluation A', subjectId: 11, subject: 'Math', date: '2026-09-20' },
@@ -1026,6 +1127,8 @@ describe('GET /api/students (scope)', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.stats.totalStudents).toBe(1);
+    expect(response.body.ageStatsByClass).toHaveLength(1);
+    expect(response.body.ageStatsByClass[0]).toMatchObject({ schoolId: 10, includedStudents: 1 });
     expect(response.body.recentGrades.map((grade: any) => grade.id)).toEqual([1001]);
     expect(response.body.recentGrades.map((grade: any) => grade.studentId)).not.toContain(201);
   });

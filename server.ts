@@ -96,7 +96,7 @@ import {
   evaluationParticipations,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -112,6 +112,7 @@ import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfig
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
 import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
+import { buildClassAgeStats } from './src/lib/studentAgeStats.ts';
 import { SCHOOL_SUSPENDED_MESSAGE } from './src/lib/schoolSuspensionMessage.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 
@@ -11216,6 +11217,8 @@ if (uniqueParentIds.length > 0) {
       let teacherClassIds: number[] | null = null;
       let teacherScope: Awaited<ReturnType<typeof getTeacherAuthorizationScope>> = null;
       let teacherAssignmentIds: number[] = [];
+      let authorizedTeacherStudentIds: number[] | null = null;
+      const ageStatsAsOf = new Date().toISOString().slice(0, 10);
       if (actor.role !== 'super_admin' && actor.schoolId) {
         schoolFilter = actor.schoolId;
       }
@@ -11253,7 +11256,7 @@ if (uniqueParentIds.length > 0) {
 
       if (actor.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 } });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
         }
 
         studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), inArray(students.id, parentChildIds))) as any;
@@ -11276,19 +11279,19 @@ if (uniqueParentIds.length > 0) {
           .where(inArray(absences.studentId, parentChildIds)) as any;
       } else if (actor.role === 'teacher') {
         if (!teacherClassIds || teacherClassIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 } });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
         }
 
-        const authorizedStudentIds = teacherScope
+        authorizedTeacherStudentIds = teacherScope
           ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds)
           : [];
-        if (authorizedStudentIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 } });
+        if (authorizedTeacherStudentIds.length === 0) {
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
         }
 
-        studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), inArray(students.id, authorizedStudentIds))) as any;
-        studentGenderQuery = studentGenderQuery.where(and(eq(students.isActive, true), inArray(students.id, authorizedStudentIds))) as any;
-        chartStudentsQuery = chartStudentsQuery.where(inArray(students.id, authorizedStudentIds)) as any;
+        studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), inArray(students.id, authorizedTeacherStudentIds))) as any;
+        studentGenderQuery = studentGenderQuery.where(and(eq(students.isActive, true), inArray(students.id, authorizedTeacherStudentIds))) as any;
+        chartStudentsQuery = chartStudentsQuery.where(inArray(students.id, authorizedTeacherStudentIds)) as any;
         chartAbsencesQuery = db
           .select({ classId: absences.classId })
           .from(absences)
@@ -11338,6 +11341,45 @@ if (uniqueParentIds.length > 0) {
         studentCountQuery = studentCountQuery.where(eq(students.isActive, true)) as any;
         studentGenderQuery = studentGenderQuery.where(eq(students.isActive, true)) as any;
       }
+
+      const ageStudentFilters = [
+        eq(students.isActive, true),
+        isNotNull(students.classId),
+      ];
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        ageStudentFilters.push(sql`false`);
+      } else if (actor.role === 'parent' && parentChildIds?.length) {
+        ageStudentFilters.push(inArray(students.id, parentChildIds));
+      } else if (actor.role === 'teacher' && authorizedTeacherStudentIds?.length) {
+        ageStudentFilters.push(inArray(students.id, authorizedTeacherStudentIds));
+        ageStudentFilters.push(eq(students.schoolId, actor.schoolId!));
+      } else if (schoolFilter != null) {
+        ageStudentFilters.push(eq(students.schoolId, schoolFilter));
+      }
+      const ageStudentRows = await db
+        .select({
+          classId: students.classId,
+          className: classes.name,
+          schoolId: students.schoolId,
+          birthDate: students.birthDate,
+        })
+        .from(students)
+        .innerJoin(classes, and(
+          eq(classes.id, students.classId),
+          or(isNull(classes.schoolId), eq(classes.schoolId, students.schoolId)),
+        ))
+        .where(and(...ageStudentFilters));
+      const ageStatsByClass = buildClassAgeStats(
+        ageStudentRows
+          .filter((row): row is typeof row & { classId: number } => row.classId != null)
+          .map((row) => ({
+            classId: row.classId,
+            className: row.className,
+            schoolId: row.schoolId,
+            birthDate: row.birthDate,
+          })),
+        ageStatsAsOf,
+      );
 
       const studentCountResult = await studentCountQuery;
       const studentGenderRows = await studentGenderQuery;
@@ -11525,6 +11567,8 @@ if (uniqueParentIds.length > 0) {
         recentGrades,
         chartData,
         absenceStatusCounts,
+        ageStatsAsOf,
+        ageStatsByClass,
       });
     } catch (err: any) {
       console.error('Error loading dashboard summary:', err);

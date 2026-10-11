@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { apiFetch } from '../lib/api.ts';
 import type { UserRole } from '../types.ts';
+import type { ClassAgeStats } from '../lib/studentAgeStats.ts';
 
 interface DashboardStats {
   totalStudents: number;
@@ -41,6 +42,8 @@ export function useAdminDashboard() {
   });
   const [recentGrades, setRecentGrades] = useState<any[]>([]);
   const [recentAbsences, setRecentAbsences] = useState<any[]>([]);
+  const [ageStatsByClass, setAgeStatsByClass] = useState<ClassAgeStats[]>([]);
+  const [ageStatsAsOf, setAgeStatsAsOf] = useState('');
   const [loginStats, setLoginStats] = useState<LoginStats>(emptyLoginStats);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +64,8 @@ export function useAdminDashboard() {
       });
       setRecentGrades(Array.isArray(summary?.recentGrades) ? summary.recentGrades : []);
       setRecentAbsences(Array.isArray(summary?.recentAbsences) ? summary.recentAbsences : []);
+      setAgeStatsByClass(Array.isArray(summary?.ageStatsByClass) ? summary.ageStatsByClass : []);
+      setAgeStatsAsOf(typeof summary?.ageStatsAsOf === 'string' ? summary.ageStatsAsOf : '');
 
       if (userRole === 'super_admin') {
         try {
@@ -83,6 +88,8 @@ export function useAdminDashboard() {
       setError(err?.message || 'Impossible de charger le dashboard.');
       setRecentGrades([]);
       setRecentAbsences([]);
+      setAgeStatsByClass([]);
+      setAgeStatsAsOf('');
     } finally {
       setLoading(false);
     }
@@ -92,6 +99,8 @@ export function useAdminDashboard() {
     stats,
     recentGrades,
     recentAbsences,
+    ageStatsByClass,
+    ageStatsAsOf,
     loginStats,
     loading,
     error,
