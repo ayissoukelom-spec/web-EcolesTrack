@@ -79,6 +79,10 @@ const selectStudent = async () => {
   await screen.findByText('Afi Doe');
 };
 
+const dashboardCategoryCards = (label: string) => screen.queryAllByText(label, { exact: true })
+  .map((element) => element.closest('article'))
+  .filter((article): article is HTMLElement => article !== null);
+
 beforeEach(() => {
   vi.mocked(apiFetch).mockImplementation(async (path: string, options?: RequestInit) => {
     if (path.includes('/api/accounting/categories')) return [{ id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true }];
@@ -117,6 +121,118 @@ afterEach(() => {
 });
 
 describe('AccountingView', () => {
+  it('does not show a precreated category without an active tariff or custom fee', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.includes('/api/accounting/categories')) return [{ id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true }];
+      if (path.includes('/api/accounting/dashboard')) {
+        return { total: 0, categories: { tuition: 25000 }, expected: 50000, remaining: 25000, methods: {} };
+      }
+      if (path.includes('/api/accounting/tariffs') || path.includes('/api/accounting/fees')) return [];
+      if (path.includes('/api/accounting/cash')) return { total: 0, allocations: [] };
+      return [];
+    });
+
+    mountView();
+
+    await screen.findByText('Caisse totale');
+    expect(dashboardCategoryCards('Scolarité')).toHaveLength(0);
+    expect(screen.getByText('Total attendu')).toBeTruthy();
+    expect(screen.getByText('Reste à recouvrer')).toBeTruthy();
+  });
+
+  it('shows categories configured for the selected year and their union for all years', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.includes('/api/accounting/categories')) return [
+        { id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true },
+        { id: 9, code: 'other', label: 'Autres frais', isEnabled: true },
+      ];
+      if (path.includes('/api/accounting/tariffs')) return [{
+        id: 41, schoolId: 1, academicYearId: 5, classId: 2, className: '6e', categoryId: 9,
+        categoryCode: 'other', categoryLabel: 'Autres frais', amount: 5000, isEnabled: true,
+      }];
+      if (path.includes('/api/accounting/dashboard')) return { total: 0, categories: {}, expected: 0, remaining: 0, methods: {} };
+      if (path.includes('/api/accounting/fees')) return [];
+      if (path.includes('/api/accounting/cash')) return { total: 0, allocations: [] };
+      return [];
+    });
+
+    mountView('school_admin', [school], [schoolClass], [
+      year,
+      { id: 5, schoolId: 1, name: '2025-2026', isActive: false },
+    ]);
+    await screen.findByText('Caisse totale');
+    expect(dashboardCategoryCards('Autres frais')).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText('Année scolaire'), { target: { value: '' } });
+    await waitFor(() => expect(dashboardCategoryCards('Autres frais')).toHaveLength(1));
+  });
+
+  it('does not show disabled tariffs or inactive custom fees as configured categories', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.includes('/api/accounting/categories')) return [{ id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true }];
+      if (path.includes('/api/accounting/tariffs')) return [{
+        id: 41, schoolId: 1, academicYearId: 4, classId: 2, className: '6e', categoryId: 8,
+        categoryCode: 'tuition', categoryLabel: 'Scolarité', amount: 150000, isEnabled: false,
+      }];
+      if (path.includes('/api/accounting/dashboard')) return { total: 0, categories: {}, expected: 0, remaining: 0, methods: {} };
+      if (path.includes('/api/accounting/fees')) return ['pending', 'rejected', 'disabled'].map((status, index) => ({
+        id: index + 1, schoolId: 1, academicYearId: 4, classId: null, studentId: null, categoryId: 8,
+        label: 'Frais', amount: 5000, status,
+      }));
+      if (path.includes('/api/accounting/cash')) return { total: 0, allocations: [] };
+      return [];
+    });
+
+    mountView();
+
+    await screen.findByText('Caisse totale');
+    expect(dashboardCategoryCards('Scolarité')).toHaveLength(0);
+  });
+
+  it('does not use active configurations belonging to another school', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.includes('/api/accounting/categories')) return [{ id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true }];
+      if (path.includes('/api/accounting/tariffs')) return [{
+        id: 41, schoolId: 2, academicYearId: 4, classId: 2, className: '6e', categoryId: 8,
+        categoryCode: 'tuition', categoryLabel: 'Scolarité', amount: 150000, isEnabled: true,
+      }];
+      if (path.includes('/api/accounting/dashboard')) return { total: 0, categories: {}, expected: 0, remaining: 0, methods: {} };
+      if (path.includes('/api/accounting/fees')) return [{
+        id: 12, schoolId: 2, academicYearId: 4, classId: null, studentId: null, categoryId: 8,
+        label: 'Frais actif', amount: 5000, status: 'active',
+      }];
+      if (path.includes('/api/accounting/cash')) return { total: 0, allocations: [] };
+      return [];
+    });
+
+    mountView();
+
+    await screen.findByText('Caisse totale');
+    expect(dashboardCategoryCards('Scolarité')).toHaveLength(0);
+  });
+
+  it('shows active applicable custom fees without duplicating categories with multiple tariffs', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (path: string) => {
+      if (path.includes('/api/accounting/categories')) return [{ id: 8, code: 'tuition', label: 'Scolarité', isEnabled: true }];
+      if (path.includes('/api/accounting/tariffs')) return [2, 3].map((classId, index) => ({
+        id: 41 + index, schoolId: 1, academicYearId: 4, classId, className: 'Classe', categoryId: 8,
+        categoryCode: 'tuition', categoryLabel: 'Scolarité', amount: 150000, isEnabled: true,
+      }));
+      if (path.includes('/api/accounting/dashboard')) return { total: 0, categories: {}, expected: 0, remaining: 0, methods: {} };
+      if (path.includes('/api/accounting/fees')) return [{
+        id: 12, schoolId: 1, academicYearId: 4, classId: 2, studentId: 10, categoryId: 8,
+        label: 'Frais actif', amount: 5000, status: 'active',
+      }];
+      if (path.includes('/api/accounting/cash')) return { total: 0, allocations: [] };
+      return [];
+    });
+
+    mountView();
+
+    await screen.findByText('Caisse totale');
+    expect(dashboardCategoryCards('Scolarité')).toHaveLength(1);
+  });
+
   it('uses the financial dashboard color hierarchy for amounts and indicators', async () => {
     mountView();
 

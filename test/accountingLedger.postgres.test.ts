@@ -141,6 +141,7 @@ describe.sequential('accounting ledger PostgreSQL integration', () => {
         name: 'Accounting test',
       }),
       isApprovedClassForSchool: async () => false,
+      dispatchPaymentNotification: async () => 202,
     });
   }, 30000);
 
@@ -272,6 +273,7 @@ describe.sequential('accounting ledger PostgreSQL integration', () => {
         name: 'Accounting test after refresh',
       }),
       isApprovedClassForSchool: async () => false,
+      dispatchPaymentNotification: async () => 202,
     });
     const listed = await request(restartedApp).get('/api/accounting/tariffs?schoolId=99&academicYearId=1');
     expect(listed.status).toBe(200);

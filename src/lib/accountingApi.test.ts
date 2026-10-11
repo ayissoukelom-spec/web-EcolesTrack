@@ -2,6 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockedFunction } from 'vitest';
 import {
   accountingCategories,
   accountingFeeDefinitions,
@@ -29,7 +30,11 @@ const dbMock = vi.hoisted(() => ({
 
 vi.mock('../db/index.ts', () => ({ db: dbMock }));
 
-import { formatAccountingReceiptAllocationLine, registerAccountingRoutes } from './accountingApi.ts';
+import {
+  formatAccountingReceiptAllocationLine,
+  registerAccountingRoutes,
+  type RegisterAccountingApiOptions,
+} from './accountingApi.ts';
 
 const mockState = {
   selectResults: new Map<any, any[][]>(),
@@ -51,6 +56,7 @@ const mockState = {
     email: 'admin@example.com',
     name: 'Admin',
   },
+  transactionCommitted: false,
 };
 
 const setSelectResults = (table: any, ...results: any[][]) => {
@@ -160,10 +166,15 @@ mockDb.execute.mockImplementation((statement: any) => {
   mockState.executedSql.push(statement);
   return Promise.resolve({ rows: [{ value: '15' }] });
 });
-mockDb.transaction.mockImplementation((callback: (tx: any) => unknown) => callback(mockDb));
+mockDb.transaction.mockImplementation(async (callback: (tx: any) => unknown) => {
+  const result = await callback(mockDb);
+  mockState.transactionCommitted = true;
+  return result;
+});
 
 describe('accounting API', () => {
   let app: express.Express;
+  let dispatchPaymentNotification: MockedFunction<RegisterAccountingApiOptions['dispatchPaymentNotification']>;
 
   beforeEach(() => {
     mockDb.select.mockClear();
@@ -183,12 +194,17 @@ describe('accounting API', () => {
     mockState.approvedClasses.clear();
     mockState.upsertTargets = [];
     mockState.nextId = 100;
+    mockState.transactionCommitted = false;
     mockState.actor = { id: 7, role: 'super_admin', schoolId: null, academicYearId: null, email: 'admin@example.com', name: 'Admin' };
+    dispatchPaymentNotification = vi.fn(async (
+      _payload: Parameters<RegisterAccountingApiOptions['dispatchPaymentNotification']>[0],
+    ) => 202);
     app = express();
     app.use(express.json());
     registerAccountingRoutes(app, {
       resolveActor: async () => mockState.actor,
       isApprovedClassForSchool: async (classId, schoolId) => mockState.approvedClasses.has(`${schoolId}:${classId}`),
+      dispatchPaymentNotification,
     });
   });
 
@@ -970,46 +986,7 @@ describe('accounting API', () => {
   });
 
   it('allocates a posted payment to the oldest installment and locks the school year', async () => {
-    prepareValidPayment();
-    setSelectResults(
-      financialPayments,
-      [],
-    );
-    setSelectResults(financialObligations, [{
-      id: 21, categoryId: 2, tariffId: 5, label: 'Scolarité', amount: 30000, createdAt: new Date(),
-    }]);
-    setSelectResults(financialInstallments, [
-      { id: 31, obligationId: 21, label: 'T1', orderIndex: 1, amount: 10000, dueDate: '2026-10-01' },
-      { id: 32, obligationId: 21, label: 'T2', orderIndex: 2, amount: 20000, dueDate: '2027-01-01' },
-    ]);
-    setSelectResults(
-      financialPaymentAllocations,
-      [],
-      [{
-        category: 'Scolarité',
-        label: 'Scolarité',
-        tariffLabel: 'Frais de scolarité',
-        amount: 10000,
-        installmentLabel: 'T1',
-        dueDate: '2026-10-01',
-      }],
-    );
-    setSelectResults(financialReceipts, [{ id: 55, paymentId: 100, receiptNumber: 'REC-2026-000015', snapshot: {} }]);
-    setSelectResults(
-      schools,
-      [{ id: 1 }],
-      [{ id: 1, name: 'École', officialName: null, logoPath: null }],
-    );
-    setSelectResults(students, [{
-      id: 10, firstName: 'Afi', lastName: 'Doe', matricule: 'A10', classId: 2, schoolId: 1,
-      isActive: true, className: '6e',
-    }]);
-    setSelectResults(
-      academicYears,
-      [{ id: 4, schoolId: 1, name: '2026-2027' }],
-      [{ id: 4, schoolId: 1, name: '2026-2027' }],
-    );
-    setSelectResults(classes, [{ id: 2, schoolId: 1, academicYearId: 4, name: '6e' }]);
+    preparePaymentNotificationScenario();
 
     const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
 
@@ -1037,6 +1014,50 @@ describe('accounting API', () => {
     expect(JSON.stringify(savedReceiptSnapshot.allocations)).toContain('"tariffLabel":"Frais de scolarité"');
     expect(formatAccountingReceiptAllocationLine(savedReceiptSnapshot.allocations[0]))
       .toBe('Frais de scolarité (échéance 2026-10-01) : 10 000 FCFA');
+    const paymentNotification = mockState.inserted.find((item) => item.table === notifications)?.values;
+    expect(paymentNotification).toMatchObject({
+      userId: 25,
+      title: 'Paiement enregistré',
+      type: 'info',
+      dedupeKey: 'accounting-payment-100',
+    });
+    expect(paymentNotification.body).toContain('Paiement de 10 000 FCFA enregistré pour Afi Doe.');
+    expect(paymentNotification.body).toContain('Frais concernés : Frais de scolarité.');
+    expect(paymentNotification.body).toContain('Reste total à payer pour l’année 2026-2027 : 35 000 FCFA.');
+    expect(paymentNotification.body).toContain('Reste pour les rubriques réglées : Scolarité : 20 000 FCFA.');
+    expect(paymentNotification.body).toContain('Date du paiement : 07/10/2026.');
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(mockState.transactionCommitted).toBe(true);
+    expect(dispatchPaymentNotification).toHaveBeenCalledWith({
+      parentId: '25',
+      title: 'Paiement enregistré',
+      message: 'Un paiement a été enregistré. Consultez l’application pour le détail.',
+      category: 'info',
+      metadata: { target: 'home', paymentId: '100' },
+      dedupeKey: 'accounting-payment-100',
+    });
+  });
+
+  it('does not fail a committed payment when the push relay rejects the request', async () => {
+    preparePaymentNotificationScenario();
+    dispatchPaymentNotification.mockRejectedValueOnce(
+      Object.assign(new Error('Payment notification relay rejected'), { statusCode: 503 }),
+    );
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body.duplicate).toBe(false);
+    expect(mockState.transactionCommitted).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(true);
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(errorLog).toHaveBeenCalledWith('Accounting payment push relay failed', {
+      paymentId: 100,
+      status: 503,
+      errorName: 'Error',
+    });
+    errorLog.mockRestore();
   });
 
   it('collects a class-range tariff and another fee with their own receipt lines', async () => {
@@ -1325,6 +1346,7 @@ describe('accounting API', () => {
     const retry = await request(app).post('/api/accounting/payments').send(body);
     expect(retry.status).toBe(200);
     expect(retry.body.duplicate).toBe(true);
+    expect(dispatchPaymentNotification).not.toHaveBeenCalled();
     expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(false);
 
     prepareValidPayment();
@@ -1404,6 +1426,39 @@ const prepareValidPayment = () => {
       remainingAfterPayment: 20000,
     },
   }]);
+};
+
+const preparePaymentNotificationScenario = () => {
+  prepareValidPayment();
+  setSelectResults(financialPayments, []);
+  const obligations = [
+    { id: 21, categoryId: 2, tariffId: 5, label: 'Scolarité', amount: 30000, createdAt: new Date() },
+    { id: 22, categoryId: 3, tariffId: 6, label: 'Cantine', amount: 15000, createdAt: new Date() },
+  ];
+  const installments = [
+    { id: 31, obligationId: 21, label: 'T1', orderIndex: 1, amount: 10000, dueDate: '2026-10-01' },
+    { id: 32, obligationId: 21, label: 'T2', orderIndex: 2, amount: 20000, dueDate: '2027-01-01' },
+    { id: 33, obligationId: 22, label: 'Cantine', orderIndex: 1, amount: 15000, dueDate: '2026-10-01' },
+  ];
+  setSelectResults(financialObligations, [obligations[0]], obligations);
+  setSelectResults(financialInstallments, installments, installments);
+  setSelectResults(financialPaymentAllocations, [], [{
+    categoryId: 2,
+    category: 'Scolarité',
+    label: 'Scolarité',
+    tariffLabel: 'Frais de scolarité',
+    amount: 10000,
+    installmentLabel: 'T1',
+    dueDate: '2026-10-01',
+  }], [{ id: 70, obligationId: 21, installmentId: 31, amount: 10000 }]);
+  setSelectResults(financialReceipts, [{ id: 55, paymentId: 100, receiptNumber: 'REC-2026-000015', snapshot: {} }]);
+  setSelectResults(schools, [{ id: 1 }], [{ id: 1, name: 'École', officialName: null, logoPath: null }]);
+  setSelectResults(students, [{
+    id: 10, firstName: 'Afi', lastName: 'Doe', matricule: 'A10', classId: 2, schoolId: 1,
+    isActive: true, className: '6e',
+  }], [{ userId: 25 }]);
+  setSelectResults(academicYears, [{ id: 4, schoolId: 1, name: '2026-2027' }], [{ id: 4, schoolId: 1, name: '2026-2027' }]);
+  setSelectResults(classes, [{ id: 2, schoolId: 1, academicYearId: 4, name: '6e' }]);
 };
 
 const prepareDashboardRows = () => {

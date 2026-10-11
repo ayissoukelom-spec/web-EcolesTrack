@@ -1258,6 +1258,17 @@ export async function createApp() {
 
   // CORS or Security Headers can be set if needed
   app.use((req, res, next) => {
+    const origin = req.get('Origin');
+    if (process.env.NODE_ENV === 'development' && origin === 'https://appassets.androidplatform.net') {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.vary('Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Authorization, Content-Type, X-Simulated-Role, X-Simulated-Uid, X-Simulated-Email, X-Simulated-Name, X-Simulated-School-Id',
+      );
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
+    }
     res.setHeader('X-Frame-Options', 'SAMEORIGIN'); // Allow embedding inside Google AI Studio
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -1367,7 +1378,26 @@ export async function createApp() {
   registerClassSubjectPivotRoute(app, { resolveActor });
   registerParentSchoolAdminWhatsAppRoute(app, { resolveActor });
   app.use('/api/accounting', requireAuth);
-  registerAccountingRoutes(app, { resolveActor, isApprovedClassForSchool });
+  registerAccountingRoutes(app, {
+    resolveActor,
+    isApprovedClassForSchool,
+    dispatchPaymentNotification: async (payload) => {
+      const { signature, timestamp } = signInternalPayload(payload);
+      const response = await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/info-notification`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Signature': signature,
+          'X-Internal-Timestamp': timestamp,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw Object.assign(new Error('Payment notification relay rejected'), { statusCode: response.status });
+      }
+      return response.status;
+    },
+  });
 
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
   app.post('/api/users/:userId/schools', requireAuth, async (req: AuthRequest, res) => {
@@ -11873,7 +11903,7 @@ if (uniqueParentIds.length > 0) {
             dedupeKey: `info-${Date.now()}-${id}`,
           };
           const { signature, timestamp } = signInternalPayload(infoNotificationPayload);
-          await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
+          const pushDispatchResponse = await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -11882,6 +11912,11 @@ if (uniqueParentIds.length > 0) {
             },
             body: JSON.stringify(infoNotificationPayload),
           });
+          if (!pushDispatchResponse.ok) {
+            console.error("Information push dispatch was rejected by the mobile backend", {
+              status: pushDispatchResponse.status,
+            });
+          }
         }
       } catch (err: any) {
         await cleanupAndRethrow(err);

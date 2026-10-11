@@ -1463,6 +1463,39 @@ describe('E2E security: auth & privilege checks', () => {
     resetLocalLoginRateLimit();
   });
 
+  it('allows only the Android WebView origin to preflight API requests in development', async () => {
+    process.env.NODE_ENV = 'development';
+    try {
+      const allowed = await request(app)
+        .options('/api/auth/local-login')
+        .set('Origin', 'https://appassets.androidplatform.net')
+        .set('Access-Control-Request-Method', 'POST')
+        .set('Access-Control-Request-Headers', 'content-type,x-simulated-role');
+
+      expect(allowed.status).toBe(204);
+      expect(allowed.headers['access-control-allow-origin']).toBe('https://appassets.androidplatform.net');
+      expect(allowed.headers['access-control-allow-credentials']).toBeUndefined();
+      expect(allowed.headers['access-control-allow-headers']).toContain('X-Simulated-Role');
+
+      const denied = await request(app)
+        .options('/api/auth/local-login')
+        .set('Origin', 'https://untrusted.example')
+        .set('Access-Control-Request-Method', 'POST');
+
+      expect(denied.headers['access-control-allow-origin']).toBeUndefined();
+
+      process.env.NODE_ENV = 'production';
+      const production = await request(app)
+        .options('/api/auth/local-login')
+        .set('Origin', 'https://appassets.androidplatform.net')
+        .set('Access-Control-Request-Method', 'POST');
+
+      expect(production.headers['access-control-allow-origin']).toBeUndefined();
+    } finally {
+      process.env.NODE_ENV = 'test';
+    }
+  });
+
   it('refuses to create the app when simulated auth is enabled in production', async () => {
     process.env.NODE_ENV = 'production';
     process.env.ALLOW_SIMULATED_AUTH = 'true';

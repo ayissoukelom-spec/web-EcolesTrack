@@ -7,6 +7,7 @@ import { generateClassSituationPdf } from '../lib/classSituationPdf.ts';
 type Category = { id: number; code: string; label: string; isEnabled: boolean };
 type Tariff = {
   id: number;
+  schoolId?: number;
   classId: number | null;
   className: string;
   classFromId?: number | null;
@@ -21,7 +22,7 @@ type Tariff = {
   isEnabled?: boolean;
 };
 type EducationLevel = { id: number; orderIndex: number };
-type Fee = { id: number; academicYearId: number; classId: number | null; studentId: number | null; categoryId: number; label: string; amount: number; status: string };
+type Fee = { id: number; schoolId?: number; academicYearId: number; classId: number | null; studentId: number | null; categoryId: number; label: string; amount: number; status: string };
 type AccountingTab = 'dashboard' | 'configuration' | 'fees' | 'students';
 type SituationRow = {
   studentId: number;
@@ -254,6 +255,15 @@ export default function AccountingView({
     && (feeLabelFilter.length === 0 || feeLabelFilter.includes(normalizeFeeFilterLabel(tariff.categoryLabel))));
   const selectedYearName = visibleYears.find((year) => year.id === yearId)?.name ?? '';
   const enabledCategories = categories.filter((category) => category.isEnabled);
+  const dashboardCategories = enabledCategories.filter((category) =>
+    tariffs.some((tariff) => tariff.categoryId === category.id
+      && tariff.isEnabled !== false
+      && (!yearId || tariff.academicYearId === yearId)
+      && (tariff.schoolId == null || tariff.schoolId === schoolId))
+    || fees.some((fee) => fee.categoryId === category.id
+      && fee.status === 'active'
+      && (!yearId || fee.academicYearId === yearId)
+      && (fee.schoolId == null || fee.schoolId === schoolId)));
   const matchingTariff = editingTariffId == null
     ? null
     : tariffs.find((tariff) => tariff.id === editingTariffId) ?? null;
@@ -1023,7 +1033,7 @@ export default function AccountingView({
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   ['Caisse totale', dashboard?.total, 'received'],
-                  ...categories.filter((category) => category.isEnabled).map((category) => [
+                  ...dashboardCategories.map((category) => [
                     categoryDisplayLabel(category.code, category.label),
                     dashboard?.categories?.[category.code],
                     'received',

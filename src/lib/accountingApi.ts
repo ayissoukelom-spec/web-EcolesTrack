@@ -538,6 +538,14 @@ const createReceiptSnapshot = async ({
 export interface RegisterAccountingApiOptions {
   resolveActor: (req: any) => Promise<AccountingActor | null>;
   isApprovedClassForSchool: (classId: number, schoolId: number | null) => Promise<boolean>;
+  dispatchPaymentNotification: (payload: {
+    parentId: string;
+    title: string;
+    message: string;
+    category: 'info';
+    metadata: { target: 'home'; paymentId: string };
+    dedupeKey: string;
+  }) => Promise<number>;
   database?: typeof defaultDb;
 }
 
@@ -1897,7 +1905,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             throw Object.assign(new Error('Idempotency key was already used for a different payment'), { statusCode: 409 });
           }
           const [receipt] = await tx.select().from(financialReceipts).where(eq(financialReceipts.paymentId, existing.id));
-          return { payment: existing, receipt, duplicate: true };
+          return { payment: existing, receipt, duplicate: true, pushNotification: undefined };
         }
         if (tariffAllocations) {
           for (const allocation of tariffAllocations) {
@@ -2034,6 +2042,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           ...allocation,
         })));
         const allocationDetails = await tx.select({
+          categoryId: financialObligations.categoryId,
           category: accountingCategories.label,
           label: financialObligations.label,
           tariffLabel: accountingTariffs.label,
@@ -2080,17 +2089,97 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           .innerJoin(parents, eq(parents.id, students.parentId))
           .where(eq(students.id, studentId));
         if (parent?.userId) {
+          const afterPayment = await loadOutstandingInstallments(tx, schoolId, studentId, academicYearId);
+          const remainingByObligation = new Map<number, number>();
+          for (const installment of afterPayment.installments) {
+            remainingByObligation.set(
+              installment.obligationId,
+              (remainingByObligation.get(installment.obligationId) ?? 0)
+                + (afterPayment.balances.get(installment.id) ?? 0),
+            );
+          }
+          const remainingByCategory = new Map<number, number>();
+          for (const obligation of afterPayment.obligations) {
+            remainingByCategory.set(
+              obligation.categoryId,
+              (remainingByCategory.get(obligation.categoryId) ?? 0)
+                + (remainingByObligation.get(obligation.id) ?? 0),
+            );
+          }
+          const formatNotificationAmount = (value: number) => value
+            .toLocaleString('fr-FR')
+            .replace(/[\u00a0\u202f]/g, ' ');
+          const feeNames = [...new Set(allocationDetails.map((allocation) =>
+            allocation.tariffLabel?.trim() || allocation.label?.trim() || allocation.category?.trim() || 'Frais'))];
+          const categoriesPaid = new Map<number, string>();
+          for (const allocation of allocationDetails) {
+            if (!categoriesPaid.has(allocation.categoryId)) {
+              categoriesPaid.set(allocation.categoryId, allocation.category?.trim() || 'Frais');
+            }
+          }
+          const paidCategoryBalances = [...categoriesPaid].map(([id, label]) =>
+            `${label} : ${formatNotificationAmount(remainingByCategory.get(id) ?? 0)} FCFA`);
+          const studentName = [student.firstName, student.lastName].filter(Boolean).join(' ') || 'votre enfant';
+          const paidAtLabel = payment.paidAt.toLocaleDateString('fr-FR', { timeZone: 'UTC' });
+          const title = 'Paiement enregistré';
+          const message = [
+            `Paiement de ${formatNotificationAmount(payment.amount)} FCFA enregistré pour ${studentName}.`,
+            `Frais concernés : ${feeNames.join(', ')}.`,
+            `Reste total à payer pour l’année ${year.name} : ${formatNotificationAmount(
+              [...afterPayment.balances.values()].reduce((total, balance) => total + balance, 0),
+            )} FCFA.`,
+            `Reste pour les rubriques réglées : ${paidCategoryBalances.join('; ')}.`,
+            `Date du paiement : ${paidAtLabel}.`,
+          ].join(' ');
+          const dedupeKey = `accounting-payment-${payment.id}`;
           await tx.insert(notifications).values({
             userId: parent.userId,
-            title: 'Paiement enregistré',
-            body: `Un paiement de ${amount} FCFA a été enregistré pour votre enfant.`,
+            title,
+            body: message,
             type: 'info',
-            dedupeKey: `accounting-payment-${payment.id}`,
+            dedupeKey,
           }).onConflictDoNothing();
+          return {
+            payment,
+            receipt,
+            duplicate: false,
+            pushNotification: {
+              parentId: String(parent.userId),
+              title,
+              message: 'Un paiement a été enregistré. Consultez l’application pour le détail.',
+              category: 'info' as const,
+              metadata: { target: 'home' as const, paymentId: String(payment.id) },
+              dedupeKey,
+            },
+          };
         }
-        return { payment, receipt, duplicate: false };
+        return { payment, receipt, duplicate: false, pushNotification: undefined };
       });
-      return res.status(result.duplicate ? 200 : 201).json(result);
+      if (!result.duplicate && result.pushNotification) {
+        try {
+          console.info('Accounting payment push requested', { paymentId: result.payment.id });
+          const status = await options.dispatchPaymentNotification(result.pushNotification);
+          console.info('Accounting payment push relay accepted', {
+            paymentId: result.payment.id,
+            status,
+          });
+        } catch (notificationError) {
+          const statusCode = typeof notificationError === 'object' && notificationError
+            && 'statusCode' in notificationError && Number.isInteger(Number(notificationError.statusCode))
+            ? Number(notificationError.statusCode)
+            : undefined;
+          console.error('Accounting payment push relay failed', {
+            paymentId: result.payment.id,
+            ...(statusCode ? { status: statusCode } : {}),
+            errorName: notificationError instanceof Error ? notificationError.name : 'UnknownError',
+          });
+        }
+      }
+      return res.status(result.duplicate ? 200 : 201).json({
+        payment: result.payment,
+        receipt: result.receipt,
+        duplicate: result.duplicate,
+      });
     } catch (error) {
       const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
       if (statusCode !== 500) {
