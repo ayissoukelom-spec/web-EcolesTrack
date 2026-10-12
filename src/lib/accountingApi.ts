@@ -2864,6 +2864,87 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
       y -= lineHeight;
     }
   };
+  const drawAllocation = (allocation: Parameters<typeof formatAccountingReceiptAllocationLine>[0]) => {
+    const description = allocation.tariffLabel?.trim()
+      || allocation.label?.trim()
+      || allocation.category?.trim()
+      || 'Frais';
+    const formattedLine = formatAccountingReceiptAllocationLine(allocation);
+    const segments = [
+      { text: description, isBold: true },
+      { text: formattedLine.slice(description.length).trimStart(), isBold: false },
+    ];
+    const lines: Array<Array<{ text: string; isBold: boolean }>> = [[]];
+    let lineWidth = 0;
+    const appendToLine = (text: string, isBold: boolean) => {
+      const line = lines[lines.length - 1];
+      const previousSegment = line[line.length - 1];
+      if (previousSegment?.isBold === isBold) {
+        previousSegment.text += text;
+      } else {
+        line.push({ text, isBold });
+      }
+      lineWidth += (isBold ? bold : font).widthOfTextAtSize(text, allocationSize);
+    };
+    const startLine = () => {
+      lines.push([]);
+      lineWidth = 0;
+    };
+    for (const [segmentIndex, segment] of segments.entries()) {
+      if (segmentIndex > 0 && lineWidth > 0) {
+        const spaceWidth = font.widthOfTextAtSize(' ', allocationSize);
+        if (lineWidth + spaceWidth <= allocationWidth) {
+          appendToLine(' ', false);
+        } else {
+          startLine();
+        }
+      }
+      const selectedFont = segment.isBold ? bold : font;
+      for (const token of segment.text.match(/\S+\s*/gu) ?? [segment.text]) {
+        const tokenWidth = selectedFont.widthOfTextAtSize(token, allocationSize);
+        if (lineWidth + tokenWidth <= allocationWidth) {
+          appendToLine(token, segment.isBold);
+          continue;
+        }
+        if (lineWidth > 0) startLine();
+        if (tokenWidth <= allocationWidth) {
+          appendToLine(token, segment.isBold);
+          continue;
+        }
+        for (const character of Array.from(token)) {
+          if (
+            lineWidth > 0
+            && lineWidth + selectedFont.widthOfTextAtSize(character, allocationSize) > allocationWidth
+          ) {
+            startLine();
+          }
+          appendToLine(character, segment.isBold);
+        }
+      }
+    }
+    for (const line of lines) {
+      ensureSpace(allocationLineHeight);
+      let x = allocationX;
+      for (const segment of line) {
+        const selectedFont = segment.isBold ? bold : font;
+        page.drawText(segment.text, { x, y, size: allocationSize, font: selectedFont, color: ink });
+        const segmentWidth = selectedFont.widthOfTextAtSize(segment.text, allocationSize);
+        if (segment.isBold) {
+          const underlineWidth = bold.widthOfTextAtSize(segment.text.trimEnd(), allocationSize);
+          if (underlineWidth > 0) {
+            page.drawLine({
+              start: { x, y: y - 2.5 },
+              end: { x: x + underlineWidth, y: y - 2.5 },
+              color: ink,
+              thickness: 0.55,
+            });
+          }
+        }
+        x += segmentWidth;
+      }
+      y -= allocationLineHeight;
+    }
+  };
   const drawFieldRow = (leftText: string, rightText?: string) => {
     const columnGap = 18;
     const columnWidth = rightText == null
@@ -2900,6 +2981,7 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
     : (allocationWidth - headerGap) / 2;
   const leftHeaderX = margin;
   const rightHeaderEdge = pageWidth - margin;
+  let logoBounds: { x: number; y: number; width: number; height: number } | null = null;
   let leftHeaderTextX = leftHeaderX;
   let leftHeaderTextWidth = headerColumnWidth;
   let schoolBottom = drawLines(
@@ -2964,6 +3046,11 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
       y: headerCenterY - logoSize.height / 2,
       ...logoSize,
     });
+    logoBounds = {
+      x: (pageWidth - logoSize.width) / 2,
+      y: headerCenterY - logoSize.height / 2,
+      ...logoSize,
+    };
     y = Math.min(headerContentBottom, headerCenterY - logoSize.height / 2) - 7;
   } else {
     y = headerContentBottom - 7;
@@ -2994,8 +3081,21 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
       + studentCardPaddingX * 2,
   );
   const studentCardHeight = studentCardLines.length * studentCardLineHeight + studentCardPaddingY * 2;
-  ensureSpace(studentCardHeight + 8);
-  const studentCardTop = y;
+  const studentCardLeft = margin;
+  const studentCardRight = studentCardLeft + studentCardWidth;
+  const studentCardTopUnderSchool = schoolBottom - 7;
+  const studentCardBottomUnderSchool = studentCardTopUnderSchool - studentCardHeight;
+  const leftHeaderAvailableRight = logoBounds
+    ? logoBounds.x
+    : rightHeaderEdge - headerColumnWidth;
+  const canPlaceUnderSchool = studentCardRight + 8 <= leftHeaderAvailableRight
+    && studentCardBottomUnderSchool > bottomLimit;
+  if (canPlaceUnderSchool) {
+    y = Math.min(y, studentCardBottomUnderSchool - 8);
+  } else {
+    ensureSpace(studentCardHeight + 8);
+  }
+  const studentCardTop = canPlaceUnderSchool ? studentCardTopUnderSchool : y;
   const studentCardBottom = studentCardTop - studentCardHeight;
   const cornerRadius = Math.min(7, studentCardHeight / 4, studentCardWidth / 4);
   const cornerCurve = cornerRadius * 0.5523;
@@ -3014,7 +3114,7 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
   page.drawSvgPath(studentCardPath, {
     x: margin,
     y: studentCardBottom + studentCardHeight,
-    borderColor: rgb(0.72, 0.76, 0.82),
+    borderColor: rgb(0, 0, 0),
     borderWidth: 0.8,
   });
   studentCardLines.forEach((line, index) => {
@@ -3028,10 +3128,12 @@ async function renderAccountingReceipt(snapshot: unknown): Promise<Uint8Array> {
   });
   y = studentCardBottom - 8;
   y -= 2;
+  y -= 4;
+  y -= 15;
   drawWrapped('Allocations', 10, true, 13);
   y -= 2;
   for (const allocation of Array.isArray(data.allocations) ? data.allocations : []) {
-    drawWrapped(formatAccountingReceiptAllocationLine(allocation), allocationSize, false, allocationLineHeight);
+    drawAllocation(allocation);
   }
   y -= 5;
   drawFieldRow(
