@@ -20,12 +20,13 @@ import {
   financialReceipts,
   levels,
   notifications,
+  notificationAttachments,
   parents,
   schools,
   schoolClasses,
   students,
 } from '../db/schema.ts';
-import { readStoredFile } from './fileStorage.ts';
+import { deleteStoredFile, persistUploadedFile, readStoredFile } from './fileStorage.ts';
 import { assertSchoolActiveInTransaction, SchoolSuspendedError } from './schoolSuspension.ts';
 import {
   allocateToOldestInstallments,
@@ -543,7 +544,18 @@ export interface RegisterAccountingApiOptions {
     title: string;
     message: string;
     category: 'info';
-    metadata: { target: 'payment'; paymentId: string };
+    metadata: {
+      target: 'payment';
+      paymentId: string;
+      notificationId?: number;
+      attachmentCount?: number;
+      attachments?: Array<{
+        attachmentId: number;
+        fileName: string;
+        mimeType: string;
+        fileSize: number;
+      }>;
+    };
     dedupeKey: string;
   }) => Promise<number>;
   database?: typeof defaultDb;
@@ -2155,10 +2167,127 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         }
         return { payment, receipt, duplicate: false, pushNotification: undefined };
       });
+      let receiptAttachment: {
+        attachmentId: number;
+        fileName: string;
+        mimeType: string;
+        fileSize: number;
+      } | undefined;
+      let receiptNotificationId: number | undefined;
+      if (result.receipt) {
+        let storedReference: string | undefined;
+        try {
+          const dedupeKey = `accounting-payment-${result.payment.id}`;
+          const [paymentNotification] = await db.select({
+            id: notifications.id,
+          }).from(notifications).where(eq(notifications.dedupeKey, dedupeKey));
+          if (!paymentNotification) {
+            throw new Error('Payment notification was not found for receipt attachment');
+          }
+          receiptNotificationId = paymentNotification.id;
+          if (paymentNotification) {
+            const fileName = `${result.receipt.receiptNumber}.pdf`;
+            const [existingAttachment] = await db.select({
+              id: notificationAttachments.id,
+              fileName: notificationAttachments.fileName,
+              mimeType: notificationAttachments.mimeType,
+              fileSize: notificationAttachments.fileSize,
+            }).from(notificationAttachments).where(and(
+              eq(notificationAttachments.notificationId, paymentNotification.id),
+              eq(notificationAttachments.fileName, fileName),
+            ));
+            if (existingAttachment) {
+              receiptAttachment = {
+                attachmentId: existingAttachment.id,
+                fileName: existingAttachment.fileName,
+                mimeType: existingAttachment.mimeType,
+                fileSize: Number(existingAttachment.fileSize),
+              };
+            } else {
+              if (actor.id == null) throw new Error('Payment receipt attachment requires an authenticated actor id');
+              const pdf = await renderAccountingReceipt(result.receipt.snapshot);
+              const storedFile = await persistUploadedFile({
+                originalname: fileName,
+                buffer: Buffer.from(pdf),
+                mimetype: 'application/pdf',
+                size: pdf.byteLength,
+              }, 'notification-attachments');
+              storedReference = storedFile.storedReference;
+
+              const inserted = await db.transaction(async (tx) => {
+                await tx.execute(sql`SELECT id FROM notifications WHERE id = ${paymentNotification.id} FOR UPDATE`);
+                const [concurrentAttachment] = await tx.select({
+                  id: notificationAttachments.id,
+                  fileName: notificationAttachments.fileName,
+                  mimeType: notificationAttachments.mimeType,
+                  fileSize: notificationAttachments.fileSize,
+                }).from(notificationAttachments).where(and(
+                  eq(notificationAttachments.notificationId, paymentNotification.id),
+                  eq(notificationAttachments.fileName, fileName),
+                ));
+                if (concurrentAttachment) return { created: false, attachment: concurrentAttachment };
+                const [attachment] = await tx.insert(notificationAttachments).values({
+                  notificationId: paymentNotification.id,
+                  fileName,
+                  filePath: storedFile.storedReference,
+                  mimeType: 'application/pdf',
+                  fileSize: pdf.byteLength,
+                  uploadedBy: actor.id,
+                }).returning({
+                  id: notificationAttachments.id,
+                  fileName: notificationAttachments.fileName,
+                  mimeType: notificationAttachments.mimeType,
+                  fileSize: notificationAttachments.fileSize,
+                });
+                return { created: true, attachment };
+              });
+              if (inserted.attachment) {
+                receiptAttachment = {
+                  attachmentId: inserted.attachment.id,
+                  fileName: inserted.attachment.fileName,
+                  mimeType: inserted.attachment.mimeType,
+                  fileSize: Number(inserted.attachment.fileSize),
+                };
+              }
+              if (!inserted.created) {
+                await deleteStoredFile(storedReference, 'notification-attachments');
+                storedReference = undefined;
+              }
+            }
+          }
+        } catch (attachmentError) {
+          if (storedReference) {
+            try {
+              await deleteStoredFile(storedReference, 'notification-attachments');
+            } catch (cleanupError) {
+              console.error('Failed to clean up unattached accounting receipt PDF', {
+                paymentId: result.payment.id,
+                receiptId: result.receipt.id,
+                errorName: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+              });
+            }
+          }
+          console.error('Failed to attach accounting receipt PDF to payment notification', {
+            paymentId: result.payment.id,
+            receiptId: result.receipt.id,
+            errorName: attachmentError instanceof Error ? attachmentError.name : 'UnknownError',
+          });
+        }
+      }
       if (!result.duplicate && result.pushNotification) {
         try {
           console.info('Accounting payment push requested', { paymentId: result.payment.id });
-          const status = await options.dispatchPaymentNotification(result.pushNotification);
+          const status = await options.dispatchPaymentNotification({
+            ...result.pushNotification,
+            metadata: {
+              ...result.pushNotification.metadata,
+              ...(receiptAttachment && receiptNotificationId != null ? {
+                notificationId: receiptNotificationId,
+                attachmentCount: 1,
+                attachments: [receiptAttachment],
+              } : {}),
+            },
+          });
           console.info('Accounting payment push relay accepted', {
             paymentId: result.payment.id,
             status,

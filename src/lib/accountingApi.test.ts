@@ -1,6 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import { PDFDocument } from 'pdf-lib';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
 import {
@@ -15,9 +16,22 @@ import {
   financialPayments,
   financialReceipts,
   notifications,
+  notificationAttachments,
   schools,
   students,
 } from '../db/schema.ts';
+
+const fileStorageMock = vi.hoisted(() => ({
+  persistUploadedFile: vi.fn(async (file: {
+    originalname?: string;
+    buffer?: Buffer | Uint8Array;
+    mimetype?: string;
+    size?: number;
+  }) => ({
+    storedReference: `notification-attachments/${file.originalname ?? 'receipt.pdf'}`,
+  })),
+  deleteStoredFile: vi.fn(async () => true),
+}));
 
 const dbMock = vi.hoisted(() => ({
   select: vi.fn(),
@@ -29,6 +43,10 @@ const dbMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../db/index.ts', () => ({ db: dbMock }));
+vi.mock('./fileStorage.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./fileStorage.ts')>()),
+  ...fileStorageMock,
+}));
 
 import {
   formatAccountingReceiptAllocationLine,
@@ -195,6 +213,11 @@ describe('accounting API', () => {
     mockState.upsertTargets = [];
     mockState.nextId = 100;
     mockState.transactionCommitted = false;
+    fileStorageMock.persistUploadedFile.mockClear();
+    fileStorageMock.deleteStoredFile.mockClear();
+    fileStorageMock.persistUploadedFile.mockImplementation(async (file) => ({
+      storedReference: `notification-attachments/${file.originalname ?? 'receipt.pdf'}`,
+    }));
     mockState.actor = { id: 7, role: 'super_admin', schoolId: null, academicYearId: null, email: 'admin@example.com', name: 'Admin' };
     dispatchPaymentNotification = vi.fn(async (
       _payload: Parameters<RegisterAccountingApiOptions['dispatchPaymentNotification']>[0],
@@ -1028,14 +1051,25 @@ describe('accounting API', () => {
     expect(paymentNotification.body).toContain('Date du paiement : 07/10/2026.');
     expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
     expect(mockState.transactionCommitted).toBe(true);
-    expect(dispatchPaymentNotification).toHaveBeenCalledWith({
+    expect(dispatchPaymentNotification).toHaveBeenCalledWith(expect.objectContaining({
       parentId: '25',
       title: 'Paiement enregistré',
       message: 'Un paiement a été enregistré. Consultez l’application pour le détail.',
       category: 'info',
-      metadata: { target: 'payment', paymentId: '100' },
+      metadata: expect.objectContaining({
+        target: 'payment',
+        paymentId: '100',
+        notificationId: 501,
+        attachmentCount: 1,
+        attachments: [expect.objectContaining({
+          attachmentId: expect.any(Number),
+          fileName: 'REC-2026-000015.pdf',
+          mimeType: 'application/pdf',
+          fileSize: expect.any(Number),
+        })],
+      }),
       dedupeKey: 'accounting-payment-100',
-    });
+    }));
   });
 
   it('does not fail a committed payment when the push relay rejects the request', async () => {
@@ -1055,6 +1089,135 @@ describe('accounting API', () => {
     expect(errorLog).toHaveBeenCalledWith('Accounting payment push relay failed', {
       paymentId: 100,
       status: 503,
+      errorName: 'Error',
+    });
+    errorLog.mockRestore();
+  });
+
+  it('attaches the generated receipt PDF to the existing payment notification for its parent', async () => {
+    preparePaymentNotificationScenario();
+    setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+    setSelectResults(notificationAttachments, []);
+
+    const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body.payment.id).toBe(100);
+    expect(response.body.receipt).toMatchObject({ id: 55, paymentId: 100, receiptNumber: 'REC-2026-000015' });
+    const paymentNotification = mockState.inserted.find((item) => item.table === notifications)?.values;
+    expect(paymentNotification).toMatchObject({
+      userId: 25,
+      title: 'Paiement enregistré',
+      dedupeKey: 'accounting-payment-100',
+    });
+    const attachment = mockState.inserted.find((item) => item.table === notificationAttachments)?.values;
+    expect(attachment).toMatchObject({
+      notificationId: 501,
+      fileName: 'REC-2026-000015.pdf',
+      filePath: 'notification-attachments/REC-2026-000015.pdf',
+      mimeType: 'application/pdf',
+      uploadedBy: 7,
+    });
+    expect(fileStorageMock.persistUploadedFile).toHaveBeenCalledOnce();
+    const storedFile = fileStorageMock.persistUploadedFile.mock.calls[0][0];
+    expect(storedFile.mimetype).toBe('application/pdf');
+    expect(Buffer.from(storedFile.buffer!).subarray(0, 4).toString()).toBe('%PDF');
+    expect(attachment?.fileSize).toBe(storedFile.buffer?.byteLength);
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(response.body.duplicate).toBe(false);
+  });
+
+  it('keeps a recorded payment successful when storing its receipt attachment fails', async () => {
+    preparePaymentNotificationScenario();
+    setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+    setSelectResults(notificationAttachments, []);
+    fileStorageMock.persistUploadedFile.mockRejectedValueOnce(new Error('storage unavailable'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body.duplicate).toBe(false);
+    expect(mockState.transactionCommitted).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === notifications)).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === notificationAttachments)).toBe(false);
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(dispatchPaymentNotification.mock.calls[0][0].metadata).not.toHaveProperty('attachmentCount');
+    expect(errorLog).toHaveBeenCalledWith('Failed to attach accounting receipt PDF to payment notification', {
+      paymentId: 100,
+      receiptId: 55,
+      errorName: 'Error',
+    });
+    errorLog.mockRestore();
+  });
+
+  it('keeps a recorded payment successful when rendering its receipt PDF fails', async () => {
+    preparePaymentNotificationScenario();
+    setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+    setSelectResults(notificationAttachments, []);
+    const renderError = new Error('PDF rendering unavailable');
+    const renderReceipt = vi.spyOn(PDFDocument, 'create').mockRejectedValueOnce(renderError);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body.duplicate).toBe(false);
+    expect(mockState.transactionCommitted).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === notifications)).toBe(true);
+    expect(fileStorageMock.persistUploadedFile).not.toHaveBeenCalled();
+    expect(mockState.inserted.some((item) => item.table === notificationAttachments)).toBe(false);
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(dispatchPaymentNotification.mock.calls[0][0].metadata).not.toHaveProperty('attachmentCount');
+    expect(errorLog).toHaveBeenCalledWith('Failed to attach accounting receipt PDF to payment notification', {
+      paymentId: 100,
+      receiptId: 55,
+      errorName: 'Error',
+    });
+    renderReceipt.mockRestore();
+    errorLog.mockRestore();
+  });
+
+  it('does not announce a receipt when attaching it to the notification fails', async () => {
+    preparePaymentNotificationScenario();
+    setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+    setSelectResults(notificationAttachments, []);
+    mockDb.transaction
+      .mockImplementationOnce(async (callback: (tx: any) => unknown) => {
+        const result = await callback(mockDb);
+        mockState.transactionCommitted = true;
+        return result;
+      })
+      .mockImplementationOnce(async (callback: (tx: any) => unknown) => callback({
+        ...mockDb,
+        insert: (table: any) => ({
+          values(values: any) {
+            if (table === notificationAttachments) {
+              throw new Error('attachment association unavailable');
+            }
+            return mockDb.insert(table).values(values);
+          },
+        }),
+      }));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).post('/api/accounting/payments').send(validPaymentBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body.duplicate).toBe(false);
+    expect(mockState.transactionCommitted).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === notifications)).toBe(true);
+    expect(mockState.inserted.some((item) => item.table === notificationAttachments)).toBe(false);
+    expect(fileStorageMock.persistUploadedFile).toHaveBeenCalledOnce();
+    expect(fileStorageMock.deleteStoredFile).toHaveBeenCalledOnce();
+    expect(dispatchPaymentNotification).toHaveBeenCalledOnce();
+    expect(dispatchPaymentNotification.mock.calls[0][0].metadata).not.toHaveProperty('attachmentCount');
+    expect(errorLog).toHaveBeenCalledWith('Failed to attach accounting receipt PDF to payment notification', {
+      paymentId: 100,
+      receiptId: 55,
       errorName: 'Error',
     });
     errorLog.mockRestore();
@@ -1343,11 +1506,17 @@ describe('accounting API', () => {
       paidAt: new Date(),
     }]);
     setSelectResults(financialReceipts, [{ id: 50, paymentId: 70, receiptNumber: 'REC-2026-000050' }]);
+    setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+    setSelectResults(notificationAttachments, [{ id: 70, notificationId: 501, fileName: 'REC-2026-000050.pdf' }]);
     const retry = await request(app).post('/api/accounting/payments').send(body);
     expect(retry.status).toBe(200);
     expect(retry.body.duplicate).toBe(true);
     expect(dispatchPaymentNotification).not.toHaveBeenCalled();
     expect(mockState.inserted.some((item) => item.table === financialPayments)).toBe(false);
+    expect(mockState.inserted.some((item) => item.table === financialReceipts)).toBe(false);
+    expect(mockState.inserted.some((item) => item.table === notifications)).toBe(false);
+    expect(mockState.inserted.some((item) => item.table === notificationAttachments)).toBe(false);
+    expect(fileStorageMock.persistUploadedFile).not.toHaveBeenCalled();
 
     prepareValidPayment();
     setSelectResults(financialPayments, [{
@@ -1459,6 +1628,8 @@ const preparePaymentNotificationScenario = () => {
   }], [{ userId: 25 }]);
   setSelectResults(academicYears, [{ id: 4, schoolId: 1, name: '2026-2027' }], [{ id: 4, schoolId: 1, name: '2026-2027' }]);
   setSelectResults(classes, [{ id: 2, schoolId: 1, academicYearId: 4, name: '6e' }]);
+  setSelectResults(notifications, [{ id: 501, userId: 25 }]);
+  setSelectResults(notificationAttachments, []);
 };
 
 const prepareDashboardRows = () => {
