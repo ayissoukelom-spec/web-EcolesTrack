@@ -1751,6 +1751,89 @@ export const computeHeaderParagraphLayout = (
   ].filter((line) => line.text.length > 0);
 };
 
+export interface HeaderParagraphRenderLineLayout {
+  text: string;
+  x: number;
+  width: number;
+  gapBefore: number;
+}
+
+export const computeHeaderParagraphRenderLayout = (
+  value: string,
+  x: number,
+  maxWidth: number,
+  font: any,
+  size: number,
+  explicitLineGap = size + 11,
+): HeaderParagraphRenderLineLayout[] => {
+  const normalizedValue = sanitizePdfText(String(value ?? '')).replace(/\s+/g, ' ').trim();
+  if (!normalizedValue) return [];
+
+  const wrapSegment = (segment: string): string[] => {
+    const words = segment.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = '';
+
+    for (const word of words) {
+      if (font.widthOfTextAtSize(word, size) > maxWidth) {
+        if (current) {
+          lines.push(current);
+          current = '';
+        }
+        let fragment = '';
+        for (const character of word) {
+          const candidate = `${fragment}${character}`;
+          if (font.widthOfTextAtSize(candidate, size) > maxWidth && fragment) {
+            lines.push(fragment);
+            fragment = character;
+          } else {
+            fragment = candidate;
+          }
+        }
+        current = fragment;
+        continue;
+      }
+
+      const candidate = current ? `${current} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        current = candidate;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  };
+
+  const createRenderLine = (text: string, gapBefore: number): HeaderParagraphRenderLineLayout => {
+    const width = font.widthOfTextAtSize(text, size);
+    return {
+      text,
+      x: x + (maxWidth - width) / 2,
+      width,
+      gapBefore,
+    };
+  };
+
+  const segments = normalizedValue.split('|').map((segment) => segment.trim()).filter(Boolean);
+  const lines: HeaderParagraphRenderLineLayout[] = [];
+  segments.forEach((segment, segmentIndex) => {
+    const wrappedLines = wrapSegment(segment);
+    wrappedLines.forEach((text, lineIndex) => {
+      lines.push(createRenderLine(
+        text,
+        lines.length === 0
+          ? 0
+          : lineIndex === 0 && segmentIndex > 0
+            ? explicitLineGap
+            : size + 1,
+      ));
+    });
+  });
+  return lines;
+};
+
 export const resolveSchoolHeaderEmailBounds = (margin: number): { left: number; right: number; width: number } => ({
   left: margin + 13,
   right: margin + 178,
@@ -2071,10 +2154,11 @@ export const createBulletinPdfDocument = async (
 
   const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 11, fitToWidth = true) => {
     const size = fitToWidth ? fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize) : initialSize;
-    const lines = computeHeaderParagraphLayout(value, maxWidth, font, size);
+    const lines = computeHeaderParagraphRenderLayout(value, x, maxWidth, font, size, lineSpacing);
+    let lineY = y;
     lines.forEach((line, lineIndex) => {
-      const lineWidth = font.widthOfTextAtSize(line.text, size);
-      drawText(page, line.text, x + (maxWidth - lineWidth) / 2, y - lineIndex * lineSpacing, size, color, font);
+      if (lineIndex > 0) lineY -= line.gapBefore;
+      drawText(page, line.text, line.x, lineY, size, color, font);
     });
   };
 
@@ -2138,7 +2222,7 @@ export const createBulletinPdfDocument = async (
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
     const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
     const institutionHeaderWidth = margin + 178 - leftX;
-    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX + 25, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
+    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
     if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 10, text, fontBold, 1);
     drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter - 6, height - 98, 166, 11, text, fontBold, 2);
     const postalAndPhone = [

@@ -13,6 +13,7 @@ import {
   calculateStudentSubjectTypeAverages,
   computeSchoolLogoRenderMetrics,
   computeHeaderParagraphLayout,
+  computeHeaderParagraphRenderLayout,
   fitHeaderParagraphFontSize,
   computeWrappedTextLines,
   formatPdfDisplayNumber,
@@ -605,6 +606,109 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout[1].text).not.toContain('|');
     expect(layout.flatMap((line) => line.words)).not.toContain('|');
     expect(layout.every((line) => line.width <= 170)).toBe(true);
+  });
+
+  it('conserve le layout historique des libellés courts sans séparateur', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const value = 'DIRECTION REGIONALE MARITIME';
+    const startX = 31;
+    const layout = computeHeaderParagraphRenderLayout(value, startX, 170, font, 8);
+
+    expect(layout).toHaveLength(1);
+    expect(layout[0].text).toBe(value);
+    expect(layout[0].width).toBe(font.widthOfTextAtSize(value, 8));
+    expect(layout[0].x).toBeCloseTo(startX + (170 - layout[0].width) / 2, 10);
+  });
+
+  it('centre individuellement les lignes automatiques sans déborder ni modifier le texte', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const value = 'DIRECTION REGIONALE DE L EDUCATION ET DE L ENSEIGNEMENT SECONDAIRE DE LA REGION MARITIME';
+    const startX = 24;
+    const layout = computeHeaderParagraphRenderLayout(value, startX, 112, font, 8);
+
+    expect(layout.length).toBeGreaterThan(2);
+    expect(layout.every((line) => line.width <= 112)).toBe(true);
+    layout.forEach((line) => {
+      expect(line.x).toBeCloseTo(startX + (112 - line.width) / 2, 10);
+      expect(line.x + line.width).toBeLessThanOrEqual(startX + 112);
+    });
+    expect(layout.map((line) => line.text).join(' ')).toBe(value);
+    expect(layout.slice(1).every((line) => line.gapBefore === 9)).toBe(true);
+    expect(layout[layout.length - 1].text.length).toBeLessThan(layout[0].text.length);
+  });
+
+  it('conserve apostrophes, accents et ponctuation et centre la dernière ligne courte', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const value = "MINISTÈRE DES ENSEIGNEMENTS PRIMAIRE, SECONDAIRE, TECHNIQUE ET DE L'ARTISANAT.";
+    const layout = computeHeaderParagraphRenderLayout(value, 24, 160, font, 8);
+
+    expect(layout.map((line) => line.text)).toEqual([
+      'MINISTÈRE DES ENSEIGNEMENTS',
+      'PRIMAIRE, SECONDAIRE, TECHNIQUE ET',
+      "DE L'ARTISANAT.",
+    ]);
+    expect(layout.map((line) => line.text).join(' ')).toBe(value);
+    layout.forEach((line) => {
+      expect(line.width).toBe(font.widthOfTextAtSize(line.text, 8));
+      expect(line.x).toBeCloseTo(24 + (160 - line.width) / 2, 10);
+      expect(line.x + line.width).toBeLessThanOrEqual(184);
+    });
+    expect(layout[2].x).toBeGreaterThan(layout[0].x);
+    expect(layout[2].x).toBeGreaterThan(layout[1].x);
+  });
+
+  it('applique l espacement historique aux séparateurs explicites, même après un retour automatique', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica');
+    const firstSegment = 'DIRECTION REGIONALE DE L EDUCATION ET DE L ENSEIGNEMENT SECONDAIRE';
+    const value = `${firstSegment} | INSPECTION REGIONALE | SERVICE DES EXAMENS`;
+    const startX = 24;
+    const layout = computeHeaderParagraphRenderLayout(value, startX, 125, font, 8, 20);
+    const firstSegmentLineCount = computeHeaderParagraphRenderLayout(firstSegment, startX, 125, font, 8).length;
+
+    expect(layout.every((line) => line.width <= 125)).toBe(true);
+    layout.forEach((line) => {
+      expect(line.x).toBeCloseTo(startX + (125 - line.width) / 2, 10);
+      expect(line.x + line.width).toBeLessThanOrEqual(startX + 125);
+    });
+    expect(layout.slice(1, firstSegmentLineCount).every((line) => line.gapBefore === 9)).toBe(true);
+    expect(layout[firstSegmentLineCount].text).toBe('INSPECTION REGIONALE');
+    expect(layout[firstSegmentLineCount].gapBefore).toBe(20);
+    expect(layout[firstSegmentLineCount + 1].text).toBe('SERVICE DES EXAMENS');
+    expect(layout[firstSegmentLineCount + 1].gapBefore).toBe(20);
+  });
+
+  it('génère le PDF avec le libellé long complet et les segments séparés', async () => {
+    const longLabel = 'DIRECTION REGIONALE DE L EDUCATION ET DE L ENSEIGNEMENT SECONDAIRE DE LA REGION MARITIME';
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: {
+        ...snapshotData.school,
+        educationDirection: `${longLabel} | INSPECTION REGIONALE`,
+        ministryName: null,
+      },
+    });
+    const document = await PDFDocument.load(pdfBytes);
+    const pdfLayout = computeHeaderParagraphRenderLayout(
+      `${longLabel} | INSPECTION REGIONALE`,
+      31,
+      172,
+      await document.embedFont(StandardFonts.Helvetica),
+      8,
+      20,
+    );
+
+    expect(document.getPageCount()).toBe(1);
+    expect(pdfLayout.map((line) => line.text).join(' ')).toBe(`${longLabel} INSPECTION REGIONALE`);
+    expect(pdfLayout.every((line) => line.width <= 172)).toBe(true);
+    pdfLayout.forEach((line) => {
+      expect(line.x).toBeCloseTo(31 + (172 - line.width) / 2, 10);
+      expect(line.x + line.width).toBeLessThanOrEqual(203);
+    });
+    expect(pdfLayout[pdfLayout.length - 1].gapBefore).toBe(20);
   });
 
   it('limite les matières longues à deux lignes et les garde dans la largeur de la cellule', async () => {
