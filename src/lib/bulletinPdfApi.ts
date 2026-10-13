@@ -1,6 +1,13 @@
 import type express from 'express';
 import { and, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import {
+  PDFDocument,
+  StandardFonts,
+  concatTransformationMatrix,
+  popGraphicsState,
+  pushGraphicsState,
+  rgb,
+} from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db/index.ts';
@@ -723,6 +730,7 @@ const loadPdfFonts = async (pdf: PDFDocument) => {
 };
 
 export const BULLETIN_FINAL_AVERAGE_LABEL = 'Note /20';
+export const BULLETIN_BODY_VERTICAL_OFFSET = 10;
 
 export const resolvePrincipalTitle = (
   schoolHasLycee: boolean | null | undefined,
@@ -1624,6 +1632,62 @@ export const computeWrappedTextLines = (
   return { lines: clampedLines, width: lineWidth };
 };
 
+export interface CenteredWrappedTextLineLayout {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+}
+
+export const computeCenteredWrappedTextLayout = (
+  value: string,
+  centerX: number,
+  firstBaselineY: number,
+  maxWidth: number,
+  font: any,
+  size: number,
+  maxLines = Number.MAX_SAFE_INTEGER,
+): CenteredWrappedTextLineLayout[] => {
+  const { lines } = computeWrappedTextLines(value, maxWidth, font, size, maxLines);
+  const lineSpacing = size + 2;
+  return lines.map((line, index) => {
+    const width = font.widthOfTextAtSize(sanitizePdfText(line), size);
+    return {
+      text: line,
+      x: centerX - width / 2,
+      y: firstBaselineY - index * lineSpacing,
+      width,
+    };
+  });
+};
+
+export const resolveSchoolHeaderFollowingTextPositions = (
+  districtLineCount: number,
+  schoolNameLineCount: number,
+  basePositions: { districtY: number; schoolNameY: number; coordinatesY: number; emailY: number },
+  districtLineSpacing = 12,
+  schoolNameLineSpacing = 13,
+  minimumGap = 12,
+): { schoolNameY: number; coordinatesY: number; emailY: number } => {
+  const districtLastY = districtLineCount > 0
+    ? basePositions.districtY - (districtLineCount - 1) * districtLineSpacing
+    : null;
+  const schoolNameY = districtLastY == null
+    ? basePositions.schoolNameY
+    : Math.min(basePositions.schoolNameY, districtLastY - minimumGap);
+  const schoolNameLastY = schoolNameY - Math.max(0, schoolNameLineCount - 1) * schoolNameLineSpacing;
+  const coordinatesY = districtLastY == null
+    ? basePositions.coordinatesY
+    : Math.min(basePositions.coordinatesY, schoolNameLastY - minimumGap);
+  const downstreamOffset = coordinatesY - basePositions.coordinatesY;
+
+  return {
+    schoolNameY,
+    coordinatesY,
+    emailY: basePositions.emailY + downstreamOffset,
+  };
+};
+
 export const computeSchoolLogoRenderMetrics = (
   imageWidth: number,
   imageHeight: number,
@@ -1832,6 +1896,18 @@ export const computeHeaderParagraphRenderLayout = (
     });
   });
   return lines;
+};
+
+export const resolveBulletinHeaderFrame = (
+  pageHeight: number,
+  frameWidth: number,
+  studentHeaderOffsetY: number,
+  heightIncrease = 10,
+): { top: number; bottom: number; width: number; height: number } => {
+  const top = pageHeight - 18 + 8;
+  const originalBottom = pageHeight - 148 - 25 - studentHeaderOffsetY + 2;
+  const bottom = originalBottom - heightIncrease;
+  return { top, bottom, width: frameWidth, height: top - bottom };
 };
 
 export const resolveSchoolHeaderEmailBounds = (margin: number): { left: number; right: number; width: number } => ({
@@ -2215,6 +2291,7 @@ export const createBulletinPdfDocument = async (
     }
     const leftColumnCenter = margin + 89;
     const leftHeaderWidth = 170;
+    const institutionFontSize = 8;
     const ministryLabel = school.ministryName?.trim() ?? '';
     const educationDirectionLabel = school.educationDirection?.trim()
       || (school.region?.trim()
@@ -2222,9 +2299,38 @@ export const createBulletinPdfDocument = async (
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
     const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
     const institutionHeaderWidth = margin + 178 - leftX;
-    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, institutionHeaderWidth, 8, 5.5, text, fontBold, 20, false);
-    if (school.abbreviation) drawCenteredWrappedText(page, school.abbreviation, leftColumnCenter, height - 80, 166, 10, text, fontBold, 1);
-    drawCenteredWrappedText(page, school.officialName || school.name, leftColumnCenter - 6, height - 98, 166, 11, text, fontBold, 2);
+    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, institutionHeaderWidth, institutionFontSize, 5.5, text, fontBold, 20, false);
+    const districtY = height - 90;
+    const districtLayout = school.abbreviation
+      ? {
+        lines: computeCenteredWrappedTextLayout(school.abbreviation, leftColumnCenter, districtY, 166, fontBold, institutionFontSize),
+        fontSize: institutionFontSize,
+        lineSpacing: institutionFontSize + 2,
+      }
+      : { lines: [], fontSize: institutionFontSize, lineSpacing: institutionFontSize + 2 };
+    const districtLines = districtLayout.lines;
+    const schoolName = school.officialName || school.name;
+    const schoolNameLineCount = computeWrappedTextLines(schoolName, 166, fontBold, 11, 2).lines.length;
+    const resolvedFollowingTextPositions = resolveSchoolHeaderFollowingTextPositions(
+      districtLines.length,
+      schoolNameLineCount,
+      {
+        districtY,
+        schoolNameY: height - 98,
+        coordinatesY: height - 119,
+        emailY: height - 128,
+      },
+      districtLayout.lineSpacing,
+    );
+    const followingTextPositions = {
+      schoolNameY: resolvedFollowingTextPositions.schoolNameY - 10,
+      coordinatesY: resolvedFollowingTextPositions.coordinatesY - 10,
+      emailY: resolvedFollowingTextPositions.emailY - 10,
+    };
+    if (school.abbreviation) {
+      districtLines.forEach((line) => drawText(page, line.text, line.x, line.y, districtLayout.fontSize, text, fontBold));
+    }
+    drawCenteredWrappedText(page, schoolName, leftColumnCenter - 6, followingTextPositions.schoolNameY, 166, 11, text, fontBold, 2);
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
       school.phone?.trim()
@@ -2244,18 +2350,18 @@ export const createBulletinPdfDocument = async (
       if (emailLine) {
         if (nonEmailLines.length > 0) {
           const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
-          drawCenteredWrappedText(page, coordinateLines[0], emailBounds.left + firstLineWidth / 2, height - 119, firstLineWidth, 7, text, fontBoldItalic, 1);
+          drawCenteredWrappedText(page, coordinateLines[0], emailBounds.left + firstLineWidth / 2, followingTextPositions.coordinatesY, firstLineWidth, 7, text, fontBoldItalic, 1);
         }
         const initialEmailWidth = fontBoldItalic.widthOfTextAtSize(emailLine, 7);
         const emailCenterX = nonEmailLines.length > 0
           ? emailBounds.left + fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7) / 2
           : emailBounds.left + Math.min(initialEmailWidth, emailBounds.width) / 2;
         const emailLayout = fitHeaderEmailToBounds(emailLine, fontBoldItalic, emailBounds, emailCenterX);
-        drawText(page, emailLayout.text, emailLayout.x, height - 128, emailLayout.fontSize, text, fontBoldItalic);
+        drawText(page, emailLayout.text, emailLayout.x, followingTextPositions.emailY, emailLayout.fontSize, text, fontBoldItalic);
       } else {
         const line = coordinateLines[0];
         const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);
-        drawCenteredWrappedText(page, line, emailBounds.left + lineWidth / 2, height - 119, lineWidth, 7, text, fontBoldItalic, 1);
+        drawCenteredWrappedText(page, line, emailBounds.left + lineWidth / 2, followingTextPositions.coordinatesY, lineWidth, 7, text, fontBoldItalic, 1);
       }
     }
     const republicText = 'REPUBLIQUE TOGOLAISE';
@@ -2324,21 +2430,18 @@ export const createBulletinPdfDocument = async (
 
   const page = pdf.addPage(pageSize);
   const studentHeaderOffsetY = 8;
-  const outerBoxTop = page.getHeight() - 18 + 8;
-  const outerBoxBottom = page.getHeight() - 148 - 25 - studentHeaderOffsetY + 2;
-  const outerBoxWidth = tableWidth;
-  const outerBoxHeight = outerBoxTop - outerBoxBottom;
+  const outerBox = resolveBulletinHeaderFrame(page.getHeight(), tableWidth, studentHeaderOffsetY);
   page.drawSvgPath(
-    `M 8,0 H ${outerBoxWidth - 8} Q ${outerBoxWidth},0 ${outerBoxWidth},8 V ${outerBoxHeight - 8} Q ${outerBoxWidth},${outerBoxHeight} ${outerBoxWidth - 8},${outerBoxHeight} H 8 Q 0,${outerBoxHeight} 0,${outerBoxHeight - 8} V 8 Q 0,0 8,0 Z`,
+    `M 8,0 H ${outerBox.width - 8} Q ${outerBox.width},0 ${outerBox.width},8 V ${outerBox.height - 8} Q ${outerBox.width},${outerBox.height} ${outerBox.width - 8},${outerBox.height} H 8 Q 0,${outerBox.height} 0,${outerBox.height - 8} V 8 Q 0,0 8,0 Z`,
     {
       x: margin,
-      y: outerBoxTop,
+      y: outerBox.top,
       borderColor: hexToRgb('#000000'),
       borderWidth: 1.2,
     },
   );
   let cursorY = drawHeader(page, true);
-  const bulletinHeaderY = cursorY + 10;
+  const bulletinHeaderY = cursorY;
 
   const title = `${template.labels.title} DU ${data.termName}`;
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
@@ -2377,6 +2480,10 @@ export const createBulletinPdfDocument = async (
     drawText(page, ` ${classNameSuffix}`, classNameX + classLevelWidth, classLineY, 14, text, fontBold);
   }
   drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
+  page.pushOperators(
+    pushGraphicsState(),
+    concatTransformationMatrix(1, 0, 0, 1, 0, -BULLETIN_BODY_VERTICAL_OFFSET),
+  );
   const studentBlockY = cursorY + 12;
   const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
   const studentName = sanitizePdfText(data.studentName);
@@ -2976,7 +3083,7 @@ export const createBulletinPdfDocument = async (
 
   const signatureLabelY = classAverageBottom - 14;
   const signatureNameY = signatureLabelY - 46;
-  if (signatureNameY > 64) {
+  if (signatureNameY - BULLETIN_BODY_VERTICAL_OFFSET > 64) {
     const signatureLabel = 'Signature du titulaire de la classe';
     const signatureLabelWidth = fontBold.widthOfTextAtSize(signatureLabel, 9);
     drawText(page, signatureLabel, signatureCenterX - signatureLabelWidth / 2, signatureLabelY, 9, text, fontBold);
@@ -3053,6 +3160,7 @@ export const createBulletinPdfDocument = async (
   page.drawLine({ start: { x: margin, y: 54 }, end: { x: page.getWidth() - margin, y: 54 }, color: lightBorder, thickness: 0.7 });
   drawText(page, `${school.name} · ${template.labels.generationDate}: ${toDateLabel(data.generatedAt)}`, margin, 38, 7.5, muted, fontBold);
   drawText(page, 'Page 1/1', page.getWidth() - margin - 55, 38, 7.5, muted, fontBold);
+  page.pushOperators(popGraphicsState());
 
   return pdf.save({ useObjectStreams: false });
 };

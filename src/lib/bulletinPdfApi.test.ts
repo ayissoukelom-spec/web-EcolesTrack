@@ -7,13 +7,17 @@ import { inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
   createBulletinPdfDocument,
+  BULLETIN_BODY_VERTICAL_OFFSET,
   BULLETIN_FINAL_AVERAGE_LABEL,
   formatStudentStatusForPdf,
   resolveStudentStatusForAcademicYear,
   calculateStudentSubjectTypeAverages,
   computeSchoolLogoRenderMetrics,
+  computeCenteredWrappedTextLayout,
   computeHeaderParagraphLayout,
   computeHeaderParagraphRenderLayout,
+  resolveBulletinHeaderFrame,
+  resolveSchoolHeaderFollowingTextPositions,
   fitHeaderParagraphFontSize,
   computeWrappedTextLines,
   formatPdfDisplayNumber,
@@ -144,6 +148,29 @@ const extractPdfText = (pdfBytes: Uint8Array): string => {
   return streams.join('\n')
     .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'))
     .replace(/Tj/g, ' ');
+};
+
+const extractPdfContentStreams = (pdfBytes: Uint8Array): string[] => {
+  const pdfBuffer = Buffer.from(pdfBytes);
+  const raw = pdfBuffer.toString('latin1');
+  const streams: string[] = [];
+  const streamPattern = /stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = streamPattern.exec(raw)) != null) {
+    const streamStart = match.index + match[0].length;
+    const dictionaryStart = raw.lastIndexOf('<<', match.index);
+    const streamLength = Number(raw.slice(dictionaryStart, match.index).match(/\/Length\s+(\d+)\b/)?.[1]);
+    if (!Number.isInteger(streamLength) || streamLength < 0 || streamStart + streamLength > pdfBuffer.length) continue;
+    const streamEnd = streamStart + streamLength;
+    try {
+      streams.push(inflateSync(pdfBuffer.subarray(streamStart, streamEnd)).toString('latin1'));
+    } catch {
+      streams.push(pdfBuffer.subarray(streamStart, streamEnd).toString('latin1'));
+    }
+    const endMarker = /^\r?\nendstream/.exec(raw.slice(streamEnd));
+    streamPattern.lastIndex = streamEnd + (endMarker?.[0].length ?? 0);
+  }
+  return streams;
 };
 
 const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: number; y: number; fontSize: number | null } | null => {
@@ -709,6 +736,164 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       expect(line.x + line.width).toBeLessThanOrEqual(203);
     });
     expect(pdfLayout[pdfLayout.length - 1].gapBefore).toBe(20);
+  });
+
+  it('descend le District de 10 points et affiche intégralement ses textes courts, moyens et longs', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont('Helvetica-Bold');
+    const pageHeight = 841.89;
+    const districtBaseline = pageHeight - 90;
+    const values = [
+      'DISTRICT',
+      'DISTRICT DE LOME',
+      'DISTRICT DE L EDUCATION ET DE L ENSEIGNEMENT SECONDAIRE DE LA REGION MARITIME',
+    ];
+
+    expect(districtBaseline).toBe(pageHeight - 80 - 10);
+    values.forEach((value) => {
+      const layout = computeCenteredWrappedTextLayout(value, 105, districtBaseline, 166, font, 10);
+      expect(layout.map((line) => line.text).join(' ')).toBe(value);
+      expect(layout.every((line) => line.width <= 166)).toBe(true);
+      layout.forEach((line) => {
+        expect(line.x).toBeCloseTo(105 - line.width / 2, 10);
+        expect(line.x + line.width).toBeLessThanOrEqual(188);
+      });
+      expect(layout[0].y).toBe(districtBaseline);
+      expect(layout.every((line, index) => line.y === districtBaseline - index * 12)).toBe(true);
+    });
+  });
+
+  it('affiche le District sur deux lignes centrées à la même taille que la Direction régionale', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const district = "INSPECTION DE L'ENSEIGNEMENT GENERAL SECONDAIRE/GOLFE-EST";
+    const centerX = 105;
+    const maxWidth = 166;
+    const fontSize = 8;
+    const layout = computeCenteredWrappedTextLayout(district, centerX, 751.89, maxWidth, font, fontSize);
+
+    expect(layout).toHaveLength(2);
+    expect(layout.map((line) => line.text)).toEqual([
+      "INSPECTION DE L'ENSEIGNEMENT",
+      'GENERAL SECONDAIRE/GOLFE-EST',
+    ]);
+    expect(layout.map((line) => line.text).join(' ')).toBe(district);
+    layout.forEach((line) => {
+      expect(line.width).toBe(font.widthOfTextAtSize(line.text, fontSize));
+      expect(line.x).toBeCloseTo(centerX - line.width / 2, 10);
+      expect(line.x + line.width).toBeLessThanOrEqual(centerX + maxWidth / 2);
+    });
+    expect(layout[0].y - layout[1].y).toBe(fontSize + 2);
+  });
+
+  it('préserve intégralement un District très long avec retour automatique compact et sans débordement', async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const district = 'INSPECTION DE L ENSEIGNEMENT GENERAL SECONDAIRE DE LA REGION MARITIME ET DU GOLFE EST';
+    const fontSize = 8;
+    const layout = computeCenteredWrappedTextLayout(district, 105, 751.89, 166, font, fontSize);
+
+    expect(layout.length).toBeGreaterThan(2);
+    expect(layout.map((line) => line.text).join(' ')).toBe(district);
+    expect(layout.every((line) => line.width <= 166)).toBe(true);
+    layout.forEach((line) => {
+      expect(line.x).toBeCloseTo(105 - line.width / 2, 10);
+    });
+    expect(layout.every((line, index) => index === 0 || layout[index - 1].y - line.y === fontSize + 2)).toBe(true);
+  });
+
+  it('décale les textes suivants selon la hauteur réellement occupée par le District', () => {
+    const basePositions = {
+      districtY: 751.89,
+      schoolNameY: 743.89,
+      coordinatesY: 722.89,
+      emailY: 713.89,
+    };
+    const oneDistrictLine = resolveSchoolHeaderFollowingTextPositions(1, 1, basePositions);
+    const threeDistrictLines = resolveSchoolHeaderFollowingTextPositions(3, 2, basePositions, 10);
+    const noDistrict = resolveSchoolHeaderFollowingTextPositions(0, 1, basePositions);
+    const districtBottomY = basePositions.districtY - 2 * 10;
+    const schoolNameBottomY = threeDistrictLines.schoolNameY - 13;
+
+    expect(threeDistrictLines.schoolNameY).toBeLessThan(oneDistrictLine.schoolNameY);
+    expect(threeDistrictLines.coordinatesY).toBeLessThan(oneDistrictLine.coordinatesY);
+    expect(threeDistrictLines.emailY).toBeLessThan(oneDistrictLine.emailY);
+    expect(districtBottomY - threeDistrictLines.schoolNameY).toBeGreaterThanOrEqual(12);
+    expect(schoolNameBottomY - threeDistrictLines.coordinatesY).toBeGreaterThanOrEqual(12);
+    expect(noDistrict).toEqual({
+      schoolNameY: basePositions.schoolNameY,
+      coordinatesY: basePositions.coordinatesY,
+      emailY: basePositions.emailY,
+    });
+    expect(basePositions).toEqual({
+      districtY: 751.89,
+      schoolNameY: 743.89,
+      coordinatesY: 722.89,
+      emailY: 713.89,
+    });
+  });
+
+  it('agrandit uniquement la hauteur du grand cadre en déplaçant sa limite basse de 10 points', () => {
+    const pageHeight = 841.89;
+    const width = 523.28;
+    const originalFrame = resolveBulletinHeaderFrame(pageHeight, width, 8, 0);
+    const expandedFrame = resolveBulletinHeaderFrame(pageHeight, width, 8);
+
+    expect(expandedFrame.top).toBe(originalFrame.top);
+    expect(expandedFrame.bottom).toBe(originalFrame.bottom - 10);
+    expect(expandedFrame.height).toBe(originalFrame.height + 10);
+    expect(expandedFrame.width).toBe(originalFrame.width);
+  });
+
+  it('déplace de 10 points les blocs sous le District sans déplacer le tableau des notes', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const positions = {
+      schoolName: extractPdfTextPosition(pdfBytes, /COLLEGE LE SAVOIR/),
+      coordinates: extractPdfTextPosition(pdfBytes, /BP : BP 12/),
+      email: extractPdfTextPosition(pdfBytes, /Email : contact@lessavoir\.test/),
+      title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
+      class: extractPdfTextPosition(pdfBytes, /Classe:/),
+      effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 42/),
+      student: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS DE L'ELEVE/),
+      tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
+    };
+
+    expect(positions.schoolName?.y).toBeCloseTo(729.89, 1);
+    expect(positions.coordinates?.y).toBeCloseTo(712.89, 1);
+    expect(positions.email?.y).toBeCloseTo(703.89, 1);
+    expect(positions.title?.y).toBeCloseTo(685.89, 1);
+    expect(positions.class?.y).toBeCloseTo(660.89, 1);
+    expect(positions.effectif?.y).toBeCloseTo(660.89, 1);
+    expect(positions.student?.y).toBeCloseTo(646.89, 1);
+    expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
+    expect(positions.schoolName!.y - positions.coordinates!.y).toBeGreaterThanOrEqual(12);
+    expect(positions.coordinates!.y - positions.email!.y).toBeGreaterThanOrEqual(8);
+    expect(positions.title!.y - positions.class!.y).toBeGreaterThanOrEqual(20);
+    expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
+  });
+
+  it('translate uniformément le corps, le tableau et le pied de page de 10 points sans toucher au titre ni à la structure', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const positions = {
+      title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
+      effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 42/),
+      student: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS DE L'ELEVE/),
+      tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
+      footer: extractPdfTextPosition(pdfBytes, /Page 1\/1/),
+    };
+    const streams = extractPdfContentStreams(pdfBytes)
+      .join('\n')
+      .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
+
+    expect(BULLETIN_BODY_VERTICAL_OFFSET).toBe(10);
+    expect(positions.title?.y).toBeCloseTo(685.89, 1);
+    expect(positions.effectif?.y).toBeCloseTo(660.89, 1);
+    expect(positions.student?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(636.89, 1);
+    expect(positions.tableHeader?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(601.89, 1);
+    expect(positions.footer?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(28, 1);
+    expect(streams).toContain('1 0 0 1 0 -10 cm');
+    expect(streams.indexOf('EFFECTIF : 42')).toBeLessThan(streams.indexOf('1 0 0 1 0 -10 cm'));
+    expect(streams.indexOf('1 0 0 1 0 -10 cm')).toBeLessThan(streams.indexOf("NOM ET PRENOMS DE L'ELEVE"));
   });
 
   it('limite les matières longues à deux lignes et les garde dans la largeur de la cellule', async () => {
