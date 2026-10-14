@@ -2241,6 +2241,7 @@ export const createBulletinPdfDocument = async (
   const drawHeader = (page: any, _includeStudentBlock: boolean) => {
     const width = page.getWidth();
     const height = page.getHeight();
+    const logoVerticalShift = 8.9;
     const headerTop = height - 18;
     const headerBottom = height - 136;
     const leftX = margin + 6;
@@ -2268,7 +2269,7 @@ export const createBulletinPdfDocument = async (
 
       page.drawImage(logo, {
         x: logoRender.x,
-        y: height - 34 + fontBold.heightAtSize(8, { descender: false }) - logoRender.drawHeight + 8,
+        y: height - 34 + fontBold.heightAtSize(8, { descender: false }) - logoRender.drawHeight + 8 + logoVerticalShift,
         width: logoRender.drawWidth,
         height: logoRender.drawHeight,
       });
@@ -2430,7 +2431,16 @@ export const createBulletinPdfDocument = async (
 
   const page = pdf.addPage(pageSize);
   const studentHeaderOffsetY = 8;
-  const outerBox = resolveBulletinHeaderFrame(page.getHeight(), tableWidth, studentHeaderOffsetY);
+  const resolvedOuterBox = resolveBulletinHeaderFrame(page.getHeight(), tableWidth, studentHeaderOffsetY);
+  const classLineY = page.getHeight() - 148 - 25 - studentHeaderOffsetY + 25;
+  const classLineDescent = getVisualFontBounds(fontBold, 14).descent;
+  const outerBoxBottom = classLineY - classLineDescent - 4 - 0.6;
+  const contentVerticalShift = outerBoxBottom - resolvedOuterBox.bottom;
+  const outerBox = {
+    ...resolvedOuterBox,
+    bottom: outerBoxBottom,
+    height: resolvedOuterBox.top - outerBoxBottom,
+  };
   page.drawSvgPath(
     `M 8,0 H ${outerBox.width - 8} Q ${outerBox.width},0 ${outerBox.width},8 V ${outerBox.height - 8} Q ${outerBox.width},${outerBox.height} ${outerBox.width - 8},${outerBox.height} H 8 Q 0,${outerBox.height} 0,${outerBox.height - 8} V 8 Q 0,0 8,0 Z`,
     {
@@ -2447,18 +2457,22 @@ export const createBulletinPdfDocument = async (
   const titleWidth = fontBold.widthOfTextAtSize(sanitizePdfText(title), 14);
   const titleBoxWidth = titleWidth + 16;
   const titleBoxHeight = 26;
-  const titleBoxX = (page.getWidth() - titleBoxWidth) / 2;
+  const titleBoxX = (page.getWidth() - titleBoxWidth) / 2 + 50;
+  const titleY = bulletinHeaderY - studentHeaderOffsetY + 25;
+  const titleFontBounds = getVisualFontBounds(fontBold, 14);
+  const titleBoxPaddingY = (titleBoxHeight - titleFontBounds.ascent - titleFontBounds.descent) / 2;
+  const titleBoxY = titleY + titleFontBounds.ascent + titleBoxPaddingY;
   page.drawSvgPath(
     `M 5,0 H ${titleBoxWidth - 5} Q ${titleBoxWidth},0 ${titleBoxWidth},5 V ${titleBoxHeight - 5} Q ${titleBoxWidth},${titleBoxHeight} ${titleBoxWidth - 5},${titleBoxHeight} H 5 Q 0,${titleBoxHeight} 0,${titleBoxHeight - 5} V 5 Q 0,0 5,0 Z`,
     {
       x: titleBoxX,
-      y: bulletinHeaderY + 13 + fontBold.heightAtSize(14, { descender: false }) / 2 - studentHeaderOffsetY,
+      y: titleBoxY,
       color: hexToRgb('#d1d5db'),
       borderColor: hexToRgb('#000000'),
       borderWidth: 1.2,
     },
   );
-  drawText(page, title, (page.getWidth() - titleWidth) / 2, bulletinHeaderY - studentHeaderOffsetY, 14, text, fontBold);
+  drawText(page, title, (page.getWidth() - titleWidth) / 2 + 50, titleY, 14, text, fontBold);
   const classNameDisplay = normalizeClassNameForDisplay(data.className);
   const classNameParts = classNameDisplay.split(/\s+/);
   const classLevel = classNameParts[0] || '';
@@ -2471,8 +2485,7 @@ export const createBulletinPdfDocument = async (
   const classEffectifWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classEffectif), 14);
   const classLineGap = 12;
   const classLineWidth = classLabelWidth + classLineGap + classEffectifWidth;
-  const classLineX = (page.getWidth() - classLineWidth) / 2;
-  const classLineY = bulletinHeaderY - 25 - studentHeaderOffsetY;
+  const classLineX = (page.getWidth() - classLineWidth) / 2 + 50;
   const classNameX = classLineX + fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), 14);
   drawText(page, classLabelPrefix, classLineX, classLineY, 14, text, fontBold);
   const classLevelWidth = drawFrenchLevelToken(page, classLevel, classNameX, classLineY, 14, text, fontBold);
@@ -2482,7 +2495,7 @@ export const createBulletinPdfDocument = async (
   drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classLineY, 14, text, fontBold);
   page.pushOperators(
     pushGraphicsState(),
-    concatTransformationMatrix(1, 0, 0, 1, 0, -BULLETIN_BODY_VERTICAL_OFFSET),
+    concatTransformationMatrix(1, 0, 0, 1, 0, -BULLETIN_BODY_VERTICAL_OFFSET + contentVerticalShift),
   );
   const studentBlockY = cursorY + 12;
   const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
@@ -2537,12 +2550,17 @@ export const createBulletinPdfDocument = async (
     if (b.subjectTypeId == null) return -1;
     return a.sortOrder - b.sortOrder || a.subjectTypeId - b.subjectTypeId;
   });
+  const allSubjectsHaveType = data.lines.every((line) => (
+    line.subjectTypeId != null || Boolean(line.subjectTypeName?.trim())
+  ));
   const renderEntries: Array<{ groupTitle?: string; subtotal?: { label: string; lines: BulletinPdfLine[] }; line?: BulletinPdfLine }> = groupedDataAvailable
-    ? orderedSubjectGroups.flatMap((group) => [
-      { groupTitle: `MATIERES ${group.subjectTypeName.toUpperCase()}` },
-      ...group.lines.map((line) => ({ line })),
-      { subtotal: { label: `TOTAL MATIERES ${group.subjectTypeName.toUpperCase()}`, lines: group.lines } },
-    ])
+    ? allSubjectsHaveType
+      ? orderedSubjectGroups.flatMap((group) => [
+        { groupTitle: `MATIERES ${group.subjectTypeName.toUpperCase()}` },
+        ...group.lines.map((line) => ({ line })),
+        { subtotal: { label: `TOTAL MATIERES ${group.subjectTypeName.toUpperCase()}`, lines: group.lines } },
+      ])
+      : orderedSubjectGroups.flatMap((group) => group.lines.map((line) => ({ line })))
     : data.lines.map((line) => ({ line }));
   const totalRowHeight = 19;
   const tableContentHeight = renderEntries.reduce((height, entry) => {
@@ -2595,8 +2613,21 @@ export const createBulletinPdfDocument = async (
       });
       const subtotalCellBottomY = cursorY - totalRowHeight + 4;
       const subtotalLabelY = getCenteredBaseline((cursorY + subtotalCellBottomY) / 2, fontBold, 10) - 0.5 - 0.4;
-      drawText(page, entry.subtotal.label, tableX + 7, subtotalLabelY, 10, primary, fontBold);
       const subtotalCoefficientColumnX = tableX + columns.slice(0, 6).reduce((total, column) => total + column.width, 0);
+      const subtotalLabelX = tableX + 7;
+      const subtotalLabelMaxWidth = subtotalCoefficientColumnX - subtotalLabelX - 6;
+      let subtotalLabel = entry.subtotal.label;
+      if (fontBold.widthOfTextAtSize(subtotalLabel, 10) > subtotalLabelMaxWidth) {
+        const labelWords = subtotalLabel.split(/\s+/);
+        while (labelWords.length > 1 && fontBold.widthOfTextAtSize(`${labelWords.join(' ')}...`, 10) > subtotalLabelMaxWidth) {
+          labelWords.pop();
+        }
+        subtotalLabel = `${labelWords.join(' ').replace(/\s+$/, '')}...`;
+        while (subtotalLabel.length > 3 && fontBold.widthOfTextAtSize(subtotalLabel, 10) > subtotalLabelMaxWidth) {
+          subtotalLabel = `${subtotalLabel.slice(0, -4)}...`;
+        }
+      }
+      drawText(page, subtotalLabel, subtotalLabelX, subtotalLabelY, 10, primary, fontBold);
       const subtotalWeightedPointsColumnX = subtotalCoefficientColumnX + columns[6].width;
       drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalCoefficients), subtotalCoefficientColumnX, columns[6].width, cursorY, subtotalCellBottomY, 10, primary, fontBold);
       drawCenteredCellValue(page, formatPdfDisplayNumberFixed(subtotalWeightedPoints), subtotalWeightedPointsColumnX, columns[7].width, cursorY, subtotalCellBottomY, 10, primary, fontBold);

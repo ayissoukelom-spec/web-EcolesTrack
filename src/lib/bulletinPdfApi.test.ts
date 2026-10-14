@@ -173,6 +173,23 @@ const extractPdfContentStreams = (pdfBytes: Uint8Array): string[] => {
   return streams;
 };
 
+const extractPdfImageDrawTransforms = (pdfBytes: Uint8Array): Array<{ x: number; y: number; width: number; height: number }> => {
+  const imageTransformPattern = /1 0 0 1 ([-\d.]+) ([-\d.]+) cm\s+1 0 0 1 0 0 cm\s+([-\d.]+) 0 0 ([-\d.]+) 0 0 cm\s+1 0 0 1 0 0 cm\s+\/[A-Za-z0-9._-]+ Do/g;
+  return extractPdfContentStreams(pdfBytes).flatMap((content) => {
+    const transforms: Array<{ x: number; y: number; width: number; height: number }> = [];
+    let match: RegExpExecArray | null;
+    while ((match = imageTransformPattern.exec(content)) != null) {
+      transforms.push({
+        x: Number(match[1]),
+        y: Number(match[2]),
+        width: Number(match[3]),
+        height: Number(match[4]),
+      });
+    }
+    return transforms;
+  });
+};
+
 const extractPdfTextPosition = (pdfBytes: Uint8Array, target: RegExp): { x: number; y: number; fontSize: number | null } | null => {
   const pdfBuffer = Buffer.from(pdfBytes);
   const raw = pdfBuffer.toString('latin1');
@@ -861,9 +878,9 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.schoolName?.y).toBeCloseTo(729.89, 1);
     expect(positions.coordinates?.y).toBeCloseTo(712.89, 1);
     expect(positions.email?.y).toBeCloseTo(703.89, 1);
-    expect(positions.title?.y).toBeCloseTo(685.89, 1);
-    expect(positions.class?.y).toBeCloseTo(660.89, 1);
-    expect(positions.effectif?.y).toBeCloseTo(660.89, 1);
+    expect(positions.title?.y).toBeCloseTo(710.89, 1);
+    expect(positions.class?.y).toBeCloseTo(685.89, 1);
+    expect(positions.effectif?.y).toBeCloseTo(685.89, 1);
     expect(positions.student?.y).toBeCloseTo(646.89, 1);
     expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
     expect(positions.schoolName!.y - positions.coordinates!.y).toBeGreaterThanOrEqual(12);
@@ -872,7 +889,7 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
   });
 
-  it('translate uniformément le corps, le tableau et le pied de page de 10 points sans toucher au titre ni à la structure', async () => {
+  it('translate uniformément le corps, le tableau et le pied de page de 10 points sans toucher à la structure', async () => {
     const pdfBytes = await createBulletinPdfDocument(snapshotData);
     const positions = {
       title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
@@ -886,14 +903,14 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
 
     expect(BULLETIN_BODY_VERTICAL_OFFSET).toBe(10);
-    expect(positions.title?.y).toBeCloseTo(685.89, 1);
-    expect(positions.effectif?.y).toBeCloseTo(660.89, 1);
+    expect(positions.title?.y).toBeCloseTo(710.89, 1);
+    expect(positions.effectif?.y).toBeCloseTo(685.89, 1);
     expect(positions.student?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(636.89, 1);
     expect(positions.tableHeader?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(601.89, 1);
     expect(positions.footer?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(28, 1);
-    expect(streams).toContain('1 0 0 1 0 -10 cm');
-    expect(streams.indexOf('EFFECTIF : 42')).toBeLessThan(streams.indexOf('1 0 0 1 0 -10 cm'));
-    expect(streams.indexOf('1 0 0 1 0 -10 cm')).toBeLessThan(streams.indexOf("NOM ET PRENOMS DE L'ELEVE"));
+    expect(streams).toContain('1 0 0 1 0 15.361999999999966 cm');
+    expect(streams.indexOf('EFFECTIF : 42')).toBeLessThan(streams.indexOf('1 0 0 1 0 15.361999999999966 cm'));
+    expect(streams.indexOf('1 0 0 1 0 15.361999999999966 cm')).toBeLessThan(streams.indexOf("NOM ET PRENOMS DE L'ELEVE"));
   });
 
   it('limite les matières longues à deux lignes et les garde dans la largeur de la cellule', async () => {
@@ -1328,6 +1345,56 @@ describe('bulletin PDF API', () => {
     }
   });
 
+  it.each([
+    ['png', testPngBase64],
+    ['jpeg', testJpegBase64],
+  ])('remonte le logo %s sans changer sa taille ni les autres éléments du PDF', async (extension, imageContent) => {
+    await withStoredLogo(extension, imageContent, async (logoPath) => {
+      const pdfWithLogo = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: { ...snapshotData.school, logoPath },
+      });
+      const pdfWithoutLogo = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: { ...snapshotData.school, logoPath: null },
+      });
+      const [logoTransform] = extractPdfImageDrawTransforms(pdfWithLogo);
+      const pdfWithLogoDocument = await PDFDocument.load(pdfWithLogo);
+      const pdfWithoutLogoDocument = await PDFDocument.load(pdfWithoutLogo);
+      const withLogoPage = pdfWithLogoDocument.getPage(0);
+      const withoutLogoPage = pdfWithoutLogoDocument.getPage(0);
+
+      expect(extractPdfImageDrawTransforms(pdfWithLogo)).toHaveLength(1);
+      expect(logoTransform.x).toBeCloseTo(246.64, 2);
+      expect(logoTransform.width).toBeCloseTo(102, 2);
+      expect(logoTransform.height).toBeCloseTo(102, 2);
+      expect(logoTransform.y).toBeCloseTo(728.254, 2);
+
+      const innerFrame = {
+        left: 16.6,
+        right: 578.68,
+        top: 831.29,
+        bottom: 653.49,
+      };
+      expect(logoTransform.x).toBeGreaterThanOrEqual(innerFrame.left);
+      expect(logoTransform.x + logoTransform.width).toBeLessThanOrEqual(innerFrame.right);
+      expect(logoTransform.y).toBeGreaterThanOrEqual(innerFrame.bottom);
+      expect(logoTransform.y + logoTransform.height).toBeLessThan(innerFrame.top);
+      expect(innerFrame.top - (logoTransform.y + logoTransform.height)).toBeCloseTo(1.036, 2);
+
+      expect(withLogoPage.getWidth()).toBe(withoutLogoPage.getWidth());
+      expect(withLogoPage.getHeight()).toBe(withoutLogoPage.getHeight());
+      for (const text of [
+        /BULLETIN DE NOTES DU Trimestre 1/,
+        /NOM ET PRENOMS DE L'ELEVE/,
+        /Matières/,
+        /Page 1\/1/,
+      ]) {
+        expect(extractPdfTextPosition(pdfWithLogo, text)).toEqual(extractPdfTextPosition(pdfWithoutLogo, text));
+      }
+    });
+  });
+
   it('génère le PDF sans image lorsqu aucun logo établissement n est configuré', async () => {
     const pdfBytes = await createBulletinPdfDocument({
       ...snapshotData,
@@ -1593,6 +1660,21 @@ describe('bulletin PDF API', () => {
     expect(text).not.toContain('Aucune sanction');
   });
 
+  it('abrège uniquement le libellé long du total de matières dans la ligne de sous-total', async () => {
+    const subjectTypeName = 'TYPE DE MATIERES OPTIONNELLES A INTITULE EXCEPTIONNELLEMENT LONG';
+    const line = { ...snapshotData.lines[0], subjectTypeName };
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      lines: [line],
+      subjectGroups: [{ subjectTypeId: 1, subjectTypeName, sortOrder: 1, lines: [line] }],
+    });
+    const text = extractPdfText(pdfBytes);
+
+    expect(text).toContain('TOTAL MATIERES TYPE DE MATIERES...');
+    expect(text).toContain(`MATIERES ${subjectTypeName.toUpperCase()}`);
+    expect(text).not.toContain(`TOTAL MATIERES ${subjectTypeName.toUpperCase()}`);
+  });
+
   it('affiche les groupes de matières dans l ordre littéraire puis scientifique', async () => {
     const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeName: 'Littéraire', average: 14 };
     const historyLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Histoire', subjectTypeName: 'Littéraire', average: 12 };
@@ -1620,7 +1702,7 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('16.00');
   });
 
-  it('affiche tous les groupes dynamiques dans leur ordre sortOrder', async () => {
+  it('affiche les matières à la suite sans titres si l une n a pas de type, dans l ordre actuel', async () => {
     const literaryLine = { ...snapshotData.lines[0], subjectName: 'Français', subjectTypeId: 1, subjectTypeName: 'Littéraire', sortOrder: 2, average: 14 };
     const technicalLine = { ...snapshotData.lines[0], id: 2, subjectName: 'Informatique', subjectTypeId: 3, subjectTypeName: 'Informatique', sortOrder: 3, average: 13 };
     const scientificLine = { ...snapshotData.lines[0], id: 3, subjectName: 'Mathématiques', subjectTypeId: 2, subjectTypeName: 'Scientifique', sortOrder: 1, average: 16 };
@@ -1636,13 +1718,17 @@ describe('bulletin PDF API', () => {
       ],
     };
 
-    const normalizedText = extractPdfText(await createBulletinPdfDocument(data)).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+    const text = extractPdfText(await createBulletinPdfDocument(data));
+    const normalizedText = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
 
-    expect(normalizedText.indexOf('MATIERESSCIENTIFIQUE')).toBeLessThan(normalizedText.indexOf('MATIERESLITTERAIRE'));
-    expect(normalizedText.indexOf('MATIERESLITTERAIRE')).toBeLessThan(normalizedText.indexOf('INFORMATIQUE'));
-    expect(normalizedText).toContain('MATIERESSANSTYPE');
-    expect(normalizedText).toContain('Informatique');
-    expect(normalizedText).toContain('Sport');
+    expect(normalizedText).not.toContain('MATIERESSCIENTIFIQUE');
+    expect(normalizedText).not.toContain('MATIERESLITTERAIRE');
+    expect(normalizedText).not.toContain('MATIERESSANSTYPE');
+    expect(normalizedText).not.toContain('TOTALMATIERES');
+    expect(text.indexOf('Math')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Fran')).toBeGreaterThan(text.indexOf('Math'));
+    expect(text.indexOf('Informatique')).toBeGreaterThan(text.indexOf('Fran'));
+    expect(text.indexOf('Sport')).toBeGreaterThan(text.indexOf('Informatique'));
   });
 
   it('affiche le total après toutes les matières et additionne coefficients et notes coefficientées', async () => {
