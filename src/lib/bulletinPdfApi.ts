@@ -2401,11 +2401,27 @@ export const createBulletinPdfDocument = async (
           drawCenteredWrappedText(page, coordinateLines[0], coordinatesCenterX, institutionCoordinatesY, coordinatesWidth, institutionCoordinatesFontSize, text, fontBoldItalic, 1);
         }
         const initialEmailWidth = fontBoldItalic.widthOfTextAtSize(emailLine, 7);
-        const emailCenterX = nonEmailLines.length > 0
-          ? emailBounds.left + fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7) / 2
-          : emailBounds.left + Math.min(initialEmailWidth, emailBounds.width) / 2;
-        const emailLayout = fitHeaderEmailToBounds(emailLine, fontBoldItalic, emailBounds, emailCenterX);
-        drawText(page, emailLayout.text, emailLayout.x, followingTextPositions.emailY, emailLayout.fontSize, text, fontBoldItalic);
+        if (logoTopY != null && nonEmailLines.length > 0) {
+          const centeredEmailBounds = {
+            left: institutionBlockCenterX - institutionCoordinatesMaxWidth / 2,
+            right: institutionBlockCenterX + institutionCoordinatesMaxWidth / 2,
+          };
+          const emailLayout = fitHeaderEmailToBounds(
+            emailLine,
+            fontBoldItalic,
+            centeredEmailBounds,
+            institutionBlockCenterX,
+          );
+          const emailBounds = getVisualFontBounds(fontBoldItalic, emailLayout.fontSize);
+          const emailY = institutionCoordinatesY - institutionCoordinatesBounds.descent - emailBounds.ascent;
+          drawText(page, emailLayout.text, emailLayout.x, emailY, emailLayout.fontSize, text, fontBoldItalic);
+        } else {
+          const emailCenterX = nonEmailLines.length > 0
+            ? emailBounds.left + fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7) / 2
+            : emailBounds.left + Math.min(initialEmailWidth, emailBounds.width) / 2;
+          const emailLayout = fitHeaderEmailToBounds(emailLine, fontBoldItalic, emailBounds, emailCenterX);
+          drawText(page, emailLayout.text, emailLayout.x, followingTextPositions.emailY, emailLayout.fontSize, text, fontBoldItalic);
+        }
       } else {
         const line = coordinateLines[0];
         const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);

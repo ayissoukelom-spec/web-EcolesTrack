@@ -1414,7 +1414,7 @@ describe('bulletin PDF API', () => {
           postalBox: '09 BP: 9034',
           phone: '+228 22271112',
           phone2: '90742847',
-          email: null,
+          email: 'contact@lessavoir.test',
           logoPath,
         },
       });
@@ -1424,6 +1424,7 @@ describe('bulletin PDF API', () => {
         pdfBytes,
         /BP : 09 BP: 9034 Tél : \+228 22271112 \/ 90742847/,
       );
+      const emailLine = extractPdfTextPosition(pdfBytes, /Email : contact@lessavoir\.test/);
       const [logoTransform] = extractPdfImageDrawTransforms(pdfBytes);
       const page = (await PDFDocument.load(pdfBytes)).getPage(0);
       const title = extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/);
@@ -1433,12 +1434,18 @@ describe('bulletin PDF API', () => {
       expect(firstSchoolNameLine).not.toBeNull();
       expect(secondSchoolNameLine).not.toBeNull();
       expect(coordinatesLine).not.toBeNull();
+      expect(emailLine).not.toBeNull();
       expect(firstSchoolNameLine!.fontSize).toBe(11);
       expect(secondSchoolNameLine!.fontSize).toBe(11);
       expect(coordinatesLine!.fontSize).toBe(7);
+      expect(emailLine!.fontSize).toBe(7);
       expect(firstSchoolNameLine!.y).toBeCloseTo(823.14 - 15, 1);
       expect(secondSchoolNameLine!.y).toBeCloseTo(810.64 - 15, 1);
       expect(coordinatesLine!.y).toBeCloseTo(802.97 - 15, 1);
+      expect(emailLine!.y).toBeCloseTo(
+        coordinatesLine!.y - 6.3,
+        2,
+      );
       expect(firstSchoolNameLine!.y).toBeGreaterThan(secondSchoolNameLine!.y);
       expect(secondSchoolNameLine!.y).toBeGreaterThan(coordinatesLine!.y);
       expect(firstSchoolNameLine!.y - secondSchoolNameLine!.y).toBeCloseTo(12.5, 1);
