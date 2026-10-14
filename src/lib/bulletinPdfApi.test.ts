@@ -865,6 +865,7 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
   it('déplace de 10 points les blocs sous le District sans déplacer le tableau des notes', async () => {
     const pdfBytes = await createBulletinPdfDocument(snapshotData);
     const positions = {
+      schoolYear: extractPdfTextPosition(pdfBytes, /Année scolaire: 2025-2026/),
       schoolName: extractPdfTextPosition(pdfBytes, /COLLEGE LE SAVOIR/),
       coordinates: extractPdfTextPosition(pdfBytes, /BP : BP 12/),
       email: extractPdfTextPosition(pdfBytes, /Email : contact@lessavoir\.test/),
@@ -878,14 +879,20 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.schoolName?.y).toBeCloseTo(729.89, 1);
     expect(positions.coordinates?.y).toBeCloseTo(712.89, 1);
     expect(positions.email?.y).toBeCloseTo(703.89, 1);
-    expect(positions.title?.y).toBeCloseTo(710.89, 1);
-    expect(positions.class?.y).toBeCloseTo(685.89, 1);
-    expect(positions.effectif?.y).toBeCloseTo(685.89, 1);
+    expect(positions.title?.y).toBeCloseTo(693.99, 1);
+    expect(positions.title?.fontSize).toBe(14);
+    expect(positions.schoolYear?.y).toBeCloseTo(743.89, 1);
+    expect(positions.schoolYear?.fontSize).toBe(11);
+    expect(positions.class?.y).toBeCloseTo(727.94, 1);
+    expect(positions.effectif?.y).toBeCloseTo(727.94, 1);
+    expect(positions.class?.fontSize).toBe(11);
+    expect(positions.effectif?.fontSize).toBe(11);
     expect(positions.student?.y).toBeCloseTo(646.89, 1);
     expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
     expect(positions.schoolName!.y - positions.coordinates!.y).toBeGreaterThanOrEqual(12);
     expect(positions.coordinates!.y - positions.email!.y).toBeGreaterThanOrEqual(8);
-    expect(positions.title!.y - positions.class!.y).toBeGreaterThanOrEqual(20);
+    expect(positions.schoolYear!.y - positions.class!.y).toBeGreaterThanOrEqual(15);
+    expect(positions.schoolYear!.y - positions.class!.y).toBeLessThanOrEqual(17);
     expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
   });
 
@@ -903,8 +910,9 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       .replace(/<([0-9A-Fa-f]+)>/g, (_match, hex: string) => Buffer.from(hex, 'hex').toString('latin1'));
 
     expect(BULLETIN_BODY_VERTICAL_OFFSET).toBe(10);
-    expect(positions.title?.y).toBeCloseTo(710.89, 1);
-    expect(positions.effectif?.y).toBeCloseTo(685.89, 1);
+    expect(positions.title?.y).toBeCloseTo(693.99, 1);
+    expect(positions.title?.fontSize).toBe(14);
+    expect(positions.effectif?.y).toBeCloseTo(727.94, 1);
     expect(positions.student?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(636.89, 1);
     expect(positions.tableHeader?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(601.89, 1);
     expect(positions.footer?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(28, 1);
@@ -1368,7 +1376,7 @@ describe('bulletin PDF API', () => {
       expect(logoTransform.x).toBeCloseTo(246.64, 2);
       expect(logoTransform.width).toBeCloseTo(102, 2);
       expect(logoTransform.height).toBeCloseTo(102, 2);
-      expect(logoTransform.y).toBeCloseTo(728.254, 2);
+      expect(logoTransform.y).toBeCloseTo(703.452, 2);
 
       const innerFrame = {
         left: 16.6,
@@ -1380,7 +1388,7 @@ describe('bulletin PDF API', () => {
       expect(logoTransform.x + logoTransform.width).toBeLessThanOrEqual(innerFrame.right);
       expect(logoTransform.y).toBeGreaterThanOrEqual(innerFrame.bottom);
       expect(logoTransform.y + logoTransform.height).toBeLessThan(innerFrame.top);
-      expect(innerFrame.top - (logoTransform.y + logoTransform.height)).toBeCloseTo(1.036, 2);
+      expect(innerFrame.top - (logoTransform.y + logoTransform.height)).toBeCloseTo(25.838, 2);
 
       expect(withLogoPage.getWidth()).toBe(withoutLogoPage.getWidth());
       expect(withLogoPage.getHeight()).toBe(withoutLogoPage.getHeight());
@@ -1392,6 +1400,56 @@ describe('bulletin PDF API', () => {
       ]) {
         expect(extractPdfTextPosition(pdfWithLogo, text)).toEqual(extractPdfTextPosition(pdfWithoutLogo, text));
       }
+    });
+  });
+
+  it('descend le bloc institutionnel de 15 points sans déplacer le logo', async () => {
+    await withStoredLogo('png', testPngBase64, async (logoPath) => {
+      const pdfBytes = await createBulletinPdfDocument({
+        ...snapshotData,
+        school: {
+          ...snapshotData.school,
+          name: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+          officialName: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+          postalBox: '09 BP: 9034',
+          phone: '+228 22271112',
+          phone2: '90742847',
+          email: null,
+          logoPath,
+        },
+      });
+      const firstSchoolNameLine = extractPdfTextPosition(pdfBytes, /COLLEGE EVANGELIQUE/);
+      const secondSchoolNameLine = extractPdfTextPosition(pdfBytes, /BAPTISTE DE KANGNIKOPE/);
+      const coordinatesLine = extractPdfTextPosition(
+        pdfBytes,
+        /BP : 09 BP: 9034 Tél : \+228 22271112 \/ 90742847/,
+      );
+      const [logoTransform] = extractPdfImageDrawTransforms(pdfBytes);
+      const page = (await PDFDocument.load(pdfBytes)).getPage(0);
+      const title = extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/);
+      const logoTop = logoTransform.y + logoTransform.height;
+      const innerFrameTop = 831.29;
+
+      expect(firstSchoolNameLine).not.toBeNull();
+      expect(secondSchoolNameLine).not.toBeNull();
+      expect(coordinatesLine).not.toBeNull();
+      expect(firstSchoolNameLine!.fontSize).toBe(11);
+      expect(secondSchoolNameLine!.fontSize).toBe(11);
+      expect(coordinatesLine!.fontSize).toBe(7);
+      expect(firstSchoolNameLine!.y).toBeCloseTo(823.14 - 15, 1);
+      expect(secondSchoolNameLine!.y).toBeCloseTo(810.64 - 15, 1);
+      expect(coordinatesLine!.y).toBeCloseTo(802.97 - 15, 1);
+      expect(firstSchoolNameLine!.y).toBeGreaterThan(secondSchoolNameLine!.y);
+      expect(secondSchoolNameLine!.y).toBeGreaterThan(coordinatesLine!.y);
+      expect(firstSchoolNameLine!.y - secondSchoolNameLine!.y).toBeCloseTo(12.5, 1);
+      expect(secondSchoolNameLine!.y - coordinatesLine!.y).toBeCloseTo(7.67, 1);
+      expect(coordinatesLine!.y).toBeGreaterThan(logoTransform.y);
+      expect(coordinatesLine!.y + 4.78).toBeLessThan(logoTop);
+      expect(firstSchoolNameLine!.y + 7.5).toBeLessThan(innerFrameTop);
+      expect(coordinatesLine!.y - title!.y).toBeCloseTo(93.981, 2);
+      expect(logoTransform.x + logoTransform.width / 2).toBeCloseTo(page.getWidth() / 2, 2);
+      expect(logoTransform.width).toBeCloseTo(102, 2);
+      expect(logoTransform.height).toBeCloseTo(102, 2);
     });
   });
 
