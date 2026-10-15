@@ -2228,13 +2228,13 @@ export const createBulletinPdfDocument = async (
     });
   };
 
-  const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 11, fitToWidth = true) => {
+  const drawHeaderParagraph = (page: any, value: string, x: number, y: number, maxWidth: number, initialSize: number, minSize: number, color: any, font: any, lineSpacing = initialSize + 11, fitToWidth = true, align: 'center' | 'left' = 'center') => {
     const size = fitToWidth ? fitHeaderParagraphFontSize(value, maxWidth, font, initialSize, minSize) : initialSize;
     const lines = computeHeaderParagraphRenderLayout(value, x, maxWidth, font, size, lineSpacing);
     let lineY = y;
     lines.forEach((line, lineIndex) => {
       if (lineIndex > 0) lineY -= line.gapBefore;
-      drawText(page, line.text, line.x, lineY, size, color, font);
+      drawText(page, line.text, align === 'left' ? x : line.x, lineY, size, color, font);
     });
   };
 
@@ -2247,7 +2247,7 @@ export const createBulletinPdfDocument = async (
     const leftX = margin + 6;
     const leftColumnCenter = margin + 89;
     const centerX = width / 2;
-    const rightX = width - margin - 145;
+    const rightBlockRightX = width - leftX;
     const institutionBlockCenterX = centerX;
     const institutionBlockMaxWidth = 166;
     const institutionCoordinatesMaxWidth = width - 2 * (margin + 178 + 8);
@@ -2261,7 +2261,7 @@ export const createBulletinPdfDocument = async (
         : "DIRECTION RÉGIONALE DE L'ÉDUCATION");
     const headerInstitutionText = [ministryLabel, educationDirectionLabel].filter(Boolean).join(' ');
     const institutionHeaderWidth = margin + 178 - leftX;
-    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, institutionHeaderWidth, institutionFontSize, 5.5, text, fontBold, 20, false);
+    if (headerInstitutionText) drawHeaderParagraph(page, headerInstitutionText, leftX, height - 34, institutionHeaderWidth, institutionFontSize, 5.5, text, fontBold, 20, false, 'left');
     const districtY = height - 90;
     const districtLayout = school.abbreviation
       ? {
@@ -2421,7 +2421,7 @@ export const createBulletinPdfDocument = async (
       }
     }
     if (school.abbreviation) {
-      districtLines.forEach((line) => drawText(page, line.text, line.x, line.y, districtLayout.fontSize, text, fontBold));
+      districtLines.forEach((line) => drawText(page, line.text, leftX, line.y, districtLayout.fontSize, text, fontBold));
     }
     schoolNamePositions.forEach(({ line, x, y }) => {
       drawText(
@@ -2453,17 +2453,17 @@ export const createBulletinPdfDocument = async (
     const republicText = 'REPUBLIQUE TOGOLAISE';
     const republicTextWidth = fontBold.widthOfTextAtSize(republicText, 9);
     const republicMarker = '-----------------';
-    const republicMarkerWidth = fontBold.widthOfTextAtSize('LIQUE TOG', 9);
-    drawText(page, republicText, rightX, height - 34, 9, text, fontBold);
-    drawText(page, republicMarker, rightX + (republicTextWidth - republicMarkerWidth) / 2, height - 47, 9, text, fontBold);
+    const republicMarkerWidth = fontBold.widthOfTextAtSize(republicMarker, 9);
+    drawText(page, republicText, rightBlockRightX - republicTextWidth, height - 34, 9, text, fontBold);
+    drawText(page, republicMarker, rightBlockRightX - republicMarkerWidth, height - 47, 9, text, fontBold);
     const mottoText = school.motto?.trim() || 'Travail-Liberté-Patrie';
-    const mottoWidth = fontBold.widthOfTextAtSize(mottoText, 8);
-    const mottoX = rightX + (republicTextWidth - mottoWidth) / 2;
+    const mottoWidth = fontBold.widthOfTextAtSize(sanitizePdfText(mottoText), 8);
+    const mottoX = rightBlockRightX - mottoWidth;
     drawText(page, mottoText, mottoX, height - 56, 8, text, fontBold);
     const schoolYearText = `${template.labels.schoolYear}: ${data.schoolYearName}`;
-    const schoolYearWidth = fontBold.widthOfTextAtSize(schoolYearText, 11);
-    const schoolYearX = rightX + (republicTextWidth - schoolYearWidth) / 2;
-    drawText(page, schoolYearText, schoolYearX, height - 98, 11, text, fontBold);
+    const schoolYearWidth = fontBold.widthOfTextAtSize(sanitizePdfText(schoolYearText), 11);
+    const schoolYearX = rightBlockRightX - schoolYearWidth;
+    drawText(page, schoolYearText, schoolYearX, height - 74, 11, text, fontBold);
     return height - 148;
   };
 
@@ -2564,27 +2564,31 @@ export const createBulletinPdfDocument = async (
   const classNameSuffix = classNameParts.slice(1).join(' ');
   const classLabelPrefix = `${template.labels.class}: `;
   const classFontSize = 11;
-  const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), classFontSize)
+  const classLabelWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), classFontSize);
+  const classLineWidth = classLabelWidth
     + getFrenchLevelTokenWidth(classLevel, classFontSize, fontBold)
-    + (classNameSuffix ? fontBold.widthOfTextAtSize(` ${classNameSuffix}`, classFontSize) : 0);
+    + (classNameSuffix ? fontBold.widthOfTextAtSize(sanitizePdfText(classNameSuffix), classFontSize) : 0);
   const classEffectif = `EFFECTIF : ${data.classStudentCount}`;
   const classEffectifWidth = fontBold.widthOfTextAtSize(sanitizePdfText(classEffectif), classFontSize);
-  const classLineGap = 12;
-  const classLineWidth = classLabelWidth + classLineGap + classEffectifWidth;
-  const schoolYearCenterX = page.getWidth() - margin - 145
-    + fontBold.widthOfTextAtSize('REPUBLIQUE TOGOLAISE', 9) / 2;
-  const classLineX = schoolYearCenterX - classLineWidth / 2;
-  const schoolYearY = page.getHeight() - 98;
-  const schoolYearFontBounds = getVisualFontBounds(fontBold, 11);
-  const classFontAscent = getVisualFontBounds(fontBold, 14).ascent;
-  const classDisplayY = schoolYearY - schoolYearFontBounds.descent - 4 - classFontAscent;
+  const rightBlockRightX = page.getWidth() - (margin + 6);
+  const classLineX = rightBlockRightX - classLineWidth;
+  const effectifX = rightBlockRightX - classEffectifWidth;
+  const classDisplayY = page.getHeight() - 90;
   const classNameX = classLineX + fontBold.widthOfTextAtSize(sanitizePdfText(classLabelPrefix), classFontSize);
   drawText(page, classLabelPrefix, classLineX, classDisplayY, classFontSize, text, fontBold);
   const classLevelWidth = drawFrenchLevelToken(page, classLevel, classNameX, classDisplayY, classFontSize, text, fontBold);
   if (classNameSuffix) {
     drawText(page, ` ${classNameSuffix}`, classNameX + classLevelWidth, classDisplayY, classFontSize, text, fontBold);
   }
-  drawText(page, classEffectif, classLineX + classLabelWidth + classLineGap, classDisplayY, classFontSize, text, fontBold);
+  drawText(
+    page,
+    classEffectif,
+    effectifX,
+    classDisplayY - 12,
+    classFontSize,
+    text,
+    fontBold,
+  );
   page.pushOperators(
     pushGraphicsState(),
     concatTransformationMatrix(1, 0, 0, 1, 0, -BULLETIN_BODY_VERTICAL_OFFSET + contentVerticalShift),

@@ -238,6 +238,27 @@ const extractPdfTextPosition = (
   return null;
 };
 
+const loadPdfGeneratorBoldFont = async (pdf: PDFDocument) => {
+  const candidates = [
+    { regular: 'C:\\Windows\\Fonts\\calibri.ttf', bold: 'C:\\Windows\\Fonts\\calibrib.ttf', boldItalic: 'C:\\Windows\\Fonts\\calibriz.ttf' },
+    { regular: 'C:\\Windows\\Fonts\\segoeui.ttf', bold: 'C:\\Windows\\Fonts\\segoeuib.ttf', boldItalic: 'C:\\Windows\\Fonts\\segoeuiz.ttf' },
+    { regular: 'C:\\Windows\\Fonts\\arial.ttf', bold: 'C:\\Windows\\Fonts\\arialbd.ttf', boldItalic: 'C:\\Windows\\Fonts\\arialbi.ttf' },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await pdf.embedFont(await readFile(candidate.regular));
+      const bold = await pdf.embedFont(await readFile(candidate.bold));
+      await pdf.embedFont(await readFile(candidate.boldItalic));
+      return bold;
+    } catch {
+      // Match the generator's fallback when a local font set is unavailable.
+    }
+  }
+
+  return pdf.embedFont(StandardFonts.TimesRomanBold);
+};
+
 const countPdfImages = (pdfBytes: Uint8Array): number => {
   const raw = Buffer.from(pdfBytes).toString('latin1');
   return raw.includes('/Subtype /Image') ? 1 : 0;
@@ -809,6 +830,30 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(layout[0].y - layout[1].y).toBe(fontSize + 2);
   });
 
+  it('aligne à gauche les deux lignes réelles du District avec la Direction régionale dans le PDF', async () => {
+    const district = "INSPECTION DE L'ENSEIGNEMENT GENERAL SECONDAIRE/GOLFE-EST";
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      school: {
+        ...snapshotData.school,
+        abbreviation: district,
+        ministryName: null,
+        educationDirection: 'DIRECTION REGIONALE DE L EDUCATION',
+      },
+    });
+    const direction = extractPdfTextPosition(pdfBytes, /DIRECTION REGIONALE/);
+    const firstDistrictLine = extractPdfTextPosition(pdfBytes, /INSPECTION/);
+    const secondDistrictLine = extractPdfTextPosition(pdfBytes, /GOLFE-EST/);
+
+    expect(direction).not.toBeNull();
+    expect(firstDistrictLine).not.toBeNull();
+    expect(secondDistrictLine).not.toBeNull();
+    expect(firstDistrictLine!.x).toBeCloseTo(direction!.x, 2);
+    expect(secondDistrictLine!.x).toBeCloseTo(direction!.x, 2);
+    expect(firstDistrictLine!.y).toBeCloseTo(751.89, 1);
+    expect(secondDistrictLine!.y).toBeCloseTo(firstDistrictLine!.y - 10, 2);
+  });
+
   it('préserve intégralement un District très long avec retour automatique compact et sans débordement', async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -868,9 +913,11 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(expandedFrame.width).toBe(originalFrame.width);
   });
 
-  it('déplace de 10 points les blocs sous le District sans déplacer le tableau des notes', async () => {
+  it('aligne à gauche les lignes du bloc Ministère / Direction et conserve la disposition verticale Classe / District', async () => {
     const pdfBytes = await createBulletinPdfDocument(snapshotData);
     const positions = {
+      ministry: extractPdfTextPosition(pdfBytes, /MINISTERE/),
+      direction: extractPdfTextPosition(pdfBytes, /DIRECTION/i),
       schoolYear: extractPdfTextPosition(pdfBytes, /Année scolaire: 2025-2026/),
       schoolName: extractPdfTextPosition(pdfBytes, /COLLEGE LE SAVOIR/),
       coordinates: extractPdfTextPosition(pdfBytes, /BP : BP 12/),
@@ -878,28 +925,127 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
       class: extractPdfTextPosition(pdfBytes, /Classe:/),
       effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 42/),
+      district: extractPdfTextPosition(pdfBytes, /CLS/),
       student: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS DE L'ELEVE/),
       tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
     };
 
+    expect(positions.ministry?.x).toBeCloseTo(22, 2);
+    expect(positions.direction?.x).toBeCloseTo(22, 2);
     expect(positions.schoolName?.y).toBeCloseTo(807.89, 1);
     expect(positions.coordinates?.y).toBeCloseTo(800.22, 1);
     expect(positions.email?.y).toBeCloseTo(793.92, 1);
     expect(positions.title?.y).toBeCloseTo(693.99, 1);
     expect(positions.title?.fontSize).toBe(14);
-    expect(positions.schoolYear?.y).toBeCloseTo(743.89, 1);
+    expect(positions.schoolYear?.y).toBeCloseTo(767.89, 1);
     expect(positions.schoolYear?.fontSize).toBe(11);
-    expect(positions.class?.y).toBeCloseTo(727.94, 1);
-    expect(positions.effectif?.y).toBeCloseTo(727.94, 1);
+    expect(positions.class?.y).toBeCloseTo(positions.district!.y, 2);
+    expect(positions.class?.y).toBeCloseTo(751.89, 1);
+    expect(positions.effectif?.y).toBeCloseTo(positions.class!.y - 12, 2);
     expect(positions.class?.fontSize).toBe(11);
     expect(positions.effectif?.fontSize).toBe(11);
     expect(positions.student?.y).toBeCloseTo(646.89, 1);
     expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
     expect(positions.schoolName!.y).toBeGreaterThan(positions.coordinates!.y);
     expect(positions.coordinates!.y).toBeGreaterThan(positions.email!.y);
-    expect(positions.schoolYear!.y - positions.class!.y).toBeGreaterThanOrEqual(15);
-    expect(positions.schoolYear!.y - positions.class!.y).toBeLessThanOrEqual(17);
+    expect(positions.schoolYear!.y - positions.class!.y).toBeCloseTo(16, 1);
     expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
+  });
+
+  it('aligne le bloc droit sur une marge symétrique et vérifie les lignes du bloc gauche sans chevauchement', async () => {
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      schoolYearName: '2026-2027',
+      className: 'CLASSXYZ',
+      classStudentCount: 10,
+      school: {
+        ...snapshotData.school,
+        motto: "Ton avenir, c'est Aujourd'hui",
+        abbreviation: "INSPECTION DE L'ENSEIGNEMENT GENERAL SECONDAIRE/GOLFE-EST",
+        ministryName: null,
+        educationDirection: 'DIRECTION REGIONALE DE L EDUCATION',
+      },
+    });
+    const positions = {
+      republic: extractPdfTextPosition(pdfBytes, /REPUBLIQUE TOGOLAISE/),
+      separator: extractPdfTextPosition(pdfBytes, /-----------------/),
+      motto: extractPdfTextPosition(pdfBytes, /Ton avenir, c'est Aujourd'hui/),
+      schoolYear: extractPdfTextPosition(pdfBytes, /Année scolaire: 2026-2027/),
+      class: extractPdfTextPosition(pdfBytes, /Classe:/),
+      className: extractPdfTextPosition(pdfBytes, /CLASSXYZ/),
+      effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 10/),
+      direction: extractPdfTextPosition(pdfBytes, /DIRECTION REGIONALE/),
+      districtFirst: extractPdfTextPosition(pdfBytes, /INSPECTION/),
+      districtSecond: extractPdfTextPosition(pdfBytes, /GOLFE-EST/),
+    };
+    const page = (await PDFDocument.load(pdfBytes)).getPage(0);
+    const pageWidth = page.getWidth();
+    const outerMargin = 22;
+    const metricsPdf = await PDFDocument.create();
+    const fontBold = await loadPdfGeneratorBoldFont(metricsPdf);
+    const rightBlock = [
+      { position: positions.republic!, width: fontBold.widthOfTextAtSize('REPUBLIQUE TOGOLAISE', 9) },
+      { position: positions.separator!, width: fontBold.widthOfTextAtSize('-----------------', 9) },
+      { position: positions.motto!, width: fontBold.widthOfTextAtSize("Ton avenir, c'est Aujourd'hui", 8) },
+      { position: positions.schoolYear!, width: fontBold.widthOfTextAtSize('Année scolaire: 2026-2027', 11) },
+      {
+        position: positions.class!,
+        width: fontBold.widthOfTextAtSize('Classe:', 11) + fontBold.widthOfTextAtSize('CLASSXYZ', 11),
+      },
+      { position: positions.effectif!, width: fontBold.widthOfTextAtSize('EFFECTIF : 10', 11) },
+    ];
+    const rightEdge = pageWidth - outerMargin;
+    const blockCenterRightEdge = pageWidth / 2
+      + (pageWidth - 2 * (16 + 178 + 8)) / 2;
+    const rightBlockLeftEdge = Math.min(...rightBlock.map(({ position }) => position.x));
+    const leftBlockRightEdge = Math.max(
+      22 + fontBold.widthOfTextAtSize('DIRECTION REGIONALE DE L EDUCATION', 8),
+      22 + fontBold.widthOfTextAtSize("INSPECTION DE L'ENSEIGNEMENT", 8),
+      22 + fontBold.widthOfTextAtSize('GENERAL SECONDAIRE/GOLFE-EST', 8),
+    );
+
+    expect(Object.values(positions).every((position) => position !== null)).toBe(true);
+    expect(positions.direction!.x).toBeCloseTo(outerMargin, 2);
+    expect(positions.districtFirst!.x).toBeCloseTo(outerMargin, 2);
+    expect(positions.districtSecond!.x).toBeCloseTo(outerMargin, 2);
+    expect(positions.schoolYear!.y).toBeCloseTo(767.89, 1);
+    expect(positions.class!.y).toBeCloseTo(751.89, 1);
+    expect(positions.effectif!.y).toBeCloseTo(positions.class!.y - 12, 2);
+    expect(rightEdge).toBeCloseTo(pageWidth - outerMargin, 10);
+    expect(positions.direction!.x).toBeCloseTo(pageWidth - rightEdge, 10);
+    expect(positions.className!.x).toBeCloseTo(
+      positions.class!.x + fontBold.widthOfTextAtSize('Classe:', 11),
+      2,
+    );
+    rightBlock.forEach(({ position, width }) => {
+      expect(position.x + width).toBeCloseTo(rightEdge, 2);
+    });
+    expect(leftBlockRightEdge).toBeLessThan(blockCenterRightEdge);
+    expect(blockCenterRightEdge).toBeLessThan(rightBlockLeftEdge);
+  });
+
+  it('descend le libellé de 5 points supplémentaires, à 20 points sous la deuxième ligne de la direction régionale', async () => {
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      schoolYearName: '2026-2027',
+      school: {
+        ...snapshotData.school,
+        ministryName: null,
+        educationDirection: 'DIRECTION REGIONALE | DE L EDUCATION',
+      },
+    });
+    const schoolYear = extractPdfTextPosition(pdfBytes, /Année scolaire: 2026-2027/);
+    const firstDirectionLine = extractPdfTextPosition(pdfBytes, /DIRECTION REGIONALE/);
+    const secondDirectionLine = extractPdfTextPosition(pdfBytes, /DE L EDUCATION/);
+
+    expect(schoolYear).not.toBeNull();
+    expect(firstDirectionLine).not.toBeNull();
+    expect(secondDirectionLine).not.toBeNull();
+    expect(firstDirectionLine!.y).toBeCloseTo(807.89, 1);
+    expect(secondDirectionLine!.y).toBeCloseTo(787.89, 1);
+    expect(schoolYear!.y).toBeCloseTo(secondDirectionLine!.y - 15 - 5, 2);
+    expect(schoolYear!.y).not.toBeCloseTo(firstDirectionLine!.y, 2);
+    expect(schoolYear!.fontSize).toBe(11);
   });
 
   it('translate uniformément le corps, le tableau et le pied de page de 10 points sans toucher à la structure', async () => {
@@ -918,7 +1064,7 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(BULLETIN_BODY_VERTICAL_OFFSET).toBe(10);
     expect(positions.title?.y).toBeCloseTo(693.99, 1);
     expect(positions.title?.fontSize).toBe(14);
-    expect(positions.effectif?.y).toBeCloseTo(727.94, 1);
+    expect(positions.effectif?.y).toBeCloseTo(739.89, 1);
     expect(positions.student?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(636.89, 1);
     expect(positions.tableHeader?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(601.89, 1);
     expect(positions.footer?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(28, 1);
