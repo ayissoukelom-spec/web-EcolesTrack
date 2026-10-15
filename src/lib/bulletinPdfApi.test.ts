@@ -914,7 +914,11 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
   });
 
   it('aligne à gauche les lignes du bloc Ministère / Direction et conserve la disposition verticale Classe / District', async () => {
-    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const pdfBytes = await createBulletinPdfDocument({
+      ...snapshotData,
+      studentName: 'SOLLY Kodzo Cyrille',
+      studentMatricule: '00055Y',
+    });
     const positions = {
       ministry: extractPdfTextPosition(pdfBytes, /MINISTERE/),
       direction: extractPdfTextPosition(pdfBytes, /DIRECTION/i),
@@ -926,7 +930,8 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       class: extractPdfTextPosition(pdfBytes, /Classe:/),
       effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 42/),
       district: extractPdfTextPosition(pdfBytes, /CLS/),
-      student: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS DE L'ELEVE/),
+      studentIdentity: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS : SOLLY Kodzo Cyrille/),
+      studentMatricule: extractPdfTextPosition(pdfBytes, /N° Mle : 00055Y/),
       tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
     };
 
@@ -944,12 +949,34 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.effectif?.y).toBeCloseTo(positions.class!.y - 12, 2);
     expect(positions.class?.fontSize).toBe(11);
     expect(positions.effectif?.fontSize).toBe(11);
-    expect(positions.student?.y).toBeCloseTo(646.89, 1);
+    expect(positions.studentIdentity?.x).toBeCloseTo(28, 2);
+    expect(positions.studentIdentity?.y).toBeCloseTo(646.89, 1);
+    expect(positions.studentMatricule?.x).toBeCloseTo(positions.studentIdentity!.x, 2);
+    expect(positions.studentMatricule?.y).toBeCloseTo(positions.studentIdentity!.y - 16, 2);
+    expect(positions.studentIdentity?.fontSize).toBe(13);
+    expect(positions.studentMatricule?.fontSize).toBe(13);
     expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
     expect(positions.schoolName!.y).toBeGreaterThan(positions.coordinates!.y);
     expect(positions.coordinates!.y).toBeGreaterThan(positions.email!.y);
     expect(positions.schoolYear!.y - positions.class!.y).toBeCloseTo(16, 1);
-    expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
+    expect(positions.class!.y - positions.studentIdentity!.y).toBeGreaterThanOrEqual(12);
+  });
+
+  it('ajuste uniquement la taille de la ligne identité si un nom long risque de chevaucher le statut', async () => {
+    const studentName = 'SOLLY Kodzo Cyrille '.repeat(6).trim();
+    const pdfBytes = await createBulletinPdfDocument({ ...snapshotData, studentName });
+    const identity = extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS : SOLLY Kodzo Cyrille/);
+    const status = extractPdfTextPosition(pdfBytes, /STATUT :/);
+    const metricsPdf = await PDFDocument.create();
+    const fontBold = await loadPdfGeneratorBoldFont(metricsPdf);
+    const identityText = `NOM ET PRENOMS : ${studentName}`;
+
+    expect(identity).not.toBeNull();
+    expect(status).not.toBeNull();
+    expect(identity!.y).toBeCloseTo(646.89, 1);
+    expect(identity!.fontSize).toBeLessThan(13);
+    expect(identity!.x + fontBold.widthOfTextAtSize(identityText, identity!.fontSize!)).toBeLessThan(status!.x);
+    expect(status!.x + fontBold.widthOfTextAtSize('STATUT :', 13)).toBeLessThanOrEqual(595.28 - 22);
   });
 
   it('aligne le bloc droit sur une marge symétrique et vérifie les lignes du bloc gauche sans chevauchement', async () => {
@@ -1053,7 +1080,7 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     const positions = {
       title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
       effectif: extractPdfTextPosition(pdfBytes, /EFFECTIF : 42/),
-      student: extractPdfTextPosition(pdfBytes, /NOM ET PRENOMS DE L'ELEVE/),
+      student: extractPdfTextPosition(pdfBytes, /Alice Dupont/),
       tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
       footer: extractPdfTextPosition(pdfBytes, /Page 1\/1/),
     };
@@ -1070,7 +1097,7 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.footer?.y! - BULLETIN_BODY_VERTICAL_OFFSET).toBeCloseTo(28, 1);
     expect(streams).toContain('1 0 0 1 0 15.361999999999966 cm');
     expect(streams.indexOf('EFFECTIF : 42')).toBeLessThan(streams.indexOf('1 0 0 1 0 15.361999999999966 cm'));
-    expect(streams.indexOf('1 0 0 1 0 15.361999999999966 cm')).toBeLessThan(streams.indexOf("NOM ET PRENOMS DE L'ELEVE"));
+    expect(streams.indexOf('1 0 0 1 0 15.361999999999966 cm')).toBeLessThan(streams.indexOf('Alice Dupont'));
   });
 
   it('limite les matières longues à deux lignes et les garde dans la largeur de la cellule', async () => {
@@ -1579,7 +1606,7 @@ describe('bulletin PDF API', () => {
         /MINISTERE/,
         /REPUBLIQUE TOGOLAISE/,
         /BULLETIN DE NOTES DU Trimestre 1/,
-        /NOM ET PRENOMS DE L'ELEVE/,
+        /Alice Dupont/,
         /Matières/,
         /Page 1\/1/,
       ]) {
@@ -2022,9 +2049,9 @@ describe('bulletin PDF API', () => {
     expect(text).toContain('BULLETIN DE NOTES DU Trimestre 1');
     expect(text).toContain('Classe:');
     expect(text).toContain('EFFECTIF : 42');
-    expect(normalizePdfTextForAssertion(text)).toContain(normalizePdfTextForAssertion("NOM ET PRENOMS DE L'ELEVE :"));
-    expect(text).toContain('Alice Dupont');
-    expect(text).toContain('N° Mle : 00001N');
+    expect(normalizePdfTextForAssertion(text)).toContain('NOM ET PRENOMS : Alice Dupont');
+    expect(normalizePdfTextForAssertion(text)).not.toContain(normalizePdfTextForAssertion("NOM ET PRENOMS DE L'ELEVE"));
+    expect(normalizePdfTextForAssertion(text)).toContain('N° Mle : 00001N');
     expect(text).toContain('STATUT :');
     expect(text).toContain('SEXE :');
     expect(text).toContain('Matières');

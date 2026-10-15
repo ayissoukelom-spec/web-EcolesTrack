@@ -2594,21 +2594,15 @@ export const createBulletinPdfDocument = async (
     concatTransformationMatrix(1, 0, 0, 1, 0, -BULLETIN_BODY_VERTICAL_OFFSET + contentVerticalShift),
   );
   const studentBlockY = cursorY + 12;
-  const studentLabel = "NOM ET PRENOMS DE L'ELEVE :";
   const studentName = sanitizePdfText(data.studentName);
   const studentLabelSize = 8;
   const studentNameSize = 10.5;
   const studentGap = 4;
-  const studentLabelWidth = fontBold.widthOfTextAtSize(studentLabel, 13);
-  const studentNameWidth = fontBold.widthOfTextAtSize(studentName, studentNameSize);
-  const studentNameX = tableX + 12 + studentLabelWidth + studentGap;
-  const studentBlockCenterX = (tableX + 12 + studentNameX + studentNameWidth) / 2;
-  drawText(page, studentLabel, tableX + 12, studentBlockY - 51 - studentHeaderOffsetY, 13, text, fontBold);
-  drawText(page, studentName, studentNameX, studentBlockY - 51 - studentHeaderOffsetY, 13, text, fontBold);
+  const studentIdentityText = `NOM ET PRENOMS : ${studentName}`;
+  const studentNameX = tableX + 12;
   if (data.studentMatricule?.trim()) {
     const matriculeText = `N° Mle : ${sanitizePdfTextPreservingAccents(data.studentMatricule)}`;
-    const matriculeWidth = fontRegular.widthOfTextAtSize(matriculeText, studentLabelSize);
-    drawText(page, matriculeText, studentBlockCenterX - matriculeWidth / 2, studentBlockY - 67 - studentHeaderOffsetY, 13, text, fontBold);
+    drawText(page, matriculeText, studentNameX, studentBlockY - 67 - studentHeaderOffsetY, 13, text, fontBold);
   }
   const pdfStatus = formatStudentStatusForPdf(data.studentStatus);
   const statusValue = pdfStatus ? sanitizePdfText(pdfStatus) : null;
@@ -2618,6 +2612,20 @@ export const createBulletinPdfDocument = async (
     statusValue ? { label: 'STATUT :', value: statusValue } : null,
     genderValue ? { label: 'SEXE :', value: genderValue } : null,
   ].filter((block): block is { label: string; value: string } => block !== null);
+  const firstRightBlock = rightBlocks[0];
+  const firstRightBlockWidth = firstRightBlock
+    ? fontBold.widthOfTextAtSize(firstRightBlock.label, 13)
+      + studentGap
+      + fontBold.widthOfTextAtSize(firstRightBlock.value, 13)
+    : 0;
+  const studentIdentityMaxWidth = rightEdge - studentNameX - firstRightBlockWidth - (firstRightBlock ? 12 : 0);
+  const studentIdentityWidthAtDefaultSize = fontBold.widthOfTextAtSize(studentIdentityText, 13);
+  const studentIdentityFontSize = Math.min(
+    13,
+    (studentIdentityMaxWidth / studentIdentityWidthAtDefaultSize) * 13,
+  );
+  const studentNameWidth = fontBold.widthOfTextAtSize(studentIdentityText, studentIdentityFontSize);
+  drawText(page, studentIdentityText, studentNameX, studentBlockY - 51 - studentHeaderOffsetY, studentIdentityFontSize, text, fontBold);
   rightBlocks.forEach((block, index) => {
     const isStatusBlock = block.label === 'STATUT :';
     const isGenderBlock = block.label === 'SEXE :';
