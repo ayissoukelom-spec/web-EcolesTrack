@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { inflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 import {
   registerBulletinPdfRoute,
   createBulletinPdfDocument,
@@ -1212,6 +1212,39 @@ const withStoredLogo = async (extension: string, content: string, callback: (log
 const testPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 const testJpegBase64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/AP/EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8Bf//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8Bf//Z';
 
+const createPngBase64 = (width: number, height: number): string => {
+  const crc32 = (value: Buffer): number => {
+    let crc = 0xffffffff;
+    for (const byte of value) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const typeBytes = Buffer.from(type);
+    const content = Buffer.concat([typeBytes, data]);
+    const length = Buffer.alloc(4);
+    const checksum = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    checksum.writeUInt32BE(crc32(content));
+    return Buffer.concat([length, content, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const scanlines = Buffer.alloc(height * (width * 4 + 1), 255);
+  for (let row = 0; row < height; row += 1) scanlines[row * (width * 4 + 1)] = 0;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(scanlines)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]).toString('base64');
+};
+
 const createApp = (
   provider: BulletinPdfDataProvider,
   pdfGenerator?: (data: BulletinPdfData) => Promise<Uint8Array>,
@@ -1362,7 +1395,7 @@ describe('bulletin PDF API', () => {
   it.each([
     ['png', testPngBase64],
     ['jpeg', testJpegBase64],
-  ])('remonte le logo %s sans changer sa taille ni les autres éléments du PDF', async (extension, imageContent) => {
+  ])('adapte le logo %s à l espace libre sans déplacer les autres éléments du PDF', async (extension, imageContent) => {
     await withStoredLogo(extension, imageContent, async (logoPath) => {
       const pdfWithLogo = await createBulletinPdfDocument({
         ...snapshotData,
@@ -1377,28 +1410,28 @@ describe('bulletin PDF API', () => {
       const pdfWithoutLogoDocument = await PDFDocument.load(pdfWithoutLogo);
       const withLogoPage = pdfWithLogoDocument.getPage(0);
       const withoutLogoPage = pdfWithoutLogoDocument.getPage(0);
+      const schoolName = extractPdfTextPosition(pdfWithLogo, /COLLEGE LE SAVOIR/);
+      const coordinates = extractPdfTextPosition(pdfWithLogo, /BP : BP 12/);
+      const email = extractPdfTextPosition(pdfWithLogo, /Email : contact@lessavoir\.test/);
 
       expect(extractPdfImageDrawTransforms(pdfWithLogo)).toHaveLength(1);
-      expect(logoTransform.x).toBeCloseTo(246.64, 2);
-      expect(logoTransform.width).toBeCloseTo(102, 2);
-      expect(logoTransform.height).toBeCloseTo(102, 2);
+      expect(logoTransform.width / logoTransform.height).toBeCloseTo(1, 6);
+      expect(logoTransform.x).toBeGreaterThanOrEqual(202);
+      expect(logoTransform.x + logoTransform.width).toBeLessThanOrEqual(withLogoPage.getWidth() - 202);
       expect(logoTransform.y).toBeCloseTo(703.452, 2);
-
-      const innerFrame = {
-        left: 16.6,
-        right: 578.68,
-        top: 831.29,
-        bottom: 653.49,
-      };
-      expect(logoTransform.x).toBeGreaterThanOrEqual(innerFrame.left);
-      expect(logoTransform.x + logoTransform.width).toBeLessThanOrEqual(innerFrame.right);
-      expect(logoTransform.y).toBeGreaterThanOrEqual(innerFrame.bottom);
-      expect(logoTransform.y + logoTransform.height).toBeLessThan(innerFrame.top);
-      expect(innerFrame.top - (logoTransform.y + logoTransform.height)).toBeCloseTo(25.838, 2);
+      expect(logoTransform.y + logoTransform.height).toBeLessThan(email!.y - 2);
+      expect(schoolName?.y).toBeCloseTo(807.89, 1);
+      expect(coordinates?.y).toBeCloseTo(800.22, 1);
+      expect(email?.y).toBeCloseTo(793.92, 1);
 
       expect(withLogoPage.getWidth()).toBe(withoutLogoPage.getWidth());
       expect(withLogoPage.getHeight()).toBe(withoutLogoPage.getHeight());
       for (const text of [
+        /COLLEGE LE SAVOIR/,
+        /BP : BP 12/,
+        /Email : contact@lessavoir\.test/,
+        /MINISTERE/,
+        /REPUBLIQUE TOGOLAISE/,
         /BULLETIN DE NOTES DU Trimestre 1/,
         /NOM ET PRENOMS DE L'ELEVE/,
         /Matières/,
@@ -1409,7 +1442,7 @@ describe('bulletin PDF API', () => {
     });
   });
 
-  it('descend le bloc institutionnel de 15 points sans déplacer le logo', async () => {
+  it('préserve l ancrage du bloc et évite son chevauchement avec le logo adapté', async () => {
     await withStoredLogo('png', testPngBase64, async (logoPath) => {
       const pdfBytes = await createBulletinPdfDocument({
         ...snapshotData,
@@ -1434,7 +1467,6 @@ describe('bulletin PDF API', () => {
       const [logoTransform] = extractPdfImageDrawTransforms(pdfBytes);
       const page = (await PDFDocument.load(pdfBytes)).getPage(0);
       const title = extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/);
-      const logoTop = logoTransform.y + logoTransform.height;
       const innerFrameTop = 831.29;
 
       expect(firstSchoolNameLine).not.toBeNull();
@@ -1455,14 +1487,110 @@ describe('bulletin PDF API', () => {
       expect(secondSchoolNameLine!.y).toBeGreaterThan(coordinatesLine!.y);
       expect(firstSchoolNameLine!.y - secondSchoolNameLine!.y).toBeCloseTo(12.5, 1);
       expect(secondSchoolNameLine!.y).toBeGreaterThan(coordinatesLine!.y);
-      expect(coordinatesLine!.y).toBeGreaterThan(logoTransform.y);
-      expect(coordinatesLine!.y + 4.78).toBeLessThan(logoTop);
+      expect(logoTransform.y + logoTransform.height).toBeLessThan(emailLine!.y - 2);
+      expect(logoTransform.y).toBeCloseTo(703.452, 2);
       expect(firstSchoolNameLine!.y + 7.5).toBeLessThan(innerFrameTop);
       expect(coordinatesLine!.y).toBeGreaterThan(title!.y);
       expect(logoTransform.x + logoTransform.width / 2).toBeCloseTo(page.getWidth() / 2, 2);
-      expect(logoTransform.width).toBeCloseTo(102, 2);
-      expect(logoTransform.height).toBeCloseTo(102, 2);
+      expect(logoTransform.width / logoTransform.height).toBeCloseTo(1, 6);
     });
+  });
+
+  it('préserve le ratio du logo et le réduit selon la hauteur réelle du bloc institutionnel', async () => {
+    const scenarios = [
+      { label: 'carré', width: 80, height: 80, school: {} },
+      { label: 'paysage', width: 160, height: 80, school: {} },
+      { label: 'portrait', width: 80, height: 160, school: {} },
+      { label: 'grande image', width: 800, height: 800, school: {} },
+      { label: 'petite image', width: 8, height: 8, school: {} },
+      {
+        label: 'nom long',
+        width: 80,
+        height: 80,
+        school: {
+          name: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+          officialName: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+        },
+      },
+      {
+        label: 'coordonnées sur plusieurs lignes',
+        width: 80,
+        height: 80,
+        school: { postalBox: Array(700).fill('BP').join(' ') },
+      },
+    ];
+    const omissionWarning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let shortNameLogoHeight = 0;
+
+    try {
+      for (const scenario of scenarios) {
+        await withStoredLogo('png', createPngBase64(scenario.width, scenario.height), async (logoPath) => {
+          const school = { ...snapshotData.school, ...scenario.school, logoPath };
+          const pdfWithLogo = await createBulletinPdfDocument({ ...snapshotData, school });
+          const pdfWithoutLogo = await createBulletinPdfDocument({
+            ...snapshotData,
+            school: { ...school, logoPath: null },
+          });
+          const [logo] = extractPdfImageDrawTransforms(pdfWithLogo);
+          const page = (await PDFDocument.load(pdfWithLogo)).getPage(0);
+          const firstNameLine = extractPdfTextPosition(pdfWithLogo, /COLLEGE/);
+          const coordinates = extractPdfTextPosition(pdfWithLogo, /BP : BP/);
+          const email = extractPdfTextPosition(pdfWithLogo, /Email : contact@lessavoir\.test/);
+          const title = extractPdfTextPosition(pdfWithLogo, /BULLETIN DE NOTES DU Trimestre 1/);
+          const ministry = extractPdfTextPosition(pdfWithLogo, /MINISTERE/);
+          const republic = extractPdfTextPosition(pdfWithLogo, /REPUBLIQUE TOGOLAISE/);
+
+          expect(firstNameLine, scenario.label).not.toBeNull();
+          expect(email, scenario.label).not.toBeNull();
+          expect(title, scenario.label).not.toBeNull();
+          expect(ministry, scenario.label).not.toBeNull();
+          expect(republic, scenario.label).not.toBeNull();
+          expect(firstNameLine!.y, scenario.label).toBeCloseTo(807.89, 1);
+          expect(firstNameLine!.y, scenario.label).toBeCloseTo(ministry!.y, 2);
+          expect(firstNameLine!.y, scenario.label).toBeCloseTo(republic!.y, 2);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /COLLEGE/)).toEqual(firstNameLine);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /BP : BP/)).toEqual(coordinates);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /Email : contact@lessavoir\.test/)).toEqual(email);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /MINISTERE/)).toEqual(ministry);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /REPUBLIQUE TOGOLAISE/)).toEqual(republic);
+          expect(extractPdfTextPosition(pdfWithoutLogo, /BULLETIN DE NOTES DU Trimestre 1/)).toEqual(title);
+
+          if (scenario.label === 'coordonnées sur plusieurs lignes') {
+            expect(logo, scenario.label).toBeUndefined();
+            expect((extractPdfText(pdfWithLogo).match(/\bBP\b/g) ?? []).length).toBeGreaterThan(100);
+            expect(omissionWarning).toHaveBeenCalledWith(
+              expect.stringContaining('no non-overlapping header space'),
+              expect.any(Object),
+            );
+            return;
+          }
+
+          expect(logo, scenario.label).toBeDefined();
+          expect(logo.width / logo.height, scenario.label).toBeCloseTo(scenario.width / scenario.height, 5);
+          expect(logo.width, scenario.label).toBeLessThanOrEqual(191.28);
+          expect(logo.height, scenario.label).toBeLessThanOrEqual(102);
+          expect(logo.x, scenario.label).toBeGreaterThanOrEqual(202);
+          expect(logo.x + logo.width, scenario.label).toBeLessThanOrEqual(page.getWidth() - 202);
+          expect(logo.y, scenario.label).toBeCloseTo(703.452, 2);
+          expect(logo.y + logo.height, scenario.label).toBeLessThan(email!.y - 2);
+          if (scenario.label === 'carré') {
+            shortNameLogoHeight = logo.height;
+            expect(logo.height, scenario.label).toBeCloseTo(86.951, 2);
+            expect(logo.height, scenario.label).toBeGreaterThanOrEqual(102 * 0.85);
+          }
+          if (scenario.label === 'nom long') {
+            expect(logo.height, scenario.label).toBeLessThan(shortNameLogoHeight);
+          }
+
+          if (coordinates) {
+            expect(coordinates.y, scenario.label).toBeLessThan(firstNameLine!.y);
+            expect(email!.y, scenario.label).toBeLessThan(coordinates.y);
+          }
+        });
+      }
+    } finally {
+      omissionWarning.mockRestore();
+    }
   });
 
   it('conserve les positions PDF du bloc institutionnel quel que soit le chargement du logo', async () => {
