@@ -596,6 +596,8 @@ const hexToRgb = (hexColor: string) => {
   return rgb(r, g, b);
 };
 
+const bulletinTitleFillColor = hexToRgb('#d1d5db');
+
 const toDateLabel = (iso: string | null): string => {
   if (!iso) return new Date().toLocaleDateString('fr-FR');
   const date = new Date(iso);
@@ -2454,8 +2456,10 @@ export const createBulletinPdfDocument = async (
     const republicTextWidth = fontBold.widthOfTextAtSize(republicText, 9);
     const republicMarker = '-----------------';
     const republicMarkerWidth = fontBold.widthOfTextAtSize(republicMarker, 9);
-    drawText(page, republicText, rightBlockRightX - republicTextWidth, height - 34, 9, text, fontBold);
-    drawText(page, republicMarker, rightBlockRightX - republicMarkerWidth, height - 47, 9, text, fontBold);
+    const republicTextX = rightBlockRightX - republicTextWidth;
+    const republicMarkerX = republicTextX + (republicTextWidth - republicMarkerWidth) / 2;
+    drawText(page, republicText, republicTextX, height - 34, 9, text, fontBold);
+    drawText(page, republicMarker, republicMarkerX, height - 47, 9, text, fontBold);
     const mottoText = school.motto?.trim() || 'Travail-Liberté-Patrie';
     const mottoWidth = fontBold.widthOfTextAtSize(sanitizePdfText(mottoText), 8);
     const mottoX = rightBlockRightX - mottoWidth;
@@ -2472,7 +2476,7 @@ export const createBulletinPdfDocument = async (
     const headerHeight = 28;
     const headerBottomY = y - headerHeight + 4;
     const headerOuterOverlap = tableBorderWidth / 2;
-    page.drawRectangle({ x: tableX, y: headerBottomY, width: tableWidth, height: headerHeight - 4, borderColor: tableBorder, borderWidth: tableBorderWidth });
+    page.drawRectangle({ x: tableX, y: headerBottomY, width: tableWidth, height: headerHeight - 4, color: bulletinTitleFillColor, borderColor: tableBorder, borderWidth: tableBorderWidth });
     page.drawLine({ start: { x: tableX, y: y + headerOuterOverlap }, end: { x: tableX, y: headerBottomY - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
     page.drawLine({ start: { x: tableX + tableWidth, y: y + headerOuterOverlap }, end: { x: tableX + tableWidth, y: headerBottomY - headerOuterOverlap }, color: tableBorder, thickness: tableBorderWidth });
     let x = tableX;
@@ -2552,7 +2556,7 @@ export const createBulletinPdfDocument = async (
     {
       x: titleBoxX,
       y: titleBoxY,
-      color: hexToRgb('#d1d5db'),
+      color: bulletinTitleFillColor,
       borderColor: hexToRgb('#000000'),
       borderWidth: 1.2,
     },

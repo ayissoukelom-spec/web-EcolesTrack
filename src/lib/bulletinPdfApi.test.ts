@@ -1012,7 +1012,6 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     const fontBold = await loadPdfGeneratorBoldFont(metricsPdf);
     const rightBlock = [
       { position: positions.republic!, width: fontBold.widthOfTextAtSize('REPUBLIQUE TOGOLAISE', 9) },
-      { position: positions.separator!, width: fontBold.widthOfTextAtSize('-----------------', 9) },
       { position: positions.motto!, width: fontBold.widthOfTextAtSize("Ton avenir, c'est Aujourd'hui", 8) },
       { position: positions.schoolYear!, width: fontBold.widthOfTextAtSize('Année scolaire: 2026-2027', 11) },
       {
@@ -1047,8 +1046,44 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     rightBlock.forEach(({ position, width }) => {
       expect(position.x + width).toBeCloseTo(rightEdge, 2);
     });
+    const republicWidth = fontBold.widthOfTextAtSize('REPUBLIQUE TOGOLAISE', 9);
+    const separatorWidth = fontBold.widthOfTextAtSize('-----------------', 9);
+    expect(positions.separator!.x + separatorWidth / 2)
+      .toBeCloseTo(positions.republic!.x + republicWidth / 2, 2);
     expect(leftBlockRightEdge).toBeLessThan(blockCenterRightEdge);
     expect(blockCenterRightEdge).toBeLessThan(rightBlockLeftEdge);
+  });
+
+  it('applique le fond exact du titre à toute la première ligne d en-tête du tableau', async () => {
+    const pdfBytes = await createBulletinPdfDocument(snapshotData);
+    const pageWidth = (await PDFDocument.load(pdfBytes)).getPage(0).getWidth();
+    const expectedHeaderWidth = pageWidth - 32;
+    const hasMatchingHeaderFill = extractPdfContentStreams(pdfBytes).some((stream) => {
+      const fillColorPattern = /([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg\b/g;
+      let fillColorMatch: RegExpExecArray | null;
+
+      while ((fillColorMatch = fillColorPattern.exec(stream)) != null) {
+        const isTitleFillColor = Math.abs(Number(fillColorMatch[1]) - 209 / 255) < 0.000001
+          && Math.abs(Number(fillColorMatch[2]) - 213 / 255) < 0.000001
+          && Math.abs(Number(fillColorMatch[3]) - 219 / 255) < 0.000001;
+        if (!isTitleFillColor) continue;
+
+        const rectanglePath = /0 0 m\s+0 ([-\d.]+) l\s+([-\d.]+) \1 l\s+\2 0 l\s+h\s+B/.exec(
+          stream.slice(fillColorMatch.index),
+        );
+        if (
+          rectanglePath
+          && Math.abs(Number(rectanglePath[1]) - 24) < 0.01
+          && Math.abs(Number(rectanglePath[2]) - expectedHeaderWidth) < 0.01
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    expect(hasMatchingHeaderFill).toBe(true);
   });
 
   it('descend le libellé de 5 points supplémentaires, à 20 points sous la deuxième ligne de la direction régionale', async () => {
