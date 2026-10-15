@@ -3554,7 +3554,17 @@ export async function createApp() {
                   eq(schoolSubjects.subjectId, subjectId)
                 )
               ).limit(1);
-              if (existingSchoolSubject.length > 0) continue;
+              if (existingSchoolSubject.length > 0) {
+                if (existingSchoolSubject[0].status === 'rejected') {
+                  await db.update(schoolSubjects)
+                    .set({ status: 'approved', updatedAt: new Date() })
+                    .where(and(
+                      eq(schoolSubjects.schoolId, id),
+                      eq(schoolSubjects.subjectId, subjectId)
+                    ));
+                }
+                continue;
+              }
 
               await db.insert(schoolSubjects).values({
                 schoolId: id,

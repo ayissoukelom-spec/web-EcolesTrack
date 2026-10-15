@@ -26,6 +26,7 @@ const mockState = {
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null; cycleId?: number | null; cycleCode?: string | null }>,
   schoolClasses: [] as Array<{ id: number; schoolId: number; classId: number; status: string }>,
   schoolSubjects: [] as Array<{ id: number; schoolId: number; subjectId: number; status: string }>,
+  schoolSubjectUpdateCalls: [] as Array<{ schoolId: number; subjectId: number }>,
   schoolTerms: [] as Array<Record<string, any>>,
   cycles: [
     { id: 1, code: 'college', isActive: true },
@@ -178,6 +179,21 @@ const createBuilder = () => {
       if (builder.table === subjects || builder.table === schoolSubjects) {
         const sourceRows = builder.table === subjects ? mockState.subjects : mockState.schoolSubjects;
         const conditions = builder.conditions.flatMap((condition) => extractConditionPairs(condition));
+        if (builder.table === subjects && builder.joins.includes(schoolSubjects)) {
+          const targetSchoolId = conditions.find((entry) => entry.column === 'schoolId')?.value;
+          const rows = sourceRows.flatMap((subject: any) => {
+            const association = mockState.schoolSubjects.find((row) => (
+              row.schoolId === targetSchoolId && row.subjectId === subject.id
+            ));
+            if (subject.schoolId !== targetSchoolId && !association) return [];
+            return [{
+              ...subject,
+              schoolId: subject.schoolId ?? null,
+              status: association?.status ?? 'approved',
+            }];
+          });
+          return Promise.resolve(rows).then(resolve);
+        }
         const rows = sourceRows.filter((row) => conditions.every((entry) => row[entry.column as keyof typeof row] === entry.value));
         return Promise.resolve(rows).then(resolve);
       }
@@ -273,6 +289,21 @@ const mockDb = {
             const updated = { ...item, ...values };
             updatedRows.push(updated);
             return updated;
+          });
+          return {
+            then(resolve: (value: any) => void) { return Promise.resolve(updatedRows).then(resolve); },
+            returning: async () => updatedRows,
+          };
+        }
+        if (table === schoolSubjects) {
+          const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
+          const updatedRows: Array<{ id: number; schoolId: number; subjectId: number; status: string }> = [];
+          mockState.schoolSubjects = mockState.schoolSubjects.map((row) => {
+            const matches = pairs.every((entry) => row[entry.column as keyof typeof row] === entry.value);
+            if (!matches) return row;
+            updatedRows.push({ ...row, ...values });
+            mockState.schoolSubjectUpdateCalls.push({ schoolId: row.schoolId, subjectId: row.subjectId });
+            return { ...row, ...values };
           });
           return {
             then(resolve: (value: any) => void) { return Promise.resolve(updatedRows).then(resolve); },
@@ -437,6 +468,7 @@ describe('POST /api/schools', () => {
     mockState.classes = [];
     mockState.schoolClasses = [];
     mockState.schoolSubjects = [];
+    mockState.schoolSubjectUpdateCalls = [];
     mockState.schoolTerms = [];
     mockState.cycles = [
       { id: 1, code: 'college', isActive: true },
@@ -802,6 +834,56 @@ describe('POST /api/schools', () => {
 
     expect(mockState.schoolClasses.map((row) => row.classId).sort()).toEqual([10, 11, 12]);
     expect(mockState.schoolSubjects.map((row) => row.subjectId).sort()).toEqual([20, 21, 22]);
+  });
+
+  it('reactivates only explicitly reassigned rejected subjects and preserves other association statuses', async () => {
+    mockState.schools = [{ id: 1, name: 'École A', phone: '+228 90000001' }];
+    mockState.subjects = [
+      { id: 20, name: 'Mathématiques', schoolId: null },
+      { id: 21, name: 'Français', schoolId: null },
+      { id: 22, name: 'Sciences', schoolId: null },
+      { id: 23, name: 'Histoire', schoolId: null },
+      { id: 24, name: 'Latin', schoolId: null },
+    ];
+    mockState.schoolSubjects = [
+      { id: 1, schoolId: 1, subjectId: 20, status: 'rejected' },
+      { id: 2, schoolId: 1, subjectId: 21, status: 'approved' },
+      { id: 3, schoolId: 1, subjectId: 22, status: 'pending' },
+      { id: 4, schoolId: 1, subjectId: 24, status: 'rejected' },
+      { id: 5, schoolId: 2, subjectId: 20, status: 'rejected' },
+    ];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({
+        name: 'École A',
+        subjectNames: ['Mathématiques', 'Français', 'Sciences', 'Histoire'],
+      })
+      .expect(200);
+
+    const associationFor = (schoolId: number, subjectId: number) => (
+      mockState.schoolSubjects.find((row) => row.schoolId === schoolId && row.subjectId === subjectId)
+    );
+    expect(associationFor(1, 20)).toMatchObject({ id: 1, status: 'approved' });
+    expect(associationFor(1, 21)).toMatchObject({ id: 2, status: 'approved' });
+    expect(associationFor(1, 22)).toMatchObject({ id: 3, status: 'pending' });
+    expect(associationFor(1, 23)).toMatchObject({ status: 'approved' });
+    expect(associationFor(1, 24)).toMatchObject({ id: 4, status: 'rejected' });
+    expect(associationFor(2, 20)).toMatchObject({ id: 5, status: 'rejected' });
+    expect(mockState.schoolSubjectUpdateCalls).toEqual([{ schoolId: 1, subjectId: 20 }]);
+    expect(mockState.schoolSubjects.filter((row) => row.schoolId === 1 && row.subjectId === 20)).toHaveLength(1);
+    expect(mockState.schoolSubjects.filter((row) => row.schoolId === 1 && row.subjectId === 23)).toHaveLength(1);
+
+    mockState.users[0].role = 'school_admin';
+    mockState.users[0].schoolId = 1;
+    const subjectsResponse = await request(app).get('/api/subjects').expect(200);
+    expect(subjectsResponse.body.find((subject: any) => subject.id === 20)).toMatchObject({
+      schoolId: null,
+      status: 'approved',
+    });
+    expect(subjectsResponse.body.find((subject: any) => subject.id === 24)).toMatchObject({
+      status: 'rejected',
+    });
   });
 
   describe('school-term catalogue permissions', () => {

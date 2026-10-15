@@ -64,7 +64,8 @@ describe('SubjectsView', () => {
         subjectsList={[
           { id: 1, schoolId: null as any, name: 'Mathématiques', code: 'MATH', status: 'approved' },
           { id: 2, schoolId: null as any, name: 'Historique', code: 'HIST', status: 'pending' },
-          { id: 3, schoolId: null as any, name: 'Latin', code: 'LAT' },
+          { id: 3, schoolId: null as any, name: 'Latin', code: 'LAT', status: 'rejected' },
+          { id: 4, schoolId: null as any, name: 'Biologie', code: 'BIO' },
         ]}
         userRole="school_admin"
         schoolId={54}
@@ -78,6 +79,93 @@ describe('SubjectsView', () => {
     expect(screen.getByText('Mathématiques')).toBeDefined();
     expect(screen.getByText('Historique')).toBeDefined();
     expect(screen.queryByText('Latin')).toBeNull();
+    expect(screen.queryByText('Refusée')).toBeNull();
+    expect(screen.queryByText('Biologie')).toBeNull();
+  });
+
+  it('affiche une matière réactivée et masque toujours les matières refusées', () => {
+    const onApproveSubject = vi.fn();
+    const onRejectSubject = vi.fn();
+    const props = {
+      userRole: 'school_admin',
+      schoolId: 54,
+      schoolsList: [],
+      onAddSubject: vi.fn(),
+      onUpdateSubject: vi.fn(),
+      onDeleteSubject: vi.fn(),
+      onApproveSubject,
+      onRejectSubject,
+    };
+    const { rerender } = render(
+      <SubjectsView
+        {...props}
+        subjectsList={[
+          { id: 1, schoolId: null, name: 'Mathématiques', status: 'rejected' },
+          { id: 2, schoolId: null, name: 'Latin', status: 'rejected' },
+        ]}
+      />
+    );
+
+    expect(screen.queryByText('Mathématiques')).toBeNull();
+    expect(screen.queryByText('Latin')).toBeNull();
+
+    rerender(
+      <SubjectsView
+        {...props}
+        subjectsList={[
+          { id: 1, schoolId: null, name: 'Mathématiques', status: 'approved' },
+          { id: 2, schoolId: null, name: 'Latin', status: 'rejected' },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Mathématiques')).toBeDefined();
+    expect(screen.getByRole('button', { name: /approuver/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /refuser/i })).toBeDefined();
+    expect(screen.queryByText('Latin')).toBeNull();
+  });
+
+  it('retire une matière de la liste après son refus et la garde masquée après rechargement', () => {
+    const onRejectSubject = vi.fn();
+    const onDeleteSubject = vi.fn();
+    const subjects = [
+      { id: 1, schoolId: null as any, name: 'Mathématiques', status: 'approved' },
+      { id: 2, schoolId: null as any, name: 'Historique', status: 'pending' },
+      { id: 3, schoolId: null as any, name: 'Latin', status: 'pending' },
+    ];
+    const props = {
+      userRole: 'school_admin',
+      schoolId: 54,
+      schoolsList: [],
+      onAddSubject: vi.fn(),
+      onUpdateSubject: vi.fn(),
+      onDeleteSubject,
+      onRejectSubject,
+    };
+    const { rerender } = render(<SubjectsView {...props} subjectsList={subjects} />);
+
+    const latinRow = screen.getByText('Latin').closest('tr')!;
+    fireEvent.click(within(latinRow).getByRole('button', { name: /refuser/i }));
+
+    expect(onRejectSubject).toHaveBeenCalledWith(3);
+    expect(onDeleteSubject).not.toHaveBeenCalled();
+
+    const afterRejection = subjects.map((subject) => (
+      subject.id === 3 ? { ...subject, status: 'rejected' } : subject
+    ));
+
+    rerender(<SubjectsView {...props} subjectsList={afterRejection} />);
+
+    const tableAfterRejection = within(screen.getByRole('table'));
+    expect(tableAfterRejection.getByText('Mathématiques')).toBeDefined();
+    expect(tableAfterRejection.getByText('Historique')).toBeDefined();
+    expect(tableAfterRejection.queryByText('Latin')).toBeNull();
+    expect(onDeleteSubject).not.toHaveBeenCalled();
+
+    rerender(<SubjectsView {...props} subjectsList={afterRejection} />);
+    expect(within(screen.getByRole('table')).queryByText('Latin')).toBeNull();
+    expect(within(screen.getByRole('table')).getByText('Mathématiques')).toBeDefined();
+    expect(within(screen.getByRole('table')).getByText('Historique')).toBeDefined();
   });
 
   it('gère une matière globale approuvée sans type sans la faire disparaître', () => {
