@@ -876,9 +876,9 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
       tableHeader: extractPdfTextPosition(pdfBytes, /Matières/),
     };
 
-    expect(positions.schoolName?.y).toBeCloseTo(729.89, 1);
-    expect(positions.coordinates?.y).toBeCloseTo(712.89, 1);
-    expect(positions.email?.y).toBeCloseTo(703.89, 1);
+    expect(positions.schoolName?.y).toBeCloseTo(795.64, 1);
+    expect(positions.coordinates?.y).toBeCloseTo(787.97, 1);
+    expect(positions.email?.y).toBeCloseTo(781.67, 1);
     expect(positions.title?.y).toBeCloseTo(693.99, 1);
     expect(positions.title?.fontSize).toBe(14);
     expect(positions.schoolYear?.y).toBeCloseTo(743.89, 1);
@@ -889,8 +889,8 @@ describe('rendu normal des libellés d en-tête du bulletin PDF', () => {
     expect(positions.effectif?.fontSize).toBe(11);
     expect(positions.student?.y).toBeCloseTo(646.89, 1);
     expect(positions.tableHeader?.y).toBeCloseTo(611.89, 1);
-    expect(positions.schoolName!.y - positions.coordinates!.y).toBeGreaterThanOrEqual(12);
-    expect(positions.coordinates!.y - positions.email!.y).toBeGreaterThanOrEqual(8);
+    expect(positions.schoolName!.y - positions.coordinates!.y).toBeCloseTo(7.668, 2);
+    expect(positions.coordinates!.y - positions.email!.y).toBeCloseTo(6.3, 1);
     expect(positions.schoolYear!.y - positions.class!.y).toBeGreaterThanOrEqual(15);
     expect(positions.schoolYear!.y - positions.class!.y).toBeLessThanOrEqual(17);
     expect(positions.class!.y - positions.student!.y).toBeGreaterThanOrEqual(12);
@@ -1458,6 +1458,71 @@ describe('bulletin PDF API', () => {
       expect(logoTransform.width).toBeCloseTo(102, 2);
       expect(logoTransform.height).toBeCloseTo(102, 2);
     });
+  });
+
+  it('conserve les positions PDF du bloc institutionnel quel que soit le chargement du logo', async () => {
+    const schoolDetails = {
+      name: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+      officialName: 'COLLEGE EVANGELIQUE BAPTISTE DE KANGNIKOPE',
+      postalBox: '09 BP: 9034',
+      phone: '+228 22271112',
+      phone2: '90742847',
+      email: 'contact@lessavoir.test',
+    };
+    const generate = (logoPath: string | null) => createBulletinPdfDocument({
+      ...snapshotData,
+      school: { ...snapshotData.school, ...schoolDetails, logoPath },
+    });
+    const pdfs: Uint8Array[] = [];
+
+    await withStoredLogo('png', testPngBase64, async (logoPath) => {
+      pdfs.push(await generate(logoPath));
+    });
+    pdfs.push(await generate(null));
+    pdfs.push(await generate('school-logos/logo-introuvable.png'));
+    pdfs.push(await generate('school-logos/logo-invalide.gif'));
+    await withStoredLogo('png', Buffer.from('not a valid PNG image').toString('base64'), async (logoPath) => {
+      pdfs.push(await generate(logoPath));
+    });
+
+    const positions = pdfs.map((pdfBytes) => ({
+      firstSchoolNameLine: extractPdfTextPosition(pdfBytes, /COLLEGE EVANGELIQUE/),
+      secondSchoolNameLine: extractPdfTextPosition(pdfBytes, /BAPTISTE DE KANGNIKOPE/),
+      coordinates: extractPdfTextPosition(
+        pdfBytes,
+        /BP : 09 BP: 9034 Tél : \+228 22271112 \/ 90742847/,
+      ),
+      email: extractPdfTextPosition(pdfBytes, /Email : contact@lessavoir\.test/),
+      title: extractPdfTextPosition(pdfBytes, /BULLETIN DE NOTES DU Trimestre 1/),
+    }));
+    const expected = positions[0];
+
+    expect(expected.firstSchoolNameLine).not.toBeNull();
+    expect(expected.secondSchoolNameLine).not.toBeNull();
+    expect(expected.coordinates).not.toBeNull();
+    expect(expected.email).not.toBeNull();
+    expect(expected.title).not.toBeNull();
+    expect(expected.firstSchoolNameLine!.y).toBeCloseTo(808.14, 1);
+    expect(expected.secondSchoolNameLine!.y).toBeCloseTo(795.64, 1);
+    expect(expected.coordinates!.y).toBeCloseTo(787.97, 1);
+    expect(expected.email!.y).toBeCloseTo(781.67, 1);
+    expect(expected.title!.y).toBeCloseTo(693.99, 1);
+
+    for (const actual of positions.slice(1)) {
+      expect(actual.firstSchoolNameLine).toEqual(expected.firstSchoolNameLine);
+      expect(actual.secondSchoolNameLine).toEqual(expected.secondSchoolNameLine);
+      expect(actual.coordinates).toEqual(expected.coordinates);
+      expect(actual.email).toEqual(expected.email);
+      expect(actual.title).toEqual(expected.title);
+    }
+
+    const titleFrameTopY = 710.39;
+    if (expected.email!.y <= titleFrameTopY) {
+      throw new Error(
+        `Institutional email overlaps the bulletin title frame: email baseline y=${expected.email!.y}, frame top y=${titleFrameTopY}`,
+      );
+    }
+    expect(expected.email!.y).toBeGreaterThan(titleFrameTopY);
   });
 
   it('génère le PDF sans image lorsqu aucun logo établissement n est configuré', async () => {

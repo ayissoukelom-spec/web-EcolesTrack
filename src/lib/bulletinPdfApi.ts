@@ -2247,10 +2247,9 @@ export const createBulletinPdfDocument = async (
     const leftColumnCenter = margin + 89;
     const centerX = width / 2;
     const rightX = width - margin - 145;
-    let logoTopY: number | null = null;
-    let institutionBlockCenterX = leftColumnCenter - 6;
+    const institutionBlockCenterX = centerX;
     let institutionBlockMaxWidth = 166;
-    let institutionCoordinatesMaxWidth = 165;
+    const institutionCoordinatesMaxWidth = width - 2 * (margin + 178 + 8);
     page.drawCircle({ x: centerX, y: height - 70, size: 26, borderColor: lightBorder, borderWidth: 0.8 });
     if (logo) {
       const centralRectLeft = margin + 178 + 8;
@@ -2272,9 +2271,6 @@ export const createBulletinPdfDocument = async (
       );
 
       const logoDrawY = outerBoxBottom + 25.2;
-      logoTopY = logoDrawY + logoRender.drawHeight;
-      institutionBlockCenterX = logoZoneCenterX;
-      institutionCoordinatesMaxWidth = centralRectWidth;
       page.drawImage(logo, {
         x: logoRender.x,
         y: logoDrawY,
@@ -2347,36 +2343,27 @@ export const createBulletinPdfDocument = async (
     const institutionCoordinatesBounds = getVisualFontBounds(fontBoldItalic, institutionCoordinatesFontSize);
     const schoolNameBounds = getVisualFontBounds(fontBold, schoolNameFontSize);
     const schoolNameLineSpacing = schoolNameFontSize + 1.5;
-    const institutionVerticalOffset = logoTopY == null ? 0 : -15;
-    const institutionCoordinatesY = logoTopY == null
-      ? followingTextPositions.coordinatesY
-      : logoTopY + institutionCoordinatesBounds.descent + 1 + institutionVerticalOffset - 5;
-    const institutionSchoolNameY = logoTopY == null
-      ? followingTextPositions.schoolNameY
-      : institutionCoordinatesY
-        + institutionCoordinatesBounds.ascent
-        + 0.5
-        + schoolNameBounds.descent
-        + (schoolNameLines.length - 1) * schoolNameLineSpacing;
+    const institutionCoordinatesY = height - 53.92;
+    const institutionSchoolNameY = institutionCoordinatesY
+      + institutionCoordinatesBounds.ascent
+      + 0.5
+      + schoolNameBounds.descent
+      + (schoolNameLines.length - 1) * schoolNameLineSpacing;
     if (school.abbreviation) {
       districtLines.forEach((line) => drawText(page, line.text, line.x, line.y, districtLayout.fontSize, text, fontBold));
     }
-    if (logoTopY == null) {
-      drawCenteredWrappedText(page, schoolName, institutionBlockCenterX, institutionSchoolNameY, institutionBlockMaxWidth, schoolNameFontSize, text, fontBold, 2);
-    } else {
-      schoolNameLines.forEach((line, index) => {
-        const lineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(line), schoolNameFontSize);
-        drawText(
-          page,
-          line,
-          institutionBlockCenterX - lineWidth / 2,
-          institutionSchoolNameY - index * schoolNameLineSpacing,
-          schoolNameFontSize,
-          text,
-          fontBold,
-        );
-      });
-    }
+    schoolNameLines.forEach((line, index) => {
+      const lineWidth = fontBold.widthOfTextAtSize(sanitizePdfText(line), schoolNameFontSize);
+      drawText(
+        page,
+        line,
+        institutionBlockCenterX - lineWidth / 2,
+        institutionSchoolNameY - index * schoolNameLineSpacing,
+        schoolNameFontSize,
+        text,
+        fontBold,
+      );
+    });
     const postalAndPhone = [
       school.postalBox?.trim() ? `BP : ${school.postalBox.trim()}` : null,
       school.phone?.trim()
@@ -2395,13 +2382,10 @@ export const createBulletinPdfDocument = async (
       const emailBounds = resolveSchoolHeaderEmailBounds(margin);
       if (emailLine) {
         if (nonEmailLines.length > 0) {
-          const firstLineWidth = fontBoldItalic.widthOfTextAtSize(coordinateLines[0], 7);
-          const coordinatesCenterX = logoTopY == null ? emailBounds.left + firstLineWidth / 2 : institutionBlockCenterX;
-          const coordinatesWidth = logoTopY == null ? firstLineWidth : institutionCoordinatesMaxWidth;
-          drawCenteredWrappedText(page, coordinateLines[0], coordinatesCenterX, institutionCoordinatesY, coordinatesWidth, institutionCoordinatesFontSize, text, fontBoldItalic, 1);
+          drawCenteredWrappedText(page, coordinateLines[0], institutionBlockCenterX, institutionCoordinatesY, institutionCoordinatesMaxWidth, institutionCoordinatesFontSize, text, fontBoldItalic, 1);
         }
         const initialEmailWidth = fontBoldItalic.widthOfTextAtSize(emailLine, 7);
-        if (logoTopY != null && nonEmailLines.length > 0) {
+        if (nonEmailLines.length > 0) {
           const centeredEmailBounds = {
             left: institutionBlockCenterX - institutionCoordinatesMaxWidth / 2,
             right: institutionBlockCenterX + institutionCoordinatesMaxWidth / 2,
@@ -2424,10 +2408,7 @@ export const createBulletinPdfDocument = async (
         }
       } else {
         const line = coordinateLines[0];
-        const lineWidth = fontBoldItalic.widthOfTextAtSize(line, 7);
-        const coordinatesCenterX = logoTopY == null ? emailBounds.left + lineWidth / 2 : institutionBlockCenterX;
-        const coordinatesWidth = logoTopY == null ? lineWidth : institutionCoordinatesMaxWidth;
-        drawCenteredWrappedText(page, line, coordinatesCenterX, institutionCoordinatesY, coordinatesWidth, institutionCoordinatesFontSize, text, fontBoldItalic, 1);
+        drawCenteredWrappedText(page, line, institutionBlockCenterX, institutionCoordinatesY, institutionCoordinatesMaxWidth, institutionCoordinatesFontSize, text, fontBoldItalic, 1);
       }
     }
     const republicText = 'REPUBLIQUE TOGOLAISE';
