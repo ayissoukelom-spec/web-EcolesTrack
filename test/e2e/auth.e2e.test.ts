@@ -135,6 +135,7 @@ function createMockDb() {
     __failNextNotificationAttachmentInsert: false,
     __failNextParentInsert: false,
     __failNextParentMembershipInsert: false,
+    __failNextUsersUpdateError: null,
   };
 
   // Minimal mock that supports the select/insert/update/delete chains used
@@ -548,6 +549,16 @@ function createMockDb() {
       }
       if (/"students"\."parent_id"\s+IS\s+NULL/i.test(query.sql)) conditions.parentId = null;
     }
+    if (tableName === 'users' && rawCond) {
+      const query = new PgDialect().sqlToQuery(rawCond);
+      if (query.sql.includes('LOWER(BTRIM("users"."email"')) {
+        conditions.email = String(query.params[0] ?? '').trim().toLowerCase();
+        if (/"users"\."id"\s*<>/i.test(query.sql)) {
+          delete conditions.id;
+          conditions.excludedUserId = Number(query.params[query.params.length - 1]);
+        }
+      }
+    }
     if (!Object.keys(conditions).length && typeof cond === 'string') {
       const maybeUid = /"([a-z0-9\-]+)"/gi.exec(cond);
       if (maybeUid) conditions.uid = maybeUid[1];
@@ -565,7 +576,8 @@ function createMockDb() {
     }
     return rows.filter((row) => {
       if (conditions.uid !== undefined && row.uid !== conditions.uid) return false;
-      if (conditions.email !== undefined && String(row.email).toLowerCase() !== String(conditions.email).toLowerCase()) return false;
+      if (conditions.email !== undefined && String(row.email).trim().toLowerCase() !== String(conditions.email).toLowerCase()) return false;
+      if (conditions.excludedUserId !== undefined && Number(row.id) === conditions.excludedUserId) return false;
       if (conditions.phone !== undefined && row.phone !== conditions.phone) return false;
       if (conditions.id !== undefined) {
         if (Array.isArray(conditions.id)) {
@@ -1169,6 +1181,11 @@ function createMockDb() {
           const executeUpdate = async (cond: any) => {
             const conditions = extractConditions(cond);
             const tableName = resolveTableName(table);
+            if (tableName === 'users' && db.__failNextUsersUpdateError) {
+              const error = db.__failNextUsersUpdateError;
+              db.__failNextUsersUpdateError = null;
+              throw error;
+            }
             if (tableName === 'schoolSubjects') {
               const matchedRows = FIXTURES.schoolSubjects.filter((row: any) => Object.entries(conditions).every(([key, value]) => row[key] === value));
               matchedRows.forEach((row: any) => Object.assign(row, values));
@@ -1836,6 +1853,116 @@ describe('E2E security: auth & privilege checks', () => {
       lastName: 'DUPONT',
       firstNames: 'Jean',
     });
+  });
+
+  it('preserves a parent email when an admin update omits email', async () => {
+    const existingEmail = FIXTURES.users.find((user) => user.id === 6)!.email;
+    const response = await request(app)
+      .put('/api/admin/users/6')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ name: 'Parent Updated', role: 'parent', schoolId: 10 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 6)?.email).toBe(existingEmail);
+    expect(FIXTURES.auditEvents[FIXTURES.auditEvents.length - 1]?.description).not.toContain('email:');
+  });
+
+  it('normalizes a legacy whitespace-only parent email to null when email is omitted', async () => {
+    (FIXTURES.users.find((user) => user.id === 6) as any).email = ' \uFEFF\u00A0 ';
+
+    const response = await request(app)
+      .put('/api/admin/users/6')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ name: 'Parent Updated', role: 'parent', schoolId: 10 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 6)?.email).toBeNull();
+    expect(FIXTURES.auditEvents[FIXTURES.auditEvents.length - 1]?.description).toContain('email:');
+    expect(FIXTURES.auditEvents[FIXTURES.auditEvents.length - 1]?.description).toContain('→ NULL');
+  });
+
+  it('uses a valid existing email when changing a parent to a role that requires it', async () => {
+    const existingEmail = FIXTURES.users.find((user) => user.id === 6)!.email;
+    const response = await request(app)
+      .put('/api/admin/users/6')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ name: 'Parent Updated', role: 'teacher', schoolId: 10 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 6)).toMatchObject({
+      email: existingEmail,
+      role: 'teacher',
+    });
+    expect(FIXTURES.auditEvents[FIXTURES.auditEvents.length - 1]?.description).not.toContain('email:');
+  });
+
+  it('normalizes a provided blank parent email to null and records the effective value', async () => {
+    const response = await request(app)
+      .put('/api/admin/users/6')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ email: ' \uFEFF\u00A0 ', name: 'Parent', role: 'parent', schoolId: 10 });
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 6)?.email).toBeNull();
+    expect(FIXTURES.auditEvents[FIXTURES.auditEvents.length - 1]?.description).toContain('email: "parent@x.test" → NULL');
+  });
+
+  it.each([
+    { label: 'no email', email: null },
+    { label: 'whitespace-only email', email: ' \uFEFF\u00A0 ' },
+  ])('requires an email when a parent with $label changes to a role that requires it', async ({ email }) => {
+    (FIXTURES.users as any[]).push({ id: 20, uid: 'email-required-on-role-change', email, name: 'Parent Without Email', role: 'parent', schoolId: 10, isDeleted: false });
+
+    const response = await request(app)
+      .put('/api/admin/users/20')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ name: 'Parent Without Email', role: 'teacher', schoolId: 10 });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Missing required field: email');
+    expect(FIXTURES.users.find((user) => user.id === 20)?.role).toBe('parent');
+  });
+
+  it('rejects a normalized email duplicate across roles and schools during admin update', async () => {
+    FIXTURES.users.push(
+      { id: 20, uid: 'update-email-target', email: 'parent-old@x.test', name: 'Update Target', role: 'parent', schoolId: 10, isDeleted: false },
+      { id: 21, uid: 'global-email-owner', email: ' shared@x.test ', name: 'Other School User', role: 'teacher', schoolId: 20, isDeleted: false },
+    );
+
+    const response = await request(app)
+      .put('/api/admin/users/20')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ email: ' SHARED@X.TEST ', name: 'Update Target', role: 'parent', schoolId: 10 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('EMAIL_ALREADY_IN_USE');
+    expect(FIXTURES.users.find((user) => user.id === 20)?.email).toBe('parent-old@x.test');
+  });
+
+  it.each([
+    { label: 'direct', error: Object.assign(new Error('duplicate'), { code: '23505', constraint: 'users_email_normalized_unique_idx' }), expectedStatus: 409, expectedCode: 'EMAIL_ALREADY_IN_USE' },
+    { label: 'wrapped', error: Object.assign(new Error('wrapped duplicate'), { cause: Object.assign(new Error('duplicate'), { code: '23505', constraint: 'users_email_normalized_unique_idx' }) }), expectedStatus: 409, expectedCode: 'EMAIL_ALREADY_IN_USE' },
+    { label: 'uid', error: Object.assign(new Error('duplicate uid'), { code: '23505', constraint: 'users_uid_unique' }), expectedStatus: 500, expectedCode: undefined },
+    { label: 'phone', error: Object.assign(new Error('duplicate phone'), { code: '23505', constraint: 'users_phone_unique' }), expectedStatus: 409, expectedCode: 'PHONE_ALREADY_IN_USE' },
+  ])('maps a $label SQL unique violation during admin update correctly', async ({ error, expectedStatus, expectedCode }) => {
+    (mockDb.db as any).__failNextUsersUpdateError = error;
+
+    const response = await request(app)
+      .put('/api/admin/users/6')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .send({ email: 'parent@x.test', name: 'Parent', role: 'parent', schoolId: 10 });
+
+    expect(response.status).toBe(expectedStatus);
+    if (expectedCode) expect(response.body.code).toBe(expectedCode);
+    else expect(response.body).toEqual({ error: 'Internal server error' });
+    expect((mockDb.db as any).__failNextUsersUpdateError).toBeNull();
   });
 
   it('updates a teacher family name and returns the coherent name in the teacher list', async () => {
@@ -3356,20 +3483,30 @@ describe('E2E security: auth & privilege checks', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(0);
-    expect(res.body.errors[0]).toMatchObject({ row: 2, name: 'Duplicate Parent', email: 'duplicate@x.test', error: 'duplicate email in this school' });
+    expect(res.body.errors[0]).toMatchObject({
+      row: 2,
+      name: 'Duplicate Parent',
+      email: 'duplicate@x.test',
+      error: 'Cet email est déjà utilisé par un autre compte et ne peut pas être importé',
+    });
   });
 
   it('3o2. globally used email in another school is rejected before user insert', async () => {
-    FIXTURES.users.push({ id: 12, uid: 'other-school-parent-uid', email: 'global-parent@x.test', name: 'Other School Parent', role: 'parent', schoolId: 20, isDeleted: false });
+    FIXTURES.users.push({ id: 12, uid: 'other-school-teacher-uid', email: 'global-parent@x.test', name: 'Other School Teacher', role: 'teacher', schoolId: 20, isDeleted: false });
 
     const res = await request(app)
       .post('/api/parents/batch')
       .set('Authorization', 'Bearer token-school')
-      .send([{ name: 'Global Duplicate', email: 'global-parent@x.test', phonePrefix: '+228', phone: '90000004', parentType: 'pere' }]);
+      .send([{ name: 'Global Duplicate', email: ' Global-Parent@X.Test ', phonePrefix: '+228', phone: '90000004', parentType: 'pere' }]);
 
     expect(res.status).toBe(200);
     expect(res.body.insertedCount).toBe(0);
-    expect(res.body.errors[0]).toMatchObject({ row: 2, name: 'Global Duplicate', email: 'global-parent@x.test', error: 'Cet email est déjà utilisé et ne peut pas être importé dans cet établissement' });
+    expect(res.body.errors[0]).toMatchObject({
+      row: 2,
+      name: 'Global Duplicate',
+      email: 'global-parent@x.test',
+      error: 'Cet email est déjà utilisé par un autre compte et ne peut pas être importé',
+    });
     expect(FIXTURES.users.filter((user: any) => user.email === 'global-parent@x.test')).toHaveLength(1);
   });
 

@@ -265,19 +265,6 @@ export async function ensureUsersTableSchema() {
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id);`);
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;`);
     await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;`);
-    await db.execute(sql`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_unique;`);
-
-    const duplicateCheck = await db.execute(sql`SELECT 1 AS duplicate
-      FROM users
-      GROUP BY LOWER(email)
-      HAVING COUNT(*) > 1
-      LIMIT 1;`);
-
-    if (Array.isArray(duplicateCheck.rows) && duplicateCheck.rows.length > 0) {
-      console.warn('Skipping users.email UNIQUE constraint because duplicate emails already exist; new duplicates are blocked by application checks.');
-    } else {
-      await db.execute(sql`ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE (email);`);
-    }
   } catch (err: any) {
     console.error('Failed to ensure users table schema exists:', err?.message || err);
     throw err;

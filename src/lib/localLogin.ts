@@ -5,6 +5,7 @@ import { users, localAuths, userLoginEvents } from '../db/schema.ts';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { parents } from '../db/schema.ts';
 import { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
+import { normalizeEmail, normalizedEmailSql } from './emailUniqueness.ts';
 
 export { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
 
@@ -41,8 +42,10 @@ export async function handleLocalLogin(req: Request, res: Response) {
     const isEmail = identifier.includes('@');
     let userRecord: any;
     if (isEmail) {
-      const normalizedEmail = identifier.toLowerCase();
-      const usersFound = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
+      const normalizedEmail = normalizeEmail(identifier);
+      const usersFound = normalizedEmail
+        ? await db.select().from(users).where(eq(normalizedEmailSql(users.email), normalizedEmail))
+        : [];
       userRecord = usersFound[0];
     } else {
       const phoneValues = normalizeParentLoginPhone(identifier, phoneCountryCode);

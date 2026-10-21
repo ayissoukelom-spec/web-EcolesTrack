@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Request, Response } from 'express';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { verifyJwt } from './jwt.ts';
 
 const mockWhere = vi.fn();
@@ -127,6 +128,27 @@ describe('handleLocalLogin', () => {
     expect(res.status).not.toHaveBeenCalled();
     expect((res.json as any).mock.calls[0][0]).toMatchObject({ id: userRecord.id, role: 'parent', tokenType: 'access' });
     expect(mockInnerJoin).not.toHaveBeenCalled();
+  });
+
+  it('normalizes case and surrounding whitespace for email login lookup', async () => {
+    const password = 'NormalizedEmailSecret123!';
+    const salt = 'normalized-email-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = { id: 458, uid: 'teacher_458', email: 'user@example.com', name: 'User Example', role: 'teacher', schoolId: 99 };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { identifier: ' \uFEFF\u00A0USER@Example.COM\u3000 ', password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({ id: userRecord.id, role: 'teacher', tokenType: 'access' });
+    const lookup = new PgDialect().sqlToQuery(mockWhere.mock.calls[0][0]);
+    expect(lookup.sql).toContain('LOWER(BTRIM(');
+    expect(lookup.params).toEqual(['user@example.com']);
   });
 
   it.each([

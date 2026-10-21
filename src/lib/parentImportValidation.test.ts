@@ -40,6 +40,23 @@ describe('parentImportValidation', () => {
     const result = validateParentImportRow({ ...validRow, email: '' }, { requireSchoolId: true });
     expect(result.errors).toEqual([]);
     expect(result.normalized.email).toBe('');
+  });
+
+  it('normalizes parent email casing and JavaScript-trim whitespace consistently', () => {
+    const result = validateParentImportRow({
+      ...validRow,
+      email: '\uFEFF\u00A0Parent@Example.com\u3000',
+    }, { requireSchoolId: true });
+
+    expect(result.errors).toEqual([]);
+    expect(result.normalized.email).toBe('parent@example.com');
+
+    const blankResult = validateParentImportRow({
+      ...validRow,
+      email: '\u2009\t\r\n',
+    }, { requireSchoolId: true });
+    expect(blankResult.errors).toEqual([]);
+    expect(blankResult.normalized.email).toBe('');
     expect(result.normalized.phone).toBe('+22890000000');
   });
 

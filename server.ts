@@ -36,7 +36,7 @@ import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
-import { getEmailUniquenessScope, normalizeEmail } from './src/lib/emailUniqueness.ts';
+import { isEmailRequiredForRole, isUsersEmailUniqueViolation, normalizeEmail, normalizedEmailConflictCondition } from './src/lib/emailUniqueness.ts';
 import { generateTemporaryLocalPassword, hashLocalPassword, verifyLocalPassword } from './src/lib/localPassword.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
@@ -220,34 +220,16 @@ async function logIfTeacherUserMismatch(userId: number | null | undefined, teach
   }
 }
 
-async function findExistingUsersByEmail(email: string | null | undefined) {
-  const normalizedEmail = normalizeEmail(email);
-  if (!normalizedEmail) return [];
-
-  const allUsers = await db.select().from(users);
-  return allUsers.filter((row: any) => normalizeEmail(row.email) === normalizedEmail);
-}
-
-// Find existing user by email AND schoolId (for per-school uniqueness)
-async function findExistingUsersByEmailAndSchool(email: string | null | undefined, schoolId: number | null | undefined) {
-  const normalizedEmail = normalizeEmail(email);
-  if (!normalizedEmail || schoolId == null) return [];
-
-  const allUsers = await db.select().from(users);
-  return allUsers.filter((row: any) => normalizeEmail(row.email) === normalizedEmail && Number(row.schoolId) === Number(schoolId));
+async function findExistingUsersByEmail(email: string | null | undefined, excludeUserId?: number) {
+  const condition = normalizedEmailConflictCondition(users.email, email, users.id, excludeUserId);
+  if (!condition) return [];
+  return db.select().from(users).where(condition);
 }
 
 const DUPLICATE_EMAIL_ERROR = {
   code: 'EMAIL_ALREADY_IN_USE',
   message: 'Cette adresse e-mail est déjà utilisée. Veuillez utiliser une autre adresse e-mail.',
 };
-
-function isUsersEmailUniqueViolation(error: any) {
-  if (error?.code !== '23505' && error?.cause?.code !== '23505') return false;
-  const constraint = String(error?.constraint || error?.cause?.constraint || '').toLowerCase();
-  const detail = String(error?.detail || error?.cause?.detail || '').toLowerCase();
-  return constraint.includes('email') || (detail.includes('users') && detail.includes('email'));
-}
 
 function sendDuplicateEmailResponse(res: any) {
   return res.status(409).json({ error: DUPLICATE_EMAIL_ERROR.message, code: DUPLICATE_EMAIL_ERROR.code });
@@ -332,7 +314,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
     if (rowsByUid.length > 0) dbUser = rowsByUid[0];
 
     if (!dbUser && req.user.email) {
-      const rowsByEmail = await db.select().from(users).where(eq(users.email, req.user.email));
+      const rowsByEmail = await findExistingUsersByEmail(req.user.email);
       if (rowsByEmail.length > 0) dbUser = rowsByEmail[0];
     }
 
@@ -745,10 +727,13 @@ async function isApprovedSubjectForSchool(subjectName: string, targetSchoolId: n
   return !!approvedSubject;
 }
 
-function formatUserUpdateDiff(targetUser: any, incoming: { email: string; name: string; role: string; schoolId?: any; phone?: string; specialization?: any }) {
+function formatUserUpdateDiff(targetUser: any, incoming: { email: string | null; name: string; role: string; schoolId?: any; phone?: string; specialization?: any }) {
   const changes: string[] = [];
-  if (incoming.email !== targetUser.email) {
-    changes.push(`email: "${targetUser.email}" → "${incoming.email}"`);
+  const previousEmail = targetUser.email ?? null;
+  const updatedEmail = incoming.email ?? null;
+  if (updatedEmail !== previousEmail) {
+    const formatEmail = (value: string | null) => value === null ? 'NULL' : JSON.stringify(value);
+    changes.push(`email: ${formatEmail(previousEmail)} → ${formatEmail(updatedEmail)}`);
   }
   if (incoming.role !== targetUser.role) {
     changes.push(`role: "${targetUser.role}" → "${incoming.role}"`);
@@ -1626,7 +1611,7 @@ export async function createApp() {
       const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
       const normalizedEmail = normalizeEmail(email);
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
-      if (role !== 'parent' && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
+      if (isEmailRequiredForRole(role) && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
       if (role === 'teacher' && (!String(lastName ?? '').trim() || !String(firstNames ?? '').trim())) {
         return res.status(400).json({ error: 'Missing required fields: lastName and firstNames' });
       }
@@ -1728,17 +1713,7 @@ export async function createApp() {
       const existingByUid = await db.select().from(users).where(eq(users.uid, finalUid));
       if (existingByUid.length > 0) return res.status(409).json({ error: 'User with same uid already exists' });
 
-      // Email uniqueness check:
-      // - super_admin: globally unique (across all schools)
-      // - others: unique per school
-      let existingByEmail: any[] = [];
-      if (role === 'super_admin') {
-        existingByEmail = await findExistingUsersByEmail(normalizedEmail);
-      } else {
-        // For non-super_admin roles, check email uniqueness within the school
-        existingByEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, resolvedSchoolId);
-      }
-      
+      const existingByEmail = await findExistingUsersByEmail(normalizedEmail);
       if (existingByEmail.length > 0) {
         return sendDuplicateEmailResponse(res);
       }
@@ -1963,7 +1938,8 @@ export async function createApp() {
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
-      if (role !== 'parent' && !email) return res.status(400).json({ error: 'Missing required field: email' });
+      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
+      if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
       const teacherIdentityProvided = role === 'teacher' && (lastName !== undefined || firstNames !== undefined);
       const normalizedTeacherLastName = teacherIdentityProvided ? String(lastName ?? '').trim().toUpperCase() : '';
       const normalizedTeacherFirstNames = teacherIdentityProvided ? String(firstNames ?? '').trim() : '';
@@ -1980,12 +1956,19 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid academicYearId' });
       }
 
-      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
-      if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
-
       // Check if school_admin is modifying a user outside their school
       const [targetUser] = await db.select().from(users).where(eq(users.id, id));
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      const emailWasProvided = Object.prototype.hasOwnProperty.call(req.body, 'email');
+      let effectiveEmail = emailWasProvided ? normalizeEmail(email) : targetUser.email ?? null;
+      // Legacy whitespace-only parent emails violate the candidate CHECK, so normalize them on update.
+      if (!emailWasProvided && role === 'parent' && normalizeEmail(effectiveEmail) === null) {
+        effectiveEmail = null;
+      }
+      const normalizedEffectiveEmail = normalizeEmail(effectiveEmail);
+      if (isEmailRequiredForRole(role) && !normalizedEffectiveEmail) {
+        return res.status(400).json({ error: 'Missing required field: email' });
+      }
       const teachingAssignmentSchoolId = actor.role === 'school_admin'
         ? actor.schoolId
         : parsedSchoolId ?? targetUser.schoolId;
@@ -2061,50 +2044,9 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot modify admin accounts' });
       }
 
-      // Email uniqueness check when changing email:
-      // - Exclude the user being updated (id != ${id})
-      // - For super_admin: globally unique
-      // - For others: unique per school
-      const normalizedIncomingEmail = normalizeEmail(email);
-      const emailChanged = normalizedIncomingEmail !== normalizeEmail(targetUser.email);
-      if (emailChanged) {
-        if (role !== 'parent' && !normalizedIncomingEmail) {
-          return res.status(400).json({ error: 'Missing required field: email' });
-        }
-
-        let emailConflicts: any[] = [];
-        if (normalizedIncomingEmail == null) {
-          // Parent accounts may intentionally have no email; skip duplicate checks.
-          emailConflicts = [];
-        } else if (targetUser.role === 'super_admin' || role === 'super_admin') {
-          // Super admin emails are globally unique
-          emailConflicts = await db.select().from(users).where(
-            and(
-              eq(sql`LOWER(${users.email})`, normalizedIncomingEmail),
-              sql`${users.id} != ${id}`
-            )
-          );
-        } else {
-          // For other roles: unique per school
-          const schoolForCheck = parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId;
-          if (schoolForCheck != null) {
-            emailConflicts = await db.select().from(users).where(
-              and(
-                eq(sql`LOWER(${users.email})`, normalizedIncomingEmail),
-                eq(users.schoolId, schoolForCheck),
-                sql`${users.id} != ${id}`
-              )
-            );
-          }
-        }
-        
-        if (emailConflicts.length > 0) {
-          const school = parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId;
-          const msg = role === 'super_admin' || targetUser.role === 'super_admin' 
-            ? 'Email already in use by another user'
-            : (school ? 'Email already in use by another user in this school' : 'Email already in use by another user');
-          return res.status(409).json({ error: msg });
-        }
+      if (normalizedEffectiveEmail != null) {
+        const emailConflicts = await findExistingUsersByEmail(normalizedEffectiveEmail, id);
+        if (emailConflicts.length > 0) return sendDuplicateEmailResponse(res);
       }
 
       let canonicalPhoneForUpdate = canonicalizeUserPhone(targetUser.phone);
@@ -2118,7 +2060,7 @@ export async function createApp() {
       }
       if (role !== targetUser.role && !canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
 
-      const updatedValues: any = { email: normalizedIncomingEmail, name: teacherDisplayName, role, gender: gender ?? null };
+      const updatedValues: any = { email: effectiveEmail, name: teacherDisplayName, role, gender: gender ?? null };
       if (teacherIdentityProvided) {
         updatedValues.lastName = normalizedTeacherLastName;
         updatedValues.firstNames = normalizedTeacherFirstNames;
@@ -2288,7 +2230,7 @@ export async function createApp() {
       }
 
       const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
-      const diffDescription = formatUserUpdateDiff(targetUser, { email, name, role, schoolId: incomingSchoolId, phone, specialization });
+      const diffDescription = formatUserUpdateDiff(targetUser, { email: effectiveEmail, name, role, schoolId: incomingSchoolId, phone, specialization });
       await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} updated account ${updatedUser.email}. ${diffDescription}`);
       
       // If teacher role, include classIds in response
@@ -2325,6 +2267,7 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Error updating admin user:', err);
       if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
+      if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -2873,22 +2816,7 @@ export async function createApp() {
       }
 
       if (normalizedEmail) {
-        // Search for existing user by email
-        // If user has a schoolId in context, search per-school; otherwise global
-        let existingByEmail: any[] = [];
-        if (schoolId) {
-          // Per-school search
-          existingByEmail = await db.select().from(users).where(
-            and(
-              eq(sql`LOWER(${users.email})`, normalizedEmail),
-              eq(users.schoolId, schoolId)
-            )
-          );
-        } else {
-          // Global search (fallback)
-          existingByEmail = await db.select().from(users).where(eq(sql`LOWER(${users.email})`, normalizedEmail));
-        }
-        
+        const existingByEmail = await findExistingUsersByEmail(normalizedEmail);
         if (existingByEmail.length > 0) {
           const existing = existingByEmail[0];
           if (schoolId && existing.schoolId !== schoolId) {
@@ -2903,6 +2831,9 @@ export async function createApp() {
       const allowedRoles = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       const normalizedRole = String(role || '').trim();
       const finalRole = allowedRoles.includes(normalizedRole) ? normalizedRole : 'parent';
+      if (isEmailRequiredForRole(finalRole) && !normalizedEmail) {
+        return res.status(400).json({ error: 'Missing required field: email' });
+      }
 
       let resolvedSchoolId = schoolId ?? null;
       if (actor.simulated && !resolvedSchoolId && finalRole !== 'super_admin') {
@@ -2920,7 +2851,7 @@ export async function createApp() {
       const createdUser = await db.transaction(async (tx) => {
         const [newUser] = await tx.insert(users).values({
           uid,
-          email: email || 'user@schooltrack.fr',
+          email: normalizedEmail,
           name: name || 'Nouvel Utilisateur',
           role: finalRole,
           schoolId: resolvedSchoolId,
@@ -3001,6 +2932,7 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Error in register-or-login:', err);
       if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
+      if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
       res.status(500).json({ error: 'Failed to register or login' });
     }
   });
@@ -6388,10 +6320,9 @@ export async function createApp() {
         }
       }
       
-      // Email uniqueness check: per-school (same email allowed in different schools)
-      const existingTeacherEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, parsedSchoolId);
+      const existingTeacherEmail = await findExistingUsersByEmail(normalizedEmail);
       if (existingTeacherEmail.length > 0) {
-        return res.status(409).json({ error: 'User with same email already exists in this school' });
+        return sendDuplicateEmailResponse(res);
       }
 
       const canonicalPhone = canonicalizeUserPhone(phone);
@@ -6524,6 +6455,7 @@ export async function createApp() {
     } catch (err: any) {
       console.error('Error creating teacher profile:', err);
       if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
+      if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -6809,8 +6741,7 @@ export async function createApp() {
             return res.status(403).json({ error: 'Cannot create parent in another school' });
           }
 
-          // Email uniqueness check: per-school (same email allowed in different schools)
-          const existingParentEmail = await findExistingUsersByEmailAndSchool(normalizedEmail, effectiveSchoolId);
+          const existingParentEmail = await findExistingUsersByEmail(normalizedEmail);
           if (existingParentEmail.length > 0) {
             return sendDuplicateEmailResponse(res);
           }
@@ -7057,16 +6988,9 @@ export async function createApp() {
           continue;
         }
 
-        // Check email uniqueness per-school (same email allowed in different schools)
-        const existing = await findExistingUsersByEmailAndSchool(normalizedEmail, schoolId);
-        if (existing && existing.length > 0) {
-          addRowError('duplicate email in this school');
-          continue;
-        }
-
-        const existingGlobal = await findExistingUsersByEmail(normalizedEmail);
-        if (existingGlobal.length > 0) {
-          addRowError('Cet email est déjà utilisé et ne peut pas être importé dans cet établissement');
+        const existing = await findExistingUsersByEmail(normalizedEmail);
+        if (existing.length > 0) {
+          addRowError('Cet email est déjà utilisé par un autre compte et ne peut pas être importé');
           continue;
         }
 
@@ -7177,6 +7101,10 @@ export async function createApp() {
         } catch (err: any) {
           if (isUsersPhoneUniqueViolation(err)) {
             addRowError(DUPLICATE_PHONE_ERROR.message);
+            continue;
+          }
+          if (isUsersEmailUniqueViolation(err)) {
+            addRowError(DUPLICATE_EMAIL_ERROR.message);
             continue;
           }
           throw err;

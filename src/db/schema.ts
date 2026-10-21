@@ -1,5 +1,6 @@
 import { relations, sql } from 'drizzle-orm';
 import { boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { emailTrimCharactersSql } from '../lib/emailUniqueness.ts';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -113,7 +114,7 @@ export const schoolTerms = pgTable('school_terms', {
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   uid: text('uid').notNull().unique(), // Firebase UID
-  email: text('email').unique(),
+  email: text('email'),
   name: text('name').notNull(),
   lastName: text('last_name'),
   firstNames: text('first_name'),
@@ -126,6 +127,17 @@ export const users = pgTable('users', {
   lastLoginAt: timestamp('last_login_at'),
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => ({
+  emailNormalizedUniqueIdx: uniqueIndex('users_email_normalized_unique_idx')
+    .on(sql`LOWER(BTRIM(${table.email}, ${emailTrimCharactersSql}))`)
+    .where(sql`${table.email} IS NOT NULL`),
+  emailRequiredForNonParentCheck: check(
+    'users_email_required_for_non_parent_check',
+    sql`${table.role} = 'parent' OR (${table.email} IS NOT NULL AND BTRIM(${table.email}, ${emailTrimCharactersSql}) <> '')`,
+  ),
+  emailNotBlankCheck: check(
+    'users_email_not_blank_check',
+    sql`${table.email} IS NULL OR BTRIM(${table.email}, ${emailTrimCharactersSql}) <> ''`,
+  ),
   phoneCanonicalCheck: check(
     'users_phone_canonical_check',
     sql`left(${table.phone}, 1) = '+' AND length(${table.phone}) BETWEEN 3 AND 16 AND substring(${table.phone} from 2 for 1) BETWEEN '1' AND '9' AND substring(${table.phone} from 2) !~ '[^0-9]'`,

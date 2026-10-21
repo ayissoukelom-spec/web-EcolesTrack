@@ -1,41 +1,18 @@
 # Corrections: Gestion d'Unicité des Emails et Flux de Sélection d'École
 
+> **Note de mise à jour :** la règle d'unicité par établissement décrite dans cette note est historique et a été remplacée. La règle actuelle exige une unicité globale des emails normalisés, tous rôles et établissements confondus; les parents peuvent avoir `NULL`. Voir le schéma courant dans `src/db/schema.ts` et le baseline candidat dans `drizzle-local-baseline-candidate/`.
+
 ## 📋 Résumé des Modifications
 
-### 1. **Gestion d'Unicité des Emails (Per-School)**
+### 1. **Règle actuelle d'unicité des emails**
 
-#### Fichier: `src/lib/emailUniqueness.ts`
-- ✅ Modifié `EmailUniquenessScope` pour supporter deux modes:
-  - `{ mode: 'global' }` : Pour super_admin (email unique dans tout le système)
-  - `{ mode: 'per-school'; schoolId: number | null }` : Pour autres rôles (email unique par école)
-- ✅ Mis à jour `getEmailUniquenessScope()` pour appliquer la logique correcte:
-  - super_admin → mode global
-  - teacher/parent → mode per-school
+- `normalizeEmail()` applique `String.trim()` puis `toLowerCase()`; un email absent ou blanc devient `NULL`.
+- Les vérifications des parcours de création, modification, authentification et import sont globales; elles ne varient ni selon le rôle ni selon l'établissement.
+- La contrainte attendue est un index unique sur `LOWER(BTRIM(email, trimCharacters))` pour les emails non nuls, accompagné de checks qui autorisent `NULL` pour les parents et refusent les emails blancs. La liste SQL des caractères rognés reflète l'ensemble `String.trim()`.
+- L'unicité de base de données est décrite dans `src/db/schema.ts` et le baseline candidat `drizzle-local-baseline-candidate/`; aucune migration n'a été appliquée par cette mise à jour.
+- `ensureUsersTableSchema()` ne supprime et ne recrée plus de contrainte email; les objets attendus relèvent du schéma et des migrations/baselines.
 
-#### Fichier: `server.ts`
-- ✅ **Nouvelle fonction** `findExistingUsersByEmailAndSchool()` (ligne ~75)
-  - Vérifie si un email existe pour un schoolId spécifique
-  - Retourne vide si pas de schoolId (ne peut pas vérifier per-school)
-
-- ✅ **POST /api/admin/users** (ligne ~730-750)
-  - Super admin: vérification d'email globale
-  - Autres rôles: vérification d'email per-school avec schoolId
-  - Message d'erreur amélioré
-
-- ✅ **POST /api/teachers** (ligne ~2420)
-  - Changé de `findExistingUsersByEmail()` → `findExistingUsersByEmailAndSchool()`
-  - Vérifie email uniquement dans la même école
-
-- ✅ **POST /api/parents** (ligne ~2650)
-  - Changé de `findExistingUsersByEmail()` → `findExistingUsersByEmailAndSchool()`
-  - Vérifie email uniquement dans la même école
-
-**Comportement Attendu:**
-```
-École A:  alice@example.com (professeur) → ✅ Créé
-École B:  alice@example.com (parent)    → ✅ Créé (différente école)
-École A:  alice@example.com (autre role)→ ❌ Refusé (même école)
-```
+**Comportement attendu :** le même email normalisé est refusé pour toute paire de comptes, y compris entre écoles ou rôles différents. Plusieurs parents peuvent avoir `NULL`; les rôles autres que parent doivent fournir un email non blanc.
 
 ---
 
@@ -92,10 +69,10 @@
 
 ### Isolation Multi-École Améliorée
 
-1. **Emails**: Même email peut exister dans différentes écoles
+1. **Emails**: Un email normalisé ne peut être attribué qu'à un seul compte, tous rôles et établissements confondus.
 2. **Authentification**: Vérification stricte que l'utilisateur a le membership requis
 3. **Super Admin**: Reste global (comme avant)
-4. **Teachers/Parents**: Isolés par école
+4. **Teachers/Parents**: Leurs autorisations et memberships restent liés à l'école; l'unicité email est globale.
 
 ### Validations Strictes
 

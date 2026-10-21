@@ -1,4 +1,5 @@
 import { canonicalizeUserPhone } from './phoneCanonicalization';
+import { normalizeEmail } from './emailUniqueness';
 
 export const PARENT_IMPORT_HEADERS = [
   'Nom',
@@ -62,7 +63,7 @@ export function validateParentImportRow(
     Object.entries(source).map(([key, value]) => [key, String(value ?? '').trim()]),
   );
   const errors: string[] = [];
-  const email = normalized.email?.toLowerCase() || '';
+  const email = normalizeEmail(normalized.email) ?? '';
   const phonePrefix = normalized.phonePrefix || '+228';
   const rawPhone = normalized.phone || '';
   const canonicalPhone = canonicalizeParentImportPhone(rawPhone, phonePrefix);

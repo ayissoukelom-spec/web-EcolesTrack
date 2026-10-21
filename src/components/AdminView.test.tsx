@@ -1344,8 +1344,8 @@ describe('AdminView create-user teacher form', () => {
         importResult={{
           insertedCount: 1,
           errors: [
-            { row: 12, name: 'AWA KOFFI', email: 'awa@gmail.com', error: 'duplicate email in this school' },
-            { row: 27, name: 'JOHN DOE', email: 'john@gmail.com', error: 'Cet email est déjà utilisé et ne peut pas être importé dans cet établissement' },
+            { row: 12, name: 'AWA KOFFI', email: 'awa@gmail.com', error: 'Cet email est déjà utilisé par un autre compte et ne peut pas être importé' },
+            { row: 27, name: 'JOHN DOE', email: 'john@gmail.com', error: 'Cet email est déjà utilisé par un autre compte et ne peut pas être importé' },
           ],
         }}
       />
@@ -1354,7 +1354,7 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByText('1 parent(s) importé(s).')).toBeTruthy();
     expect(screen.getByText('2 ligne(s) non importée(s).')).toBeTruthy();
     expect(screen.getByText(/Ligne 12 — AWA KOFFI — awa@gmail.com/)).toBeTruthy();
-    expect(screen.getByText('duplicate email in this school')).toBeTruthy();
+    expect(screen.getAllByText('Cet email est déjà utilisé par un autre compte et ne peut pas être importé')).toHaveLength(2);
     expect(screen.getByText(/Ligne 27 — JOHN DOE — john@gmail.com/)).toBeTruthy();
 
     view.rerender(

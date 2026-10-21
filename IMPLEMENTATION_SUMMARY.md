@@ -1,5 +1,7 @@
 # 📋 Résumé Exécutif: Corrections Email & Flux d'Authentification
 
+> **Note de mise à jour :** ce résumé conserve l'historique de la règle par école, qui est désormais obsolète. L'unicité email actuelle est globale après normalisation, sans distinction de rôle ou d'établissement; les parents peuvent ne pas avoir d'email. Les implémentations de référence sont dans `src/lib/emailUniqueness.ts`, `server.ts`, `src/db/schema.ts` et le baseline candidat `drizzle-local-baseline-candidate/`.
+
 ## 🎯 Objectifs Atteints
 
 ### 1️⃣ Gestion d'Unicité des Emails ✅
