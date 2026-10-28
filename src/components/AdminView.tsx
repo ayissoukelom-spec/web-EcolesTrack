@@ -2682,6 +2682,9 @@ export default function AdminView({
     setParentDetail(parent);
     setParentDetailOpen(true);
   };
+  const parentDetailStudents = parentDetail
+    ? studentsList.filter((student) => student.parentId === parentDetail.id)
+    : [];
 
   // keep local parts in sync so partial selections are visible immediately
   useEffect(() => {
@@ -4067,7 +4070,18 @@ export default function AdminView({
                 <div><strong>Email:</strong> {parentDetail.email || '—'}</div>
                 <div><strong>Téléphone:</strong> {parentDetail.phone || '—'}</div>
                 <div><strong>Adresse:</strong> {parentDetail.address || '—'}</div>
-                <div><strong>Élève associé:</strong> {parentDetail.studentFirstName && parentDetail.studentLastName ? `${parentDetail.studentLastName} ${parentDetail.studentFirstName}` : '—'}</div>
+                <div><strong>Élèves associés:</strong></div>
+                {parentDetailStudents.length > 0 ? (
+                  <ul className="list-disc space-y-1 pl-5">
+                    {parentDetailStudents.map((student) => (
+                      <li key={student.id}>
+                        {student.lastName} {student.firstName} ({student.className?.trim() || 'Classe non renseignée'})
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div>Aucun élève associé</div>
+                )}
                 <div><strong>École de l'élève:</strong> {
                   parentDetail.schoolName || (parentDetail.studentSchoolId ? schoolsList.find((s) => s.id === parentDetail.studentSchoolId)?.name : null) || parentDetail.studentSchoolName ||
                   schoolsList.find((s) => s.id === studentsList.find((st) => st.id === parentDetail.studentId || st.parentId === parentDetail.id)?.schoolId)?.name ||

@@ -11,6 +11,33 @@ import { apiFetch } from '../lib/api';
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 const getPrimarySchoolPhoneInput = () => screen.getAllByPlaceholderText('90000000')[0] as HTMLInputElement;
 
+function renderParentDetail(parent: Parent, students: Student[]) {
+  renderWithAuth(
+    <AdminView
+      userRole="super_admin"
+      schoolsList={[]}
+      yearsList={[]}
+      classesList={[]}
+      teachersList={[]}
+      studentsList={students}
+      parentsList={[parent]}
+      usersList={[]}
+      onAddSchool={async () => ({})}
+      onAddYear={() => undefined}
+      onAddClass={async () => undefined}
+      onAddTeacher={async () => ({})}
+      onAddParent={async () => ({})}
+      onAddStudent={() => undefined}
+      onDeleteClass={() => undefined}
+      onDeleteSchool={() => undefined}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Voir' }));
+  return screen.getByRole('dialog', { name: 'Détails du parent' });
+}
+
 describe('AdminView school term cycle availability', () => {
   beforeEach(() => {
     Object.defineProperty(window, 'localStorage', {
@@ -106,6 +133,78 @@ describe('AdminView school term cycle availability', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe('AdminView parent detail students', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', {
+      value: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+      },
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const parent: Parent = {
+    id: 21,
+    userId: 121,
+    name: 'Parent Test',
+    email: 'parent@example.test',
+  };
+
+  it('continues to show one associated student with their class', () => {
+    const dialog = renderParentDetail(parent, [
+      { id: 1, parentId: parent.id, firstName: 'Yayra', lastName: 'Edoh', className: '6ème', schoolId: 1, classId: 10 },
+    ]);
+
+    expect(within(dialog).getByText('Edoh Yayra (6ème)')).toBeTruthy();
+  });
+
+  it('shows every associated student with their own class on separate lines', () => {
+    const dialog = renderParentDetail(parent, [
+      { id: 1, parentId: parent.id, firstName: 'Yayra', lastName: 'Edoh', className: '6ème', schoolId: 1, classId: 10 },
+      { id: 2, parentId: parent.id, firstName: 'Kossi', lastName: 'Afi', className: '5ème', schoolId: 1, classId: 11 },
+    ]);
+
+    expect(within(dialog).getByText('Edoh Yayra (6ème)').tagName).toBe('LI');
+    expect(within(dialog).getByText('Afi Kossi (5ème)').tagName).toBe('LI');
+  });
+
+  it('does not show a student associated with another parent', () => {
+    const dialog = renderParentDetail(parent, [
+      { id: 1, parentId: parent.id, firstName: 'Yayra', lastName: 'Edoh', className: '6ème', schoolId: 1, classId: 10 },
+      { id: 2, parentId: 22, firstName: 'Kossi', lastName: 'Afi', className: '5ème', schoolId: 1, classId: 11 },
+    ]);
+
+    expect(within(dialog).getByText('Edoh Yayra (6ème)')).toBeTruthy();
+    expect(within(dialog).queryByText('Afi Kossi (5ème)')).toBeNull();
+  });
+
+  it('shows an explicit message when no student is associated', () => {
+    const dialog = renderParentDetail({
+      ...parent,
+      studentFirstName: 'Ancien',
+      studentLastName: 'Lien',
+    }, []);
+
+    expect(within(dialog).getByText('Aucun élève associé')).toBeTruthy();
+    expect(within(dialog).queryByText('Lien Ancien')).toBeNull();
+  });
+
+  it('uses a clear fallback when an associated student has no class', () => {
+    const dialog = renderParentDetail(parent, [
+      { id: 1, parentId: parent.id, firstName: 'Yayra', lastName: 'Edoh', className: '', schoolId: 1, classId: null },
+    ]);
+
+    expect(within(dialog).getByText('Edoh Yayra (Classe non renseignée)')).toBeTruthy();
   });
 });
 
