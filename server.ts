@@ -6494,6 +6494,7 @@ export async function createApp() {
         className: classes.name,
         schoolName: schools.name,
         lastLoginAt: users.lastLoginAt,
+        lastMobileVisitAt: users.lastMobileVisitAt,
       };
 
       if (actor.role === 'parent') {
@@ -6539,6 +6540,7 @@ export async function createApp() {
           className: classes.name,
           schoolName: schools.name,
           lastLoginAt: users.lastLoginAt,
+          lastMobileVisitAt: users.lastMobileVisitAt,
         }).from(parents)
           .innerJoin(users, eq(parents.userId, users.id))
           .leftJoin(students, and(

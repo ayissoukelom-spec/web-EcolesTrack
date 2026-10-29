@@ -1079,7 +1079,7 @@ describe('AdminView create-user teacher form', () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const parents: Parent[] = [
       { id: 1, userId: 1, name: 'Tano Moussa', email: 'tano@example.com', phone: '+228 90000001', address: 'Rue Tano', schoolId: 1, studentFirstName: 'Kossi', studentLastName: 'Tano', schoolName: 'École du Lac' },
-      { id: 2, userId: 2, name: 'Amani Awa', email: 'amani@example.com', phone: '+228 90000002', address: 'Rue Amani', schoolId: 1, studentFirstName: 'Ali', studentLastName: 'Amani', schoolName: 'École du Lac' },
+      { id: 2, userId: 2, name: 'Amani Awa', email: 'amani@example.com', phone: '+228 90000002', address: 'Rue Amani', schoolId: 1, studentFirstName: 'Ali', studentLastName: 'Amani', schoolName: 'École du Lac', lastLoginAt: '2026-09-24T09:00:00.000Z', lastMobileVisitAt: '2026-09-24T10:00:00.000Z' },
     ];
     const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
     const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
@@ -1113,6 +1113,10 @@ describe('AdminView create-user teacher form', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Parents & Tuteurs/i }));
+      expect(screen.getByText('Dernière connexion')).toBeTruthy();
+      expect(screen.getByText('Dernière visite APK')).toBeTruthy();
+      expect(screen.getByText(new Date('2026-09-24T10:00:00.000Z').toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }))).toBeTruthy();
+      expect(screen.getByText('Non suivie')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Télécharger Excel' }));
 
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
@@ -1129,7 +1133,8 @@ describe('AdminView create-user teacher form', () => {
           Adresse: 'Rue Amani',
           'Élève associé': 'Amani Ali',
           'École de l’élève': 'École du Lac',
-          'Dernière connexion': 'Jamais connecté',
+          'Dernière connexion': new Date('2026-09-24T09:00:00.000Z').toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }),
+          'Dernière visite APK': new Date('2026-09-24T10:00:00.000Z').toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }),
         },
         {
           Nom: 'Tano Moussa',
@@ -1139,6 +1144,7 @@ describe('AdminView create-user teacher form', () => {
           'Élève associé': 'Tano Kossi',
           'École de l’élève': 'École du Lac',
           'Dernière connexion': 'Jamais connecté',
+          'Dernière visite APK': 'Non suivie',
         },
       ]);
     } finally {

@@ -154,6 +154,7 @@ export interface Parent {
   schoolName?: string;
   gender?: string;
   lastLoginAt?: string | null;
+  lastMobileVisitAt?: string | null;
 }
 
 export interface Class {

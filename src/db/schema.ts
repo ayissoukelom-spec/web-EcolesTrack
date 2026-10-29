@@ -125,6 +125,7 @@ export const users = pgTable('users', {
   gender: text('gender'),
   isDeleted: boolean('is_deleted').default(false).notNull(),
   lastLoginAt: timestamp('last_login_at'),
+  lastMobileVisitAt: timestamp('last_mobile_visit_at'),
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => ({
   emailNormalizedUniqueIdx: uniqueIndex('users_email_normalized_unique_idx')

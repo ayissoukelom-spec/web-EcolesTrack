@@ -18,7 +18,7 @@ const FIXTURES = {
     { id: 3, uid: 'teacher-uid', email: 'teacher@school.test', name: 'Teacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 4, uid: 'other-teacher-uid', email: 'otherteacher@school.test', name: 'OtherTeacher', role: 'teacher', schoolId: 10, isDeleted: false },
     { id: 5, uid: 'no-school-teacher-uid', email: 'noschool@x.test', name: 'NoSchool', role: 'teacher', schoolId: null, isDeleted: false },
-    { id: 6, uid: 'sim-parent', email: 'parent@x.test', phone: '+22890000001', name: 'Parent', role: 'parent', schoolId: 10, isDeleted: false },
+    { id: 6, uid: 'sim-parent', email: 'parent@x.test', phone: '+22890000001', name: 'Parent', role: 'parent', schoolId: 10, isDeleted: false, lastLoginAt: '2026-09-24T09:00:00.000Z', lastMobileVisitAt: '2026-09-24T10:00:00.000Z' },
     { id: 7, uid: 'sim-parent-no-school', email: 'parent-noschool@x.test', phone: '+22890000002', name: 'ParentNoSchool', role: 'parent', schoolId: null, isDeleted: false },
     { id: 8, uid: 'sim-parent-query-bypass', email: 'parent-query@x.test', phone: '+22890000003', name: 'ParentQuery', role: 'parent', schoolId: null, isDeleted: false },
     { id: 9, uid: 'sim-school-admin-no-school', email: 'admin-noschool@x.test', name: 'SchoolAdminNoSchool', role: 'school_admin', schoolId: null, isDeleted: false },
@@ -688,6 +688,12 @@ function createMockDb() {
       const resolveSelectedValue = (expr: any, baseRow: any, selectedAlias?: string) => {
         if (expr == null) return null;
         if (selectedAlias === 'user' && baseRow._joinedUser) return baseRow._joinedUser;
+        if (resolveTableName(builder._table) === 'parents'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'users')
+          && ['lastLoginAt', 'lastMobileVisitAt'].includes(String(selectedAlias))) {
+          const user = FIXTURES.users.find((row: any) => Number(row.id) === Number(baseRow.userId));
+          return user?.[String(selectedAlias)] ?? null;
+        }
         if (resolveTableName(builder._table) === 'teachers'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'users')
           && ['uid', 'name', 'lastName', 'firstNames', 'email', 'gender'].includes(String(selectedAlias))) {
@@ -2115,6 +2121,18 @@ describe('E2E security: auth & privilege checks', () => {
       .set('Authorization', 'Bearer token-school');
 
     expect(res.status).toBe(403);
+  });
+
+  it('GET /api/parents returns the separate login and APK visit timestamps', async () => {
+    const res = await request(app)
+      .get('/api/parents')
+      .set('Authorization', 'Bearer token-school');
+
+    expect(res.status).toBe(200);
+    expect(res.body.find((parent: any) => parent.id === 1)).toMatchObject({
+      lastLoginAt: '2026-09-24T09:00:00.000Z',
+      lastMobileVisitAt: '2026-09-24T10:00:00.000Z',
+    });
   });
 
   it('3h. teacher only sees parents for authorized same-school students', async () => {

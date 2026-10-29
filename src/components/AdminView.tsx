@@ -1256,6 +1256,9 @@ export default function AdminView({
       'Dernière connexion': parent.lastLoginAt
         ? new Date(parent.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
         : 'Jamais connecté',
+      'Dernière visite APK': parent.lastMobileVisitAt
+        ? new Date(parent.lastMobileVisitAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+        : 'Non suivie',
     }));
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Parents');
@@ -6508,6 +6511,7 @@ export default function AdminView({
                   <th className="px-3 sm:px-6 py-4">Élève associé</th>
                   <th className="px-3 sm:px-6 py-4">École de l'élève</th>
                   <th className="px-3 sm:px-6 py-4">Dernière connexion</th>
+                  <th className="px-3 sm:px-6 py-4">Dernière visite APK</th>
                   <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -6519,6 +6523,7 @@ export default function AdminView({
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.studentFirstName && pt.studentLastName ? `${pt.studentLastName} ${pt.studentFirstName}` : '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.schoolName || (pt.studentSchoolId ? schoolsList.find((s) => s.id === pt.studentSchoolId)?.name : null) || pt.studentSchoolName || schoolsList.find((s) => s.id === studentsList.find((st) => st.id === pt.studentId || st.parentId === pt.id)?.schoolId)?.name || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.lastLoginAt ? new Date(pt.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : 'Jamais connecté'}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{pt.lastMobileVisitAt ? new Date(pt.lastMobileVisitAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : 'Non suivie'}</td>
                     <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                       <button
                         onClick={() => openParentDetail(pt)}
