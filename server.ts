@@ -6118,6 +6118,7 @@ export async function createApp() {
         firstNames: users.firstNames,
         email: users.email,
         gender: users.gender,
+        lastLoginAt: users.lastLoginAt,
         phone: teachers.phone,
         specialization: teachers.specialization,
         schoolId: teachers.schoolId,

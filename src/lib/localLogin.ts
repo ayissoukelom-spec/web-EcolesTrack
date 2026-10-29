@@ -131,10 +131,14 @@ export async function handleLocalLogin(req: Request, res: Response) {
       console.error('Failed to record Web login event:', eventError?.message || eventError);
     }
 
-    if (userRecord.role === 'parent') {
-      await db.update(users)
+    if (userRecord.role === 'parent' || userRecord.role === 'teacher') {
+      const [updatedUser] = await db.update(users)
         .set({ lastLoginAt: new Date() })
-        .where(eq(users.id, userRecord.id));
+        .where(eq(users.id, userRecord.id))
+        .returning({ id: users.id });
+      if (!updatedUser) {
+        throw new Error('Authenticated user was not found while recording last login.');
+      }
     }
 
     const response = {

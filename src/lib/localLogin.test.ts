@@ -6,8 +6,9 @@ import { verifyJwt } from './jwt.ts';
 const mockWhere = vi.fn();
 const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
 const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
-const mockUpdateWhere = vi.fn();
-const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
+const mockReturning = vi.fn();
+const mockUpdateWhereAndReturning = vi.fn(() => ({ returning: mockReturning }));
+const mockSet = vi.fn(() => ({ where: mockUpdateWhereAndReturning }));
 const mockInsertValues = vi.fn();
 const mockDb = {
   select: vi.fn(() => ({ from: mockFrom })),
@@ -35,7 +36,8 @@ const createMockRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUpdateWhere.mockResolvedValue(undefined);
+  mockUpdateWhereAndReturning.mockReturnValue({ returning: mockReturning });
+  mockReturning.mockResolvedValue([{ id: 1 }]);
   mockInsertValues.mockResolvedValue(undefined);
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-jwt-secret';
@@ -299,7 +301,94 @@ describe('handleLocalLogin', () => {
 
     expect(mockDb.update).toHaveBeenCalledTimes(1);
     expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ lastLoginAt: expect.any(Date) }));
-    expect(mockUpdateWhere).toHaveBeenCalled();
+    expect(mockUpdateWhereAndReturning).toHaveBeenCalled();
+  });
+
+  it('updates lastLoginAt for a successful teacher login', async () => {
+    const password = 'TeacherSecret123!';
+    const salt = 'teacher-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 458,
+      uid: 'teacher_458',
+      email: 'teacher@example.com',
+      name: 'Teacher Example',
+      role: 'teacher',
+      schoolId: 99,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledWith({ lastLoginAt: expect.any(Date) });
+    expect(mockUpdateWhereAndReturning).toHaveBeenCalled();
+    const updateCondition = new PgDialect().sqlToQuery(mockUpdateWhereAndReturning.mock.calls[0][0]);
+    expect(updateCondition.params).toContain(userRecord.id);
+    expect(mockReturning).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report a successful teacher login when the last-login update affects no user', async () => {
+    const password = 'TeacherSecret123!';
+    const salt = 'teacher-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 460,
+      uid: 'teacher_460',
+      email: 'teacher@example.com',
+      name: 'Teacher Example',
+      role: 'teacher',
+      schoolId: 99,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+    mockReturning.mockResolvedValueOnce([]);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(mockUpdateWhereAndReturning).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Authenticated user was not found while recording last login.',
+    });
+    errorSpy.mockRestore();
+  });
+
+  it('does not update lastLoginAt for a failed teacher login', async () => {
+    const password = 'wrong-password';
+    const salt = 'teacher-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync('correct-password', salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 459,
+      uid: 'teacher_459',
+      email: 'teacher@example.com',
+      name: 'Teacher Example',
+      role: 'teacher',
+      schoolId: 99,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
   });
 
   it('records one event for each successful login', async () => {

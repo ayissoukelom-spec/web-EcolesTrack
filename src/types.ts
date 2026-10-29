@@ -112,6 +112,7 @@ export interface Teacher {
   lastName?: string | null;
   firstNames?: string | null;
   email: string;
+  lastLoginAt?: string | null;
   phone?: string;
   specialization?: string | string[];
   schoolId: number;

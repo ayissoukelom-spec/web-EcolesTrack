@@ -1163,7 +1163,7 @@ describe('AdminView create-user teacher form', () => {
     ];
     const teachers: Teacher[] = [
       { id: 11, userId: 101, name: 'ZOU Jean', lastName: 'ZOU', firstNames: 'Jean', email: 'jean@example.com', phone: '+22890000011', specialization: 'Mathématiques', schoolId: 1 },
-      { id: 12, userId: 102, name: 'KOFFI Awa', lastName: 'KOFFI', firstNames: 'Awa', email: 'awa@example.com', phone: '+22890000012', specialization: 'Sciences', schoolId: 1 },
+      { id: 12, userId: 102, name: 'KOFFI Awa', lastName: 'KOFFI', firstNames: 'Awa', email: 'awa@example.com', phone: '+22890000012', specialization: 'Sciences', schoolId: 1, lastLoginAt: '2026-10-28T16:30:00.000Z' },
       { id: 21, userId: 201, name: 'YAO Kossi', lastName: 'YAO', firstNames: 'Kossi', email: 'kossi@example.com', phone: '+22890000021', specialization: 'Histoire', schoolId: 2 },
     ];
     const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
@@ -1199,6 +1199,9 @@ describe('AdminView create-user teacher form', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
       expect(screen.getByTestId('teachers-total-count').textContent).toContain('3 enseignants');
+      expect(screen.getByText('Dernière connexion')).toBeTruthy();
+      expect(screen.getByText(new Date('2026-10-28T16:30:00.000Z').toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }))).toBeTruthy();
+      expect(screen.getAllByText('Jamais connecté')).toHaveLength(2);
 
       fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
       expect(screen.getByTestId('teachers-total-count').textContent).toContain('2 enseignants');
@@ -1217,6 +1220,7 @@ describe('AdminView create-user teacher form', () => {
           École: 'École du Lac',
           'Spécialité enseignée': 'Sciences',
           Téléphone: '+22890000012',
+          'Dernière connexion': new Date('2026-10-28T16:30:00.000Z').toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }),
         },
         {
           'Nom complet': 'ZOU Jean',
@@ -1224,6 +1228,7 @@ describe('AdminView create-user teacher form', () => {
           École: 'École du Lac',
           'Spécialité enseignée': 'Mathématiques',
           Téléphone: '+22890000011',
+          'Dernière connexion': 'Jamais connecté',
         },
       ]);
     } finally {

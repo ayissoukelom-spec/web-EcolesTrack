@@ -1287,6 +1287,9 @@ export default function AdminView({
         ? teacher.specialization.join(', ')
         : teacher.specialization || 'Général',
       Téléphone: teacher.phone || '',
+      'Dernière connexion': teacher.lastLoginAt
+        ? new Date(teacher.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+        : 'Jamais connecté',
     }));
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Enseignants');
@@ -6003,6 +6006,7 @@ export default function AdminView({
                       <th className="px-3 sm:px-6 py-4">École</th>
                       <th className="px-3 sm:px-6 py-4">Spécialité enseignée</th>
                       <th className="px-3 sm:px-6 py-4">Téléphone</th>
+                      <th className="px-3 sm:px-6 py-4">Dernière connexion</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -6013,6 +6017,7 @@ export default function AdminView({
                         <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolsList.find((s) => s.id === tc.schoolId)?.name || '—'}</td>
                         <td className="px-3 sm:px-6 py-4 text-indigo-700 font-semibold text-xs bg-indigo-50/40 inline-block my-2 mx-6 py-1 px-2.5 rounded-lg border border-indigo-100">{tc.specialization || 'Général'}</td>
                         <td className="px-3 sm:px-6 py-4 text-slate-500">{tc.phone || '—'}</td>
+                        <td className="px-3 sm:px-6 py-4 text-slate-500">{tc.lastLoginAt ? new Date(tc.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : 'Jamais connecté'}</td>
                         <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                           <button
                             onClick={() => openTeacherDetail(tc)}
@@ -6064,7 +6069,7 @@ export default function AdminView({
                     ))}
                     {filteredTeachersList.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="text-center py-8 text-slate-400 text-xs">Aucun enseignant trouvé.</td>
+                        <td colSpan={6} className="text-center py-8 text-slate-400 text-xs">Aucun enseignant trouvé.</td>
                       </tr>
                     )}
                   </tbody>

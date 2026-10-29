@@ -10,6 +10,7 @@ const mockState: any = {
   newTeachers: [] as any[],
   classAssignments: [] as Array<{ teacherId: number; classId: number }> ,
   users: [] as any[],
+  teacherProjection: null as any,
   filterSchoolId: null as number | null,
 };
 
@@ -45,6 +46,7 @@ const createBuilder = (selectArgs: any[] = []) => {
       let out: any[] = [];
       const tableName = getTableName(builder.table);
       if (tableName === 'teachers') {
+        mockState.teacherProjection = builder.selectArgs[0];
         const oldRows = mockState.oldTeachers || [];
         const newRows = mockState.newTeachers || [];
 
@@ -167,7 +169,29 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     mockState.newTeachers = [];
     mockState.classAssignments = [];
     mockState.users = [];
+    mockState.teacherProjection = null;
     mockState.filterSchoolId = null;
+  });
+
+  it('returns lastLoginAt from the joined user projection for the admin teacher list', async () => {
+    const lastLoginAt = new Date('2026-10-28T16:30:00.000Z');
+    mockState.oldTeachers = [{
+      id: 1,
+      userId: 11,
+      uid: 'u1',
+      name: 'Teacher One',
+      email: 'teacher@example.com',
+      schoolId: 10,
+      lastLoginAt,
+    }];
+
+    const res = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .expect(200);
+
+    expect(mockState.teacherProjection.lastLoginAt).toBe(users.lastLoginAt);
+    expect(res.body[0]).toMatchObject({ lastLoginAt: lastLoginAt.toISOString() });
   });
 
   it('super_admin: retrieves all teachers and their classIds', async () => {
