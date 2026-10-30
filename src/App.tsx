@@ -224,6 +224,7 @@ export default function App() {
   const [subjectTypesList, setSubjectTypesList] = useState<SubjectType[]>([]);
   const [educationLevels, setEducationLevels] = useState<EducationLevel[]>([]);
   const processedNotificationIdsRef = useRef<Set<number>>(new Set());
+  const parentFocusCheckInFlightRef = useRef(false);
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
@@ -520,9 +521,22 @@ export default function App() {
   }, [activeTab, currentRole]);
 
   useEffect(() => {
-    if (!['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole)) return;
+    if (!['school_admin', 'super_admin', 'surveillant', 'teacher', 'parent'].includes(currentRole)) return;
 
     const refreshDashboardOnFocus = () => {
+      if (currentRole === 'parent') {
+        if (parentFocusCheckInFlightRef.current) return;
+        parentFocusCheckInFlightRef.current = true;
+        void apiFetch('/api/notifications')
+          .catch((error) => {
+            console.warn('Impossible de vérifier la session parent au retour du focus :', error);
+          })
+          .finally(() => {
+            parentFocusCheckInFlightRef.current = false;
+          });
+        return;
+      }
+
       void fetchAllData(false);
     };
     window.addEventListener('focus', refreshDashboardOnFocus);

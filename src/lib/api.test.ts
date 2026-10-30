@@ -131,6 +131,113 @@ describe('apiFetch', () => {
     expect(replaceMock).toHaveBeenCalledWith('/login');
   });
 
+  it('clears the session and preserves the disabled-account message on 401 ACCOUNT_DISABLED', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    const disabledMessage = 'Ce compte est désactivé. Contactez votre administrateur.';
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+    localStorage.setItem('ecoletrack_simulated_user', JSON.stringify({ uid: 'parent-1' }));
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ code: 'ACCOUNT_DISABLED', error: disabledMessage }),
+    } as any);
+
+    await expect(apiFetch('/api/test')).rejects.toMatchObject({
+      status: 401,
+      isUnauthorized: true,
+      code: 'ACCOUNT_DISABLED',
+    });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_user')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBe(disabledMessage);
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+    expect(replaceMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('redirects only once when concurrent requests receive 401 ACCOUNT_DISABLED', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ code: 'ACCOUNT_DISABLED', error: 'Compte désactivé.' }),
+    } as any);
+
+    await Promise.allSettled([
+      apiFetch('/api/first'),
+      apiFetch('/api/second'),
+    ]);
+
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBe('Compte désactivé.');
+  });
+
+  it('applies ACCOUNT_DISABLED logout handling to apiFetchBlob', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({
+        code: 'ACCOUNT_DISABLED',
+        error: 'Ce compte est désactivé. Contactez votre administrateur.',
+      }),
+    } as any);
+
+    await expect(apiFetchBlob('/api/notifications/12/attachments/34')).rejects.toMatchObject({
+      status: 401,
+      isUnauthorized: true,
+      code: 'ACCOUNT_DISABLED',
+    });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBe(
+      'Ce compte est désactivé. Contactez votre administrateur.',
+    );
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+    expect(replaceMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not log out on 403 permission errors', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'jwt-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      json: () => Promise.resolve({ code: 'FORBIDDEN', error: 'Forbidden' }),
+    } as any);
+
+    await expect(apiFetch('/api/test')).rejects.toMatchObject({ status: 403 });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
   it('does not clear session or redirect on non-token 401 errors', async () => {
     const replaceMock = vi.fn();
     Object.defineProperty(globalThis, 'location', {

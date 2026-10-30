@@ -720,6 +720,87 @@ describe('App navigation', () => {
     });
   });
 
+  it.each(['school_admin', 'super_admin', 'surveillant', 'teacher'])(
+    'keeps the existing dashboard refresh on focus for %s',
+    async (role) => {
+      await renderWithRole(role, [], 0);
+
+      await waitFor(() => expect(mockApiFetch.mock.calls.some(([url]) => url === '/api/dashboard/summary')).toBe(true));
+      const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/dashboard/summary').length;
+      window.dispatchEvent(new Event('focus'));
+
+      await waitFor(() => {
+        const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/dashboard/summary').length;
+        expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
+      });
+    },
+  );
+
+  it('checks a parent session through the protected notifications API when the window regains focus', async () => {
+    await renderWithRole('parent', [], 0);
+
+    await waitFor(() => expect(document.getElementById('sidebar-nav-parent-grades')).toBeTruthy());
+    const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+      expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
+    });
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
+  });
+
+  it.each([
+    ['network failure', new TypeError('Network unavailable')],
+    ['403 permission error', Object.assign(new Error('Forbidden'), { status: 403 })],
+  ])('keeps the parent session on focus after a %s', async (_scenario, error) => {
+    await renderWithRole('parent', [], 0);
+
+    await waitFor(() => expect(document.getElementById('sidebar-nav-parent-grades')).toBeTruthy());
+    const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+    mockApiFetch.mockImplementation((url: string) => (
+      url === '/api/notifications' ? Promise.reject(error) : Promise.resolve([])
+    ));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+      expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
+    });
+    await waitFor(() => expect(warnSpy).toHaveBeenCalled());
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
+    warnSpy.mockRestore();
+  });
+
+  it('does not send concurrent parent session checks for closely spaced focus events', async () => {
+    await renderWithRole('parent', [], 0);
+
+    await waitFor(() => expect(document.getElementById('sidebar-nav-parent-grades')).toBeTruthy());
+    const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+    let resolveFocusCheck: ((value: unknown) => void) | undefined;
+    mockApiFetch.mockImplementation((url: string) => (
+      url === '/api/notifications'
+        ? new Promise((resolve) => {
+          resolveFocusCheck = resolve;
+        })
+        : Promise.resolve([])
+    ));
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications')).toHaveLength(requestsBeforeFocus + 1);
+    await act(async () => {
+      resolveFocusCheck?.([]);
+    });
+  });
+
   it('keeps an older full-list absence while the limited dashboard summary refreshes', async () => {
     mockGetSimulatedRole.mockReturnValue('school_admin');
     mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });

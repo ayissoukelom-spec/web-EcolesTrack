@@ -94,6 +94,8 @@ const LOCAL_STORAGE_ACTIVE_SCHOOL_KEY = 'ecoletrack_active_school_id';
 const LOCAL_STORAGE_ACCESS_TOKEN_KEY = 'ecoletrack_jwt_access';
 const SESSION_EXPIRED_MESSAGE_KEY = 'ecoletrack_session_expired_message';
 const SESSION_EXPIRED_MESSAGE = 'Votre session a expiré. Veuillez vous reconnecter.';
+const ACCOUNT_DISABLED_MESSAGE = 'Ce compte est désactivé. Contactez votre administrateur.';
+const redirectedLocations = new WeakSet<Location>();
 const API_BASE_URL = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL
   ? String(import.meta.env.VITE_API_BASE_URL)
   : '';
@@ -200,9 +202,9 @@ export function clearAuthSession() {
   }
 }
 
-export function markSessionExpired() {
+export function markSessionExpired(message = SESSION_EXPIRED_MESSAGE) {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(SESSION_EXPIRED_MESSAGE_KEY, SESSION_EXPIRED_MESSAGE);
+  localStorage.setItem(SESSION_EXPIRED_MESSAGE_KEY, message);
 }
 
 export function getSessionExpiredMessage(): string | null {
@@ -213,6 +215,29 @@ export function getSessionExpiredMessage(): string | null {
 export function clearSessionExpiredMessage() {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(SESSION_EXPIRED_MESSAGE_KEY);
+}
+
+function handleUnauthorizedResponse(status: number, errorBody: { code?: unknown; error?: unknown }) {
+  if (status !== 401) return;
+
+  const isDisabledAccount = errorBody.code === 'ACCOUNT_DISABLED';
+  const errorMessage = typeof errorBody.error === 'string' ? errorBody.error : String(errorBody.error ?? '');
+  if (!isDisabledAccount && !isTokenSessionError(errorMessage)) return;
+
+  clearAuthSession();
+  markSessionExpired(
+    isDisabledAccount && errorMessage.trim()
+      ? errorMessage
+      : isDisabledAccount
+        ? ACCOUNT_DISABLED_MESSAGE
+        : SESSION_EXPIRED_MESSAGE,
+  );
+
+  if (typeof window === 'undefined' || window.location.pathname === '/login') return;
+  if (redirectedLocations.has(window.location)) return;
+
+  redirectedLocations.add(window.location);
+  window.location.replace('/login');
 }
 
 export function getActiveSchoolId(): number | null {
@@ -432,19 +457,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
-      const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');
-      if (isTokenSessionError(errorMessage)) {
-        clearAuthSession();
-        markSessionExpired();
-        if (
-          typeof window !== 'undefined' &&
-          window.location &&
-          typeof window.location.replace === 'function' &&
-          window.location.pathname !== '/login'
-        ) {
-          window.location.replace('/login');
-        }
-      }
+      handleUnauthorizedResponse(response.status, errBody);
     }
     throw error;
   }
@@ -498,19 +511,7 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
-      const errorMessage = typeof errBody.error === 'string' ? errBody.error : String(errBody.error ?? '');
-      if (isTokenSessionError(errorMessage)) {
-        clearAuthSession();
-        markSessionExpired();
-        if (
-          typeof window !== 'undefined' &&
-          window.location &&
-          typeof window.location.replace === 'function' &&
-          window.location.pathname !== '/login'
-        ) {
-          window.location.replace('/login');
-        }
-      }
+      handleUnauthorizedResponse(response.status, errBody);
     }
     throw error;
   }
