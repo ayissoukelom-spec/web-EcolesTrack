@@ -1392,6 +1392,42 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
+  it('shows WEB last-login timestamps and never-connected status to a school admin', () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
+    const lastLoginAt = '2026-10-28T16:30:00.000Z';
+
+    renderWithAuth(
+      <AdminView
+        userRole="school_admin"
+        schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[
+          { id: 11, userId: 101, name: 'ZOU Jean', email: 'jean@example.com', schoolId: 1, lastLoginAt },
+          { id: 12, userId: 102, name: 'KOFFI Awa', email: 'awa@example.com', schoolId: 1, lastLoginAt: null },
+        ]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        currentSchoolId={1}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+
+    expect(screen.getByText('Dernière connexion')).toBeTruthy();
+    expect(screen.getByText(new Date(lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }))).toBeTruthy();
+    expect(screen.getByText('Jamais connecté')).toBeTruthy();
+  });
+
   it('counts parents by selected school for super admin', () => {
     const schools: School[] = [
       { id: 1, name: 'École du Lac', address: '', phone: '' },

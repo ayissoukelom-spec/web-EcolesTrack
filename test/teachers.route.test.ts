@@ -8,6 +8,7 @@ const mockState: any = {
   actorId: null as number | null,
   oldTeachers: [] as any[],
   newTeachers: [] as any[],
+  schoolAdminMemberships: [] as Array<{ schoolId: number; role: string; isActive: boolean }>,
   classAssignments: [] as Array<{ teacherId: number; classId: number }> ,
   users: [] as any[],
   teacherProjection: null as any,
@@ -64,6 +65,10 @@ const createBuilder = (selectArgs: any[] = []) => {
         }
       } else if (tableName === 'class_teachers' || tableName === 'classTeachers') {
         out = mockState.classAssignments || [];
+      } else if (tableName === 'user_schools' || tableName === 'userSchools') {
+        out = (mockState.schoolAdminMemberships || []).filter((membership) => (
+          membership.role === 'school_admin' && membership.isActive
+        ));
       } else if (tableName === 'users') {
         out = mockState.users || [];
       }
@@ -167,6 +172,7 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     mockState.actorId = null;
     mockState.oldTeachers = [];
     mockState.newTeachers = [];
+    mockState.schoolAdminMemberships = [];
     mockState.classAssignments = [];
     mockState.users = [];
     mockState.teacherProjection = null;
@@ -226,7 +232,16 @@ describe('GET /api/teachers (RBAC & merging)', () => {
   });
 
   it('school_admin: sees teachers of their school', async () => {
-    mockState.oldTeachers = [{ id: 3, userId: 13, uid: 'u3', name: 'T3', email: 't3@example.com', schoolId: 10 }, { id: 4, userId: 14, uid: 'u4', name: 'T4', email: 't4@example.com', schoolId: 20 }];
+    const lastLoginAt = new Date('2026-10-28T16:30:00.000Z');
+    mockState.schoolAdminMemberships = [
+      { schoolId: 10, role: 'school_admin', isActive: true },
+      { schoolId: 20, role: 'school_admin', isActive: false },
+      { schoolId: 30, role: 'teacher', isActive: true },
+    ];
+    mockState.oldTeachers = [
+      { id: 3, userId: 13, uid: 'u3', name: 'T3', email: 't3@example.com', schoolId: 10, lastLoginAt },
+      { id: 4, userId: 14, uid: 'u4', name: 'T4', email: 't4@example.com', schoolId: 20 },
+    ];
     mockState.newTeachers = [];
     mockState.classAssignments = [];
 
@@ -237,9 +252,12 @@ describe('GET /api/teachers (RBAC & merging)', () => {
       .expect(200);
 
     expect(res.body.map((t: any) => t.id)).toEqual([3]);
+    expect(mockState.teacherProjection.lastLoginAt).toBe(users.lastLoginAt);
+    expect(res.body[0]).toMatchObject({ lastLoginAt: lastLoginAt.toISOString() });
   });
 
   it('school_admin: cannot request another school via ?schoolId (403)', async () => {
+    mockState.schoolAdminMemberships = [{ schoolId: 10, role: 'school_admin', isActive: true }];
     const res = await request(app)
       .get('/api/teachers?schoolId=20')
       .set('x-simulated-role', 'school_admin')
@@ -249,11 +267,56 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     expect(res.body).toHaveProperty('error');
   });
 
-  it('school_admin without schoolId returns []', async () => {
+  it('school_admin: can query another active school_admin membership but not an unlinked school', async () => {
+    mockState.schoolAdminMemberships = [
+      { schoolId: 10, role: 'school_admin', isActive: true },
+      { schoolId: 20, role: 'school_admin', isActive: true },
+    ];
+    mockState.oldTeachers = [
+      { id: 3, userId: 13, uid: 'u3', name: 'T3', email: 't3@example.com', schoolId: 10 },
+      { id: 4, userId: 14, uid: 'u4', name: 'T4', email: 't4@example.com', schoolId: 20 },
+    ];
+    mockState.newTeachers = [];
+
+    await request(app)
+      .get('/api/teachers?schoolId=20')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-school-id', '10')
+      .expect(200);
+
+    mockState.schoolAdminMemberships = [{ schoolId: 10, role: 'school_admin', isActive: true }];
+    await request(app)
+      .get('/api/teachers?schoolId=20')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-school-id', '10')
+      .expect(403);
+  });
+
+  it('does not project WEB last-login data to non-administrator roles', async () => {
+    mockState.oldTeachers = [{
+      id: 5,
+      userId: 15,
+      uid: 'u5',
+      name: 'T5',
+      email: 't5@example.com',
+      schoolId: 30,
+      lastLoginAt: new Date('2026-10-28T16:30:00.000Z'),
+    }];
+
+    await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'teacher')
+      .set('x-simulated-school-id', '30')
+      .expect(200);
+
+    expect(mockState.teacherProjection).not.toHaveProperty('lastLoginAt');
+  });
+
+  it('school_admin without an active school_admin membership returns [] even if a school id is supplied', async () => {
     const res = await request(app)
       .get('/api/teachers')
       .set('x-simulated-role', 'school_admin')
-      .set('x-simulated-school-id', '')
+      .set('x-simulated-school-id', '10')
       .expect(200);
     expect(res.body).toEqual([]);
   });

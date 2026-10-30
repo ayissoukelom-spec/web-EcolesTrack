@@ -6191,9 +6191,38 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      const filterSchoolId = req.query.schoolId ? parseInt(String(req.query.schoolId), 10) : null;
-      if (actor.role !== 'super_admin' && filterSchoolId && actor.schoolId && filterSchoolId !== actor.schoolId) {
-        return res.status(403).json({ error: 'Cannot request teachers for another school' });
+      let filterSchoolId: number | null = null;
+      if (req.query.schoolId !== undefined) {
+        const requestedSchoolId = String(req.query.schoolId);
+        const parsedSchoolId = Number(requestedSchoolId);
+        if (!/^[1-9]\d*$/.test(requestedSchoolId) || !Number.isSafeInteger(parsedSchoolId)) {
+          return res.status(400).json({ error: 'Invalid school id' });
+        }
+        filterSchoolId = parsedSchoolId;
+      }
+
+      let querySchoolIds: number[] | null = filterSchoolId == null ? null : [filterSchoolId];
+      if (actor.role === 'school_admin') {
+        if (!actor.id) return res.json([]);
+        const memberships = await db.select({ schoolId: userSchools.schoolId })
+          .from(userSchools)
+          .where(and(
+            eq(userSchools.userId, actor.id),
+            eq(userSchools.role, 'school_admin'),
+            eq(userSchools.isActive, true),
+          ));
+        const authorizedSchoolIds = Array.from(new Set(memberships.map((membership) => membership.schoolId)));
+        if (filterSchoolId != null && !authorizedSchoolIds.includes(filterSchoolId)) {
+          return res.status(403).json({ error: 'Cannot request teachers for another school' });
+        }
+        querySchoolIds = filterSchoolId == null ? authorizedSchoolIds : [filterSchoolId];
+        if (querySchoolIds.length === 0) return res.json([]);
+      } else if (actor.role !== 'super_admin') {
+        if (filterSchoolId != null && actor.schoolId != null && filterSchoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Cannot request teachers for another school' });
+        }
+        if (actor.schoolId == null) return res.json([]);
+        querySchoolIds = [actor.schoolId];
       }
 
       const teacherProjection = {
@@ -6205,7 +6234,9 @@ export async function createApp() {
         firstNames: users.firstNames,
         email: users.email,
         gender: users.gender,
-        lastLoginAt: users.lastLoginAt,
+        ...(['super_admin', 'school_admin'].includes(actor.role)
+          ? { lastLoginAt: users.lastLoginAt }
+          : {}),
         phone: teachers.phone,
         specialization: teachers.specialization,
         schoolId: teachers.schoolId,
@@ -6233,31 +6264,26 @@ export async function createApp() {
       let oldModelQuery = baseOldModel;
       let newModelQuery = baseNewModel;
 
-      if (filterSchoolId) {
-        oldModelQuery = oldModelQuery.where(eq(teachers.schoolId, filterSchoolId)) as any;
-        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, filterSchoolId)) as any;
+      const oldModelConditions = [];
+      const newModelConditions = [];
+      if (querySchoolIds) {
+        oldModelConditions.push(inArray(teachers.schoolId, querySchoolIds));
+        newModelConditions.push(inArray(userSchools.schoolId, querySchoolIds));
       }
-
-      if (actor.role !== 'super_admin') {
-        if (!actor.schoolId) {
-          return res.json([]);
-        }
-        oldModelQuery = oldModelQuery.where(eq(teachers.schoolId, actor.schoolId)) as any;
-        newModelQuery = newModelQuery.where(eq(userSchools.schoolId, actor.schoolId)) as any;
-      }
-
       if (actor.role === 'teacher') {
         if (!actor.id) {
           return res.json([]);
         }
-        oldModelQuery = oldModelQuery.where(eq(teachers.userId, actor.id)) as any;
-        newModelQuery = newModelQuery.where(eq(teachers.userId, actor.id)) as any;
+        oldModelConditions.push(eq(teachers.userId, actor.id));
+        newModelConditions.push(eq(teachers.userId, actor.id));
       }
 
       if (actor.role !== 'super_admin' || req.query.includeDeleted !== 'true') {
-        oldModelQuery = oldModelQuery.where(eq(users.isDeleted, false)) as any;
-        newModelQuery = newModelQuery.where(eq(users.isDeleted, false)) as any;
+        oldModelConditions.push(eq(users.isDeleted, false));
+        newModelConditions.push(eq(users.isDeleted, false));
       }
+      if (oldModelConditions.length > 0) oldModelQuery = oldModelQuery.where(and(...oldModelConditions)) as any;
+      if (newModelConditions.length > 0) newModelQuery = newModelQuery.where(and(...newModelConditions)) as any;
 
       const [oldTeachers, newTeachers] = await Promise.all([
         oldModelQuery,
@@ -6298,7 +6324,7 @@ export async function createApp() {
           .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
           .where(actor.role === 'super_admin'
             ? inArray(teacherSubjects.teacherId, teacherIds)
-            : and(inArray(teacherSubjects.teacherId, teacherIds), eq(teacherSubjects.schoolId, actor.schoolId!)))
+            : and(inArray(teacherSubjects.teacherId, teacherIds), inArray(teacherSubjects.schoolId, querySchoolIds!)))
         : [];
       const subjectAssignmentMap = new Map<number, Array<{ id: number; name: string }>>();
       for (const assignment of subjectAssignments) {
@@ -6314,7 +6340,7 @@ export async function createApp() {
           .from(classTeachers)
           .where(actor.role === 'super_admin'
             ? inArray(classTeachers.teacherId, teacherIds)
-            : and(inArray(classTeachers.teacherId, teacherIds), eq(classTeachers.schoolId, actor.schoolId!)));
+            : and(inArray(classTeachers.teacherId, teacherIds), inArray(classTeachers.schoolId, querySchoolIds!)));
       }
 
       console.log('GET /api/teachers - assignments count:', assignments.length);
@@ -6329,7 +6355,7 @@ export async function createApp() {
         eq(teacherClassSubjects.isActive, true),
       ];
       if (actor.role !== 'super_admin') {
-        teachingAssignmentConditions.push(eq(teacherClassSubjects.schoolId, actor.schoolId!));
+        teachingAssignmentConditions.push(inArray(teacherClassSubjects.schoolId, querySchoolIds!));
       } else if (filterSchoolId != null) {
         teachingAssignmentConditions.push(eq(teacherClassSubjects.schoolId, filterSchoolId));
       }
