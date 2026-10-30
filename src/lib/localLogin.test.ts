@@ -1,19 +1,59 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Request, Response } from 'express';
+import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { verifyJwt } from './jwt.ts';
 
 const mockWhere = vi.fn();
-const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
-const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
+const mockInnerJoin = vi.fn(() => ({
+  where: (...args: any[]) => Promise.resolve(mockWhere(...args)).then((rows) => {
+    const selectedUser = rows?.[0]?.user ?? rows?.[0];
+    if (selectedUser?.role) lastSelectedUser = selectedUser;
+    return rows;
+  }),
+}));
+const usersTable = {};
+const localAuthsTable = {};
+let lastSelectedUser: any;
+const mockFrom = vi.fn((table: any) => {
+  let lockRequested = false;
+  const query: any = {
+    where: (...args: any[]) => Promise.resolve(mockWhere(...args)).then((rows) => {
+      if (table === usersTable) {
+        const selectedUser = rows?.[0]?.user ?? rows?.[0];
+        if (selectedUser?.role) lastSelectedUser = selectedUser;
+        if (lockRequested && (!rows || rows.length === 0) && lastSelectedUser) {
+          return [lastSelectedUser];
+        }
+      }
+      return rows;
+    }),
+    for: () => {
+      lockRequested = true;
+      return query;
+    },
+    innerJoin: mockInnerJoin,
+  };
+  return query;
+});
 const mockReturning = vi.fn();
-const mockUpdateWhereAndReturning = vi.fn(() => ({ returning: mockReturning }));
+const mockUpdateWhereAndReturning = vi.fn((_condition: SQL<unknown>) => ({ returning: mockReturning }));
 const mockSet = vi.fn(() => ({ where: mockUpdateWhereAndReturning }));
-const mockInsertValues = vi.fn();
-const mockDb = {
-  select: vi.fn(() => ({ from: mockFrom })),
-  update: vi.fn(() => ({ set: mockSet })),
-  insert: vi.fn(() => ({ values: mockInsertValues })),
+const mockInsertValues = vi.fn(async (_values: unknown) => undefined);
+const mockSelect = vi.fn(() => ({ from: mockFrom }));
+const mockUpdate = vi.fn(() => ({ set: mockSet }));
+const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
+interface MockDatabase {
+  select: typeof mockSelect;
+  update: typeof mockUpdate;
+  insert: typeof mockInsert;
+  transaction: (callback: (tx: MockDatabase) => Promise<unknown>) => Promise<unknown>;
+}
+const mockDb: MockDatabase = {
+  select: mockSelect,
+  update: mockUpdate,
+  insert: mockInsert,
+  transaction: vi.fn(async (callback: (tx: MockDatabase) => Promise<unknown>) => callback(mockDb)),
 };
 
 vi.mock('../db/index.ts', () => ({
@@ -21,10 +61,11 @@ vi.mock('../db/index.ts', () => ({
 }));
 
 vi.mock('../db/schema.ts', () => ({
-  users: {},
+  users: usersTable,
   parents: {},
-  localAuths: {},
+  localAuths: localAuthsTable,
   userLoginEvents: {},
+  auditEvents: {},
 }));
 
 const createMockRes = () => {
@@ -36,6 +77,8 @@ const createMockRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  lastSelectedUser = undefined;
+  mockWhere.mockResolvedValue([]);
   mockUpdateWhereAndReturning.mockReturnValue({ returning: mockReturning });
   mockReturning.mockResolvedValue([{ id: 1 }]);
   mockInsertValues.mockResolvedValue(undefined);
@@ -47,6 +90,36 @@ beforeEach(() => {
 });
 
 describe('handleLocalLogin', () => {
+  it.each(['teacher', 'school_admin'])('rejects a disabled %s before issuing a token or recording login', async (role) => {
+    const password = 'DisabledAccountSecret123!';
+    const salt = 'disabled-account-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 700,
+      uid: 'disabled-user-700',
+      email: 'disabled@example.com',
+      name: 'Disabled User',
+      role,
+      schoolId: 42,
+      isDeleted: true,
+    };
+
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({
+      error: 'Ce compte est désactivé. Contactez votre administrateur.',
+    });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockReturning).not.toHaveBeenCalled();
+  });
+
   it('returns a JWT token on successful login with expected claims', async () => {
     const password = 'SuperSecret123!';
     const salt = 'test-salt';
@@ -108,9 +181,74 @@ describe('handleLocalLogin', () => {
     expect(decoded.iss).toBe('test-issuer');
     expect(decoded.aud).toBe('test-audience');
     expect(decoded.sub).toBe(String(userRecord.id));
+    expect(decoded.authRevocationEventId).toBe(0);
     expect(typeof decoded.iat).toBe('number');
     expect(typeof decoded.exp).toBe('number');
     expect(mockInnerJoin).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the locked account status after password verification before issuing a token', async () => {
+    const password = 'ConcurrentDisableSecret123!';
+    const salt = 'concurrent-disable-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const activeUser = {
+      id: 700,
+      uid: 'concurrent-disable-user',
+      email: 'concurrent-disable@example.com',
+      name: 'Concurrent Disable',
+      role: 'teacher',
+      schoolId: 42,
+      isDeleted: false,
+    };
+
+    mockWhere.mockResolvedValueOnce([activeUser]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+    mockWhere.mockResolvedValueOnce([{ ...activeUser, isDeleted: true }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: activeUser.email, password } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({
+      error: 'Ce compte est désactivé. Contactez votre administrateur.',
+    });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockReturning).not.toHaveBeenCalled();
+  });
+
+  it('keeps successful School Admin login working', async () => {
+    const password = 'SchoolAdminSecret123!';
+    const salt = 'school-admin-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 124,
+      uid: 'school-admin-124',
+      email: 'school-admin@example.com',
+      name: 'School Admin',
+      role: 'school_admin',
+      schoolId: 42,
+      isDeleted: false,
+    };
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({
+      id: userRecord.id,
+      role: 'school_admin',
+      tokenType: 'access',
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      userId: userRecord.id,
+      role: 'school_admin',
+    }));
   });
 
   it('keeps parent email login working with the existing password and token flow', async () => {
@@ -197,6 +335,7 @@ describe('handleLocalLogin', () => {
 
     mockWhere.mockResolvedValueOnce([{ user: userRecord }]);
     mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const res = createMockRes() as Response;
@@ -409,7 +548,11 @@ describe('handleLocalLogin', () => {
     mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([authRow]);
     mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([authRow]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([]);
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const req = { body: { email: userRecord.email, password } } as Request;

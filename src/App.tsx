@@ -125,6 +125,7 @@ export default function App() {
       setNotificationsList([]);
       setAuditEvents([]);
       setUsersList([]);
+      setDisabledUsersList([]);
       setSubjectsList([]);
       setApprovedSubjectsList([]);
       setSubjectTypesList([]);
@@ -217,6 +218,7 @@ export default function App() {
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [usersList, setUsersList] = useState<User[]>([]);
+  const [disabledUsersList, setDisabledUsersList] = useState<User[]>([]);
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
   const [subjectTypesList, setSubjectTypesList] = useState<SubjectType[]>([]);
@@ -361,6 +363,9 @@ export default function App() {
         : '/api/classes';
       const studentsEndpoint = '/api/students?includeFormer=true';
       const homeroomClassesEndpoint = currentRole === 'teacher' ? '/api/my-homeroom-classes' : null;
+      const disabledUsersEndpoint = currentRole === 'super_admin'
+        ? '/api/simulation/users?includeDeleted=true'
+        : null;
       const endpoints = [
         '/api/schools',
         '/api/academic-years',
@@ -380,6 +385,7 @@ export default function App() {
         '/api/subject-types',
         '/api/education/levels',
         '/api/simulation/users',
+        ...(disabledUsersEndpoint ? [disabledUsersEndpoint] : []),
         ...(homeroomClassesEndpoint ? [homeroomClassesEndpoint] : []),
       ];
 
@@ -422,6 +428,13 @@ export default function App() {
       if (Array.isArray(map['/api/subject-types'])) setSubjectTypesList(map['/api/subject-types']);
       if (Array.isArray(map['/api/education/levels'])) setEducationLevels(map['/api/education/levels']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
+      if (disabledUsersEndpoint && Array.isArray(map[disabledUsersEndpoint])) {
+        setDisabledUsersList(map[disabledUsersEndpoint].filter((user: User) => (
+          user.isDeleted === true && ['teacher', 'school_admin'].includes(user.role)
+        )));
+      } else {
+        setDisabledUsersList([]);
+      }
       if (homeroomClassesEndpoint && Array.isArray(map[homeroomClassesEndpoint])) {
         setHomeroomClassesList(map[homeroomClassesEndpoint]);
       } else if (currentRole !== 'teacher') {
@@ -929,9 +942,21 @@ export default function App() {
       await apiFetch(`/api/admin/users/${id}`, {
         method: 'DELETE',
       });
-      fetchAllData();
+      await fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message || 'Impossible de supprimer le compte');
+      throw err;
+    }
+  };
+
+  const handleReactivateUser = async (id: number) => {
+    try {
+      await apiFetch(`/api/admin/users/${id}/reactivate`, {
+        method: 'POST',
+      });
+      await fetchAllData();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Impossible de réactiver le compte');
       throw err;
     }
   };
@@ -1641,6 +1666,8 @@ export default function App() {
                   studentsList={studentsList}
                   parentsList={parentsList}
                   usersList={usersList}
+                  disabledUsersList={disabledUsersList}
+                  auditEvents={auditEvents}
                   subjectsList={subjectsList}
                   subjectTypesList={subjectTypesList}
                   educationLevels={educationLevels}
@@ -1665,6 +1692,7 @@ export default function App() {
                   onUpdateUser={handleUpdateUser}
                   onSetPassword={handleSetPassword}
                   onDeleteUser={handleDeleteUser}
+                  onReactivateUser={handleReactivateUser}
                   onDeleteClass={handleDeleteClass}
                   onDeleteSchool={handleDeleteSchool}
                   onSetSchoolSuspended={handleSetSchoolSuspended}

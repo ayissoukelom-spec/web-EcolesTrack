@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '../contexts/AuthContext.tsx';
@@ -304,6 +305,156 @@ describe('AdminView school deletion confirmation', () => {
 describe('AdminView create-user teacher form', () => {
   afterEach(() => {
     cleanup();
+  });
+
+  describe('AdminView disabled account lifecycle', () => {
+    beforeEach(() => {
+      Object.defineProperty(window, 'localStorage', {
+        value: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(),
+          removeItem: vi.fn(),
+          clear: vi.fn(),
+        },
+        configurable: true,
+      });
+    });
+
+    afterEach(() => {
+      cleanup();
+      vi.restoreAllMocks();
+    });
+
+    it('moves the same account between accessible active and disabled views and shows its available deactivation date', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
+      const activeTeacher: User = {
+        id: 11,
+        uid: 'active-teacher',
+        email: 'active@example.test',
+        name: 'Teacher Eleven',
+        firstNames: 'Aïcha',
+        lastName: 'Kossi',
+        role: 'teacher',
+        schoolId: 7,
+        isDeleted: false,
+      };
+      const school = { id: 7, name: 'École de Test' } as School;
+      const deactivatedAt = '2026-10-29T15:30:00.000Z';
+      const onDeactivate = vi.fn();
+      const onReactivate = vi.fn();
+
+      const AccountLifecycleHarness = () => {
+        const [activeUsers, setActiveUsers] = React.useState<User[]>([activeTeacher]);
+        const [disabledUsers, setDisabledUsers] = React.useState<User[]>([]);
+        const [auditEvents, setAuditEvents] = React.useState<any[]>([]);
+        return (
+          <AdminView
+            userRole="super_admin"
+            schoolsList={[school]}
+            yearsList={[]}
+            classesList={[]}
+            teachersList={[]}
+            studentsList={[]}
+            parentsList={[]}
+            usersList={activeUsers}
+            disabledUsersList={disabledUsers}
+            auditEvents={auditEvents}
+            onAddSchool={async () => ({})}
+            onAddYear={() => undefined}
+            onAddClass={async () => undefined}
+            onAddTeacher={async () => ({})}
+            onAddParent={async () => ({})}
+            onAddStudent={() => undefined}
+            onDeleteClass={() => undefined}
+            onDeleteSchool={() => undefined}
+            onDeleteUser={async (id) => {
+              onDeactivate(id);
+              const user = activeUsers.find((candidate) => candidate.id === id);
+              if (!user) throw new Error('Compte introuvable');
+              setActiveUsers((current) => current.filter((candidate) => candidate.id !== id));
+              setDisabledUsers((current) => [...current.filter((candidate) => candidate.id !== id), { ...user, isDeleted: true }]);
+              setAuditEvents([{ id: 1, action: 'delete', resourceType: 'user', resourceId: id, createdAt: deactivatedAt }]);
+            }}
+            onReactivateUser={async (id) => {
+              onReactivate(id);
+              const user = disabledUsers.find((candidate) => candidate.id === id);
+              if (!user) throw new Error('Compte introuvable');
+              setDisabledUsers((current) => current.filter((candidate) => candidate.id !== id));
+              setActiveUsers((current) => [...current.filter((candidate) => candidate.id !== id), { ...user, isDeleted: false }]);
+            }}
+          />
+        );
+      };
+
+      renderWithAuth(<AccountLifecycleHarness />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comptes' }));
+      expect(screen.getByText('Aïcha Kossi')).toBeTruthy();
+      expect(screen.getAllByText('École de Test').length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: /Comptes actifs \(1\)/ })).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(screen.getByRole('button', { name: 'Désactiver' }));
+
+      const deactivateDialog = screen.getByRole('dialog', { name: 'Confirmer la désactivation' });
+      fireEvent.click(within(deactivateDialog).getByRole('button', { name: 'Désactiver' }));
+      await waitFor(() => expect(onDeactivate).toHaveBeenCalledWith(activeTeacher.id));
+      expect(screen.getByRole('button', { name: /Comptes désactivés \(1\)/ })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('Aïcha Kossi')).toBeTruthy();
+      expect(screen.getAllByText('École de Test').length).toBeGreaterThan(0);
+      expect(screen.getByText(new Date(deactivatedAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }))).toBeTruthy();
+
+      fireEvent.click(within(deactivateDialog).getByRole('button', { name: 'Fermer' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Réactiver' }));
+      const reactivateDialog = screen.getByRole('dialog', { name: 'Confirmer la réactivation' });
+      fireEvent.click(within(reactivateDialog).getByRole('button', { name: 'Réactiver' }));
+
+      await waitFor(() => expect(onReactivate).toHaveBeenCalledWith(activeTeacher.id));
+      expect(screen.getByRole('button', { name: /Comptes actifs \(1\)/ })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('Aïcha Kossi')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Comptes désactivés \(0\)/ })).toBeTruthy();
+      expect(onDeactivate).toHaveBeenCalledWith(11);
+      expect(onReactivate).toHaveBeenCalledWith(11);
+    });
+
+    it('shows API errors when reactivation fails', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[]}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[]}
+          disabledUsersList={[{
+            id: 12,
+            uid: 'disabled-teacher',
+            email: 'disabled@example.test',
+            name: 'Disabled Teacher',
+            role: 'teacher',
+            isDeleted: true,
+          }]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onReactivateUser={async () => { throw new Error('Réactivation refusée par le serveur'); }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comptes' }));
+      fireEvent.click(screen.getByRole('button', { name: /Comptes désactivés/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Réactiver' }));
+      const dialog = screen.getByRole('dialog', { name: 'Confirmer la réactivation' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Réactiver' }));
+
+      expect(await within(dialog).findByText('Réactivation refusée par le serveur')).toBeTruthy();
+    });
   });
 
   beforeEach(() => {

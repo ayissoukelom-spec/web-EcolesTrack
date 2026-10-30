@@ -319,6 +319,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
     }
 
     if (dbUser) {
+      if (dbUser.isDeleted) return null;
       const resolvedSchoolId = req.user.schoolId ?? dbUser.schoolId ?? null;
       return { ...dbUser, role, schoolId: resolvedSchoolId, simulated: true } as ResolvedActor;
     }
@@ -1439,7 +1440,9 @@ export async function createApp() {
       if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
 
       // Build filter conditions
-      let filterConditions: any = eq(users.isDeleted, false);
+      const includeDeleted = actor.role === 'super_admin'
+        && req.query.includeDeleted === 'true';
+      let filterConditions: any = includeDeleted ? undefined : eq(users.isDeleted, false);
 
       // Apply role-based filtering
       if (actor.role === 'school_admin' && actor.schoolId) {
@@ -1451,7 +1454,7 @@ export async function createApp() {
           notInArray(users.role, ['super_admin'])
         );
       } else if (actor.role === 'super_admin') {
-        // Super admin sees all users (only filter by isDeleted)
+        // Disabled accounts are exposed only through the explicit super-admin query.
       } else if (actor.role === 'parent') {
         // Parents may query their own public profile if needed.
         if (!actor.id) {
@@ -1466,7 +1469,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const allUsers = await db
+      let usersQuery = db
         .select({
           id: users.id,
           uid: users.uid,
@@ -1475,11 +1478,14 @@ export async function createApp() {
           role: users.role,
           schoolId: users.schoolId,
           academicYearId: users.academicYearId,
+          lastName: users.lastName,
+          firstNames: users.firstNames,
           isDeleted: users.isDeleted,
           createdAt: users.createdAt,
           userPhone: users.phone,
           teacherId: teachers.id,
           teacherPhone: teachers.phone,
+          teacherSchoolId: teachers.schoolId,
           teacherSpecialization: teachers.specialization,
           parentPhone: parents.phone,
           userSchoolId: userSchools.schoolId,
@@ -1487,8 +1493,9 @@ export async function createApp() {
         .from(users)
         .leftJoin(teachers, eq(teachers.userId, users.id))
         .leftJoin(parents, eq(parents.userId, users.id))
-        .leftJoin(userSchools, eq(userSchools.userId, users.id))
-        .where(filterConditions);
+        .leftJoin(userSchools, eq(userSchools.userId, users.id));
+      if (filterConditions) usersQuery = usersQuery.where(filterConditions) as typeof usersQuery;
+      const allUsers = await usersQuery;
 
       const normalizedById = allUsers.reduce((acc: Record<number, any>, user: any) => {
         if (!acc[user.id]) {
@@ -1501,6 +1508,8 @@ export async function createApp() {
             schoolId: user.schoolId,
             schoolIds: user.schoolId != null ? [user.schoolId] : [],
             academicYearId: user.academicYearId,
+            lastName: user.lastName,
+            firstNames: user.firstNames,
             isDeleted: user.isDeleted,
             createdAt: user.createdAt,
             phone: user.userPhone || user.teacherPhone || user.parentPhone || null,
@@ -1508,6 +1517,13 @@ export async function createApp() {
             classIds: [],
             _teacherId: user.teacherId,
           };
+        }
+        if (user.teacherSchoolId != null) {
+          const existingSchoolIds = acc[user.id].schoolIds || [];
+          if (!existingSchoolIds.includes(user.teacherSchoolId)) {
+            existingSchoolIds.push(user.teacherSchoolId);
+            acc[user.id].schoolIds = existingSchoolIds;
+          }
         }
         if (user.userSchoolId != null) {
           const existingSchoolIds = acc[user.id].schoolIds || [];
@@ -2272,7 +2288,7 @@ export async function createApp() {
     }
   });
 
-  // Admin: delete user account (super_admin only) - soft delete
+  // Admin: deactivate user account (super_admin only) - soft delete
   app.delete('/api/admin/users/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
@@ -2282,29 +2298,102 @@ export async function createApp() {
       }
 
       const id = Number(req.params.id);
-      if (Number.isNaN(id)) {
+      if (!Number.isSafeInteger(id) || id <= 0) {
         return res.status(400).json({ error: 'Invalid user id' });
       }
 
-      const [targetUser] = await db.select().from(users).where(eq(users.id, id));
-      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      const result = await db.transaction(async (tx) => {
+        const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
+        if (!targetUser) return { status: 404 as const };
+        if (!['teacher', 'school_admin'].includes(targetUser.role)) return { status: 400 as const };
+        if (targetUser.isDeleted) return { status: 200 as const, alreadyDeactivated: true };
 
-      // Soft delete: mark user as deleted (preserves all related data)
-      await db.update(users).set({ isDeleted: true }).where(eq(users.id, id));
+        const [updatedUser] = await tx.update(users)
+          .set({ isDeleted: true })
+          .where(and(eq(users.id, id), eq(users.isDeleted, false)))
+          .returning({ id: users.id });
+        if (!updatedUser) throw new Error('User account changed before deactivation');
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name,
+          action: 'delete',
+          resourceType: 'user',
+          resourceId: id,
+          schoolId: null,
+          description: `Super admin ${actor.name} deactivated user account ${targetUser.name} (${targetUser.email})`,
+        });
+        return { status: 200 as const, alreadyDeactivated: false };
+      });
 
-      await logAuditEvent(
-        actor,
-        'delete',
-        'user',
-        id,
-        actor.schoolId ?? null,
-        `Super admin ${actor.name} deactivated user account ${targetUser.name} (${targetUser.email})`
-      );
-
-      res.json({ success: true, id });
+      if (result.status === 404) return res.status(404).json({ error: 'User not found' });
+      if (result.status === 400) {
+        return res.status(400).json({ error: 'Only teacher and school admin accounts can be deactivated here' });
+      }
+      res.json({ success: true, id, alreadyDeactivated: result.alreadyDeactivated });
     } catch (err: any) {
       console.error('Error deleting user:', err);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/admin/users/:id/reactivate', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Forbidden: only super_admin can reactivate user accounts' });
+      }
+
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'Invalid user id' });
+      }
+
+      const result = await db.transaction(async (tx) => {
+        const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
+        if (!targetUser) return { status: 404 as const };
+        if (!['teacher', 'school_admin'].includes(targetUser.role)) return { status: 400 as const };
+        if (!targetUser.isDeleted) return { status: 200 as const, alreadyActive: true };
+
+        const [updatedUser] = await tx.update(users)
+          .set({ isDeleted: false })
+          .where(and(eq(users.id, id), eq(users.isDeleted, true)))
+          .returning({ id: users.id });
+        if (!updatedUser) throw new Error('User account changed before reactivation');
+
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name,
+          action: 'session_revoked',
+          resourceType: 'user',
+          resourceId: id,
+          schoolId: null,
+          description: `Revocation boundary for sessions issued before reactivation of ${targetUser.name} (${targetUser.email})`,
+        });
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name,
+          action: 'reactivate',
+          resourceType: 'user',
+          resourceId: id,
+          schoolId: null,
+          description: `Super admin ${actor.name} reactivated user account ${targetUser.name} (${targetUser.email})`,
+        });
+        return { status: 200 as const, alreadyActive: false };
+      });
+
+      if (result.status === 404) return res.status(404).json({ error: 'User not found' });
+      if (result.status === 400) return res.status(400).json({ error: 'Only teacher and school admin accounts can be reactivated here' });
+      return res.json({ success: true, id, alreadyActive: result.alreadyActive });
+    } catch (err: any) {
+      console.error('Error reactivating user:', err);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -6114,14 +6203,13 @@ export async function createApp() {
         name: users.name,
         lastName: users.lastName,
         firstNames: users.firstNames,
-        lastName: users.lastName,
-        firstNames: users.firstNames,
         email: users.email,
         gender: users.gender,
         lastLoginAt: users.lastLoginAt,
         phone: teachers.phone,
         specialization: teachers.specialization,
         schoolId: teachers.schoolId,
+        isDeleted: users.isDeleted,
       };
 
       const baseOldModel = db
@@ -6164,6 +6252,11 @@ export async function createApp() {
         }
         oldModelQuery = oldModelQuery.where(eq(teachers.userId, actor.id)) as any;
         newModelQuery = newModelQuery.where(eq(teachers.userId, actor.id)) as any;
+      }
+
+      if (actor.role !== 'super_admin' || req.query.includeDeleted !== 'true') {
+        oldModelQuery = oldModelQuery.where(eq(users.isDeleted, false)) as any;
+        newModelQuery = newModelQuery.where(eq(users.isDeleted, false)) as any;
       }
 
       const [oldTeachers, newTeachers] = await Promise.all([

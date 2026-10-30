@@ -3,7 +3,7 @@ import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult,
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, getTeacherDisplayName } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, AuditEvent, getTeacherDisplayName } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -415,6 +415,8 @@ interface AdminViewProps {
   studentsList: Student[];
   parentsList: Parent[];
   usersList: User[];
+  disabledUsersList?: User[];
+  auditEvents?: AuditEvent[];
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
@@ -442,6 +444,7 @@ interface AdminViewProps {
   onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
   onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }>;
   onDeleteUser?: (id: number) => Promise<void>;
+  onReactivateUser?: (id: number) => Promise<void>;
   onDeleteClass: (id: number) => void;
   onDeleteSchool: (id: number, password: string) => void | Promise<void>;
   onSetSchoolSuspended?: (id: number, isSuspended: boolean) => Promise<void>;
@@ -486,12 +489,15 @@ export default function AdminView({
   onClearImportResult,
   onCreateUser,
   usersList,
+  disabledUsersList = [],
+  auditEvents = [],
   onDeleteClass,
   onDeleteSchool,
   onSetSchoolSuspended,
   onUpdateUser,
   onSetPassword,
   onDeleteUser,
+  onReactivateUser,
   onAddSubject,
   onUpdateSubject,
   onDeleteSubject,
@@ -545,6 +551,7 @@ export default function AdminView({
   const [searchQuery, setSearchQuery] = useState('');
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
+  const [accountStatusFilter, setAccountStatusFilter] = useState<'active' | 'disabled'>('active');
   const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
   const [studentClassFilterId, setStudentClassFilterId] = useState<number | null>(null);
   const [studentRosterFilter, setStudentRosterFilter] = useState<'active' | 'former' | 'all'>('active');
@@ -1313,7 +1320,30 @@ export default function AdminView({
     return Array.isArray(user.schoolIds) && user.schoolIds.includes(schoolId);
   };
 
-  const filteredAccountsList = usersList.filter((u) => {
+  const accountsForDisplay = userRole === 'super_admin'
+    ? [...usersList.filter((user) => !user.isDeleted), ...disabledUsersList]
+    : usersList.filter((user) => !user.isDeleted);
+  const latestDeactivationByUserId = new Map<number, AuditEvent>();
+  auditEvents.forEach((event) => {
+    if (event.action !== 'delete' || event.resourceType !== 'user' || event.resourceId == null) return;
+    const current = latestDeactivationByUserId.get(event.resourceId);
+    if (!current || event.id > current.id) latestDeactivationByUserId.set(event.resourceId, event);
+  });
+  const schoolNamesForAccount = (user: User) => {
+    const teacherProfile = teachersList.find((teacher) => teacher.userId === user.id);
+    const schoolIds = [...new Set([
+      user.schoolId,
+      ...(user.schoolIds ?? []),
+      teacherProfile?.schoolId,
+    ].filter((id): id is number => typeof id === 'number'))];
+    return schoolIds
+      .map((id) => schoolsList.find((school) => school.id === id)?.name)
+      .filter((name): name is string => Boolean(name));
+  };
+  const filteredAccountsList = accountsForDisplay.filter((u) => {
+    if (userRole === 'super_admin' && (u.isDeleted === true) !== (accountStatusFilter === 'disabled')) {
+      return false;
+    }
     if (userRole === 'school_admin' && ['super_admin', 'school_admin'].includes(u.role)) {
       return false;
     }
@@ -1326,7 +1356,7 @@ export default function AdminView({
     if (!matchesCreationDateFilter(u.createdAt, accountCreationDateFilter)) {
       return false;
     }
-    return filterBySearch(`${u.name} ${u.email} ${u.role}`);
+    return filterBySearch(`${u.firstNames ?? ''} ${u.lastName ?? ''} ${u.name} ${u.email} ${u.role} ${schoolNamesForAccount(u).join(' ')}`);
   });
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId) : undefined;
@@ -2473,6 +2503,10 @@ export default function AdminView({
   const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [deleteUserSuccess, setDeleteUserSuccess] = useState(false);
+  const [userToReactivate, setUserToReactivate] = useState<User | null>(null);
+  const [reactivateUserError, setReactivateUserError] = useState<string | null>(null);
+  const [isReactivatingUser, setIsReactivatingUser] = useState(false);
+  const [reactivateUserSuccess, setReactivateUserSuccess] = useState(false);
 
   useEffect(() => {
     if (importResult && userRole !== 'super_admin' && userRole !== 'school_admin') {
@@ -2592,7 +2626,7 @@ export default function AdminView({
 
   // treat any open modal/panel as blocking the global search input
   const anyModalOpen = (
-    showImportDetails || showCreateUserForm || showCreatedUserPreview || studentDetailOpen || teacherDetailOpen || parentDetailOpen || editUserOpen || deleteUserOpen || editSchoolOpen || editStudentOpen || isModalOpen || newParentMode || newTeacherMode
+    showImportDetails || showCreateUserForm || showCreatedUserPreview || studentDetailOpen || teacherDetailOpen || parentDetailOpen || editUserOpen || deleteUserOpen || !!userToReactivate || editSchoolOpen || editStudentOpen || isModalOpen || newParentMode || newTeacherMode
   );
 
   // close all modals/panels (used by clicking the global overlay)
@@ -4102,7 +4136,7 @@ export default function AdminView({
           </ModalSurface>
         )}
 
-        {/* Delete user confirmation modal */}
+        {/* Deactivate user confirmation modal */}
         {deleteUserOpen && userToDelete && (
           <ModalSurface
             isOpen={deleteUserOpen && !!userToDelete}
@@ -4113,10 +4147,10 @@ export default function AdminView({
               setDeleteUserSuccess(false);
             }}
             contentClassName="max-w-md"
-            ariaLabel="Confirmer la suppression"
+            ariaLabel="Confirmer la désactivation"
           >
             <div className="w-full">
-              <h3 className="font-bold mb-3">Confirmer la suppression</h3>
+              <h3 className="font-bold mb-3">Confirmer la désactivation</h3>
               <p className="text-sm text-slate-600">Voulez-vous vraiment désactiver le compte de <strong>{userToDelete.name}</strong> ({userToDelete.email}) ? Ce compte sera désactivé mais toutes les données liées (élèves, notes, absences) resteront intactes et accessibles.</p>
               {deleteUserError && <div className="text-rose-600 text-sm mt-3">{deleteUserError}</div>}
               {deleteUserSuccess && !deleteUserError && (
@@ -4137,6 +4171,7 @@ export default function AdminView({
                       if (!onDeleteUser || !userToDelete) return;
                       setIsDeletingUser(true);
                       await onDeleteUser(userToDelete.id);
+                      setAccountStatusFilter('disabled');
                       setIsDeletingUser(false);
                       setDeleteUserSuccess(true);
                     } catch (err: any) {
@@ -4147,6 +4182,61 @@ export default function AdminView({
                   disabled={deleteUserSuccess || isDeletingUser}
                 >
                   {isDeletingUser ? 'Désactivation...' : deleteUserSuccess ? 'Désactivé' : 'Désactiver'}
+                </button>
+              </div>
+            </div>
+          </ModalSurface>
+        )}
+        {userToReactivate && (
+          <ModalSurface
+            isOpen={!!userToReactivate}
+            onClose={() => {
+              setUserToReactivate(null);
+              setReactivateUserError(null);
+              setReactivateUserSuccess(false);
+            }}
+            contentClassName="max-w-md"
+            ariaLabel="Confirmer la réactivation"
+          >
+            <div className="w-full">
+              <h3 className="font-bold mb-3">Confirmer la réactivation</h3>
+              <p className="text-sm text-slate-600">
+                Réactiver le compte de <strong>{userToReactivate.name}</strong> ({userToReactivate.email}) ?
+                Le compte existant et ses données seront conservés. Une nouvelle connexion sera nécessaire.
+              </p>
+              {reactivateUserError && <div className="text-rose-600 text-sm mt-3">{reactivateUserError}</div>}
+              {reactivateUserSuccess && !reactivateUserError && (
+                <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded text-emerald-700 text-sm">
+                  Le compte a bien été réactivé.
+                </div>
+              )}
+              <div className="flex justify-end gap-2 mt-5">
+                <button className="px-3 py-2 rounded bg-slate-100" onClick={() => {
+                  setUserToReactivate(null);
+                  setReactivateUserError(null);
+                  setReactivateUserSuccess(false);
+                }}>
+                  {reactivateUserSuccess ? 'Fermer' : 'Annuler'}
+                </button>
+                <button
+                  className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white disabled:bg-slate-300"
+                  disabled={isReactivatingUser || reactivateUserSuccess}
+                  onClick={async () => {
+                    if (!onReactivateUser) return;
+                    setIsReactivatingUser(true);
+                    setReactivateUserError(null);
+                    try {
+                      await onReactivateUser(userToReactivate.id);
+                      setAccountStatusFilter('active');
+                      setReactivateUserSuccess(true);
+                    } catch (error: any) {
+                      setReactivateUserError(error?.message || 'Impossible de réactiver le compte');
+                    } finally {
+                      setIsReactivatingUser(false);
+                    }
+                  }}
+                >
+                  {isReactivatingUser ? 'Réactivation...' : reactivateUserSuccess ? 'Réactivé' : 'Réactiver'}
                 </button>
               </div>
             </div>
@@ -6587,6 +6677,31 @@ export default function AdminView({
                 <p className="text-sm text-slate-500">Créez et gérez les comptes, y compris les admins écoles.</p>
               </div>
             </div>
+            {userRole === 'super_admin' && (
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Vues des comptes">
+                {([
+                  ['active', 'Comptes actifs', usersList.filter((user) => !user.isDeleted).length],
+                  ['disabled', 'Comptes désactivés', disabledUsersList.length],
+                ] as const).map(([status, label, count]) => (
+                  <button
+                    key={status}
+                    type="button"
+                    aria-pressed={accountStatusFilter === status}
+                    onClick={() => {
+                      setAccountStatusFilter(status);
+                      setSearchQuery('');
+                    }}
+                    className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${
+                      accountStatusFilter === status
+                        ? 'border-indigo-600 bg-indigo-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label} <span className="ml-1 opacity-80">({count})</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {(userRole === 'super_admin' || userRole === 'school_admin') && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {userRole === 'super_admin' && (
@@ -6653,24 +6768,42 @@ export default function AdminView({
                   <th className="px-3 sm:px-6 py-4">Spécialisation</th>
                   <th className="px-3 sm:px-6 py-4">Téléphone</th>
                   <th className="px-3 sm:px-6 py-4">Date de création</th>
+                  {userRole === 'super_admin' && accountStatusFilter === 'disabled' && (
+                    <th className="px-3 sm:px-6 py-4">Date de désactivation</th>
+                  )}
+                  <th className="px-3 sm:px-6 py-4">Statut</th>
                   <th className="px-3 sm:px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredAccountsList.map((user) => (
                   <tr key={user.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">{user.name}</td>
+                    <td className="px-3 sm:px-6 py-4 font-bold text-slate-800">
+                      {[user.firstNames, user.lastName].filter(Boolean).join(' ') || user.name}
+                    </td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500 font-mono text-xs">{user.email}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-700 capitalize">{user.role.replace('_', ' ')}</td>
-                    <td className="px-3 sm:px-6 py-4 text-slate-500">{(() => {
-                      const teacherProfile = teachersList.find((t) => t.userId === user.id);
-                      const sid = user.schoolId ?? teacherProfile?.schoolId ?? null;
-                      return sid ? (schoolsList.find((s) => s.id === Number(sid))?.name || '—') : '—';
-                    })()}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolNamesForAccount(user).join(', ') || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).specialization || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).phone || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{formatCreatedAt(user.createdAt)}</td>
+                    {userRole === 'super_admin' && accountStatusFilter === 'disabled' && (
+                      <td className="px-3 sm:px-6 py-4 text-slate-500">
+                        {(() => {
+                          const value = latestDeactivationByUserId.get(user.id)?.createdAt;
+                          const date = value ? new Date(value) : null;
+                          return date && !Number.isNaN(date.getTime())
+                            ? date.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+                            : 'Non disponible';
+                        })()}
+                      </td>
+                    )}
+                    <td className="px-3 sm:px-6 py-4">
+                      <span className={user.isDeleted ? 'text-rose-700' : 'text-emerald-700'}>
+                        {user.isDeleted ? 'Désactivé' : 'Actif'}
+                      </span>
+                    </td>
                     <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => {
@@ -6708,7 +6841,7 @@ export default function AdminView({
                         >
                           Modifier
                         </button>
-                      {userRole !== 'school_admin' && (
+                      {userRole === 'super_admin' && ['teacher', 'school_admin'].includes(user.role) && !user.isDeleted && (
                         <button
                           onClick={() => {
                             setUserToDelete(user);
@@ -6716,12 +6849,25 @@ export default function AdminView({
                             setDeleteUserError(null);
                           }}
                           className="p-1 px-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 text-rose-600 rounded-lg text-xs font-semibold transition-colors"
-                          title="Supprimer"
+                          title="Désactiver"
                         >
-                          Supprimer
+                          Désactiver
                         </button>
                       )}
-                      {userRole === 'super_admin' && (user.role === 'teacher' || user.role === 'parent') && (
+                      {userRole === 'super_admin' && ['teacher', 'school_admin'].includes(user.role) && user.isDeleted && (
+                        <button
+                          onClick={() => {
+                            setUserToReactivate(user);
+                            setReactivateUserError(null);
+                            setReactivateUserSuccess(false);
+                          }}
+                          className="p-1 px-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold transition-colors"
+                          title="Réactiver"
+                        >
+                          Réactiver
+                        </button>
+                      )}
+                      {userRole === 'super_admin' && !user.isDeleted && (user.role === 'teacher' || user.role === 'parent') && (
                         <button
                           onClick={() => {
                             setMultiSchoolTargetUser(user);
@@ -6739,9 +6885,11 @@ export default function AdminView({
                     </td>
                   </tr>
                 ))}
-                {usersList.length === 0 && (
+                {filteredAccountsList.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="text-center py-8 text-slate-400 text-xs">Aucun compte de connexion disponible.</td>
+                    <td colSpan={userRole === 'super_admin' && accountStatusFilter === 'disabled' ? 11 : 10} className="text-center py-8 text-slate-400 text-xs">
+                      {accountStatusFilter === 'disabled' ? 'Aucun compte désactivé correspondant à ces filtres.' : 'Aucun compte actif correspondant à ces filtres.'}
+                    </td>
                   </tr>
                 )}
               </tbody>

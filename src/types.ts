@@ -113,6 +113,7 @@ export interface Teacher {
   firstNames?: string | null;
   email: string;
   lastLoginAt?: string | null;
+  isDeleted?: boolean;
   phone?: string;
   specialization?: string | string[];
   schoolId: number;

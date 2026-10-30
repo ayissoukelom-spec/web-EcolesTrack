@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { getJwtSecret, verifyJwt } from '../lib/jwt.ts';
 import { db } from '../db/index.ts';
-import { localAuths, tokenBlacklist, users } from '../db/schema.ts';
+import { auditEvents, localAuths, tokenBlacklist, users } from '../db/schema.ts';
 import { eq, gt, and, or } from 'drizzle-orm';
+import { normalizeEmail, normalizedEmailSql } from '../lib/emailUniqueness.ts';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 
@@ -81,8 +82,24 @@ export const verifyToken = async (
     }
 
     if (simulatedRole) {
+      const simulatedUid = simulatedUidHeader
+        ? Array.isArray(simulatedUidHeader) ? simulatedUidHeader[0] : simulatedUidHeader
+        : `sim_${simulatedRole}_123`;
+      const [simulatedUidUser] = await db.select({ id: users.id, isDeleted: users.isDeleted })
+        .from(users)
+        .where(eq(users.uid, simulatedUid));
+      const normalizedSimulatedEmail = normalizeEmail(simulatedEmail);
+      const [simulatedEmailUser] = normalizedSimulatedEmail
+        ? await db.select({ id: users.id, isDeleted: users.isDeleted })
+          .from(users)
+          .where(eq(normalizedEmailSql(users.email), normalizedSimulatedEmail))
+        : [];
+      if (simulatedUidUser?.isDeleted || simulatedEmailUser?.isDeleted) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+      }
+
       req.user = {
-        uid: simulatedUid || `sim_${simulatedRole}_123`,
+        uid: simulatedUid,
         email: simulatedEmail || `${simulatedRole}@ecoletrack.fr`,
         name: simulatedName || 'Utilisateur simulé',
         role: simulatedRole,
@@ -139,6 +156,34 @@ export const verifyToken = async (
 
     if (decoded.sub !== String(dbUser.id)) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+
+    const revocationEvents = await db.select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(and(
+        eq(auditEvents.resourceType, 'user'),
+        eq(auditEvents.resourceId, dbUser.id),
+        or(
+          eq(auditEvents.action, 'delete'),
+          eq(auditEvents.action, 'session_revoked'),
+        ),
+      ));
+    const latestRevocationEventId = (revocationEvents ?? []).reduce(
+      (latest, event) => Math.max(latest, Number(event.id) || 0),
+      0,
+    );
+    const tokenRevocationEventId = decoded.authRevocationEventId;
+    if (tokenRevocationEventId !== undefined
+      && (typeof tokenRevocationEventId !== 'number'
+        || !Number.isSafeInteger(tokenRevocationEventId)
+        || tokenRevocationEventId < 0)) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+    if (latestRevocationEventId > 0) {
+      if (typeof tokenRevocationEventId !== 'number'
+        || tokenRevocationEventId < latestRevocationEventId) {
+        return res.status(401).json({ error: 'Unauthorized: Token revoked' });
+      }
     }
 
     const [localAuth] = await db.select({ mustReset: localAuths.mustReset })

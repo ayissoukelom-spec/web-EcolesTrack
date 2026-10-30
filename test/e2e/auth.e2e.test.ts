@@ -188,7 +188,8 @@ function createMockDb() {
           if (lastColumn) {
             const normalizedLast = lastColumn.replace(/_/g, '').replace(/\./g, '');
             const value = chunk;
-            if (normalizedLast.includes('uid')) result.uid = value;
+            if (/isdeleted/.test(normalizedLast)) result.isDeleted = value;
+            else if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
             else if (normalizedLast === 'phone') result.phone = value;
             else if (/school.*id/.test(normalizedLast)) result.schoolId = value === null ? null : Number(value);
@@ -235,7 +236,8 @@ function createMockDb() {
           if (lastColumn) {
             const normalizedLast = lastColumn.replace(/_/g, '').replace(/\./g, '');
             const value = (chunk as any).value;
-            if (/is_?active/.test(normalizedLast)) result.isActive = value;
+            if (/is_?deleted/.test(normalizedLast)) result.isDeleted = value;
+            else if (/is_?active/.test(normalizedLast)) result.isActive = value;
             else if (normalizedLast.includes('uid')) result.uid = value;
             else if (normalizedLast.includes('email')) result.email = value;
             else if (normalizedLast === 'phone') result.phone = value;
@@ -320,6 +322,7 @@ function createMockDb() {
         const leftStr = String(left).toLowerCase().replace(/\./g, '');
         const rawRight = right && typeof right === 'object' && 'value' in right ? (right as any).value : right;
         const rightIsPrimitive = rawRight === null || ['string', 'number', 'boolean'].includes(typeof rawRight);
+        if (/is_?deleted/.test(leftStr) && rightIsPrimitive) result.isDeleted = rawRight;
         if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
         if (/is_?active/.test(leftStr) && rightIsPrimitive) result.isActive = rawRight;
         if (leftStr.includes('uid') && rightIsPrimitive) result.uid = rawRight;
@@ -617,6 +620,7 @@ function createMockDb() {
       }
       if (conditions.status !== undefined && row.status !== conditions.status) return false;
       if (conditions.isActive !== undefined && row.isActive !== conditions.isActive) return false;
+      if (conditions.isDeleted !== undefined && (row.isDeleted ?? false) !== conditions.isDeleted) return false;
       if (conditions.firstName !== undefined && String(row.firstName).toLowerCase() !== conditions.firstName) return false;
       if (conditions.lastName !== undefined && String(row.lastName).toLowerCase() !== conditions.lastName) return false;
       return true;
@@ -649,6 +653,9 @@ function createMockDb() {
         where(cond?: any) {
           if (cond !== undefined) builder._conds.push(cond);
           builder._cond = cond;
+          return builder;
+        },
+        for(_strength: string) {
           return builder;
         },
         orderBy(..._args: any[]) {
@@ -696,9 +703,17 @@ function createMockDb() {
         }
         if (resolveTableName(builder._table) === 'teachers'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'users')
-          && ['uid', 'name', 'lastName', 'firstNames', 'email', 'gender'].includes(String(selectedAlias))) {
+          && ['uid', 'name', 'lastName', 'firstNames', 'email', 'gender', 'isDeleted'].includes(String(selectedAlias))) {
           const user = FIXTURES.users.find((row: any) => Number(row.id) === Number(baseRow.userId));
           return user?.[String(selectedAlias)] ?? null;
+        }
+        if (resolveTableName(builder._table) === 'users'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'teachers')
+          && ['teacherPhone', 'teacherSchoolId', 'teacherSpecialization'].includes(String(selectedAlias))) {
+          const teacher = FIXTURES.teachers.find((row: any) => Number(row.userId) === Number(baseRow.id));
+          if (selectedAlias === 'teacherPhone') return teacher?.phone ?? null;
+          if (selectedAlias === 'teacherSchoolId') return teacher?.schoolId ?? null;
+          return teacher?.specialization ?? null;
         }
         if (resolveTableName(builder._table) === 'grades' && selectedAlias === 'subject') {
           const evaluation = FIXTURES.evaluations.find((row: any) => Number(row.id) === Number(baseRow.evaluationId));
@@ -758,6 +773,8 @@ function createMockDb() {
         const fromName = resolveTableName(builder._table);
         const hasStudentParentJoin = fromName === 'students'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
+        const hasTeacherUserJoin = fromName === 'teachers'
+          && builder._joins.some((join: any) => resolveTableName(join.table) === 'users');
         const hasUsersParentPhoneLookup = fromName === 'users'
           && conditions.phone !== undefined
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'parents');
@@ -770,6 +787,7 @@ function createMockDb() {
         const hasAbsenceStudentJoin = fromName === 'absences'
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'students');
         const baseConditions = { ...conditions };
+        if (hasTeacherUserJoin) delete baseConditions.isDeleted;
         if (hasStudentParentJoin) delete baseConditions.userId;
         if (hasUsersParentPhoneLookup) delete baseConditions.phone;
         if (hasClassTeachersClassJoin) delete baseConditions.schoolId;
@@ -782,6 +800,13 @@ function createMockDb() {
           && builder._joins.some((join: any) => resolveTableName(join.table) === 'schoolSubjects');
         if (hasSchoolSubjectsJoin) delete baseConditions.schoolId;
         let rows = filterTableRows(builder._table, baseConditions, hasUsersParentPhoneLookup ? undefined : builder._cond);
+
+        if (hasTeacherUserJoin && conditions.isDeleted !== undefined) {
+          rows = rows.filter((teacher: any) => {
+            const user = FIXTURES.users.find((row: any) => Number(row.id) === Number(teacher.userId));
+            return (user?.isDeleted ?? false) === conditions.isDeleted;
+          });
+        }
 
         if (hasAbsenceStudentJoin && conditions.schoolId != null) {
           rows = rows.filter((absence: any) => {
@@ -999,6 +1024,7 @@ function createMockDb() {
       const localAuthsBefore = JSON.parse(JSON.stringify(FIXTURES.localAuths));
       const parentsBefore = JSON.parse(JSON.stringify(FIXTURES.parents));
       const userSchoolsBefore = JSON.parse(JSON.stringify(FIXTURES.userSchools));
+      const auditEventsBefore = JSON.parse(JSON.stringify(FIXTURES.auditEvents));
       try {
         return await callback(db);
       } catch (error) {
@@ -1007,6 +1033,7 @@ function createMockDb() {
         FIXTURES.localAuths.splice(0, FIXTURES.localAuths.length, ...localAuthsBefore);
         FIXTURES.parents.splice(0, FIXTURES.parents.length, ...parentsBefore);
         FIXTURES.userSchools.splice(0, FIXTURES.userSchools.length, ...userSchoolsBefore);
+        FIXTURES.auditEvents.splice(0, FIXTURES.auditEvents.length, ...auditEventsBefore);
         throw error;
       }
     },
@@ -4188,6 +4215,148 @@ describe('E2E security: auth & privilege checks', () => {
 
     const deleted = FIXTURES.users.find((u) => u.id === 3);
     if (deleted) expect(deleted.isDeleted).toBe(true);
+  });
+
+  it('deactivates and reactivates the same teacher account without deleting related records', async () => {
+    const accountBefore = structuredClone(FIXTURES.users.find((user) => user.id === 3));
+    const teacherBefore = structuredClone(FIXTURES.teachers.find((teacher) => teacher.userId === 3));
+    const membershipsBefore = structuredClone(FIXTURES.userSchools.filter((membership) => membership.userId === 3));
+    const assignmentsBefore = structuredClone(FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === teacherBefore?.id));
+
+    const deactivateResponse = await request(app)
+      .delete('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(deactivateResponse.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 3)?.isDeleted).toBe(true);
+    expect(FIXTURES.teachers.find((teacher) => teacher.userId === 3)).toEqual(teacherBefore);
+    expect(FIXTURES.userSchools.filter((membership) => membership.userId === 3)).toEqual(membershipsBefore);
+    expect(FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === teacherBefore?.id)).toEqual(assignmentsBefore);
+
+    const listResponse = await request(app)
+      .get('/api/simulation/users?includeDeleted=true')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.body.find((user: any) => user.id === 3)?.isDeleted).toBe(true);
+
+    const operationalTeachers = await request(app)
+      .get('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(operationalTeachers.status).toBe(200);
+    expect(operationalTeachers.body.some((teacher: any) => teacher.userId === 3)).toBe(false);
+
+    const allTeacherProfiles = await request(app)
+      .get('/api/teachers?includeDeleted=true')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(allTeacherProfiles.status).toBe(200);
+    expect(allTeacherProfiles.body.find((teacher: any) => teacher.userId === 3)?.isDeleted).toBe(true);
+
+    const reactivateResponse = await request(app)
+      .post('/api/admin/users/3/reactivate')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(reactivateResponse.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 3)).toMatchObject({
+      id: accountBefore?.id,
+      uid: accountBefore?.uid,
+      role: accountBefore?.role,
+      isDeleted: false,
+    });
+    expect(FIXTURES.teachers.find((teacher) => teacher.userId === 3)).toEqual(teacherBefore);
+    expect(FIXTURES.userSchools.filter((membership) => membership.userId === 3)).toEqual(membershipsBefore);
+    expect(FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === teacherBefore?.id)).toEqual(assignmentsBefore);
+    expect(FIXTURES.auditEvents.filter((event: any) => event.resourceId === 3 && event.resourceType === 'user').map((event: any) => event.action))
+      .toEqual(expect.arrayContaining(['delete', 'reactivate']));
+
+    const schoolAdminBefore = structuredClone(FIXTURES.users.find((user) => user.id === 2));
+    const schoolAdminMembershipsBefore = structuredClone(FIXTURES.userSchools.filter((membership) => membership.userId === 2));
+    const schoolAdminDeactivateResponse = await request(app)
+      .delete('/api/admin/users/2')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(schoolAdminDeactivateResponse.status).toBe(200);
+    const schoolAdminReactivateResponse = await request(app)
+      .post('/api/admin/users/2/reactivate')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(schoolAdminReactivateResponse.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === 2)).toMatchObject({
+      id: schoolAdminBefore?.id,
+      uid: schoolAdminBefore?.uid,
+      role: 'school_admin',
+      isDeleted: false,
+    });
+    expect(FIXTURES.userSchools.filter((membership) => membership.userId === 2)).toEqual(schoolAdminMembershipsBefore);
+  });
+
+  it('restricts reactivation to super admins and handles invalid or existing accounts', async () => {
+    const forbiddenDeactivationResponse = await request(app)
+      .delete('/api/admin/users/3')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid');
+    expect(forbiddenDeactivationResponse.status).toBe(403);
+    expect(FIXTURES.users.find((user) => user.id === 3)?.isDeleted).toBe(false);
+
+    const forbiddenResponse = await request(app)
+      .post('/api/admin/users/3/reactivate')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid');
+    expect(forbiddenResponse.status).toBe(403);
+
+    const invalidIdResponse = await request(app)
+      .post('/api/admin/users/0/reactivate')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(invalidIdResponse.status).toBe(400);
+
+    const missingAccountResponse = await request(app)
+      .post('/api/admin/users/9999/reactivate')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(missingAccountResponse.status).toBe(404);
+
+    const alreadyActiveResponse = await request(app)
+      .post('/api/admin/users/3/reactivate')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(alreadyActiveResponse.status).toBe(200);
+    expect(alreadyActiveResponse.body).toMatchObject({ success: true, id: 3, alreadyActive: true });
+  });
+
+  it('creates a revocation boundary when reactivating a legacy disabled account without a delete event', async () => {
+    const user = FIXTURES.users.find((candidate) => candidate.id === 3);
+    expect(user).toBeDefined();
+    if (!user) return;
+    user.isDeleted = true;
+    const teacherBefore = structuredClone(FIXTURES.teachers.find((teacher) => teacher.userId === user.id));
+    const membershipsBefore = structuredClone(FIXTURES.userSchools.filter((membership) => membership.userId === user.id));
+    expect(FIXTURES.auditEvents.some((event: any) => (
+      event.resourceType === 'user'
+      && event.resourceId === user.id
+      && event.action === 'delete'
+    ))).toBe(false);
+
+    const response = await request(app)
+      .post(`/api/admin/users/${user.id}/reactivate`)
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+
+    expect(response.status).toBe(200);
+    expect(FIXTURES.users.find((candidate) => candidate.id === user.id)).toMatchObject({
+      id: 3,
+      uid: 'teacher-uid',
+      role: 'teacher',
+      isDeleted: false,
+    });
+    expect(FIXTURES.teachers.find((teacher) => teacher.userId === user.id)).toEqual(teacherBefore);
+    expect(FIXTURES.userSchools.filter((membership) => membership.userId === user.id)).toEqual(membershipsBefore);
+    expect(FIXTURES.auditEvents.filter((event: any) => (
+      event.resourceType === 'user'
+      && event.resourceId === user.id
+    )).map((event: any) => event.action)).toEqual(['session_revoked', 'reactivate']);
   });
 
   it('6a. school_admin created by admin preserves phone and appears in simulation users', async () => {

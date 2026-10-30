@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
-import { users, localAuths, userLoginEvents } from '../db/schema.ts';
+import { users, localAuths, userLoginEvents, auditEvents } from '../db/schema.ts';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { parents } from '../db/schema.ts';
 import { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
@@ -98,53 +98,84 @@ export async function handleLocalLogin(req: Request, res: Response) {
       return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
-    const payload = {
-      uid: userRecord.uid,
-      email: userRecord.email,
-      name: userRecord.name,
-      role: userRecord.role,
-      schoolId: userRecord.schoolId ?? null,
-      type: 'access',
-    };
-
     const secret = getJwtSecret({ isProduction: process.env.NODE_ENV === 'production' });
     if (!secret) {
       return res.status(500).json({ error: 'Server configuration error' });
     }
 
-    const token = signJwt(payload, secret, {
-      expiresIn: normalizeJwtExpiresIn(process.env.JWT_EXPIRES_IN),
-      issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,
-      audience: process.env.JWT_AUDIENCE ?? DEFAULT_JWT_AUDIENCE,
-      subject: String(userRecord.id),
-      jwtid: crypto.randomUUID(),
+    const authentication = await db.transaction(async (tx) => {
+      const [lockedUser] = await tx.select().from(users).for('update').where(eq(users.id, userRecord.id));
+      if (!lockedUser) return { status: 'missing' as const };
+      if (lockedUser.isDeleted) return { status: 'disabled' as const };
+      if (lockedUser.role === 'student') return { status: 'invalid' as const };
+
+      const revocationEvents = await tx.select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(and(
+          eq(auditEvents.resourceType, 'user'),
+          eq(auditEvents.resourceId, lockedUser.id),
+          or(
+            eq(auditEvents.action, 'delete'),
+            eq(auditEvents.action, 'session_revoked'),
+          ),
+        ));
+      const authRevocationEventId = (revocationEvents ?? []).reduce(
+        (latest, event) => Math.max(latest, Number(event.id) || 0),
+        0,
+      );
+
+      if (lockedUser.role === 'parent' || lockedUser.role === 'teacher') {
+        const [updatedUser] = await tx.update(users)
+          .set({ lastLoginAt: new Date() })
+          .where(and(eq(users.id, lockedUser.id), eq(users.isDeleted, false)))
+          .returning({ id: users.id });
+        if (!updatedUser) {
+          throw new Error('Authenticated user was not found while recording last login.');
+        }
+      }
+
+      const token = signJwt({
+        uid: lockedUser.uid,
+        email: lockedUser.email,
+        name: lockedUser.name,
+        role: lockedUser.role,
+        schoolId: lockedUser.schoolId ?? null,
+        type: 'access',
+        authIssuedAtMs: Date.now(),
+        authRevocationEventId,
+      }, secret, {
+        expiresIn: normalizeJwtExpiresIn(process.env.JWT_EXPIRES_IN),
+        issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,
+        audience: process.env.JWT_AUDIENCE ?? DEFAULT_JWT_AUDIENCE,
+        subject: String(lockedUser.id),
+        jwtid: crypto.randomUUID(),
+      });
+
+      return { status: 'authenticated' as const, user: lockedUser, token };
     });
+
+    if (authentication.status === 'disabled') {
+      return res.status(403).json({ error: 'Ce compte est désactivé. Contactez votre administrateur.' });
+    }
+    if (authentication.status !== 'authenticated') {
+      return res.status(401).json({ error: 'Email ou mot de passe invalide' });
+    }
 
     try {
       await db.insert(userLoginEvents).values({
-        userId: userRecord.id,
-        role: userRecord.role,
-        schoolId: userRecord.schoolId ?? null,
+        userId: authentication.user.id,
+        role: authentication.user.role,
+        schoolId: authentication.user.schoolId ?? null,
         clientType: 'web',
       });
     } catch (eventError: any) {
       console.error('Failed to record Web login event:', eventError?.message || eventError);
     }
 
-    if (userRecord.role === 'parent' || userRecord.role === 'teacher') {
-      const [updatedUser] = await db.update(users)
-        .set({ lastLoginAt: new Date() })
-        .where(eq(users.id, userRecord.id))
-        .returning({ id: users.id });
-      if (!updatedUser) {
-        throw new Error('Authenticated user was not found while recording last login.');
-      }
-    }
-
     const response = {
-      ...userRecord,
+      ...authentication.user,
       mustReset: !!localMustReset,
-      token,
+      token: authentication.token,
       tokenType: 'access',
     } as any;
 

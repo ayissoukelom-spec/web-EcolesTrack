@@ -99,6 +99,7 @@ describe('auth middleware access control', () => {
     mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([]);
 
     const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
     const res = createMockRes();
@@ -189,7 +190,7 @@ describe('auth middleware access control', () => {
     mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([]);
 
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const req = { headers: { authorization: 'Bearer deleted-token' } } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
@@ -198,6 +199,169 @@ describe('auth middleware access control', () => {
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
   });
+
+    it('rejects an access token issued before the latest account deactivation', async () => {
+      mockVerifyJwt.mockReturnValueOnce({
+        uid: 'user_99',
+        type: 'access',
+        jti: 'jti-before-deactivation',
+        sub: '99',
+        authRevocationEventId: 0,
+      });
+      mockWhere.mockResolvedValueOnce([]);
+      mockWhere.mockResolvedValueOnce([{
+        id: 99,
+        uid: 'user_99',
+        email: 'user99@example.com',
+        name: 'User NinetyNine',
+        role: 'teacher',
+        schoolId: 12,
+      }]);
+      mockWhere.mockResolvedValueOnce([{ id: 21 }]);
+
+      const req = { headers: { authorization: 'Bearer old-token' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
+    });
+
+    it('rejects the same old token after reactivation has recorded a revocation boundary', async () => {
+      mockVerifyJwt.mockReturnValueOnce({
+        uid: 'user_99',
+        type: 'access',
+        jti: 'jti-before-deactivation',
+        sub: '99',
+        authRevocationEventId: 0,
+      });
+      mockWhere.mockResolvedValueOnce([]);
+      mockWhere.mockResolvedValueOnce([{
+        id: 99,
+        uid: 'user_99',
+        email: 'user99@example.com',
+        name: 'User NinetyNine',
+        role: 'teacher',
+        schoolId: 12,
+        isDeleted: false,
+      }]);
+      mockWhere.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
+
+      const req = { headers: { authorization: 'Bearer new-token' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
+    });
+
+    it('accepts a new token issued after reactivation using the current revocation event id', async () => {
+      mockVerifyJwt.mockReturnValueOnce({
+        uid: 'user_99',
+        type: 'access',
+        jti: 'jti-after-reactivation',
+        sub: '99',
+        authRevocationEventId: 22,
+      });
+      mockWhere.mockResolvedValueOnce([]);
+      mockWhere.mockResolvedValueOnce([{
+        id: 99,
+        uid: 'user_99',
+        email: 'user99@example.com',
+        name: 'User NinetyNine',
+        role: 'teacher',
+        schoolId: 12,
+        isDeleted: false,
+      }]);
+      mockWhere.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
+      mockWhere.mockResolvedValueOnce([]);
+
+      const req = { headers: { authorization: 'Bearer reactivated-current-token' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('rejects a legacy token without a revocation claim after an account has been reactivated', async () => {
+      mockVerifyJwt.mockReturnValueOnce({
+        uid: 'user_99',
+        type: 'access',
+        jti: 'legacy-token',
+        sub: '99',
+      });
+      mockWhere.mockResolvedValueOnce([]);
+      mockWhere.mockResolvedValueOnce([{
+        id: 99,
+        uid: 'user_99',
+        email: 'user99@example.com',
+        name: 'User NinetyNine',
+        role: 'teacher',
+        schoolId: 12,
+        isDeleted: false,
+      }]);
+      mockWhere.mockResolvedValueOnce([{ id: 22 }]);
+
+      const req = { headers: { authorization: 'Bearer legacy-token-after-reactivation' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
+    });
+
+    it('rejects simulated authentication for a real deleted account', async () => {
+      process.env.NODE_ENV = 'test';
+      mockWhere.mockResolvedValueOnce([{ id: 700, isDeleted: true }]);
+
+      const req = {
+        headers: {
+          'x-simulated-role': 'teacher',
+          'x-simulated-uid': 'deleted-teacher',
+        },
+      } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(req.user).toBeUndefined();
+    });
+
+    it('rejects simulated auth when the supplied email belongs to a deleted account', async () => {
+      process.env.NODE_ENV = 'test';
+      mockWhere.mockResolvedValueOnce([{ id: 701, isDeleted: false }]);
+      mockWhere.mockResolvedValueOnce([{ id: 700, isDeleted: true }]);
+
+      const req = {
+        headers: {
+          'x-simulated-role': 'teacher',
+          'x-simulated-uid': 'active-uid',
+          'x-simulated-email': 'DELETED@example.test',
+        },
+      } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
 
   it('rejects a token when sub does not match the DB user id', async () => {
     const token = 'mismatched-sub-token';
@@ -245,6 +409,7 @@ describe('auth middleware access control', () => {
       role: 'teacher',
       schoolId: 12,
     }]);
+    mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
 
     const req = {
@@ -278,6 +443,7 @@ describe('auth middleware access control', () => {
       role: 'teacher',
       schoolId: 12,
     }]);
+    mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
 
     const req = {
@@ -349,6 +515,8 @@ describe('auth middleware access control', () => {
     process.env.NODE_ENV = 'development';
     process.env.ALLOW_SIMULATED_AUTH = 'true';
     delete process.env.JWT_SECRET;
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([]);
     expect(assertSimulatedAuthConfiguration).not.toThrow();
 
     const req = {
