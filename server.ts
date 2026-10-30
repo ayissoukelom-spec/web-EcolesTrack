@@ -27,7 +27,7 @@ import ExcelJS from 'exceljs';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
-import { db } from './src/db/index.ts';
+import { db, withNotificationRecipientAccountLock } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest, assertSimulatedAuthConfiguration } from './src/middleware/auth.ts';
 import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts';
@@ -2302,7 +2302,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid user id' });
       }
 
-      const result = await db.transaction(async (tx) => {
+      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => lockedDb.transaction(async (tx) => {
         const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
         if (!targetUser) return { status: 404 as const };
         if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
@@ -2313,6 +2313,13 @@ export async function createApp() {
           .where(and(eq(users.id, id), eq(users.isDeleted, false)))
           .returning({ id: users.id });
         if (!updatedUser) throw new Error('User account changed before deactivation');
+        if (targetUser.role === 'parent') {
+          await tx.execute(sql`
+            UPDATE mobile_parent_sessions
+            SET is_active = false, revoked_at = now()
+            WHERE parent_id = ${String(id)} AND is_active = true
+          `);
+        }
         await tx.insert(auditEvents).values({
           actorUserId: actor.id ?? null,
           actorRole: actor.role,
@@ -2325,7 +2332,7 @@ export async function createApp() {
           description: `Super admin ${actor.name} deactivated user account ${targetUser.name} (${targetUser.email})`,
         });
         return { status: 200 as const, alreadyDeactivated: false };
-      });
+      }));
 
       if (result.status === 404) return res.status(404).json({ error: 'User not found' });
       if (result.status === 400) {
@@ -2351,7 +2358,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid user id' });
       }
 
-      const result = await db.transaction(async (tx) => {
+      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => lockedDb.transaction(async (tx) => {
         const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
         if (!targetUser) return { status: 404 as const };
         if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
@@ -2386,7 +2393,7 @@ export async function createApp() {
           description: `Super admin ${actor.name} reactivated user account ${targetUser.name} (${targetUser.email})`,
         });
         return { status: 200 as const, alreadyActive: false };
-      });
+      }));
 
       if (result.status === 404) return res.status(404).json({ error: 'User not found' });
       if (result.status === 400) return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be reactivated here' });

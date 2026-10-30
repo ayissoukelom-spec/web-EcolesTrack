@@ -147,10 +147,17 @@ export const verifyToken = async (
       return res.status(401).json({ error: 'Unauthorized: Token revoked' });
     }
 
-    const [dbUser] = await db.select().from(users).where(
-      and(eq(users.uid, uid), eq(users.isDeleted, false)),
-    );
+    const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
     if (!dbUser) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+    if (dbUser.isDeleted) {
+      if (dbUser.role === 'parent') {
+        return res.status(401).json({
+          error: 'Ce compte est désactivé. Contactez votre administrateur.',
+          code: 'ACCOUNT_DISABLED',
+        });
+      }
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 

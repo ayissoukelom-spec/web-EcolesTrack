@@ -115,6 +115,7 @@ describe('handleLocalLogin', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect((res.json as any).mock.calls[0][0]).toMatchObject({
       error: 'Ce compte est désactivé. Contactez votre administrateur.',
+      code: 'ACCOUNT_DISABLED',
     });
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockReturning).not.toHaveBeenCalled();
@@ -146,6 +147,10 @@ describe('handleLocalLogin', () => {
     } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(403);
+    expect((res.json as any).mock.calls[0][0]).toMatchObject({
+      error: 'Ce compte est désactivé. Contactez votre administrateur.',
+      code: 'ACCOUNT_DISABLED',
+    });
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockReturning).not.toHaveBeenCalled();
   });

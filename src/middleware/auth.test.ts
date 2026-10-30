@@ -188,7 +188,12 @@ describe('auth middleware access control', () => {
       jti: 'jti-100',
     });
     mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([{
+      id: 100,
+      uid: 'user_100',
+      role: 'parent',
+      isDeleted: true,
+    }]);
 
     const req = { headers: { authorization: 'Bearer deleted-token' } } as any as AuthRequest;
     const res = createMockRes();
@@ -198,6 +203,10 @@ describe('auth middleware access control', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Ce compte est désactivé. Contactez votre administrateur.',
+      code: 'ACCOUNT_DISABLED',
+    });
   });
 
     it('rejects an access token issued before the latest account deactivation', async () => {

@@ -42,3 +42,55 @@ pool.on('error', (err) => {
 
 // Initialize Drizzle with the pool and schema
 export const db = drizzle(pool, { schema });
+
+export const NOTIFICATION_RECIPIENT_LOCK_NAMESPACE = 1_163_284_052;
+
+export async function withNotificationRecipientAccountLock<T>(
+  userId: number,
+  action: (lockedDb: Omit<typeof db, "$client">) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  let lockAcquired = false;
+  let releaseError: Error | undefined;
+
+  try {
+    await client.query("SET lock_timeout = '15s'");
+    try {
+      await client.query("SELECT pg_advisory_lock($1, $2)", [
+        NOTIFICATION_RECIPIENT_LOCK_NAMESPACE,
+        userId,
+      ]);
+      lockAcquired = true;
+    } finally {
+      try {
+        await client.query("RESET lock_timeout");
+      } catch (resetError) {
+        releaseError = resetError instanceof Error
+          ? resetError
+          : new Error("Failed to reset PostgreSQL lock timeout.");
+        throw resetError;
+      }
+    }
+
+    return await action(drizzle(client, { schema }));
+  } finally {
+    try {
+      if (lockAcquired) {
+        const { rows } = await client.query(
+          "SELECT pg_advisory_unlock($1, $2) AS unlocked",
+          [NOTIFICATION_RECIPIENT_LOCK_NAMESPACE, userId],
+        );
+        if (rows[0]?.unlocked !== true) {
+          throw new Error("Notification recipient advisory lock was not held at release.");
+        }
+      }
+    } catch (unlockError) {
+      releaseError = unlockError instanceof Error
+        ? unlockError
+        : new Error("Failed to release notification recipient advisory lock.");
+      throw unlockError;
+    } finally {
+      client.release(releaseError);
+    }
+  }
+}

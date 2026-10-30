@@ -1336,7 +1336,14 @@ function createMockDb() {
     },
   });
   // Simulate the daily aggregate query without connecting to PostgreSQL.
+  (db as any).__mobileParentSessionRevocationQueries = [];
   (db as any).execute = async (_sql: any) => {
+    const query = new PgDialect().sqlToQuery(_sql);
+    if (/UPDATE mobile_parent_sessions/i.test(query.sql)) {
+      (db as any).__mobileParentSessionRevocationQueries.push(query);
+      return { rows: [] };
+    }
+
     const today = new Date('2026-09-24T00:00:00.000Z');
     const eventsByDate = new Map<string, { total: number; web: number; android: number }>();
     for (const event of FIXTURES.userLoginEvents) {
@@ -1361,7 +1368,10 @@ function createMockDb() {
 }
 
 // Mock the DB module used by server.ts (cover both relative and bare imports)
-const mockDb = { db: createMockDb() };
+const mockDb = {
+  db: createMockDb(),
+  withNotificationRecipientAccountLock: async (_userId: number, action: (db: any) => Promise<unknown>) => action(mockDb.db),
+};
 vi.mock('../../src/db/index.ts', () => mockDb);
 vi.mock('src/db/index.ts', () => mockDb);
 vi.mock('src/db', () => mockDb);
@@ -4337,6 +4347,10 @@ describe('E2E security: auth & privilege checks', () => {
       .set('x-simulated-role', 'super_admin')
       .set('x-simulated-uid', 'super-uid');
     expect(deactivation.status).toBe(200);
+    expect(mockDb.db.__mobileParentSessionRevocationQueries).toHaveLength(1);
+    expect(mockDb.db.__mobileParentSessionRevocationQueries[0].sql)
+      .toMatch(/WHERE parent_id = \$1 AND is_active = true/i);
+    expect(mockDb.db.__mobileParentSessionRevocationQueries[0].params).toEqual([String(parentUser.id)]);
     expect(FIXTURES.users.find((user) => user.id === parentUser.id)?.isDeleted).toBe(true);
     expect(FIXTURES.parents.find((parent) => parent.userId === parentUser.id)).toEqual(parentBefore);
     expect(FIXTURES.students.filter((student) => student.parentId === parentBefore?.id)).toEqual(childrenBefore);
@@ -4356,10 +4370,12 @@ describe('E2E security: auth & privilege checks', () => {
       .post('/api/auth/local-login')
       .send({ email: parentUser.email, password });
     expect(disabledLogin.status).toBe(403);
-    await request(app)
+    expect(disabledLogin.body.code).toBe('ACCOUNT_DISABLED');
+    const disabledProtectedResponse = await request(app)
       .get('/api/parents')
       .set('Authorization', `Bearer ${oldToken}`)
       .expect(401);
+    expect(disabledProtectedResponse.body.code).toBe('ACCOUNT_DISABLED');
 
     const reactivation = await request(app)
       .post(`/api/admin/users/${parentUser.id}/reactivate`)

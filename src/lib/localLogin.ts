@@ -155,7 +155,10 @@ export async function handleLocalLogin(req: Request, res: Response) {
     });
 
     if (authentication.status === 'disabled') {
-      return res.status(403).json({ error: 'Ce compte est désactivé. Contactez votre administrateur.' });
+      return res.status(403).json({
+        error: 'Ce compte est désactivé. Contactez votre administrateur.',
+        code: 'ACCOUNT_DISABLED',
+      });
     }
     if (authentication.status !== 'authenticated') {
       return res.status(401).json({ error: 'Email ou mot de passe invalide' });
