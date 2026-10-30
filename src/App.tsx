@@ -430,7 +430,7 @@ export default function App() {
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
       if (disabledUsersEndpoint && Array.isArray(map[disabledUsersEndpoint])) {
         setDisabledUsersList(map[disabledUsersEndpoint].filter((user: User) => (
-          user.isDeleted === true && ['teacher', 'school_admin'].includes(user.role)
+          user.isDeleted === true && ['teacher', 'school_admin', 'parent'].includes(user.role)
         )));
       } else {
         setDisabledUsersList([]);

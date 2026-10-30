@@ -2305,7 +2305,7 @@ export async function createApp() {
       const result = await db.transaction(async (tx) => {
         const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
         if (!targetUser) return { status: 404 as const };
-        if (!['teacher', 'school_admin'].includes(targetUser.role)) return { status: 400 as const };
+        if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
         if (targetUser.isDeleted) return { status: 200 as const, alreadyDeactivated: true };
 
         const [updatedUser] = await tx.update(users)
@@ -2329,7 +2329,7 @@ export async function createApp() {
 
       if (result.status === 404) return res.status(404).json({ error: 'User not found' });
       if (result.status === 400) {
-        return res.status(400).json({ error: 'Only teacher and school admin accounts can be deactivated here' });
+        return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be deactivated here' });
       }
       res.json({ success: true, id, alreadyDeactivated: result.alreadyDeactivated });
     } catch (err: any) {
@@ -2354,7 +2354,7 @@ export async function createApp() {
       const result = await db.transaction(async (tx) => {
         const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
         if (!targetUser) return { status: 404 as const };
-        if (!['teacher', 'school_admin'].includes(targetUser.role)) return { status: 400 as const };
+        if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
         if (!targetUser.isDeleted) return { status: 200 as const, alreadyActive: true };
 
         const [updatedUser] = await tx.update(users)
@@ -2389,7 +2389,7 @@ export async function createApp() {
       });
 
       if (result.status === 404) return res.status(404).json({ error: 'User not found' });
-      if (result.status === 400) return res.status(400).json({ error: 'Only teacher and school admin accounts can be reactivated here' });
+      if (result.status === 400) return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be reactivated here' });
       return res.json({ success: true, id, alreadyActive: result.alreadyActive });
     } catch (err: any) {
       console.error('Error reactivating user:', err);

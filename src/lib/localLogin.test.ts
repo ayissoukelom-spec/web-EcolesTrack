@@ -90,7 +90,7 @@ beforeEach(() => {
 });
 
 describe('handleLocalLogin', () => {
-  it.each(['teacher', 'school_admin'])('rejects a disabled %s before issuing a token or recording login', async (role) => {
+  it.each(['teacher', 'school_admin', 'parent'])('rejects a disabled %s before issuing a token or recording login', async (role) => {
     const password = 'DisabledAccountSecret123!';
     const salt = 'disabled-account-salt';
     const crypto = await import('node:crypto');
@@ -116,6 +116,36 @@ describe('handleLocalLogin', () => {
     expect((res.json as any).mock.calls[0][0]).toMatchObject({
       error: 'Ce compte est désactivé. Contactez votre administrateur.',
     });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockReturning).not.toHaveBeenCalled();
+  });
+
+  it('rejects a disabled parent through phone login before issuing a token', async () => {
+    const password = 'DisabledParentPhoneSecret123!';
+    const salt = 'disabled-parent-phone-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 701,
+      uid: 'disabled-parent-phone',
+      email: 'disabled-parent-phone@example.com',
+      phone: '+22890000001',
+      name: 'Disabled Parent',
+      role: 'parent',
+      schoolId: 42,
+      isDeleted: true,
+    };
+
+    mockWhere.mockResolvedValueOnce([{ user: userRecord }]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({
+      body: { identifier: userRecord.phone, phoneCountryCode: '+228', password },
+    } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockReturning).not.toHaveBeenCalled();
   });

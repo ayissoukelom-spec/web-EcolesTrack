@@ -325,7 +325,7 @@ describe('AdminView create-user teacher form', () => {
       vi.restoreAllMocks();
     });
 
-    it('moves the same account between accessible active and disabled views and shows its available deactivation date', async () => {
+    it.each(['teacher', 'parent'] as const)('moves the same %s account between active and disabled views', async (role) => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
       const activeTeacher: User = {
         id: 11,
@@ -334,7 +334,7 @@ describe('AdminView create-user teacher form', () => {
         name: 'Teacher Eleven',
         firstNames: 'Aïcha',
         lastName: 'Kossi',
-        role: 'teacher',
+        role,
         schoolId: 7,
         isDeleted: false,
       };

@@ -261,6 +261,37 @@ describe('auth middleware access control', () => {
       expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
     });
 
+    it('rejects a parent token issued before deactivation even after the parent is reactivated', async () => {
+      mockVerifyJwt.mockReturnValueOnce({
+        uid: 'parent-uid',
+        type: 'access',
+        jti: 'parent-token-before-deactivation',
+        sub: '600',
+        authRevocationEventId: 0,
+      });
+      mockWhere.mockResolvedValueOnce([]);
+      mockWhere.mockResolvedValueOnce([{
+        id: 600,
+        uid: 'parent-uid',
+        email: 'parent@example.com',
+        name: 'Parent Account',
+        role: 'parent',
+        schoolId: 12,
+        isDeleted: false,
+      }]);
+      mockWhere.mockResolvedValueOnce([{ id: 31 }, { id: 32 }]);
+
+      const req = { headers: { authorization: 'Bearer parent-token-before-deactivation' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res as any, next as any);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
+    });
+
     it('accepts a new token issued after reactivation using the current revocation event id', async () => {
       mockVerifyJwt.mockReturnValueOnce({
         uid: 'user_99',

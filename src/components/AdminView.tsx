@@ -6841,7 +6841,7 @@ export default function AdminView({
                         >
                           Modifier
                         </button>
-                      {userRole === 'super_admin' && ['teacher', 'school_admin'].includes(user.role) && !user.isDeleted && (
+                      {userRole === 'super_admin' && ['teacher', 'school_admin', 'parent'].includes(user.role) && !user.isDeleted && (
                         <button
                           onClick={() => {
                             setUserToDelete(user);
@@ -6854,7 +6854,7 @@ export default function AdminView({
                           Désactiver
                         </button>
                       )}
-                      {userRole === 'super_admin' && ['teacher', 'school_admin'].includes(user.role) && user.isDeleted && (
+                      {userRole === 'super_admin' && ['teacher', 'school_admin', 'parent'].includes(user.role) && user.isDeleted && (
                         <button
                           onClick={() => {
                             setUserToReactivate(user);

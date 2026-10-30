@@ -526,6 +526,7 @@ function createMockDb() {
       : tableName === 'absenceJustifications' ? FIXTURES.absenceJustifications
       : tableName === 'notifications' ? FIXTURES.notifications
       : tableName === 'notificationAttachments' ? FIXTURES.notificationAttachments
+      : tableName === 'auditEvents' ? FIXTURES.auditEvents
       : []) as any[];
 
     if (!cond) return rows;
@@ -1137,8 +1138,10 @@ function createMockDb() {
               return [obj];
             }
             if (obj.actorUserId !== undefined) {
-              FIXTURES.auditEvents.push(obj as any);
-              return [obj];
+              const nextAuditEventId = Math.max(0, ...FIXTURES.auditEvents.map((event: any) => Number(event.id) || 0)) + 1;
+              const auditEvent = { ...obj, id: nextAuditEventId };
+              FIXTURES.auditEvents.push(auditEvent as any);
+              return [auditEvent];
             }
             if (obj.uid && obj.role && Object.prototype.hasOwnProperty.call(obj, 'email')) {
               const phone = typeof obj.phone === 'string' ? obj.phone : '';
@@ -4290,6 +4293,105 @@ describe('E2E security: auth & privilege checks', () => {
       isDeleted: false,
     });
     expect(FIXTURES.userSchools.filter((membership) => membership.userId === 2)).toEqual(schoolAdminMembershipsBefore);
+  });
+
+  it('lets only a super admin deactivate and reactivate a parent without changing the parent-child relationship or restoring old sessions', async () => {
+    const parentUser = FIXTURES.users.find((user) => user.id === 6)!;
+    const parentBefore = structuredClone(FIXTURES.parents.find((parent) => parent.userId === parentUser.id));
+    const childrenBefore = structuredClone(FIXTURES.students.filter((student) => student.parentId === parentBefore?.id));
+    const password = 'ParentLifecycleSecret2026!';
+    const salt = 'parent-lifecycle-salt';
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    FIXTURES.localAuths.push({
+      userId: parentUser.id,
+      passwordHash,
+      salt,
+      mustReset: false,
+    } as any);
+
+    const initialLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: parentUser.email, password });
+    expect(initialLogin.status).toBe(200);
+    const oldToken = initialLogin.body.token as string;
+    await request(app)
+      .get('/api/parents')
+      .set('Authorization', `Bearer ${oldToken}`)
+      .expect(200);
+
+    const unauthorizedDeactivation = await request(app)
+      .delete(`/api/admin/users/${parentUser.id}`)
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid');
+    expect(unauthorizedDeactivation.status).toBe(403);
+    expect(FIXTURES.users.find((user) => user.id === parentUser.id)?.isDeleted).toBe(false);
+
+    const unauthorizedReactivation = await request(app)
+      .post(`/api/admin/users/${parentUser.id}/reactivate`)
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid');
+    expect(unauthorizedReactivation.status).toBe(403);
+
+    const deactivation = await request(app)
+      .delete(`/api/admin/users/${parentUser.id}`)
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(deactivation.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === parentUser.id)?.isDeleted).toBe(true);
+    expect(FIXTURES.parents.find((parent) => parent.userId === parentUser.id)).toEqual(parentBefore);
+    expect(FIXTURES.students.filter((student) => student.parentId === parentBefore?.id)).toEqual(childrenBefore);
+
+    const disabledAccounts = await request(app)
+      .get('/api/simulation/users?includeDeleted=true')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(disabledAccounts.status).toBe(200);
+    expect(disabledAccounts.body.find((user: any) => user.id === parentUser.id)).toMatchObject({
+      id: parentUser.id,
+      role: 'parent',
+      isDeleted: true,
+    });
+
+    const disabledLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: parentUser.email, password });
+    expect(disabledLogin.status).toBe(403);
+    await request(app)
+      .get('/api/parents')
+      .set('Authorization', `Bearer ${oldToken}`)
+      .expect(401);
+
+    const reactivation = await request(app)
+      .post(`/api/admin/users/${parentUser.id}/reactivate`)
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid');
+    expect(reactivation.status).toBe(200);
+    expect(FIXTURES.users.find((user) => user.id === parentUser.id)).toMatchObject({
+      id: 6,
+      role: 'parent',
+      isDeleted: false,
+    });
+    expect(FIXTURES.parents.find((parent) => parent.userId === parentUser.id)).toEqual(parentBefore);
+    expect(FIXTURES.students.filter((student) => student.parentId === parentBefore?.id)).toEqual(childrenBefore);
+
+    await request(app)
+      .get('/api/parents')
+      .set('Authorization', `Bearer ${oldToken}`)
+      .expect(401);
+
+    const newLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: parentUser.email, password });
+    expect(newLogin.status).toBe(200);
+    expect(newLogin.body.token).not.toBe(oldToken);
+    await request(app)
+      .get('/api/parents')
+      .set('Authorization', `Bearer ${newLogin.body.token}`)
+      .expect(200);
+
+    expect(FIXTURES.auditEvents.filter((event: any) => (
+      event.resourceType === 'user' && event.resourceId === parentUser.id
+    )).map((event: any) => event.action)).toEqual(['delete', 'session_revoked', 'reactivate']);
   });
 
   it('restricts reactivation to super admins and handles invalid or existing accounts', async () => {
