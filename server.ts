@@ -881,6 +881,7 @@ function verifyInternalNotificationAttachmentRequest(req: any, res: any): boolea
 export async function createApp() {
   assertSimulatedAuthConfiguration();
   const app = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
 
   // JSON parsing middleware
@@ -1255,10 +1256,33 @@ export async function createApp() {
       );
       if (req.method === 'OPTIONS') return res.sendStatus(204);
     }
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN'); // Allow embedding inside Google AI Studio
+
+    const forwardedProto = Array.isArray(req.headers['x-forwarded-proto'])
+      ? req.headers['x-forwarded-proto'][0]
+      : req.headers['x-forwarded-proto'];
+    const isSecureRequest = req.secure || forwardedProto === 'https';
+    const cspDirectives = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "img-src 'self' data: https://flagcdn.com https://*.flagcdn.com",
+      "font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com",
+      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com",
+      "frame-src 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ');
+
+    res.setHeader('Content-Security-Policy', cspDirectives);
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    if (isSecureRequest) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+    }
     next();
   });
 
