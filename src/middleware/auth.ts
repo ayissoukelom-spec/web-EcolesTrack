@@ -4,6 +4,10 @@ import { db } from '../db/index.ts';
 import { auditEvents, localAuths, tokenBlacklist, users } from '../db/schema.ts';
 import { eq, gt, and, or } from 'drizzle-orm';
 import { normalizeEmail, normalizedEmailSql } from '../lib/emailUniqueness.ts';
+import {
+  TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE,
+  TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+} from '../lib/teacherControl/security.ts';
 
 export type AppRole = 'admin' | 'teacher' | 'parent' | 'student';
 
@@ -35,6 +39,31 @@ export interface AuthRequest extends Request {
   };
 }
 
+function teacherDocumentCookieToken(request: AuthRequest): string | null {
+  if (request.method !== 'GET' || request.path !== TEACHER_CONTROL_TEACHER_DOCUMENT_PATH) return null;
+  const cookieHeader = request.headers.cookie;
+  if (typeof cookieHeader !== 'string') return null;
+  const cookie = cookieHeader.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(`${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=`));
+  if (!cookie) return null;
+  try {
+    return decodeURIComponent(cookie.slice(TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE.length + 1)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function clearTeacherDocumentCookie(response: Response): void {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  response.append('Set-Cookie', [
+    `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=`,
+    `Path=${TEACHER_CONTROL_TEACHER_DOCUMENT_PATH}`,
+    'Max-Age=0',
+    'HttpOnly',
+    'SameSite=Strict',
+  ].join('; ') + secure);
+}
+
 export const verifyToken = async (
   req: AuthRequest,
   res: Response,
@@ -44,6 +73,11 @@ export const verifyToken = async (
   const allowSimulatedAuth = !isProduction
     && (process.env.NODE_ENV === 'test' || process.env.ALLOW_SIMULATED_AUTH === 'true');
   const authHeader = req.headers.authorization;
+  const documentCookieToken = authHeader ? null : teacherDocumentCookieToken(req);
+  if (documentCookieToken) clearTeacherDocumentCookie(res);
+  const token = authHeader?.startsWith('Bearer ')
+    ? authHeader.slice('Bearer '.length)
+    : documentCookieToken;
 
   const simulatedRoleHeader = req.headers['x-simulated-role'];
   const simulatedRole = typeof simulatedRoleHeader === 'string'
@@ -76,7 +110,7 @@ export const verifyToken = async (
       ? Number(simulatedSchoolIdHeader[0])
       : null;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     if (!allowSimulatedAuth) {
       return res.status(401).json({ error: 'Unauthorized: Missing token' });
     }
@@ -113,7 +147,6 @@ export const verifyToken = async (
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
   try {
     const secret = getJwtSecret({ isProduction });
     if (!secret) {

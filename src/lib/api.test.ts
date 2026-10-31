@@ -83,6 +83,23 @@ describe('apiFetch', () => {
     expect(options.headers['x-simulated-uid']).toBe('sim_parent_123');
   });
 
+  it('sends the existing Bearer token with GPS challenge requests', async () => {
+    localStorage.setItem('ecoletrack_jwt_access', 'gps-access-token');
+
+    await apiFetch('/api/teacher-control/gps-challenges', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start_session' }),
+    });
+
+    const fetchMock = globalThis.fetch as unknown as {
+      mock: { calls: Array<[string, RequestInit]> };
+    };
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${window.location.origin}/api/teacher-control/gps-challenges`);
+    expect((options.headers as Record<string, string>).Authorization).toBe('Bearer gps-access-token');
+  });
+
   it('does not add Authorization header when no access token is stored', async () => {
     setSimulatedRole('parent');
     setSimulatedUser({ uid: 'sim_parent_123', email: 'parent@example.com', name: 'Parent User' });

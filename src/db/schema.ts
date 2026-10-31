@@ -661,6 +661,205 @@ export const auditEvents = pgTable('audit_events', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const teacherControlGpsSettings = pgTable('teacher_control_gps_settings', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').notNull().unique(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  isEnabled: boolean('is_enabled').default(false).notNull(),
+  latitude: numeric('latitude', { precision: 9, scale: 6 }),
+  longitude: numeric('longitude', { precision: 10, scale: 6 }),
+  geofenceRadiusMeters: integer('geofence_radius_meters').default(200).notNull(),
+  updatedByUserId: integer('updated_by_user_id'),
+  updatedByNameSnapshot: text('updated_by_name_snapshot'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  radiusCheck: check('teacher_control_gps_radius_check', sql`${table.geofenceRadiusMeters} > 0`),
+  latitudeCheck: check('teacher_control_gps_latitude_check', sql`${table.latitude} IS NULL OR ${table.latitude} BETWEEN -90 AND 90`),
+  longitudeCheck: check('teacher_control_gps_longitude_check', sql`${table.longitude} IS NULL OR ${table.longitude} BETWEEN -180 AND 180`),
+  enabledCoordinatesCheck: check('teacher_control_gps_enabled_coordinates_check', sql`
+    ${table.isEnabled} = false OR (${table.latitude} IS NOT NULL AND ${table.longitude} IS NOT NULL)
+  `),
+}));
+
+export const teacherControlGpsChallenges = pgTable('teacher_control_gps_challenges', {
+  id: serial('id').primaryKey(),
+  challengeHash: text('challenge_hash').notNull().unique(),
+  actorUserId: integer('actor_user_id').notNull(),
+  schoolId: integer('school_id').notNull(),
+  action: text('action').notNull(),
+  resourceId: integer('resource_id'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  scopeExpiryIdx: index('teacher_control_gps_challenges_scope_expiry_idx')
+    .on(table.actorUserId, table.schoolId, table.action, table.expiresAt),
+  actionCheck: check('teacher_control_gps_challenges_action_check', sql`${table.action} IN ('start_session', 'end_session')`),
+}));
+
+export const teacherControlHourlyRates = pgTable('teacher_control_hourly_rates', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').notNull(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  teacherId: integer('teacher_id').notNull(),
+  teacherNameSnapshot: text('teacher_name_snapshot').notNull(),
+  hourlyRateXof: integer('hourly_rate_xof').notNull(),
+  updatedByUserId: integer('updated_by_user_id'),
+  updatedByNameSnapshot: text('updated_by_name_snapshot'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  teacherSchoolUniqueIdx: uniqueIndex('teacher_control_hourly_rates_school_teacher_uidx').on(table.schoolId, table.teacherId),
+  hourlyRateCheck: check('teacher_control_hourly_rates_amount_check', sql`${table.hourlyRateXof} >= 0`),
+}));
+
+export const teacherControlSessions = pgTable('teacher_control_sessions', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').notNull(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  teacherId: integer('teacher_id').notNull(),
+  teacherUserId: integer('teacher_user_id').notNull(),
+  teacherNameSnapshot: text('teacher_name_snapshot').notNull(),
+  teachingAssignmentId: integer('teaching_assignment_id'),
+  classTeacherAssociationId: integer('class_teacher_association_id'),
+  teacherSubjectAssociationId: integer('teacher_subject_association_id'),
+  classId: integer('class_id').notNull(),
+  classNameSnapshot: text('class_name_snapshot').notNull(),
+  subjectId: integer('subject_id').notNull(),
+  subjectNameSnapshot: text('subject_name_snapshot').notNull(),
+  status: text('status').default('open').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  startDistanceMeters: integer('start_distance_meters').notNull(),
+  startAccuracyMeters: integer('start_accuracy_meters').notNull(),
+  startGeofenceRadiusMeters: integer('start_geofence_radius_meters').notNull(),
+  validatedEndedAt: timestamp('validated_ended_at', { withTimezone: true }),
+  endSource: text('end_source'),
+  endDistanceMeters: integer('end_distance_meters'),
+  endAccuracyMeters: integer('end_accuracy_meters'),
+  endGeofenceRadiusMeters: integer('end_geofence_radius_meters'),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+  closedByUserId: integer('closed_by_user_id'),
+  closedByNameSnapshot: text('closed_by_name_snapshot'),
+  closeReason: text('close_reason'),
+  hourlyRateXofSnapshot: integer('hourly_rate_xof_snapshot'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  oneOpenSessionPerTeacherSchoolIdx: uniqueIndex('teacher_control_sessions_one_open_per_teacher_school_uidx')
+    .on(table.schoolId, table.teacherId)
+    .where(sql`${table.status} = 'open'`),
+  teacherHistoryIdx: index('teacher_control_sessions_school_teacher_started_idx').on(table.schoolId, table.teacherId, table.startedAt),
+  schoolHistoryIdx: index('teacher_control_sessions_school_started_idx').on(table.schoolId, table.startedAt),
+  statusCheck: check('teacher_control_sessions_status_check', sql`${table.status} IN ('open', 'completed', 'closed_without_end')`),
+  assignmentSourceCheck: check('teacher_control_sessions_assignment_source_check', sql`
+    (${table.teachingAssignmentId} IS NOT NULL
+      AND ${table.classTeacherAssociationId} IS NULL
+      AND ${table.teacherSubjectAssociationId} IS NULL)
+    OR (${table.teachingAssignmentId} IS NULL
+      AND ${table.classTeacherAssociationId} IS NOT NULL
+      AND ${table.teacherSubjectAssociationId} IS NOT NULL)
+  `),
+  stateTimesCheck: check('teacher_control_sessions_state_times_check', sql`
+    (${table.status} = 'open' AND ${table.validatedEndedAt} IS NULL AND ${table.closedAt} IS NULL)
+    OR (${table.status} = 'completed' AND ${table.validatedEndedAt} IS NOT NULL AND ${table.closedAt} IS NULL)
+    OR (${table.status} = 'closed_without_end' AND ${table.validatedEndedAt} IS NULL AND ${table.closedAt} IS NOT NULL)
+  `),
+  endSourceCheck: check('teacher_control_sessions_end_source_check', sql`
+    (${table.validatedEndedAt} IS NULL AND ${table.endSource} IS NULL)
+    OR (${table.validatedEndedAt} IS NOT NULL AND ${table.endSource} IN ('gps', 'regularization'))
+  `),
+  endAfterStartCheck: check('teacher_control_sessions_end_after_start_check', sql`
+    ${table.validatedEndedAt} IS NULL OR ${table.validatedEndedAt} >= ${table.startedAt}
+  `),
+  gpsValuesCheck: check('teacher_control_sessions_gps_values_check', sql`
+    ${table.startDistanceMeters} >= 0
+    AND ${table.startAccuracyMeters} BETWEEN 0 AND 100
+    AND ${table.startGeofenceRadiusMeters} > 0
+    AND (${table.endDistanceMeters} IS NULL OR ${table.endDistanceMeters} >= 0)
+    AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 100)
+    AND (${table.endGeofenceRadiusMeters} IS NULL OR ${table.endGeofenceRadiusMeters} > 0)
+  `),
+  endGpsValuesCheck: check('teacher_control_sessions_end_gps_values_check', sql`
+    (${table.endSource} = 'gps' AND ${table.endDistanceMeters} IS NOT NULL AND ${table.endAccuracyMeters} IS NOT NULL AND ${table.endGeofenceRadiusMeters} IS NOT NULL)
+    OR (${table.endSource} = 'regularization' AND ${table.endDistanceMeters} IS NULL AND ${table.endAccuracyMeters} IS NULL AND ${table.endGeofenceRadiusMeters} IS NULL)
+    OR (${table.endSource} IS NULL AND ${table.endDistanceMeters} IS NULL AND ${table.endAccuracyMeters} IS NULL AND ${table.endGeofenceRadiusMeters} IS NULL)
+  `),
+  rateSnapshotCheck: check('teacher_control_sessions_rate_snapshot_check', sql`
+    ${table.hourlyRateXofSnapshot} IS NULL OR ${table.hourlyRateXofSnapshot} >= 0
+  `),
+}));
+
+export const teacherControlRegularizationRequests = pgTable('teacher_control_regularization_requests', {
+  id: serial('id').primaryKey(),
+  sessionId: integer('session_id').references(() => teacherControlSessions.id, { onDelete: 'restrict' }).notNull(),
+  schoolId: integer('school_id').notNull(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  teacherId: integer('teacher_id').notNull(),
+  teacherNameSnapshot: text('teacher_name_snapshot').notNull(),
+  proposedEndedAt: timestamp('proposed_ended_at', { withTimezone: true }).notNull(),
+  reason: text('reason').notNull(),
+  status: text('status').default('pending').notNull(),
+  submittedByUserId: integer('submitted_by_user_id').notNull(),
+  submittedByNameSnapshot: text('submitted_by_name_snapshot').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  onePendingRequestPerSessionIdx: uniqueIndex('teacher_control_regularization_one_pending_per_session_uidx')
+    .on(table.sessionId)
+    .where(sql`${table.status} = 'pending'`),
+  sessionHistoryIdx: index('teacher_control_regularization_session_history_idx').on(table.sessionId, table.createdAt),
+  statusCheck: check('teacher_control_regularization_status_check', sql`${table.status} IN ('pending', 'accepted', 'rejected', 'modified_accepted')`),
+  reasonCheck: check('teacher_control_regularization_reason_check', sql`BTRIM(${table.reason}) <> ''`),
+}));
+
+export const teacherControlRegularizationDecisions = pgTable('teacher_control_regularization_decisions', {
+  id: serial('id').primaryKey(),
+  requestId: integer('request_id').references(() => teacherControlRegularizationRequests.id, { onDelete: 'restrict' }).notNull(),
+  sessionId: integer('session_id').notNull(),
+  schoolId: integer('school_id').notNull(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  decision: text('decision').notNull(),
+  previousProposedEndedAt: timestamp('previous_proposed_ended_at', { withTimezone: true }).notNull(),
+  decidedEndedAt: timestamp('decided_ended_at', { withTimezone: true }),
+  reason: text('reason'),
+  actorUserId: integer('actor_user_id'),
+  actorRole: text('actor_role').notNull(),
+  actorNameSnapshot: text('actor_name_snapshot').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  requestHistoryIdx: index('teacher_control_regularization_decisions_request_history_idx').on(table.requestId, table.createdAt),
+  decisionCheck: check('teacher_control_regularization_decision_check', sql`${table.decision} IN ('accepted', 'rejected', 'modified_accepted')`),
+  reasonCheck: check('teacher_control_regularization_decision_reason_check', sql`
+    ${table.decision} NOT IN ('rejected', 'modified_accepted')
+    OR (${table.reason} IS NOT NULL AND BTRIM(${table.reason}) <> '')
+  `),
+  decisionEndTimeCheck: check('teacher_control_regularization_decision_end_time_check', sql`
+    (${table.decision} = 'rejected' AND ${table.decidedEndedAt} IS NULL)
+    OR (${table.decision} IN ('accepted', 'modified_accepted') AND ${table.decidedEndedAt} IS NOT NULL)
+  `),
+}));
+
+export const teacherControlAuditEvents = pgTable('teacher_control_audit_events', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').notNull(),
+  schoolNameSnapshot: text('school_name_snapshot').notNull(),
+  actorUserId: integer('actor_user_id'),
+  actorRole: text('actor_role').notNull(),
+  actorEmailSnapshot: text('actor_email_snapshot'),
+  actorNameSnapshot: text('actor_name_snapshot').notNull(),
+  action: text('action').notNull(),
+  resourceType: text('resource_type').notNull(),
+  resourceId: integer('resource_id'),
+  beforeValues: jsonb('before_values').$type<Record<string, unknown> | null>(),
+  afterValues: jsonb('after_values').$type<Record<string, unknown> | null>(),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  schoolHistoryIdx: index('teacher_control_audit_school_history_idx').on(table.schoolId, table.createdAt),
+  resourceHistoryIdx: index('teacher_control_audit_resource_history_idx').on(table.resourceType, table.resourceId, table.createdAt),
+}));
+
 export const accountingCategories = pgTable('accounting_categories', {
   id: serial('id').primaryKey(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),

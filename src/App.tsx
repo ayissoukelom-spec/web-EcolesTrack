@@ -54,6 +54,7 @@ import ClassSubjectPivotView from './components/ClassSubjectPivotView.tsx';
 import GlobalErrorToast from './components/GlobalErrorToast.tsx';
 import HomeroomView from './components/HomeroomView.tsx';
 import SchoolSuspensionNotice from './components/SchoolSuspensionNotice.tsx';
+import TeacherControlView from './components/TeacherControlView.tsx';
 
 import {
   LayoutDashboard,
@@ -1321,6 +1322,22 @@ export default function App() {
                 <span>Tableau de Bord</span>
               </button>
 
+              {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+                <button
+                  onClick={() => setActiveTab('teacher-control')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'teacher-control'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-teacher-control"
+                  data-testid="sidebar-nav-teacher-control"
+                >
+                  <ClipboardCheck className="h-4.5 w-4.5" />
+                  <span>Contrôle des enseignants</span>
+                </button>
+              )}
+
               {/* Tab 2: Admin standard dashboard */}
               {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
                 onClick={() => setActiveTab('administration')}
@@ -1664,6 +1681,20 @@ export default function App() {
                   absenceStatusCounts={stats.absenceStatusCounts}
                 />
               )}
+
+              {activeTab === 'teacher-control'
+                && ['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+                  <ErrorBoundary>
+                    <TeacherControlView
+                      userRole={currentRole}
+                      activeSchoolId={currentSchoolId}
+                      schoolsList={schoolsList}
+                      teachersList={teachersList}
+                      superAdminSchoolFilterId={superAdminSchoolFilterId}
+                      onSuperAdminSchoolFilterChange={setSuperAdminSchoolFilterId}
+                    />
+                  </ErrorBoundary>
+                )}
 
               {activeTab === 'homeroom' && currentRole === 'teacher' && homeroomClassesList.length > 0 && (
                 <HomeroomView classes={homeroomClassesList} />

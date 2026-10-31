@@ -34,11 +34,16 @@ import {
   type AuthRequest,
   verifyToken,
 } from './auth';
+import {
+  TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE,
+  TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+} from '../lib/teacherControl/security.ts';
 
 const createMockRes = () => {
   const res: any = {};
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
+  res.append = vi.fn().mockReturnValue(res);
   return res;
 };
 
@@ -118,6 +123,87 @@ describe('auth middleware access control', () => {
       schoolId: userRecord.schoolId,
     });
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('accepts the same JWT from the short-lived cookie only for the teacher GPS document', async () => {
+    const userRecord = {
+      id: 99,
+      uid: 'user_99',
+      email: 'user99@example.com',
+      name: 'User NinetyNine',
+      role: 'teacher',
+      schoolId: 12,
+    };
+    mockVerifyJwt.mockReturnValueOnce({
+      uid: userRecord.uid,
+      type: 'access',
+      jti: 'jti-99',
+      sub: String(userRecord.id),
+    });
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([]);
+    mockWhere.mockResolvedValueOnce([]);
+
+    const req = {
+      method: 'GET',
+      path: TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=document-token` },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res as any, next as any);
+
+    expect(mockVerifyJwt).toHaveBeenCalledWith(
+      'document-token',
+      'test-jwt-secret',
+      expect.any(Object),
+    );
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toMatchObject({ id: 99, role: 'teacher' });
+    expect(res.append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringContaining(`${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=; Path=${TEACHER_CONTROL_TEACHER_DOCUMENT_PATH}; Max-Age=0`),
+    );
+  });
+
+  it('does not accept the document cookie for API requests or reject invalid document cookies as authenticated', async () => {
+    const apiRequest = {
+      method: 'POST',
+      path: '/api/teacher-control/gps-challenges',
+      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=document-token` },
+    } as any as AuthRequest;
+    const apiResponse = createMockRes();
+    const apiNext = vi.fn();
+
+    await verifyToken(apiRequest, apiResponse as any, apiNext as any);
+
+    expect(apiNext).not.toHaveBeenCalled();
+    expect(apiResponse.status).toHaveBeenCalledWith(401);
+    expect(apiResponse.json).toHaveBeenCalledWith({ error: 'Unauthorized: Missing token' });
+    expect(mockVerifyJwt).not.toHaveBeenCalled();
+
+    mockVerifyJwt.mockImplementationOnce(() => {
+      throw new Error('jwt expired');
+    });
+    const invalidRequest = {
+      method: 'GET',
+      path: TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=expired-token` },
+    } as any as AuthRequest;
+    const invalidResponse = createMockRes();
+    const invalidNext = vi.fn();
+
+    await verifyToken(invalidRequest, invalidResponse as any, invalidNext as any);
+
+    expect(invalidNext).not.toHaveBeenCalled();
+    expect(invalidResponse.status).toHaveBeenCalledWith(401);
+    expect(invalidResponse.json).toHaveBeenCalledWith({ error: 'Unauthorized: Invalid token' });
+    expect(invalidResponse.append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringContaining(`${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=; Path=${TEACHER_CONTROL_TEACHER_DOCUMENT_PATH}; Max-Age=0`),
+    );
   });
 
   it('rejects a blacklisted access token', async () => {

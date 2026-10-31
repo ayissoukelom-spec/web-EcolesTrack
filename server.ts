@@ -49,6 +49,7 @@ import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAd
 import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
 import {
   schools,
+  teacherControlGpsSettings,
   academicYears,
   users,
   userSchools,
@@ -105,6 +106,16 @@ import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthoriz
 import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts';
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
+import { resolveTeacherControlSchoolAccess } from './src/lib/teacherControl/authorization.ts';
+import {
+  TEACHER_CONTROL_APP_PERMISSIONS_POLICY,
+  TEACHER_CONTROL_DEFAULT_PERMISSIONS_POLICY,
+  getTeacherControlDocumentPermissionsPolicy,
+  isTeacherControlTeacherDocumentRequest,
+  TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+  TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY,
+} from './src/lib/teacherControl/security.ts';
+import { registerTeacherControlApi } from './src/lib/teacherControl/api.ts';
 import { filterAvailableSchoolTerms, getPeriodTypeShortName, getSchoolPeriodTypeStates, inferLevelCodeFromClassName, resolveCycleForClass, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
@@ -1267,7 +1278,12 @@ export async function createApp() {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    res.setHeader(
+      'Permissions-Policy',
+      req.method === 'GET' && req.path === '/'
+        ? TEACHER_CONTROL_APP_PERMISSIONS_POLICY
+        : TEACHER_CONTROL_DEFAULT_PERMISSIONS_POLICY,
+    );
     if (isSecureRequest) {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     }
@@ -1301,6 +1317,46 @@ export async function createApp() {
       }
       return next();
     });
+  });
+
+  app.use(async (req: AuthRequest, res, next) => {
+    if (!isTeacherControlTeacherDocumentRequest(req.method, req.originalUrl)) return next();
+
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(401).send('Unauthenticated');
+      if (actor.role !== 'teacher') return res.status(403).send('Forbidden');
+
+      const access = await resolveTeacherControlSchoolAccess(actor);
+      if (access.allowed === false) {
+        if (access.reason === 'school_suspended') {
+          return res.status(423).send('School suspended');
+        }
+        if (access.reason === 'missing_school') {
+          return res.status(404).send('School not found');
+        }
+        return res.status(403).send('Forbidden');
+      }
+
+      const [gpsSettings] = await db.select({
+        isEnabled: teacherControlGpsSettings.isEnabled,
+        latitude: teacherControlGpsSettings.latitude,
+        longitude: teacherControlGpsSettings.longitude,
+      }).from(teacherControlGpsSettings)
+        .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
+        .limit(1);
+      const permissionsPolicy = getTeacherControlDocumentPermissionsPolicy({
+        method: req.method,
+        path: req.originalUrl,
+        role: actor.role,
+        gpsSettings,
+      });
+      if (permissionsPolicy) res.locals.teacherControlPermissionsPolicy = permissionsPolicy;
+      return next();
+    } catch (error) {
+      console.error('Failed to verify teacher control document access:', error);
+      return res.status(503).send('Unable to verify teacher control access');
+    }
   });
 
   // ==========================================
@@ -1375,6 +1431,7 @@ export async function createApp() {
   registerClassRankingRoute(app, { resolveActor });
   registerClassSubjectPivotRoute(app, { resolveActor });
   registerParentSchoolAdminWhatsAppRoute(app, { resolveActor });
+  registerTeacherControlApi(app, { resolveActor, requireAuth });
   app.use('/api/accounting', requireAuth);
   registerAccountingRoutes(app, {
     resolveActor,
@@ -12020,6 +12077,23 @@ if (uniqueParentIds.length > 0) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
     });
+    app.get(TEACHER_CONTROL_TEACHER_DOCUMENT_PATH, async (req, res, next) => {
+      if (res.locals.teacherControlPermissionsPolicy !== TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY) {
+        return next();
+      }
+
+      try {
+        const indexPath = path.join(process.cwd(), 'index.html');
+        const indexHtml = await fsPromises.readFile(indexPath, 'utf8');
+        const html = await vite.transformIndexHtml(req.originalUrl, indexHtml);
+        res.setHeader('Permissions-Policy', TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY);
+        return res.status(200).type('html').send(html);
+      } catch (error) {
+        console.error('Failed to serve teacher control document:', error);
+        if (res.headersSent) return next(error);
+        return res.status(500).send('Error serving index.html');
+      }
+    });
     // Use Vite as middleware for everything except /api
     app.use((req, res, next) => {
       if (req.path.startsWith('/api')) {
@@ -12048,6 +12122,21 @@ if (uniqueParentIds.length > 0) {
   } else {
     // Production serving static files
     const distPath = path.join(process.cwd(), 'dist');
+    app.get(TEACHER_CONTROL_TEACHER_DOCUMENT_PATH, async (_req, res, next) => {
+      if (res.locals.teacherControlPermissionsPolicy !== TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY) {
+        return next();
+      }
+
+      try {
+        const indexHtml = await fsPromises.readFile(path.join(distPath, 'index.html'), 'utf8');
+        res.setHeader('Permissions-Policy', TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY);
+        return res.status(200).type('html').send(indexHtml);
+      } catch (error) {
+        console.error('Failed to serve teacher control document:', error);
+        if (res.headersSent) return next(error);
+        return res.status(500).send('Error serving index.html');
+      }
+    });
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
