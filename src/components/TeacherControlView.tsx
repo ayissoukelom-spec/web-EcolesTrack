@@ -37,6 +37,8 @@ type GpsStatus =
   | 'timeout'
   | 'serverError';
 type TeacherAction = 'start' | 'end';
+type UnrecordedRequestType = 'immediate_report' | 'late_declaration';
+type IncidentType = 'gps_unavailable' | 'gps_accuracy' | 'permission_denied' | 'network' | 'application' | 'other';
 
 type GpsFix = {
   latitude: number;
@@ -70,9 +72,12 @@ type Session = {
   startedAt: string;
   validatedEndedAt: string | null;
   endSource: 'gps' | 'regularization' | null;
-  startDistanceMeters: number;
-  startAccuracyMeters: number;
-  startGeofenceRadiusMeters: number;
+  startDistanceMeters: number | null;
+  startAccuracyMeters: number | null;
+  startGeofenceRadiusMeters: number | null;
+  startSource: 'gps' | 'regularization';
+  regularizationOrigin: 'immediate_report' | 'late_declaration' | null;
+  regularizationRequestId: number | null;
   endDistanceMeters: number | null;
   endAccuracyMeters: number | null;
   endGeofenceRadiusMeters: number | null;
@@ -85,7 +90,9 @@ type Session = {
 type Decision = {
   id: number;
   decision: 'accepted' | 'rejected' | 'modified_accepted';
-  previousProposedEndedAt: string;
+  previousProposedEndedAt: string | null;
+  previousProposedStartedAt: string | null;
+  decidedStartedAt: string | null;
   decidedEndedAt: string | null;
   reason: string | null;
   actorNameSnapshot: string;
@@ -95,10 +102,24 @@ type Decision = {
 type Regularization = {
   request: {
     id: number;
-    sessionId: number;
+    sessionId: number | null;
+    requestType: 'incomplete_session' | 'immediate_report' | 'late_declaration';
+    schoolNameSnapshot: string;
+    classId: number | null;
+    classNameSnapshot: string | null;
+    subjectId: number | null;
+    subjectNameSnapshot: string | null;
+    referenceStartedAt: string | null;
+    declaredStartedAt: string | null;
     teacherNameSnapshot: string;
-    proposedEndedAt: string;
+    proposedEndedAt: string | null;
     reason: string;
+    description: string | null;
+    incidentType: string | null;
+    technicalDetails: Record<string, unknown> | null;
+    gpsLatitude: string | null;
+    gpsLongitude: string | null;
+    gpsAccuracyMeters: string | null;
     status: 'pending' | 'accepted' | 'rejected' | 'modified_accepted' | string;
     createdAt: string;
   };
@@ -111,6 +132,14 @@ type Statistics = {
   completedSessions: number;
   incompleteSessions: number;
   regularizedSessions: number;
+  gpsCompletedSessions: number;
+  incompleteSessionRegularizations: number;
+  immediateRegularizedSessions: number;
+  lateRegularizedSessions: number;
+  gpsDurationMilliseconds: number;
+  incompleteRegularizedDurationMilliseconds: number;
+  immediateRegularizedDurationMilliseconds: number;
+  lateRegularizedDurationMilliseconds: number;
   pendingRegularizations: number;
   validatedDurationMilliseconds: number;
   estimatedCompensationXof: number;
@@ -257,6 +286,24 @@ function requestStatusLabel(status: Regularization['request']['status']): string
   if (status === 'rejected') return 'Refusée';
   if (status === 'modified_accepted') return 'Acceptée après modification';
   return status;
+}
+
+function regularizationTypeLabel(requestType: Regularization['request']['requestType']): string {
+  if (requestType === 'immediate_report') return 'SIGNALEMENT IMMÉDIAT';
+  if (requestType === 'late_declaration') return 'DÉCLARATION TARDIVE';
+  return 'RÉGULARISATION DE SÉANCE INCOMPLÈTE';
+}
+
+function incidentTypeLabel(incidentType: string | null): string {
+  switch (incidentType) {
+    case 'gps_unavailable': return 'GPS indisponible';
+    case 'gps_accuracy': return 'Précision GPS insuffisante';
+    case 'permission_denied': return 'Permission de géolocalisation refusée';
+    case 'network': return 'Connexion Internet indisponible';
+    case 'application': return 'Erreur technique de l’application';
+    case 'other': return 'Autre problème';
+    default: return '—';
+  }
 }
 
 class GeolocationRequestError extends Error {
@@ -510,7 +557,18 @@ export default function TeacherControlView({
   const [requestEndTimes, setRequestEndTimes] = useState<Record<number, string>>({});
   const [requestReasons, setRequestReasons] = useState<Record<number, string>>({});
   const [regularizationEndTimes, setRegularizationEndTimes] = useState<Record<number, string>>({});
+  const [regularizationStartTimes, setRegularizationStartTimes] = useState<Record<number, string>>({});
   const [regularizationReasons, setRegularizationReasons] = useState<Record<number, string>>({});
+  const [unrecordedRequestOpen, setUnrecordedRequestOpen] = useState(false);
+  const [unrecordedRequestType, setUnrecordedRequestType] = useState<UnrecordedRequestType>('late_declaration');
+  const [unrecordedClassId, setUnrecordedClassId] = useState('');
+  const [unrecordedSubjectId, setUnrecordedSubjectId] = useState('');
+  const [unrecordedReason, setUnrecordedReason] = useState('');
+  const [unrecordedDescription, setUnrecordedDescription] = useState('');
+  const [unrecordedIncidentType, setUnrecordedIncidentType] = useState<IncidentType>('gps_unavailable');
+  const [unrecordedStartedAt, setUnrecordedStartedAt] = useState('');
+  const [unrecordedEndedAt, setUnrecordedEndedAt] = useState('');
+  const [unrecordedCompletionDescription, setUnrecordedCompletionDescription] = useState<Record<number, string>>({});
   const [closeReasons, setCloseReasons] = useState<Record<number, string>>({});
   const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '', geofenceRadiusMeters: '200' });
 
@@ -936,6 +994,98 @@ export default function TeacherControlView({
     }
   };
 
+  const submitUnrecordedRegularization = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (actionInFlight.current || !assignments) return;
+    const classId = Number(unrecordedClassId);
+    const subjectId = Number(unrecordedSubjectId);
+    const assignment = assignments.find((item) => item.classId === classId && item.subjectId === subjectId);
+    if (!assignment || !unrecordedReason.trim()) {
+      setError('Sélectionnez une classe, une matière autorisée et indiquez le motif.');
+      return;
+    }
+
+    const declaredStartedAt = unrecordedRequestType === 'late_declaration'
+      ? parseLomeInput(unrecordedStartedAt)
+      : null;
+    const proposedEndedAt = unrecordedRequestType === 'late_declaration'
+      ? parseLomeInput(unrecordedEndedAt)
+      : null;
+    if (unrecordedRequestType === 'late_declaration'
+      && (!declaredStartedAt || !proposedEndedAt || declaredStartedAt >= proposedEndedAt || proposedEndedAt > new Date().toISOString())) {
+      setError('Pour une déclaration tardive, indiquez une date/heure de début et de fin cohérentes, non futures.');
+      return;
+    }
+    actionInFlight.current = true;
+    setBusyAction('unrecorded-regularization');
+    setError(null);
+    const gpsEvidence = unrecordedRequestType === 'immediate_report' ? gpsReading : null;
+    try {
+      await postJson('/api/teacher-control/regularizations/unrecorded', {
+        requestType: unrecordedRequestType,
+        classId,
+        subjectId,
+        reason: unrecordedReason.trim(),
+        description: unrecordedDescription.trim() || null,
+        ...(unrecordedRequestType === 'immediate_report'
+          ? {
+            incidentType: unrecordedIncidentType,
+            ...(gpsEvidence ? {
+              latitude: gpsEvidence.latitude,
+              longitude: gpsEvidence.longitude,
+              accuracyMeters: gpsEvidence.accuracyMeters,
+            } : {}),
+            technicalDetails: {
+              gpsErrorCode: gpsStatus,
+              gpsErrorMessage: error,
+              networkOnline: navigator.onLine,
+              ...(gpsEvidence ? { gpsAccuracyMeters: gpsEvidence.accuracyMeters } : {}),
+            },
+          }
+          : { declaredStartedAt, proposedEndedAt }),
+      });
+      await refreshAfterAction(unrecordedRequestType === 'immediate_report'
+        ? 'Le signalement immédiat a été transmis. Son heure serveur constitue l’heure de début de référence, sans certifier la présence ni le début effectif du cours.'
+        : 'La déclaration tardive a été transmise pour examen administratif.');
+      setUnrecordedRequestOpen(false);
+      setUnrecordedReason('');
+      setUnrecordedDescription('');
+      setUnrecordedStartedAt('');
+      setUnrecordedEndedAt('');
+    } catch (requestError) {
+      showError(requestError, 'Impossible de transmettre la demande de régularisation.');
+    } finally {
+      actionInFlight.current = false;
+      setBusyAction(null);
+    }
+  };
+
+  const completeImmediateRegularization = async (request: Regularization['request']) => {
+    const proposedEndedAt = parseLomeInput(requestEndTimes[request.id] ?? '');
+    if (!proposedEndedAt) {
+      setError('Indiquez une heure de fin déclarée valide.');
+      return;
+    }
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setBusyAction(`complete-report-${request.id}`);
+    setError(null);
+    try {
+      await postJson(`/api/teacher-control/regularizations/${request.id}/complete`, {
+        proposedEndedAt,
+        description: unrecordedCompletionDescription[request.id]?.trim() || null,
+      });
+      await refreshAfterAction('L’heure de fin déclarée a été ajoutée à votre signalement.');
+      setRequestEndTimes((current) => ({ ...current, [request.id]: '' }));
+      setUnrecordedCompletionDescription((current) => ({ ...current, [request.id]: '' }));
+    } catch (requestError) {
+      showError(requestError, 'Impossible de compléter le signalement.');
+    } finally {
+      actionInFlight.current = false;
+      setBusyAction(null);
+    }
+  };
+
   const decideRegularization = async (
     request: Regularization['request'],
     decision: 'accepted' | 'rejected' | 'modified_accepted',
@@ -943,6 +1093,9 @@ export default function TeacherControlView({
     const reason = regularizationReasons[request.id]?.trim() ?? '';
     const proposedEndedAt = decision === 'modified_accepted'
       ? parseLomeInput(regularizationEndTimes[request.id] ?? '')
+      : null;
+    const proposedStartedAt = decision === 'modified_accepted' && request.requestType !== 'incomplete_session'
+      ? parseLomeInput(regularizationStartTimes[request.id] ?? '')
       : null;
     if ((decision === 'rejected' || decision === 'modified_accepted') && !reason) {
       setError('Un motif est obligatoire pour cette décision.');
@@ -952,6 +1105,10 @@ export default function TeacherControlView({
       setError('Indiquez une nouvelle heure de fin valide.');
       return;
     }
+    if (decision === 'modified_accepted' && request.requestType !== 'incomplete_session' && !proposedStartedAt) {
+      setError('Indiquez une nouvelle heure de début valide.');
+      return;
+    }
     setBusyAction(`decision-${request.id}`);
     setError(null);
     try {
@@ -959,6 +1116,8 @@ export default function TeacherControlView({
         decision,
         ...(reason ? { reason } : {}),
         ...(proposedEndedAt ? { proposedEndedAt } : {}),
+        ...(proposedStartedAt ? { proposedStartedAt } : {}),
+        ...(isSuperAdmin ? { schoolId } : {}),
       });
       await refreshAfterAction('La décision a été enregistrée et auditée.');
     } catch (actionError) {
@@ -1234,6 +1393,9 @@ export default function TeacherControlView({
               <StatCard label="Durée validée" value={formatDuration(globalStatistics.validatedDurationMilliseconds)} />
               <StatCard label="Rémunération validée" value={formatAmount(globalStatistics.estimatedCompensationXof)} detail={`${globalStatistics.pendingRegularizations} demande(s) en attente`} />
             </div>
+            <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              Durées comptabilisées : GPS {formatDuration(globalStatistics.gpsDurationMilliseconds ?? 0)} ({globalStatistics.gpsCompletedSessions ?? 0} séances) · régularisation après séance incomplète {formatDuration(globalStatistics.incompleteRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.incompleteSessionRegularizations ?? 0}) · signalements immédiats {formatDuration(globalStatistics.immediateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.immediateRegularizedSessions ?? 0}) · déclarations tardives {formatDuration(globalStatistics.lateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.lateRegularizedSessions ?? 0}).
+            </p>
             <div className="overflow-hidden rounded-2xl border border-slate-200">
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
                 <h2 className="font-bold text-slate-900">Statistiques par établissement</h2>
@@ -1251,7 +1413,12 @@ export default function TeacherControlView({
                     <span className="text-sm text-slate-600">{school.totalSessions} séance(s) · {school.openSessions} en cours</span>
                     <span className="text-sm text-slate-600">{school.completedSessions} terminée(s) · {school.incompleteSessions} sans fin validée</span>
                     <span className="text-sm text-slate-600">{formatDuration(school.validatedDurationMilliseconds)}</span>
-                    <span className="text-sm font-semibold text-slate-800">{formatAmount(school.estimatedCompensationXof)} · {school.pendingRegularizations} attente(s)</span>
+                    <span className="text-sm font-semibold text-slate-800">
+                      {formatAmount(school.estimatedCompensationXof)} · {school.pendingRegularizations} attente(s)
+                      <span className="mt-1 block text-xs font-normal text-slate-500">
+                        GPS {formatDuration(school.gpsDurationMilliseconds ?? 0)} · incomplètes {formatDuration(school.incompleteRegularizedDurationMilliseconds ?? 0)} · immédiates {formatDuration(school.immediateRegularizedDurationMilliseconds ?? 0)} · tardives {formatDuration(school.lateRegularizedDurationMilliseconds ?? 0)}
+                      </span>
+                    </span>
                   </button>
                 ))}
                 {globalStatistics.schools.length === 0 && <p className="p-4 text-sm text-slate-500">Aucun établissement disponible.</p>}
@@ -1289,6 +1456,9 @@ export default function TeacherControlView({
             <StatCard label="Durée validée" value={formatDuration(statistics.validatedDurationMilliseconds)} />
             <StatCard label="Montant validé" value={formatAmount(statistics.estimatedCompensationXof)} detail={`${statistics.pendingRegularizations} demande(s) en attente · fins validées uniquement`} />
           </div>
+          <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+            Durées comptabilisées : GPS {formatDuration(statistics.gpsDurationMilliseconds ?? 0)} ({statistics.gpsCompletedSessions ?? 0} séances) · régularisation après séance incomplète {formatDuration(statistics.incompleteRegularizedDurationMilliseconds ?? 0)} ({statistics.incompleteSessionRegularizations ?? 0}) · signalements immédiats {formatDuration(statistics.immediateRegularizedDurationMilliseconds ?? 0)} ({statistics.immediateRegularizedSessions ?? 0}) · déclarations tardives {formatDuration(statistics.lateRegularizedDurationMilliseconds ?? 0)} ({statistics.lateRegularizedSessions ?? 0}).
+          </p>
         </div>
       )}
 
@@ -1525,6 +1695,107 @@ export default function TeacherControlView({
             </div>
           )}
 
+          {isTeacher && assignments && assignments.length > 0 && (
+            <section className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-bold text-slate-900">Séance non enregistrée</h2>
+                  <p className="mt-1 text-sm text-slate-600">Signalez immédiatement un problème empêchant le démarrage, ou déclarez ultérieurement un cours oublié.</p>
+                </div>
+                <button
+                  type="button"
+                  className={secondaryButtonClass}
+                  aria-expanded={unrecordedRequestOpen}
+                  onClick={() => setUnrecordedRequestOpen((open) => !open)}
+                >{unrecordedRequestOpen ? 'Fermer' : 'Demander la régularisation d’une séance non enregistrée'}</button>
+              </div>
+              {unrecordedRequestOpen && (
+                <form className="grid gap-3 rounded-xl border border-amber-100 bg-white p-4 sm:grid-cols-2" onSubmit={(event) => void submitUnrecordedRegularization(event)}>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Circonstance
+                    <select
+                      className={`${inputClass} mt-1`}
+                      aria-label="Circonstance de la demande"
+                      value={unrecordedRequestType}
+                      disabled={busyAction != null}
+                      onChange={(event) => setUnrecordedRequestType(event.target.value as UnrecordedRequestType)}
+                    >
+                      <option value="late_declaration">Déclaration tardive d’un cours oublié</option>
+                      <option value="immediate_report">Signalement immédiat d’un problème de démarrage</option>
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Classe
+                    <select className={`${inputClass} mt-1`} aria-label="Classe de la demande" value={unrecordedClassId} disabled={busyAction != null} onChange={(event) => {
+                      setUnrecordedClassId(event.target.value);
+                      setUnrecordedSubjectId('');
+                    }}>
+                      <option value="">Sélectionner une classe</option>
+                      {availableClasses.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Matière
+                    <select className={`${inputClass} mt-1`} aria-label="Matière de la demande" value={unrecordedSubjectId} disabled={!unrecordedClassId || busyAction != null} onChange={(event) => setUnrecordedSubjectId(event.target.value)}>
+                      <option value="">Sélectionner une matière</option>
+                      {assignments.filter((item) => String(item.classId) === unrecordedClassId).map((item) => (
+                        <option key={item.subjectId} value={item.subjectId}>{item.subjectName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {unrecordedRequestType === 'immediate_report' ? (
+                    <>
+                      <label className="text-sm font-semibold text-slate-700">
+                        Motif du problème
+                        <select className={`${inputClass} mt-1`} aria-label="Motif du problème" value={unrecordedIncidentType} onChange={(event) => setUnrecordedIncidentType(event.target.value as IncidentType)}>
+                          <option value="gps_unavailable">GPS indisponible</option>
+                          <option value="gps_accuracy">Précision GPS insuffisante</option>
+                          <option value="permission_denied">Permission de géolocalisation refusée</option>
+                          <option value="network">Connexion Internet indisponible</option>
+                          <option value="application">Erreur technique de l’application</option>
+                          <option value="other">Autre problème</option>
+                        </select>
+                      </label>
+                      <p className="rounded-lg bg-indigo-50 p-3 text-sm text-indigo-900 sm:col-span-2">
+                        L’heure de soumission enregistrée par le serveur sera l’heure de début de référence. Elle ne prouve pas à elle seule que le cours a commencé. Vous pourrez déclarer l’heure de fin après le cours.
+                      </p>
+                      {gpsReading && (
+                        <p className="text-xs text-slate-500 sm:col-span-2">
+                          Position éventuellement obtenue lors de la tentative (non validée) : {gpsReading.latitude}, {gpsReading.longitude} · précision {Math.ceil(gpsReading.accuracyMeters)} m.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <label className="text-sm font-semibold text-slate-700">
+                        Début déclaré · heure de Lomé
+                        <input className={`${inputClass} mt-1`} type="datetime-local" aria-label="Début déclaré" value={unrecordedStartedAt} max={formatLomeInput()} onChange={(event) => setUnrecordedStartedAt(event.target.value)} required />
+                      </label>
+                      <label className="text-sm font-semibold text-slate-700">
+                        Fin déclarée · heure de Lomé
+                        <input className={`${inputClass} mt-1`} type="datetime-local" aria-label="Fin déclarée" value={unrecordedEndedAt} min={unrecordedStartedAt || undefined} max={formatLomeInput()} onChange={(event) => setUnrecordedEndedAt(event.target.value)} required />
+                      </label>
+                    </>
+                  )}
+                  <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                    Motif / explication
+                    <textarea className={`${inputClass} mt-1 min-h-20`} value={unrecordedReason} onChange={(event) => setUnrecordedReason(event.target.value)} required maxLength={1000} />
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                    Précisions facultatives
+                    <textarea className={`${inputClass} mt-1 min-h-16`} value={unrecordedDescription} onChange={(event) => setUnrecordedDescription(event.target.value)} maxLength={2000} />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+                    <button className={buttonClass} type="submit" disabled={busyAction != null}>
+                      {busyAction === 'unrecorded-regularization' && <RefreshCw className="h-4 w-4 animate-spin" />}
+                      Transmettre à l’administration
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          )}
+
           <form className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50 p-4" onSubmit={applySessionFilters}>
             <h2 className="font-bold text-slate-900">Filtres des séances</h2>
             <SessionFilterControls
@@ -1662,9 +1933,32 @@ export default function TeacherControlView({
             <article key={entry.request.id} className="rounded-2xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="font-bold text-slate-900">{entry.request.teacherNameSnapshot} · Demande #{entry.request.id}</p>
-                  <p className="mt-1 text-sm text-slate-600">Séance #{entry.request.sessionId} · fin proposée le {formatLomeDate(entry.request.proposedEndedAt)}</p>
+                  <p className="font-bold text-slate-900">
+                    {regularizationTypeLabel(entry.request.requestType)} · {entry.request.teacherNameSnapshot} · Demande #{entry.request.id}
+                  </p>
+                  {entry.request.requestType === 'incomplete_session' ? (
+                    <p className="mt-1 text-sm text-slate-600">
+                      Séance #{entry.request.sessionId} · fin proposée {formatLomeDate(entry.request.proposedEndedAt)}
+                    </p>
+                  ) : (
+                    <div className="mt-1 space-y-1 text-sm text-slate-600">
+                      <p>{entry.request.schoolNameSnapshot} · {entry.request.classNameSnapshot} · {entry.request.subjectNameSnapshot}</p>
+                      {entry.request.requestType === 'immediate_report' ? (
+                        <p>Heure de signalement serveur et début de référence : {formatLomeDate(entry.request.referenceStartedAt)}</p>
+                      ) : (
+                        <p>Début déclaré : {formatLomeDate(entry.request.declaredStartedAt)}</p>
+                      )}
+                      <p>Fin déclarée : {formatLomeDate(entry.request.proposedEndedAt)} · Soumise le {formatLomeDate(entry.request.createdAt)}</p>
+                      {entry.request.incidentType && <p>Origine : {incidentTypeLabel(entry.request.incidentType)}</p>}
+                      {(entry.request.gpsLatitude != null || entry.request.gpsLongitude != null) && (
+                        <p className="text-xs text-amber-800">
+                          Position fournie lors de la tentative, non vérifiée par le contrôle GPS : {entry.request.gpsLatitude ?? '—'}, {entry.request.gpsLongitude ?? '—'} · précision déclarée {entry.request.gpsAccuracyMeters ?? '—'} m.
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <p className="mt-2 text-sm text-slate-700">{entry.request.reason}</p>
+                  {entry.request.description && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{entry.request.description}</p>}
                 </div>
                 <StatusBadge status={entry.request.status} />
               </div>
@@ -1672,22 +1966,69 @@ export default function TeacherControlView({
                 <div key={decision.id} className="mt-4 rounded-xl bg-slate-50 p-3 text-sm">
                   <p className="font-semibold text-slate-800">{requestStatusLabel(decision.decision)} — {decision.actorNameSnapshot}</p>
                   <p className="mt-1 text-slate-600">
+                    {decision.decidedStartedAt ? `Début retenu : ${formatLomeDate(decision.decidedStartedAt)} · ` : ''}
                     {decision.decidedEndedAt ? `Fin validée : ${formatLomeDate(decision.decidedEndedAt)} · ` : ''}
                     {decision.reason || 'Aucun motif saisi'} · {formatLomeDate(decision.createdAt)}
                   </p>
                 </div>
               ))}
-              {isSchoolAdmin && entry.request.status === 'pending' && (
+              {isTeacher && entry.request.requestType === 'immediate_report'
+                && entry.request.status === 'pending' && entry.request.proposedEndedAt == null && (
+                  <div className="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:grid-cols-2">
+                    <p className="text-sm text-slate-700 sm:col-span-2">Après le cours, complétez le signalement avec l’heure de fin déclarée. Cette heure restera une déclaration à examiner, sans validation GPS fictive.</p>
+                    <label className="text-xs font-semibold text-slate-700">
+                      Heure de fin déclarée · heure de Lomé
+                      <input
+                        type="datetime-local"
+                        className={`${inputClass} mt-1`}
+                        aria-label={`Heure de fin déclarée demande ${entry.request.id}`}
+                        min={entry.request.referenceStartedAt ? formatLomeInput(new Date(entry.request.referenceStartedAt)) : undefined}
+                        max={formatLomeInput()}
+                        value={requestEndTimes[entry.request.id] ?? ''}
+                        onChange={(event) => setRequestEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                      />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">
+                      Précision facultative
+                      <textarea
+                        className={`${inputClass} mt-1 min-h-16`}
+                        value={unrecordedCompletionDescription[entry.request.id] ?? ''}
+                        maxLength={2000}
+                        onChange={(event) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                      />
+                    </label>
+                    <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void completeImmediateRegularization(entry.request)}>
+                      {busyAction === `complete-report-${entry.request.id}` && <RefreshCw className="h-4 w-4 animate-spin" />}
+                      Ajouter l’heure de fin déclarée
+                    </button>
+                  </div>
+                )}
+              {(isSchoolAdmin || isSuperAdmin) && entry.request.status === 'pending' && (
                 <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                  {entry.request.requestType !== 'incomplete_session' && (
+                    <label className="text-xs font-semibold text-slate-700">
+                      Heure de début retenue · heure de Lomé
+                      <input
+                        type="datetime-local"
+                        className={`${inputClass} mt-1`}
+                        value={regularizationStartTimes[entry.request.id]
+                          ?? formatLomeInput(new Date(entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
+                        max={formatLomeInput()}
+                        onChange={(event) => setRegularizationStartTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                      />
+                    </label>
+                  )}
                   <label className="text-xs font-semibold text-slate-700">
                     Heure de fin modifiée (facultative sauf acceptation après modification)
                     <input
                       type="datetime-local"
                       className={`${inputClass} mt-1`}
-                      value={regularizationEndTimes[entry.request.id] ?? formatLomeInput(new Date(entry.request.proposedEndedAt))}
-                      min={formatLomeInput(new Date(sessions.find((session) => session.id === entry.request.sessionId)?.startedAt ?? entry.request.createdAt))}
+                      value={regularizationEndTimes[entry.request.id] ?? (entry.request.proposedEndedAt ? formatLomeInput(new Date(entry.request.proposedEndedAt)) : '')}
+                      min={formatLomeInput(new Date(entry.request.requestType === 'incomplete_session'
+                        ? sessions.find((session) => session.id === entry.request.sessionId)?.startedAt ?? entry.request.createdAt
+                        : entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
                       max={formatLomeInput()}
-                      onChange={(event) => setRegularizationEndTimes({ ...regularizationEndTimes, [entry.request.id]: event.target.value })}
+                      onChange={(event) => setRegularizationEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
                     />
                   </label>
                   <label className="text-xs font-semibold text-slate-700">
@@ -1700,7 +2041,7 @@ export default function TeacherControlView({
                   </label>
                   <div className="flex flex-wrap gap-2">
                     <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void decideRegularization(entry.request, 'accepted')}>
-                      <Check className="h-4 w-4" /> Accepter l’heure proposée
+                      <Check className="h-4 w-4" /> {entry.request.requestType === 'incomplete_session' ? 'Accepter l’heure proposée' : 'Confirmer les heures proposées'}
                     </button>
                     <button className={secondaryButtonClass} type="button" disabled={busyAction != null} onClick={() => void decideRegularization(entry.request, 'modified_accepted')}>
                       <CalendarClock className="h-4 w-4" /> Modifier et accepter
@@ -1710,11 +2051,6 @@ export default function TeacherControlView({
                     </button>
                   </div>
                 </div>
-              )}
-              {isSuperAdmin && entry.request.status === 'pending' && (
-                <p className="mt-4 flex items-center gap-2 rounded-xl bg-slate-50 p-3 text-xs font-medium text-slate-600">
-                  <ShieldCheck className="h-4 w-4" /> Consultation uniquement : le Super Administrateur ne peut pas traiter cette demande.
-                </p>
               )}
             </article>
           ))}
@@ -2051,7 +2387,10 @@ function SessionCard({
       </div>
 
       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
-        <p>GPS départ : {session.startDistanceMeters} m · précision {session.startAccuracyMeters} m / rayon {session.startGeofenceRadiusMeters} m</p>
+        <p>{session.startSource === 'regularization'
+          ? `Début retenu administrativement · ${session.regularizationOrigin ? regularizationTypeLabel(session.regularizationOrigin) : 'régularisation'}`
+          : `GPS départ : ${session.startDistanceMeters ?? '—'} m · précision ${session.startAccuracyMeters ?? '—'} m / rayon ${session.startGeofenceRadiusMeters ?? '—'} m`}
+        </p>
         <p>Durée : {formatDuration(session.durationMilliseconds)}</p>
         <p>Taux instantané : {formatAmount(session.hourlyRateXofSnapshot)}</p>
         <p>Fin : {session.endSource === 'gps' ? 'contrôle GPS validé' : session.endSource === 'regularization' ? 'régularisation validée' : session.status === 'closed_without_end' ? 'sans heure réelle' : '—'}</p>
@@ -2063,6 +2402,7 @@ function SessionCard({
         <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 text-sm text-slate-700">
           <p className="font-semibold text-slate-900">Détails de la séance #{session.id}</p>
           <p className="mt-1">Matière : {session.subjectNameSnapshot} · Affectation archivée : #{session.classId}/{session.subjectId}</p>
+          {session.regularizationRequestId != null && <p className="mt-1">Demande de régularisation source : #{session.regularizationRequestId}</p>}
           <p className="mt-1">Contrôle de fin : {session.endDistanceMeters == null ? 'Aucune fin GPS enregistrée' : `${session.endDistanceMeters} m · précision ${session.endAccuracyMeters} m / rayon ${session.endGeofenceRadiusMeters} m`}</p>
           <p className="mt-1">Montant estimé : {formatAmount(session.estimatedAmountXof)}. Une clôture administrative sans heure validée ne produit ni durée ni rémunération.</p>
         </div>
@@ -2166,13 +2506,31 @@ function RegularizationHistory({ requests }: { requests: Regularization[] }) {
       {requests.map((entry) => (
         <article key={entry.request.id} className="rounded-xl border border-slate-200 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-semibold text-slate-900">Séance #{entry.request.sessionId} · fin proposée {formatLomeDate(entry.request.proposedEndedAt)}</p>
+            <p className="font-semibold text-slate-900">
+              {regularizationTypeLabel(entry.request.requestType)}
+              {entry.request.requestType === 'incomplete_session'
+                ? ` · Séance #${entry.request.sessionId}`
+                : ` · ${entry.request.classNameSnapshot ?? 'Classe'} · ${entry.request.subjectNameSnapshot ?? 'Matière'}`}
+            </p>
             <StatusBadge status={entry.request.status} />
           </div>
+          <p className="mt-1 text-xs text-slate-500">
+            {entry.request.requestType === 'immediate_report'
+              ? `Début de référence fixé au signalement serveur : ${formatLomeDate(entry.request.referenceStartedAt)}`
+              : entry.request.requestType === 'late_declaration'
+                ? `Début déclaré : ${formatLomeDate(entry.request.declaredStartedAt)}`
+                : `Fin proposée : ${formatLomeDate(entry.request.proposedEndedAt)}`}
+            {entry.request.proposedEndedAt ? ` · Fin déclarée/proposée : ${formatLomeDate(entry.request.proposedEndedAt)}` : ''}
+            {` · Soumise le ${formatLomeDate(entry.request.createdAt)}`}
+          </p>
           <p className="mt-2 text-sm text-slate-600">{entry.request.reason}</p>
+          {entry.request.description && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{entry.request.description}</p>}
           {entry.decisions.map((decision) => (
             <p key={decision.id} className="mt-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-              {requestStatusLabel(decision.decision)} par {decision.actorNameSnapshot} · fin validée {formatLomeDate(decision.decidedEndedAt)} · {decision.reason || 'Sans motif'} · {formatLomeDate(decision.createdAt)}
+              {requestStatusLabel(decision.decision)} par {decision.actorNameSnapshot}
+              {decision.decidedStartedAt ? ` · Début retenu ${formatLomeDate(decision.decidedStartedAt)}` : ''}
+              {decision.decidedEndedAt ? ` · Fin retenue ${formatLomeDate(decision.decidedEndedAt)}` : ''}
+              {` · ${decision.reason || 'Sans motif'} · ${formatLomeDate(decision.createdAt)}`}
             </p>
           ))}
         </article>

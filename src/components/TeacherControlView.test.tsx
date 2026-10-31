@@ -701,10 +701,11 @@ describe('TeacherControlView', () => {
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
   });
 
-  it('keeps super-admin session and regularization access read-only', async () => {
+  it('allows a super admin to review a regularization within the selected school scope', async () => {
     const onSchoolChange = vi.fn();
-    const superApi = vi.fn(async (url: string) => {
+    const superApi = vi.fn(async (url: string, _options?: RequestInit) => {
       if (url.startsWith('/api/teacher-control/sessions')) return [session];
+      if (url.startsWith('/api/teacher-control/regularizations/7/decision')) return { request: {}, decision: {}, session };
       if (url.startsWith('/api/teacher-control/statistics')) {
         return {
           totalSessions: 1,
@@ -718,9 +719,23 @@ describe('TeacherControlView', () => {
         request: {
           id: 7,
           sessionId: 1,
+          requestType: 'incomplete_session',
+          schoolNameSnapshot: 'École A',
+          classId: null,
+          classNameSnapshot: null,
+          subjectId: null,
+          subjectNameSnapshot: null,
+          referenceStartedAt: null,
+          declaredStartedAt: null,
           teacherNameSnapshot: 'Afi Mensah',
           proposedEndedAt: '2026-10-31T09:00:00.000Z',
           reason: 'Sortie urgente',
+          description: null,
+          incidentType: null,
+          technicalDetails: null,
+          gpsLatitude: null,
+          gpsLongitude: null,
+          gpsAccuracyMeters: null,
           status: 'pending',
           createdAt: '2026-10-31T09:10:00.000Z',
         },
@@ -758,9 +773,16 @@ describe('TeacherControlView', () => {
     expect(superApi.mock.calls.some(([url]) => url.includes('schoolId=8'))).toBe(true);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Régularisations' }));
-    expect(await screen.findByText('Afi Mensah · Demande #7')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Accepter l’heure proposée' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Refuser' })).toBeNull();
+    expect(await screen.findByText(/Afi Mensah · Demande #7/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Accepter l’heure proposée' }));
+    await waitFor(() => {
+      const decisionCall = superApi.mock.calls.find(([url]) => url.includes('/regularizations/7/decision'));
+      expect(decisionCall).toBeTruthy();
+      expect(JSON.parse((decisionCall?.[1] as RequestInit)?.body as string)).toEqual({
+        decision: 'accepted',
+        schoolId: 8,
+      });
+    });
   });
 
   it('requires a reason before a school administrator can reject a regularization request', async () => {
@@ -1215,5 +1237,181 @@ describe('TeacherControlView', () => {
       expect(screen.getByText('6e A · Mathématiques')).toBeTruthy();
       expect(window.location.pathname).toBe('/');
       expect(screen.queryByText('Chargement des données du module…')).toBeNull();
+    });
+
+    it('submits an immediate report without requiring a GPS attempt or existing session', async () => {
+      let submittedBody: Record<string, unknown> | null = null;
+      let createdRequest: Record<string, unknown> | null = null;
+      const serverTimestamp = '2026-10-31T12:00:00.000Z';
+      apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (url === '/api/teacher-control/regularizations/unrecorded') {
+          submittedBody = JSON.parse(options?.body as string) as Record<string, unknown>;
+          createdRequest = {
+            id: 52,
+            sessionId: null,
+            requestType: 'immediate_report',
+            schoolNameSnapshot: 'École A',
+            teacherNameSnapshot: 'Test actor',
+            classId: 30,
+            classNameSnapshot: '6e A',
+            subjectId: 40,
+            subjectNameSnapshot: 'Mathématiques',
+            referenceStartedAt: serverTimestamp,
+            declaredStartedAt: null,
+            proposedEndedAt: null,
+            reason: submittedBody.reason,
+            description: null,
+            incidentType: submittedBody.incidentType,
+            technicalDetails: submittedBody.technicalDetails,
+            gpsLatitude: null,
+            gpsLongitude: null,
+            gpsAccuracyMeters: null,
+            status: 'pending',
+            createdAt: serverTimestamp,
+          };
+          return createdRequest;
+        }
+        if (url.startsWith('/api/teacher-control/sessions')) return [];
+        if (url.startsWith('/api/teacher-control/statistics')) {
+          return {
+            totalSessions: 0,
+            openSessions: 0,
+            completedSessions: 0,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: createdRequest ? 1 : 0,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+          };
+        }
+        if (url === '/api/teacher-control/regularizations') {
+          return createdRequest ? [{ request: createdRequest, decisions: [] }] : [];
+        }
+        if (url === '/api/teacher-control/assignments') {
+          return [{
+            assignmentId: 9,
+            classId: 30,
+            className: '6e A',
+            subjectId: 40,
+            subjectName: 'Mathématiques',
+          }];
+        }
+        return {};
+      });
+      render(<TeacherControlView {...defaultProps} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Demander la régularisation d’une séance non enregistrée' }));
+      const requestType = screen.getByLabelText('Circonstance de la demande') as HTMLSelectElement;
+      const immediateOption = screen.getByRole('option', { name: 'Signalement immédiat d’un problème de démarrage' }) as HTMLOptionElement;
+      expect(immediateOption.disabled).toBe(false);
+      fireEvent.change(requestType, { target: { value: 'immediate_report' } });
+      fireEvent.change(screen.getByLabelText('Classe de la demande'), { target: { value: '30' } });
+      fireEvent.change(screen.getByLabelText('Matière de la demande'), { target: { value: '40' } });
+      fireEvent.change(screen.getByLabelText('Motif / explication'), { target: { value: 'Le démarrage est impossible.' } });
+      expect((screen.getByRole('button', { name: 'Transmettre à l’administration' }) as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: 'Transmettre à l’administration' }));
+
+      expect(await screen.findByText(/SIGNALEMENT IMMÉDIAT/)).toBeTruthy();
+      expect(submittedBody).toMatchObject({
+        requestType: 'immediate_report',
+        classId: 30,
+        subjectId: 40,
+        incidentType: 'gps_unavailable',
+        reason: 'Le démarrage est impossible.',
+      });
+      expect(submittedBody).not.toHaveProperty('schoolId');
+      expect(submittedBody).not.toHaveProperty('referenceStartedAt');
+      expect(submittedBody).not.toHaveProperty('startedAt');
+      expect(submittedBody).not.toHaveProperty('latitude');
+      expect(submittedBody).not.toHaveProperty('longitude');
+      expect(submittedBody).not.toHaveProperty('accuracyMeters');
+      expect(createdRequest?.referenceStartedAt).toBe(serverTimestamp);
+      expect(createdRequest?.sessionId).toBeNull();
+      expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/sessions/start')).toBe(false);
+      expect(window.location.pathname).toBe('/');
+    });
+
+    it('submits a late unrecorded-session declaration using the selected active assignment', async () => {
+      let submittedBody: Record<string, unknown> | null = null;
+      let createdRequest: Record<string, unknown> | null = null;
+      apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (url === '/api/teacher-control/regularizations/unrecorded') {
+          submittedBody = JSON.parse(options?.body as string) as Record<string, unknown>;
+          createdRequest = {
+            id: 51,
+            sessionId: null,
+            requestType: 'late_declaration',
+            schoolNameSnapshot: 'École A',
+            teacherNameSnapshot: 'Test actor',
+            classId: 30,
+            classNameSnapshot: '6e A',
+            subjectId: 40,
+            subjectNameSnapshot: 'Mathématiques',
+            referenceStartedAt: null,
+            declaredStartedAt: submittedBody.declaredStartedAt,
+            proposedEndedAt: submittedBody.proposedEndedAt,
+            reason: submittedBody.reason,
+            description: submittedBody.description,
+            incidentType: null,
+            technicalDetails: null,
+            gpsLatitude: null,
+            gpsLongitude: null,
+            gpsAccuracyMeters: null,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+          };
+          return createdRequest;
+        }
+        if (url.startsWith('/api/teacher-control/sessions')) return [];
+        if (url.startsWith('/api/teacher-control/statistics')) {
+          return {
+            totalSessions: 0,
+            openSessions: 0,
+            completedSessions: 0,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: 1,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+          };
+        }
+        if (url.startsWith('/api/teacher-control/regularizations')) {
+          return createdRequest ? [{ request: createdRequest, decisions: [] }] : [];
+        }
+        if (url === '/api/teacher-control/assignments') {
+          return [{
+            assignmentId: 9,
+            classId: 30,
+            className: '6e A',
+            subjectId: 40,
+            subjectName: 'Mathématiques',
+          }];
+        }
+        return {};
+      });
+      render(<TeacherControlView {...defaultProps} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Demander la régularisation d’une séance non enregistrée' }));
+      fireEvent.change(screen.getByLabelText('Classe de la demande'), { target: { value: '30' } });
+      fireEvent.change(screen.getByLabelText('Matière de la demande'), { target: { value: '40' } });
+      const start = new Date(Date.now() - 3_600_000).toISOString().slice(0, 16);
+      const end = new Date(Date.now() - 1_800_000).toISOString().slice(0, 16);
+      fireEvent.change(screen.getByLabelText('Début déclaré'), { target: { value: start } });
+      fireEvent.change(screen.getByLabelText('Fin déclarée'), { target: { value: end } });
+      fireEvent.change(screen.getByLabelText('Motif / explication'), { target: { value: 'Oubli de saisie' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Transmettre à l’administration' }));
+
+      expect(await screen.findByText(/DÉCLARATION TARDIVE/)).toBeTruthy();
+      expect(submittedBody).toMatchObject({
+        requestType: 'late_declaration',
+        classId: 30,
+        subjectId: 40,
+        reason: 'Oubli de saisie',
+      });
+      expect(submittedBody).not.toHaveProperty('schoolId');
+      expect(submittedBody).not.toHaveProperty('referenceStartedAt');
+      expect(typeof submittedBody?.declaredStartedAt).toBe('string');
+      expect(typeof submittedBody?.proposedEndedAt).toBe('string');
+      expect(window.location.pathname).toBe('/');
     });
 });

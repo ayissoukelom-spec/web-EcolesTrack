@@ -1,5 +1,6 @@
 import { relations, sql } from 'drizzle-orm';
 import { boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { emailTrimCharactersSql } from '../lib/emailUniqueness.ts';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -728,11 +729,15 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
   classNameSnapshot: text('class_name_snapshot').notNull(),
   subjectId: integer('subject_id').notNull(),
   subjectNameSnapshot: text('subject_name_snapshot').notNull(),
+  startSource: text('start_source').default('gps').notNull(),
+  regularizationOrigin: text('regularization_origin'),
+  regularizationRequestId: integer('regularization_request_id')
+    .references((): AnyPgColumn => teacherControlRegularizationRequests.id, { onDelete: 'restrict' }),
   status: text('status').default('open').notNull(),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
-  startDistanceMeters: integer('start_distance_meters').notNull(),
-  startAccuracyMeters: integer('start_accuracy_meters').notNull(),
-  startGeofenceRadiusMeters: integer('start_geofence_radius_meters').notNull(),
+  startDistanceMeters: integer('start_distance_meters'),
+  startAccuracyMeters: integer('start_accuracy_meters'),
+  startGeofenceRadiusMeters: integer('start_geofence_radius_meters'),
   validatedEndedAt: timestamp('validated_ended_at', { withTimezone: true }),
   endSource: text('end_source'),
   endDistanceMeters: integer('end_distance_meters'),
@@ -749,6 +754,9 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
   oneOpenSessionPerTeacherSchoolIdx: uniqueIndex('teacher_control_sessions_one_open_per_teacher_school_uidx')
     .on(table.schoolId, table.teacherId)
     .where(sql`${table.status} = 'open'`),
+  regularizationRequestUniqueIdx: uniqueIndex('teacher_control_sessions_regularization_request_uidx')
+    .on(table.regularizationRequestId)
+    .where(sql`${table.regularizationRequestId} IS NOT NULL`),
   teacherHistoryIdx: index('teacher_control_sessions_school_teacher_started_idx').on(table.schoolId, table.teacherId, table.startedAt),
   schoolHistoryIdx: index('teacher_control_sessions_school_started_idx').on(table.schoolId, table.startedAt),
   statusCheck: check('teacher_control_sessions_status_check', sql`${table.status} IN ('open', 'completed', 'closed_without_end')`),
@@ -759,6 +767,23 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
     OR (${table.teachingAssignmentId} IS NULL
       AND ${table.classTeacherAssociationId} IS NOT NULL
       AND ${table.teacherSubjectAssociationId} IS NOT NULL)
+  `),
+  startSourceCheck: check('teacher_control_sessions_start_source_check', sql`
+    (${table.startSource} = 'gps'
+      AND ${table.startDistanceMeters} IS NOT NULL
+      AND ${table.startAccuracyMeters} IS NOT NULL
+      AND ${table.startGeofenceRadiusMeters} IS NOT NULL)
+    OR (${table.startSource} = 'regularization'
+      AND ${table.startDistanceMeters} IS NULL
+      AND ${table.startAccuracyMeters} IS NULL
+      AND ${table.startGeofenceRadiusMeters} IS NULL)
+  `),
+  regularizationOriginCheck: check('teacher_control_sessions_regularization_origin_check', sql`
+    (${table.startSource} = 'gps' AND ${table.regularizationOrigin} IS NULL AND ${table.regularizationRequestId} IS NULL)
+    OR (${table.startSource} = 'regularization'
+      AND ${table.regularizationOrigin} IS NOT NULL
+      AND ${table.regularizationOrigin} IN ('immediate_report', 'late_declaration')
+      AND ${table.regularizationRequestId} IS NOT NULL)
   `),
   stateTimesCheck: check('teacher_control_sessions_state_times_check', sql`
     (${table.status} = 'open' AND ${table.validatedEndedAt} IS NULL AND ${table.closedAt} IS NULL)
@@ -773,9 +798,9 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
     ${table.validatedEndedAt} IS NULL OR ${table.validatedEndedAt} >= ${table.startedAt}
   `),
   gpsValuesCheck: check('teacher_control_sessions_gps_values_check', sql`
-    ${table.startDistanceMeters} >= 0
-    AND ${table.startAccuracyMeters} BETWEEN 0 AND 100
-    AND ${table.startGeofenceRadiusMeters} > 0
+    (${table.startDistanceMeters} IS NULL OR ${table.startDistanceMeters} >= 0)
+    AND (${table.startAccuracyMeters} IS NULL OR ${table.startAccuracyMeters} BETWEEN 0 AND 100)
+    AND (${table.startGeofenceRadiusMeters} IS NULL OR ${table.startGeofenceRadiusMeters} > 0)
     AND (${table.endDistanceMeters} IS NULL OR ${table.endDistanceMeters} >= 0)
     AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 100)
     AND (${table.endGeofenceRadiusMeters} IS NULL OR ${table.endGeofenceRadiusMeters} > 0)
@@ -792,13 +817,26 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
 
 export const teacherControlRegularizationRequests = pgTable('teacher_control_regularization_requests', {
   id: serial('id').primaryKey(),
-  sessionId: integer('session_id').references(() => teacherControlSessions.id, { onDelete: 'restrict' }).notNull(),
+  sessionId: integer('session_id').references(() => teacherControlSessions.id, { onDelete: 'restrict' }),
   schoolId: integer('school_id').notNull(),
   schoolNameSnapshot: text('school_name_snapshot').notNull(),
   teacherId: integer('teacher_id').notNull(),
   teacherNameSnapshot: text('teacher_name_snapshot').notNull(),
-  proposedEndedAt: timestamp('proposed_ended_at', { withTimezone: true }).notNull(),
+  requestType: text('request_type').default('incomplete_session').notNull(),
+  classId: integer('class_id'),
+  classNameSnapshot: text('class_name_snapshot'),
+  subjectId: integer('subject_id'),
+  subjectNameSnapshot: text('subject_name_snapshot'),
+  referenceStartedAt: timestamp('reference_started_at', { withTimezone: true }),
+  declaredStartedAt: timestamp('declared_started_at', { withTimezone: true }),
+  proposedEndedAt: timestamp('proposed_ended_at', { withTimezone: true }),
   reason: text('reason').notNull(),
+  description: text('description'),
+  incidentType: text('incident_type'),
+  technicalDetails: jsonb('technical_details').$type<Record<string, unknown> | null>(),
+  gpsLatitude: numeric('gps_latitude', { precision: 9, scale: 6 }),
+  gpsLongitude: numeric('gps_longitude', { precision: 10, scale: 6 }),
+  gpsAccuracyMeters: numeric('gps_accuracy_meters', { precision: 10, scale: 2 }),
   status: text('status').default('pending').notNull(),
   submittedByUserId: integer('submitted_by_user_id').notNull(),
   submittedByNameSnapshot: text('submitted_by_name_snapshot').notNull(),
@@ -809,6 +847,55 @@ export const teacherControlRegularizationRequests = pgTable('teacher_control_reg
     .on(table.sessionId)
     .where(sql`${table.status} = 'pending'`),
   sessionHistoryIdx: index('teacher_control_regularization_session_history_idx').on(table.sessionId, table.createdAt),
+  schoolTeacherHistoryIdx: index('teacher_control_regularization_school_teacher_history_idx')
+    .on(table.schoolId, table.teacherId, table.createdAt),
+  requestTypeCheck: check('teacher_control_regularization_request_type_check', sql`
+    ${table.requestType} IN ('incomplete_session', 'immediate_report', 'late_declaration')
+  `),
+  requestSourceCheck: check('teacher_control_regularization_request_source_check', sql`
+    (${table.requestType} = 'incomplete_session'
+      AND ${table.sessionId} IS NOT NULL
+      AND ${table.proposedEndedAt} IS NOT NULL)
+    OR (${table.requestType} = 'immediate_report'
+      AND ${table.referenceStartedAt} IS NOT NULL
+      AND (
+        (${table.status} IN ('pending', 'rejected') AND ${table.sessionId} IS NULL)
+        OR (${table.status} IN ('accepted', 'modified_accepted')
+          AND ${table.sessionId} IS NOT NULL
+          AND ${table.proposedEndedAt} IS NOT NULL)
+      ))
+    OR (${table.requestType} = 'late_declaration'
+      AND ${table.declaredStartedAt} IS NOT NULL
+      AND ${table.proposedEndedAt} IS NOT NULL
+      AND (
+        (${table.status} IN ('pending', 'rejected') AND ${table.sessionId} IS NULL)
+        OR (${table.status} IN ('accepted', 'modified_accepted') AND ${table.sessionId} IS NOT NULL)
+      ))
+  `),
+  requestClassSubjectCheck: check('teacher_control_regularization_class_subject_check', sql`
+    (${table.requestType} = 'incomplete_session'
+      AND ${table.classId} IS NULL AND ${table.classNameSnapshot} IS NULL
+      AND ${table.subjectId} IS NULL AND ${table.subjectNameSnapshot} IS NULL)
+    OR (${table.requestType} IN ('immediate_report', 'late_declaration')
+      AND ${table.classId} IS NOT NULL AND ${table.classNameSnapshot} IS NOT NULL
+      AND ${table.subjectId} IS NOT NULL AND ${table.subjectNameSnapshot} IS NOT NULL)
+  `),
+  gpsEvidenceCheck: check('teacher_control_regularization_gps_check', sql`
+    (${table.gpsLatitude} IS NULL AND ${table.gpsLongitude} IS NULL AND ${table.gpsAccuracyMeters} IS NULL)
+    OR (${table.gpsLatitude} IS NOT NULL
+      AND ${table.gpsLongitude} IS NOT NULL
+      AND ${table.gpsAccuracyMeters} IS NOT NULL
+      AND ${table.gpsLatitude} BETWEEN -90 AND 90
+      AND ${table.gpsLongitude} BETWEEN -180 AND 180
+      AND ${table.gpsAccuracyMeters} >= 0)
+  `),
+  incidentTypeCheck: check('teacher_control_regularization_incident_type_check', sql`
+    ${table.incidentType} IS NULL
+    OR ${table.incidentType} IN ('gps_unavailable', 'gps_accuracy', 'permission_denied', 'network', 'application', 'other')
+  `),
+  immediateIncidentCheck: check('teacher_control_regularization_immediate_incident_check', sql`
+    ${table.requestType} <> 'immediate_report' OR ${table.incidentType} IS NOT NULL
+  `),
   statusCheck: check('teacher_control_regularization_status_check', sql`${table.status} IN ('pending', 'accepted', 'rejected', 'modified_accepted')`),
   reasonCheck: check('teacher_control_regularization_reason_check', sql`BTRIM(${table.reason}) <> ''`),
 }));
@@ -816,11 +903,13 @@ export const teacherControlRegularizationRequests = pgTable('teacher_control_reg
 export const teacherControlRegularizationDecisions = pgTable('teacher_control_regularization_decisions', {
   id: serial('id').primaryKey(),
   requestId: integer('request_id').references(() => teacherControlRegularizationRequests.id, { onDelete: 'restrict' }).notNull(),
-  sessionId: integer('session_id').notNull(),
+  sessionId: integer('session_id'),
   schoolId: integer('school_id').notNull(),
   schoolNameSnapshot: text('school_name_snapshot').notNull(),
   decision: text('decision').notNull(),
-  previousProposedEndedAt: timestamp('previous_proposed_ended_at', { withTimezone: true }).notNull(),
+  previousProposedEndedAt: timestamp('previous_proposed_ended_at', { withTimezone: true }),
+  previousProposedStartedAt: timestamp('previous_proposed_started_at', { withTimezone: true }),
+  decidedStartedAt: timestamp('decided_started_at', { withTimezone: true }),
   decidedEndedAt: timestamp('decided_ended_at', { withTimezone: true }),
   reason: text('reason'),
   actorUserId: integer('actor_user_id'),
@@ -835,7 +924,7 @@ export const teacherControlRegularizationDecisions = pgTable('teacher_control_re
     OR (${table.reason} IS NOT NULL AND BTRIM(${table.reason}) <> '')
   `),
   decisionEndTimeCheck: check('teacher_control_regularization_decision_end_time_check', sql`
-    (${table.decision} = 'rejected' AND ${table.decidedEndedAt} IS NULL)
+    (${table.decision} = 'rejected' AND ${table.decidedEndedAt} IS NULL AND ${table.decidedStartedAt} IS NULL)
     OR (${table.decision} IN ('accepted', 'modified_accepted') AND ${table.decidedEndedAt} IS NOT NULL)
   `),
 }));

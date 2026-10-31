@@ -24,13 +24,46 @@ const mockDatabaseState = vi.hoisted(() => ({
   hourlyRates: [] as Array<Record<string, unknown>>,
   sessions: [] as Array<Record<string, unknown>>,
   regularizationRequests: [] as Array<Record<string, unknown>>,
+  regularizationDecisions: [] as Array<Record<string, unknown>>,
   challenges: [] as Array<Record<string, unknown>>,
+  lockOrder: [] as string[],
+  teacherLockHooks: null as null | {
+    onAcquired: () => void;
+    onWaiting: () => void;
+    hold: Promise<void>;
+  },
+  skipConcurrentRollback: false,
   failAuditInsert: false,
 }));
 
 vi.mock('../../db/index.ts', async () => {
   const { PgDialect } = await import('drizzle-orm/pg-core');
   const schema = await import('../../db/schema.ts');
+  const teacherLocks = new Map<string, { held: boolean; waiters: Array<() => void> }>();
+  const acquireTeacherLock = async (key: string, context: { releases: Array<() => void> }) => {
+    let lock = teacherLocks.get(key);
+    if (!lock) {
+      lock = { held: false, waiters: [] };
+      teacherLocks.set(key, lock);
+    }
+    const alreadyHeld = lock.held;
+    if (alreadyHeld) {
+      mockDatabaseState.teacherLockHooks?.onWaiting();
+      await new Promise<void>((resolve) => lock?.waiters.push(resolve));
+    } else {
+      lock.held = true;
+    }
+    if (!alreadyHeld) {
+      const hooks = mockDatabaseState.teacherLockHooks;
+      hooks?.onAcquired();
+      if (hooks) await hooks.hold;
+    }
+    context.releases.push(() => {
+      const next = lock?.waiters.shift();
+      if (next) next();
+      else if (lock) lock.held = false;
+    });
+  };
   const rowsFor = (table: unknown) => {
     if (table === schema.userSchools) return mockDatabaseState.memberships;
     if (table === schema.schools) return mockDatabaseState.schools;
@@ -45,10 +78,11 @@ vi.mock('../../db/index.ts', async () => {
     if (table === schema.teacherControlHourlyRates) return mockDatabaseState.hourlyRates;
     if (table === schema.teacherControlSessions) return mockDatabaseState.sessions;
     if (table === schema.teacherControlRegularizationRequests) return mockDatabaseState.regularizationRequests;
+    if (table === schema.teacherControlRegularizationDecisions) return mockDatabaseState.regularizationDecisions;
     if (table === schema.teacherControlGpsChallenges) return mockDatabaseState.challenges;
     return [];
   };
-  const select = vi.fn((selection?: Record<string, unknown>) => {
+  const select = vi.fn((selection?: Record<string, unknown>, context?: { releases: Array<() => void> }) => {
     const builder: any = {
       table: null as unknown,
       selection,
@@ -57,6 +91,7 @@ vi.mock('../../db/index.ts', async () => {
       params: [] as unknown[],
       hasWhere: false,
       grouped: false,
+      lockMode: null as string | null,
       from(table: unknown) {
         builder.table = table;
         return builder;
@@ -83,8 +118,24 @@ vi.mock('../../db/index.ts', async () => {
       limit() { return builder; },
       offset() { return builder; },
       orderBy() { return builder; },
-      for() { return builder; },
-      then(resolve: (value: Array<Record<string, unknown>>) => unknown, reject?: (error: unknown) => unknown) {
+      for(lockMode?: string) {
+        builder.lockMode = lockMode ?? null;
+        return builder;
+      },
+      async then(resolve: (value: Array<Record<string, unknown>>) => unknown, reject?: (error: unknown) => unknown) {
+        if (builder.lockMode === 'update') {
+          if (builder.table === schema.teachers) {
+            const teacher = mockDatabaseState.teachers.find((row) => (
+              builder.params.includes(row.id) && builder.params.includes(row.schoolId)
+            ));
+            if (teacher && context) {
+              await acquireTeacherLock(`${teacher.id}:${teacher.schoolId}`, context);
+            }
+            mockDatabaseState.lockOrder.push('teacher');
+          }
+          if (builder.table === schema.teacherControlSessions) mockDatabaseState.lockOrder.push('session');
+          if (builder.table === schema.teacherControlRegularizationRequests) mockDatabaseState.lockOrder.push('request');
+        }
         if (builder.table === schema.teacherControlSessions && builder.grouped && builder.selection?.name) {
           let optionRows = [...mockDatabaseState.sessions];
           if (builder.hasWhere) {
@@ -138,6 +189,26 @@ vi.mock('../../db/index.ts', async () => {
               completedSessions: completedSessions.length,
               incompleteSessions: sessions.filter((row) => row.status === 'closed_without_end').length,
               regularizedSessions: sessions.filter((row) => row.endSource === 'regularization').length,
+              gpsCompletedSessions: completedSessions.filter((row) => row.endSource === 'gps').length,
+              incompleteSessionRegularizations: completedSessions.filter((row) => row.startSource === 'gps' && row.endSource === 'regularization').length,
+              gpsDurationMilliseconds: completedSessions.filter((row) => row.endSource === 'gps').reduce((total, session) => (
+                total + new Date(session.validatedEndedAt as string | Date).getTime()
+                  - new Date(session.startedAt as string | Date).getTime()
+              ), 0),
+              incompleteRegularizedDurationMilliseconds: completedSessions.filter((row) => row.startSource === 'gps' && row.endSource === 'regularization').reduce((total, session) => (
+                total + new Date(session.validatedEndedAt as string | Date).getTime()
+                  - new Date(session.startedAt as string | Date).getTime()
+              ), 0),
+              immediateRegularizedSessions: sessions.filter((row) => row.regularizationOrigin === 'immediate_report').length,
+              immediateRegularizedDurationMilliseconds: completedSessions.filter((row) => row.regularizationOrigin === 'immediate_report').reduce((total, session) => (
+                total + new Date(session.validatedEndedAt as string | Date).getTime()
+                  - new Date(session.startedAt as string | Date).getTime()
+              ), 0),
+              lateRegularizedSessions: sessions.filter((row) => row.regularizationOrigin === 'late_declaration').length,
+              lateRegularizedDurationMilliseconds: completedSessions.filter((row) => row.regularizationOrigin === 'late_declaration').reduce((total, session) => (
+                total + new Date(session.validatedEndedAt as string | Date).getTime()
+                  - new Date(session.startedAt as string | Date).getTime()
+              ), 0),
               validatedDurationMilliseconds,
               estimatedCompensationXof,
             };
@@ -230,6 +301,10 @@ vi.mock('../../db/index.ts', async () => {
               subjectName: row.subjectNameSnapshot,
             }));
           }
+        } else if (builder.table === schema.teacherControlRegularizationRequests) {
+          rows = rows.filter((row) => builder.params.every((param: unknown) => (
+            param instanceof Date || Object.values(row).includes(param)
+          )));
         } else if (builder.table === schema.teacherControlGpsChallenges) {
           rows = rows.filter((row) => builder.params.includes(row.challengeHash)
             && builder.params.includes(row.actorUserId)
@@ -242,7 +317,7 @@ vi.mock('../../db/index.ts', async () => {
               ? row.resourceId == null
               : builder.params.includes(row.resourceId)));
         }
-        return Promise.resolve(rows).then(resolve, reject);
+        return Promise.resolve(rows.map((row) => ({ ...row }))).then(resolve, reject);
       },
     };
     return builder;
@@ -311,6 +386,8 @@ vi.mock('../../db/index.ts', async () => {
             && row.expiresAt > new Date())
           : table === schema.teacherControlSessions
             ? rows.filter((row) => params.includes(row.id))
+            : table === schema.teacherControlRegularizationRequests
+              ? rows.filter((row) => params.includes(row.id))
             : [];
         for (const row of filtered) Object.assign(row, values);
         return filtered;
@@ -345,7 +422,12 @@ vi.mock('../../db/index.ts', async () => {
     update,
     delete: deleteRows,
     transaction: async <T>(callback: (tx: typeof db) => Promise<T>): Promise<T> => {
-      const snapshot = {
+    const context = { releases: [] as Array<() => void> };
+    const tx = {
+      ...db,
+      select: (selection?: Record<string, unknown>) => select(selection, context),
+    };
+    const snapshot = {
         memberships: structuredClone(mockDatabaseState.memberships),
         schools: structuredClone(mockDatabaseState.schools),
         gpsSettings: structuredClone(mockDatabaseState.gpsSettings),
@@ -359,13 +441,16 @@ vi.mock('../../db/index.ts', async () => {
         hourlyRates: structuredClone(mockDatabaseState.hourlyRates),
         sessions: structuredClone(mockDatabaseState.sessions),
         regularizationRequests: structuredClone(mockDatabaseState.regularizationRequests),
+        regularizationDecisions: structuredClone(mockDatabaseState.regularizationDecisions),
         challenges: structuredClone(mockDatabaseState.challenges),
       };
       try {
-        return await callback(db);
+        return await callback(tx);
       } catch (error) {
-        Object.assign(mockDatabaseState, snapshot);
+        if (!mockDatabaseState.skipConcurrentRollback) Object.assign(mockDatabaseState, snapshot);
         throw error;
+      } finally {
+        for (const release of context.releases.reverse()) release();
       }
     },
   };
@@ -394,9 +479,21 @@ describe('teacher control API authorization and input validation', () => {
     mockDatabaseState.hourlyRates = [];
     mockDatabaseState.sessions = [];
     mockDatabaseState.regularizationRequests = [];
+    mockDatabaseState.regularizationDecisions = [];
     mockDatabaseState.challenges = [];
+    mockDatabaseState.lockOrder = [];
+    mockDatabaseState.teacherLockHooks = null;
+    mockDatabaseState.skipConcurrentRollback = false;
     mockDatabaseState.failAuditInsert = false;
   });
+
+  const createDeferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((complete) => {
+      resolve = complete;
+    });
+    return { promise, resolve };
+  };
 
   const createTestApp = () => {
     const testApp = express();
@@ -406,6 +503,116 @@ describe('teacher control API authorization and input validation', () => {
       requireAuth: (_req, _res, next) => next(),
     });
     return testApp;
+  };
+
+  const configureUnrecordedTeacher = () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+    mockDatabaseState.hourlyRates = [{
+      id: 34, schoolId: 8, teacherId: 21, hourlyRateXof: 3600,
+    }];
+  };
+
+  const configureUnrecordedAdmin = () => {
+    mockActor.role = 'school_admin';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+  };
+
+  const configureGpsStart = async () => {
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 301,
+      teacherId: 21,
+      schoolId: 8,
+      classId: 31,
+      className: '6e A',
+      classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 401,
+      teacherId: 21,
+      schoolId: 8,
+      subjectId: 41,
+      subjectName: 'Mathématiques',
+      subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 91,
+      teacherId: 21,
+      schoolId: 8,
+      classId: 31,
+      subjectId: 41,
+      isActive: true,
+    }];
+    mockDatabaseState.gpsSettings = [{
+      id: 4,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      isEnabled: true,
+      latitude: '6.1375',
+      longitude: '1.2123',
+      geofenceRadiusMeters: 200,
+    }];
+    const app = createTestApp();
+    const challengeResponse = await request(app)
+      .post('/api/teacher-control/gps-challenges')
+      .send({ action: 'start_session' });
+    expect(challengeResponse.status).toBe(200);
+    return {
+      app,
+      startBody: {
+        classId: 31,
+        subjectId: 41,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 20,
+        gpsChallenge: challengeResponse.body.challenge as string,
+      },
+    };
+  };
+
+  const configureTeacherRegularization = () => {
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 301,
+      teacherId: 21,
+      schoolId: 8,
+      classId: 31,
+      className: '6e A',
+      classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 401,
+      teacherId: 21,
+      schoolId: 8,
+      subjectId: 41,
+      subjectName: 'Mathématiques',
+      subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 91,
+      teacherId: 21,
+      schoolId: 8,
+      classId: 31,
+      subjectId: 41,
+      isActive: true,
+    }];
+    mockDatabaseState.classes = [{ id: 31, schoolId: 8, name: '6e A' }];
+    mockDatabaseState.subjects = [{ id: 41, name: 'Mathématiques' }];
   };
 
   it('rejects unsupported raw roles for protected configuration and GPS operations', async () => {
@@ -498,6 +705,993 @@ describe('teacher control API authorization and input validation', () => {
 
     const unavailableSchool = await request(app).get('/api/teacher-control/filter-options?schoolId=999');
     expect(unavailableSchool.status).toBe(404);
+  });
+
+  it('records an immediate report with an immutable server timestamp and unverified GPS evidence', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'immediate_report',
+        classId: 41,
+        subjectId: 51,
+        incidentType: 'gps_accuracy',
+        reason: 'Précision insuffisante',
+        description: 'Le démarrage a échoué.',
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 135,
+        startedAt: '2026-10-31T08:00:00.000Z',
+      });
+
+    expect(response.status).toBe(400);
+    const accepted = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'immediate_report',
+        classId: 41,
+        subjectId: 51,
+        incidentType: 'gps_accuracy',
+        reason: 'Précision insuffisante',
+        description: 'Le démarrage a échoué.',
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 135,
+      });
+
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.requestType).toBe('immediate_report');
+    expect(accepted.body.sessionId).toBeNull();
+    expect(accepted.body.referenceStartedAt).toBe(accepted.body.createdAt);
+    expect(accepted.body.referenceStartedAt).not.toBe('2026-10-31T08:00:00.000Z');
+    expect(accepted.body.proposedEndedAt).toBeNull();
+    expect(accepted.body.gpsLatitude).toBe('6.137500');
+    expect(accepted.body.gpsAccuracyMeters).toBe('135.00');
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+
+    const duplicate = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'immediate_report',
+        classId: 41,
+        subjectId: 51,
+        incidentType: 'gps_accuracy',
+        reason: 'Un second signalement',
+      });
+    expect(duplicate.status).toBe(409);
+  });
+
+  it('creates an immediate report without a prior session or GPS fix using the server timestamp', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'immediate_report',
+        classId: 41,
+        subjectId: 51,
+        incidentType: 'application',
+        reason: 'Le démarrage est impossible.',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.requestType).toBe('immediate_report');
+    expect(response.body.sessionId).toBeNull();
+    expect(response.body.referenceStartedAt).toBe(response.body.createdAt);
+    expect(response.body.proposedEndedAt).toBeNull();
+    expect(response.body.gpsLatitude).toBeNull();
+    expect(response.body.gpsLongitude).toBeNull();
+    expect(response.body.gpsAccuracyMeters).toBeNull();
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+    expect(mockDatabaseState.regularizationRequests).toHaveLength(1);
+  });
+
+  it('blocks GPS start while an immediate report is pending and its end time is unknown', async () => {
+    const { app, startBody } = await configureGpsStart();
+    const referenceStartedAt = new Date(Date.now() - 60_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 501,
+      sessionId: null,
+      schoolId: 8,
+      teacherId: 21,
+      requestType: 'immediate_report',
+      referenceStartedAt,
+      declaredStartedAt: null,
+      proposedEndedAt: null,
+      status: 'pending',
+    }];
+
+    const response = await request(app).post('/api/teacher-control/sessions/start').send(startBody);
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('overlaps another pending regularization');
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher']);
+  });
+
+  it('serializes a route-level immediate report against GPS start and blocks the start', async () => {
+    const { app, startBody } = await configureGpsStart();
+    const acquired = createDeferred();
+    const waiting = createDeferred();
+    const release = createDeferred();
+    mockDatabaseState.skipConcurrentRollback = true;
+    mockDatabaseState.teacherLockHooks = {
+      onAcquired: acquired.resolve,
+      onWaiting: waiting.resolve,
+      hold: release.promise,
+    };
+
+    try {
+      const reportPromise = request(app)
+        .post('/api/teacher-control/regularizations/unrecorded')
+        .send({
+          requestType: 'immediate_report',
+          classId: 31,
+          subjectId: 41,
+          incidentType: 'gps_unavailable',
+          reason: 'GPS indisponible',
+        }).then((response) => response);
+      await acquired.promise;
+      const startPromise = request(app)
+        .post('/api/teacher-control/sessions/start')
+        .send(startBody)
+        .then((response) => response);
+      await waiting.promise;
+      release.resolve();
+
+      const [report, start] = await Promise.all([reportPromise, startPromise]);
+      expect(report.status).toBe(200);
+      expect(start.status).toBe(409);
+      expect(start.body.error).toContain('overlaps another pending regularization');
+      expect(mockDatabaseState.sessions).toHaveLength(0);
+      expect(mockDatabaseState.regularizationRequests).toHaveLength(1);
+      expect(mockDatabaseState.regularizationRequests[0].proposedEndedAt).toBeNull();
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'teacher']);
+    } finally {
+      release.resolve();
+      mockDatabaseState.teacherLockHooks = null;
+      mockDatabaseState.skipConcurrentRollback = false;
+    }
+  });
+
+  it('serializes two route-level late declarations and rejects the overlapping second period', async () => {
+    configureTeacherRegularization();
+    const app = createTestApp();
+    const startedAt = new Date(Date.now() - 3_600_000).toISOString();
+    const proposedEndedAt = new Date(Date.now() - 1_800_000).toISOString();
+    const body = {
+      requestType: 'late_declaration',
+      classId: 31,
+      subjectId: 41,
+      declaredStartedAt: startedAt,
+      proposedEndedAt,
+      reason: 'Oubli de saisie',
+    };
+    const acquired = createDeferred();
+    const waiting = createDeferred();
+    const release = createDeferred();
+    mockDatabaseState.skipConcurrentRollback = true;
+    mockDatabaseState.teacherLockHooks = {
+      onAcquired: acquired.resolve,
+      onWaiting: waiting.resolve,
+      hold: release.promise,
+    };
+
+    try {
+      const firstPromise = request(app)
+        .post('/api/teacher-control/regularizations/unrecorded')
+        .send(body)
+        .then((response) => response);
+      await acquired.promise;
+      const secondPromise = request(app)
+        .post('/api/teacher-control/regularizations/unrecorded')
+        .send(body)
+        .then((response) => response);
+      await waiting.promise;
+      release.resolve();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(409);
+      expect(mockDatabaseState.regularizationRequests).toHaveLength(1);
+      expect(mockDatabaseState.sessions).toHaveLength(0);
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'teacher']);
+    } finally {
+      release.resolve();
+      mockDatabaseState.teacherLockHooks = null;
+      mockDatabaseState.skipConcurrentRollback = false;
+    }
+  });
+
+  it('serializes GPS closure against an administrative decision on the same route-level session', async () => {
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.gpsSettings = [{
+      id: 4,
+      schoolId: 8,
+      isEnabled: true,
+      latitude: '6.1375',
+      longitude: '1.2123',
+      geofenceRadiusMeters: 200,
+    }];
+    mockDatabaseState.sessions = [{
+      id: 701,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherUserId: 501,
+      teacherNameSnapshot: 'Test actor',
+      status: 'open',
+      startedAt: new Date(Date.now() - 3_600_000),
+      startSource: 'gps',
+      startDistanceMeters: 0,
+      startAccuracyMeters: 20,
+      startGeofenceRadiusMeters: 200,
+      validatedEndedAt: null,
+      endSource: null,
+      closedAt: null,
+    }];
+    mockDatabaseState.regularizationRequests = [{
+      id: 702,
+      sessionId: 701,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Test actor',
+      requestType: 'incomplete_session',
+      proposedEndedAt: new Date(Date.now() - 60_000),
+      reason: 'Déclaration de fin',
+      status: 'pending',
+      submittedByUserId: 501,
+      submittedByNameSnapshot: 'Test actor',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+    const app = createTestApp();
+    const challenge = await request(app)
+      .post('/api/teacher-control/gps-challenges')
+      .send({ action: 'end_session', sessionId: 701 });
+    expect(challenge.status).toBe(200);
+
+    const acquired = createDeferred();
+    const waiting = createDeferred();
+    const release = createDeferred();
+    mockDatabaseState.skipConcurrentRollback = true;
+    mockDatabaseState.teacherLockHooks = {
+      onAcquired: acquired.resolve,
+      onWaiting: waiting.resolve,
+      hold: release.promise,
+    };
+
+    try {
+      const endPromise = request(app).post('/api/teacher-control/sessions/701/end').send({
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 20,
+        gpsChallenge: challenge.body.challenge,
+      }).then((response) => response);
+      await acquired.promise;
+      mockActor.role = 'school_admin';
+      mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+      const decisionPromise = request(app)
+        .post('/api/teacher-control/regularizations/702/decision')
+        .send({ decision: 'accepted' })
+        .then((response) => response);
+      await waiting.promise;
+      release.resolve();
+
+      const [end, decision] = await Promise.all([endPromise, decisionPromise]);
+      expect(end.status).toBe(200);
+      expect(decision.status).toBe(409);
+      expect(mockDatabaseState.sessions[0]).toMatchObject({ status: 'completed', endSource: 'gps' });
+      expect(mockDatabaseState.regularizationRequests[0].status).toBe('pending');
+      expect(mockDatabaseState.regularizationDecisions).toHaveLength(0);
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session', 'teacher', 'session']);
+    } finally {
+      release.resolve();
+      mockDatabaseState.teacherLockHooks = null;
+      mockDatabaseState.skipConcurrentRollback = false;
+    }
+  });
+
+  it('serializes repeated route-level decisions and creates one accepted session', async () => {
+    configureTeacherRegularization();
+    mockActor.role = 'school_admin';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    mockDatabaseState.regularizationRequests = [{
+      id: 703,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'late_declaration',
+      classId: 31,
+      classNameSnapshot: '6e A',
+      subjectId: 41,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: null,
+      declaredStartedAt: new Date(Date.now() - 3_600_000),
+      proposedEndedAt: new Date(Date.now() - 1_800_000),
+      reason: 'Oubli',
+      status: 'pending',
+      submittedByUserId: 601,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+    const app = createTestApp();
+    const acquired = createDeferred();
+    const waiting = createDeferred();
+    const release = createDeferred();
+    mockDatabaseState.skipConcurrentRollback = true;
+    mockDatabaseState.teacherLockHooks = {
+      onAcquired: acquired.resolve,
+      onWaiting: waiting.resolve,
+      hold: release.promise,
+    };
+
+    try {
+      const firstPromise = request(app)
+        .post('/api/teacher-control/regularizations/703/decision')
+        .send({ decision: 'accepted' })
+        .then((response) => response);
+      await acquired.promise;
+      const secondPromise = request(app)
+        .post('/api/teacher-control/regularizations/703/decision')
+        .send({ decision: 'rejected', reason: 'Décision concurrente' })
+        .then((response) => response);
+      await waiting.promise;
+      release.resolve();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(404);
+      expect(mockDatabaseState.regularizationRequests[0].status).toBe('accepted');
+      expect(mockDatabaseState.sessions).toHaveLength(1);
+      expect(mockDatabaseState.sessions[0]).toMatchObject({
+        regularizationRequestId: 703,
+        startSource: 'regularization',
+        endSource: 'regularization',
+        status: 'completed',
+      });
+      expect(mockDatabaseState.regularizationDecisions).toHaveLength(1);
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'request', 'teacher', 'request']);
+    } finally {
+      release.resolve();
+      mockDatabaseState.teacherLockHooks = null;
+      mockDatabaseState.skipConcurrentRollback = false;
+    }
+  });
+
+  it('allows GPS start after a historical late declaration has ended', async () => {
+    const { app, startBody } = await configureGpsStart();
+    mockDatabaseState.regularizationRequests = [{
+      id: 502,
+      sessionId: null,
+      schoolId: 8,
+      teacherId: 21,
+      requestType: 'late_declaration',
+      referenceStartedAt: null,
+      declaredStartedAt: new Date(Date.now() - 3_600_000),
+      proposedEndedAt: new Date(Date.now() - 1_800_000),
+      status: 'pending',
+    }];
+
+    const response = await request(app).post('/api/teacher-control/sessions/start').send(startBody);
+
+    expect(response.status).toBe(200);
+    expect(mockDatabaseState.sessions).toHaveLength(1);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher']);
+  });
+
+  it('rejects GPS start when a pending late-declaration interval overlaps it', async () => {
+    const { app, startBody } = await configureGpsStart();
+    mockDatabaseState.regularizationRequests = [{
+      id: 503,
+      sessionId: null,
+      schoolId: 8,
+      teacherId: 21,
+      requestType: 'late_declaration',
+      referenceStartedAt: null,
+      declaredStartedAt: new Date(Date.now() - 60_000),
+      proposedEndedAt: new Date(Date.now() + 60_000),
+      status: 'pending',
+    }];
+
+    const response = await request(app).post('/api/teacher-control/sessions/start').send(startBody);
+
+    expect(response.status).toBe(409);
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher']);
+  });
+
+  it('takes teacher then session locks and rejects an overlapping immediate report', async () => {
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    const startedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.sessions = [{
+      id: 601,
+      schoolId: 8,
+      teacherId: 21,
+      teacherUserId: 501,
+      teacherNameSnapshot: 'Test actor',
+      schoolNameSnapshot: 'School Eight',
+      status: 'open',
+      startedAt,
+      validatedEndedAt: null,
+      closedAt: null,
+    }];
+    mockDatabaseState.regularizationRequests = [{
+      id: 602,
+      sessionId: null,
+      schoolId: 8,
+      teacherId: 21,
+      requestType: 'immediate_report',
+      referenceStartedAt: new Date(Date.now() - 90_000),
+      proposedEndedAt: null,
+      status: 'pending',
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/sessions/601/regularizations')
+      .send({
+        proposedEndedAt: new Date(Date.now() - 60_000).toISOString(),
+        reason: 'Clôture manquée',
+      });
+
+    expect(response.status).toBe(409);
+    expect(mockDatabaseState.regularizationRequests).toHaveLength(1);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
+  });
+
+  it('closes an incomplete session only after taking the teacher then session lock', async () => {
+    mockActor.role = 'school_admin';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    mockDatabaseState.sessions = [{
+      id: 603,
+      schoolId: 8,
+      teacherId: 21,
+      teacherUserId: 601,
+      teacherNameSnapshot: 'Teacher One',
+      schoolNameSnapshot: 'School Eight',
+      status: 'open',
+      startedAt: new Date(Date.now() - 3_600_000),
+      validatedEndedAt: null,
+      closedAt: null,
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/sessions/603/close-incomplete')
+      .send({ reason: 'Séance abandonnée' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('closed_without_end');
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
+  });
+
+  it('creates a late declaration only from an authorized pedagogical pair and server submission time', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+    const now = Date.now();
+    const declaredStartedAt = new Date(now - 3_600_000).toISOString();
+    const proposedEndedAt = new Date(now - 1_800_000).toISOString();
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'late_declaration',
+        classId: 41,
+        subjectId: 51,
+        declaredStartedAt,
+        proposedEndedAt,
+        reason: 'Oubli de démarrage et de clôture',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.sessionId).toBeNull();
+    expect(response.body.requestType).toBe('late_declaration');
+    expect(response.body.declaredStartedAt).toBe(declaredStartedAt);
+    expect(response.body.proposedEndedAt).toBe(proposedEndedAt);
+    expect(response.body.createdAt).not.toBe(declaredStartedAt);
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+
+    const unauthorizedPair = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'late_declaration',
+        classId: 999,
+        subjectId: 51,
+        declaredStartedAt,
+        proposedEndedAt,
+        reason: 'Paire non attribuée',
+      });
+    expect(unauthorizedPair.status).toBe(403);
+
+    const futureDeclaration = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'late_declaration',
+        classId: 41,
+        subjectId: 51,
+        declaredStartedAt,
+        proposedEndedAt: new Date(Date.now() + 60_000).toISOString(),
+        reason: 'Heure future',
+      });
+    expect(futureDeclaration.status).toBe(400);
+  });
+
+  it('lets the teacher add an end declaration to an immediate report without changing its server reference time', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    const referenceStartedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 9,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'immediate_report',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt,
+      declaredStartedAt: null,
+      proposedEndedAt: null,
+      reason: 'GPS unavailable',
+      description: null,
+      incidentType: 'gps_unavailable',
+      status: 'pending',
+      submittedByUserId: 501,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: referenceStartedAt,
+      updatedAt: referenceStartedAt,
+    }];
+    const app = createTestApp();
+    const invalidEnd = await request(app)
+      .post('/api/teacher-control/regularizations/9/complete')
+      .send({ proposedEndedAt: new Date(Date.now() + 60_000).toISOString() });
+    expect(invalidEnd.status).toBe(400);
+
+    const validEndAt = new Date(Date.now() - 1_800_000).toISOString();
+    const response = await request(app)
+      .post('/api/teacher-control/regularizations/9/complete')
+      .send({ proposedEndedAt: validEndAt, description: 'Cours terminé.' });
+    expect(response.status).toBe(200);
+    expect(response.body.referenceStartedAt).toBe(referenceStartedAt.toISOString());
+    expect(response.body.proposedEndedAt).toBe(validEndAt);
+    expect(response.body.description).toBe('Cours terminé.');
+    expect(response.body.sessionId).toBeNull();
+  });
+
+  it('validates a late declaration and creates an administratively accepted session without GPS values', async () => {
+    mockActor.role = 'school_admin';
+    mockActor.schoolId = 8;
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+    const startedAt = new Date(Date.now() - 3_600_000).toISOString();
+    const endedAt = new Date(Date.now() - 1_800_000).toISOString();
+    mockDatabaseState.regularizationRequests = [{
+      id: 7,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'late_declaration',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: null,
+      declaredStartedAt: new Date(startedAt),
+      proposedEndedAt: new Date(endedAt),
+      reason: 'Oubli de saisie',
+      description: null,
+      incidentType: null,
+      status: 'pending',
+      submittedByUserId: 601,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/7/decision')
+      .send({ decision: 'accepted' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.session.startSource).toBe('regularization');
+    expect(response.body.session.regularizationOrigin).toBe('late_declaration');
+    expect(response.body.session.startedAt).toBe(startedAt);
+    expect(response.body.session.validatedEndedAt).toBe(endedAt);
+    expect(response.body.session.endSource).toBe('regularization');
+    expect(response.body.session.startDistanceMeters).toBeNull();
+    expect(response.body.session.startAccuracyMeters).toBeNull();
+    expect(response.body.session.endDistanceMeters).toBeNull();
+    expect(response.body.request.sessionId).toBe(response.body.session.id);
+    expect(response.body.request.status).toBe('accepted');
+    expect(mockDatabaseState.sessions).toHaveLength(1);
+    expect(mockDatabaseState.auditEvents.some((event) => event.action === 'session_created_by_regularization')).toBe(true);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'request']);
+
+    const repeatedDecision = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/7/decision')
+      .send({ decision: 'accepted' });
+    expect([404, 409]).toContain(repeatedDecision.status);
+    expect(mockDatabaseState.sessions).toHaveLength(1);
+  });
+
+  it.each(['immediate_report', 'late_declaration'] as const)(
+    'creates then accepts an unrecorded %s request with one server-completed session',
+    async (requestType) => {
+      configureUnrecordedTeacher();
+      const submittedAt = Date.now();
+      const lateStartedAt = new Date(submittedAt - 3_600_000);
+      const lateEndedAt = new Date(submittedAt - 1_800_000);
+      const createResponse = await request(createTestApp())
+        .post('/api/teacher-control/regularizations/unrecorded')
+        .send({
+          requestType,
+          classId: 41,
+          subjectId: 51,
+          incidentType: requestType === 'immediate_report' ? 'application' : undefined,
+          declaredStartedAt: requestType === 'late_declaration' ? lateStartedAt.toISOString() : undefined,
+          proposedEndedAt: requestType === 'late_declaration' ? lateEndedAt.toISOString() : undefined,
+          reason: requestType === 'immediate_report' ? 'Panne technique' : 'Oubli de l’application',
+        });
+
+      expect(createResponse.status).toBe(200);
+      expect(createResponse.body.status).toBe('pending');
+      expect(createResponse.body.sessionId).toBeNull();
+      expect(mockDatabaseState.sessions).toHaveLength(0);
+      expect(createResponse.body.referenceStartedAt).toBe(
+        requestType === 'immediate_report' ? createResponse.body.createdAt : null,
+      );
+      expect(createResponse.body.declaredStartedAt).toBe(
+        requestType === 'late_declaration' ? lateStartedAt.toISOString() : null,
+      );
+
+      const pendingSessions = await request(createTestApp())
+        .get('/api/teacher-control/sessions?limit=50');
+      expect(pendingSessions.status).toBe(200);
+      expect(pendingSessions.body.items).toHaveLength(0);
+
+      if (requestType === 'immediate_report') {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const completion = await request(createTestApp())
+          .post(`/api/teacher-control/regularizations/${createResponse.body.id}/complete`)
+          .send({ proposedEndedAt: new Date().toISOString() });
+        expect(completion.status).toBe(200);
+        expect(completion.body.referenceStartedAt).toBe(createResponse.body.referenceStartedAt);
+      }
+
+      configureUnrecordedAdmin();
+      const decision = await request(createTestApp())
+        .post(`/api/teacher-control/regularizations/${createResponse.body.id}/decision`)
+        .send({ decision: 'accepted' });
+
+      expect(decision.status).toBe(200);
+      expect(decision.body.request).toMatchObject({
+        status: 'accepted',
+        sessionId: decision.body.session.id,
+      });
+      expect(decision.body.session).toMatchObject({
+        status: 'completed',
+        startSource: 'regularization',
+        regularizationOrigin: requestType,
+        regularizationRequestId: createResponse.body.id,
+        endSource: 'regularization',
+        startDistanceMeters: null,
+        startAccuracyMeters: null,
+        startGeofenceRadiusMeters: null,
+        endDistanceMeters: null,
+        endAccuracyMeters: null,
+        endGeofenceRadiusMeters: null,
+      });
+      expect(decision.body.session.startedAt).toBe(
+        requestType === 'immediate_report'
+          ? createResponse.body.referenceStartedAt
+          : lateStartedAt.toISOString(),
+      );
+      expect(mockDatabaseState.sessions).toHaveLength(1);
+      expect(mockDatabaseState.sessions[0].regularizationRequestId).toBe(createResponse.body.id);
+      expect(mockDatabaseState.regularizationRequests[0].sessionId).toBe(mockDatabaseState.sessions[0].id);
+
+      const sessions = await request(createTestApp())
+        .get('/api/teacher-control/sessions?limit=50');
+      expect(sessions.status).toBe(200);
+      expect(sessions.body.items).toHaveLength(1);
+      const listedSession = sessions.body.items[0];
+      const duration = new Date(listedSession.validatedEndedAt).getTime()
+        - new Date(listedSession.startedAt).getTime();
+      expect(listedSession.durationMilliseconds).toBe(duration);
+      expect(listedSession.estimatedAmountXof).toBe(Math.round(3600 * duration / 3_600_000));
+
+      const repeatedDecision = await request(createTestApp())
+        .post(`/api/teacher-control/regularizations/${createResponse.body.id}/decision`)
+        .send({ decision: 'accepted' });
+      expect([404, 409]).toContain(repeatedDecision.status);
+      expect(mockDatabaseState.sessions).toHaveLength(1);
+    },
+  );
+
+  it('rolls back the accepted session, request link, decision and audit when transaction work fails', async () => {
+    configureUnrecordedTeacher();
+    const now = Date.now();
+    const createResponse = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/unrecorded')
+      .send({
+        requestType: 'late_declaration',
+        classId: 41,
+        subjectId: 51,
+        declaredStartedAt: new Date(now - 3_600_000).toISOString(),
+        proposedEndedAt: new Date(now - 1_800_000).toISOString(),
+        reason: 'Oubli de l’application',
+      });
+    expect(createResponse.status).toBe(200);
+    configureUnrecordedAdmin();
+    mockDatabaseState.failAuditInsert = true;
+    const auditCountBeforeDecision = mockDatabaseState.auditEvents.length;
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const response = await request(createTestApp())
+        .post(`/api/teacher-control/regularizations/${createResponse.body.id}/decision`)
+        .send({ decision: 'accepted' });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: 'Teacher-control operation failed' });
+      expect(mockDatabaseState.sessions).toHaveLength(0);
+      expect(mockDatabaseState.regularizationDecisions).toHaveLength(0);
+      expect(mockDatabaseState.auditEvents).toHaveLength(auditCountBeforeDecision);
+      expect(mockDatabaseState.regularizationRequests[0]).toMatchObject({
+        status: 'pending',
+        sessionId: null,
+      });
+      expect(errorLog).toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('records both declared and administrator-retained times when correcting a late declaration', async () => {
+    mockActor.role = 'school_admin';
+    mockActor.schoolId = 8;
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    mockDatabaseState.classTeacherAssociations = [{
+      id: 31, teacherId: 21, schoolId: 8, classId: 41, className: '6e A', classSchoolId: 8,
+    }];
+    mockDatabaseState.teacherSubjectAssociations = [{
+      id: 32, teacherId: 21, schoolId: 8, subjectId: 51, subjectName: 'Mathématiques', subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
+    }];
+    const declaredStartedAt = new Date(Date.now() - 3_600_000);
+    const declaredEndedAt = new Date(Date.now() - 1_800_000);
+    const retainedStartedAt = new Date(declaredStartedAt.getTime() - 15 * 60_000);
+    const retainedEndedAt = new Date(declaredEndedAt.getTime() + 10 * 60_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 17,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'late_declaration',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: null,
+      declaredStartedAt,
+      proposedEndedAt: declaredEndedAt,
+      reason: 'Oubli de saisie',
+      description: null,
+      incidentType: null,
+      status: 'pending',
+      submittedByUserId: 601,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/17/decision')
+      .send({
+        decision: 'modified_accepted',
+        reason: 'Heures corrigées après vérification',
+        proposedStartedAt: retainedStartedAt.toISOString(),
+        proposedEndedAt: retainedEndedAt.toISOString(),
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.session.startedAt).toBe(retainedStartedAt.toISOString());
+    expect(response.body.session.validatedEndedAt).toBe(retainedEndedAt.toISOString());
+    expect(response.body.decision).toMatchObject({
+      decision: 'modified_accepted',
+      previousProposedStartedAt: declaredStartedAt.toISOString(),
+      previousProposedEndedAt: declaredEndedAt.toISOString(),
+      decidedStartedAt: retainedStartedAt.toISOString(),
+      decidedEndedAt: retainedEndedAt.toISOString(),
+    });
+    expect(mockDatabaseState.regularizationDecisions).toHaveLength(1);
+  });
+
+  it.each(['immediate_report', 'late_declaration'] as const)(
+    'rejects an unrecorded %s request without creating a session or retained times',
+    async (requestType) => {
+    mockActor.role = 'school_admin';
+    mockActor.schoolId = 8;
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    const declaredStartedAt = new Date(Date.now() - 3_600_000);
+    const proposedEndedAt = new Date(Date.now() - 1_800_000);
+    const referenceStartedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 18,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType,
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: requestType === 'immediate_report' ? referenceStartedAt : null,
+      declaredStartedAt: requestType === 'late_declaration' ? declaredStartedAt : null,
+      proposedEndedAt: requestType === 'late_declaration' ? proposedEndedAt : null,
+      reason: 'Demande de test',
+      description: null,
+      incidentType: requestType === 'immediate_report' ? 'application' : null,
+      status: 'pending',
+      submittedByUserId: 601,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/18/decision')
+      .send({ decision: 'rejected', reason: 'Éléments insuffisants' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.session).toBeNull();
+    expect(response.body.decision).toMatchObject({
+      decision: 'rejected',
+      previousProposedStartedAt: (requestType === 'immediate_report' ? referenceStartedAt : declaredStartedAt).toISOString(),
+      previousProposedEndedAt: requestType === 'late_declaration' ? proposedEndedAt.toISOString() : null,
+      decidedStartedAt: null,
+      decidedEndedAt: null,
+    });
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+    expect(mockDatabaseState.regularizationRequests[0]).toMatchObject({
+      status: 'rejected',
+      sessionId: null,
+    });
+    },
+  );
+
+  it('preserves incomplete-session regularization, including rejection without closing the session', async () => {
+    mockActor.role = 'school_admin';
+    mockActor.schoolId = 8;
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.schools = [{ id: 8, name: 'School Eight', isSuspended: false }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    const startedAt = new Date(Date.now() - 3_600_000);
+    const proposedEndedAt = new Date(Date.now() - 1_800_000);
+    mockDatabaseState.sessions = [{
+      id: 4,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherUserId: 601,
+      teacherNameSnapshot: 'Teacher One',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      status: 'open',
+      startedAt,
+      startSource: 'gps',
+      startDistanceMeters: 10,
+      startAccuracyMeters: 20,
+      startGeofenceRadiusMeters: 200,
+      validatedEndedAt: null,
+      endSource: null,
+      closedAt: null,
+    }];
+    mockDatabaseState.regularizationRequests = [{
+      id: 12,
+      sessionId: 4,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'incomplete_session',
+      proposedEndedAt,
+      reason: 'Sortie urgente',
+      status: 'pending',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const app = createTestApp();
+    const rejected = await request(app)
+      .post('/api/teacher-control/regularizations/12/decision')
+      .send({ decision: 'rejected', reason: 'Informations insuffisantes' });
+    expect(rejected.status).toBe(200);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session', 'request']);
+    expect(rejected.body.session.status).toBe('open');
+    expect(mockDatabaseState.sessions[0].status).toBe('open');
+    mockDatabaseState.regularizationRequests[0].status = 'pending';
+    mockDatabaseState.lockOrder = [];
+
+    const response = await request(app)
+      .post('/api/teacher-control/regularizations/12/decision')
+      .send({ decision: 'accepted' });
+    expect(response.status).toBe(200);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session', 'request']);
+    expect(response.body.session.status).toBe('completed');
+    expect(response.body.session.startedAt).toBe(startedAt.toISOString());
+    expect(response.body.session.validatedEndedAt).toBe(proposedEndedAt.toISOString());
+    expect(response.body.session.startSource).toBe('gps');
+    expect(response.body.session.endSource).toBe('regularization');
+    expect(mockDatabaseState.sessions[0].status).toBe('completed');
   });
 
   it('creates a short-lived navigation cookie only for an authenticated teacher with enabled GPS', async () => {
@@ -608,6 +1802,8 @@ describe('teacher control API authorization and input validation', () => {
         id: 61,
         schoolId: 8,
         status: 'completed',
+        startSource: 'gps',
+        endSource: 'gps',
         startedAt: new Date('2026-10-31T08:00:00.000Z'),
         validatedEndedAt: new Date('2026-10-31T09:00:00.000Z'),
         hourlyRateXofSnapshot: 1800,
@@ -616,20 +1812,101 @@ describe('teacher control API authorization and input validation', () => {
         id: 62,
         schoolId: 99,
         status: 'completed',
+        startSource: 'gps',
+        endSource: 'gps',
         startedAt: new Date('2026-10-31T08:00:00.000Z'),
         validatedEndedAt: new Date('2026-10-31T08:30:00.000Z'),
         hourlyRateXofSnapshot: null,
       },
+      {
+        id: 63,
+        schoolId: 8,
+        status: 'completed',
+        startSource: 'regularization',
+        regularizationOrigin: 'immediate_report',
+        endSource: 'regularization',
+        startedAt: new Date('2026-10-31T08:00:00.000Z'),
+        validatedEndedAt: new Date('2026-10-31T08:30:00.000Z'),
+        hourlyRateXofSnapshot: 1800,
+      },
+      {
+        id: 64,
+        schoolId: 8,
+        status: 'completed',
+        startSource: 'regularization',
+        regularizationOrigin: 'late_declaration',
+        endSource: 'regularization',
+        startedAt: new Date('2026-10-31T09:00:00.000Z'),
+        validatedEndedAt: new Date('2026-10-31T09:30:00.000Z'),
+        hourlyRateXofSnapshot: 1800,
+      },
+      {
+        id: 65,
+        schoolId: 8,
+        status: 'completed',
+        startSource: 'regularization',
+        regularizationOrigin: 'immediate_report',
+        endSource: 'regularization',
+        startedAt: new Date('2026-10-31T10:00:00.000Z'),
+        validatedEndedAt: new Date('2026-10-31T10:30:00.000Z'),
+        hourlyRateXofSnapshot: null,
+      },
+      {
+        id: 66,
+        schoolId: 8,
+        status: 'completed',
+        startSource: 'gps',
+        endSource: 'regularization',
+        startedAt: new Date('2026-10-31T11:00:00.000Z'),
+        validatedEndedAt: new Date('2026-10-31T11:15:00.000Z'),
+        hourlyRateXofSnapshot: 1800,
+      },
+    ];
+    mockDatabaseState.regularizationRequests = [
+      { id: 101, schoolId: 8, requestType: 'immediate_report', status: 'pending', teacherId: 21, classId: 41, subjectId: 51 },
+      { id: 102, schoolId: 8, requestType: 'immediate_report', status: 'rejected', teacherId: 21, classId: 41, subjectId: 51 },
     ];
 
     const response = await request(createTestApp()).get('/api/teacher-control/statistics/global');
 
     expect(response.status).toBe(200);
-    expect(response.body.totalSessions).toBe(2);
-    expect(response.body.validatedDurationMilliseconds).toBe(5_400_000);
-    expect(response.body.estimatedCompensationXof).toBe(1800);
+    expect(response.body.totalSessions).toBe(6);
+    expect(response.body.validatedDurationMilliseconds).toBe(11_700_000);
+    expect(response.body.estimatedCompensationXof).toBe(4050);
     expect(response.body.schools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ schoolId: 8, schoolName: 'School Eight', totalSessions: 1 }),
+      expect.objectContaining({
+        schoolId: 8,
+        totalSessions: 5,
+        completedSessions: 5,
+        gpsCompletedSessions: 1,
+        incompleteSessionRegularizations: 1,
+        incompleteRegularizedDurationMilliseconds: 900_000,
+        immediateRegularizedSessions: 2,
+        immediateRegularizedDurationMilliseconds: 3_600_000,
+        lateRegularizedSessions: 1,
+        lateRegularizedDurationMilliseconds: 1_800_000,
+        gpsDurationMilliseconds: 3_600_000,
+        validatedDurationMilliseconds: 9_900_000,
+        estimatedCompensationXof: 4050,
+      }),
+    ]));
+    const schoolSummary = response.body.schools.find((school: { schoolId: number }) => school.schoolId === 8);
+    expect(
+      schoolSummary.gpsDurationMilliseconds
+      + schoolSummary.incompleteRegularizedDurationMilliseconds
+      + schoolSummary.immediateRegularizedDurationMilliseconds
+      + schoolSummary.lateRegularizedDurationMilliseconds,
+    ).toBe(schoolSummary.validatedDurationMilliseconds);
+    const allSchoolDetailedDurations = response.body.schools.reduce((total: number, school: Record<string, number>) => (
+      total
+      + school.gpsDurationMilliseconds
+      + school.incompleteRegularizedDurationMilliseconds
+      + school.immediateRegularizedDurationMilliseconds
+      + school.lateRegularizedDurationMilliseconds
+    ), 0);
+    expect(allSchoolDetailedDurations).toBe(response.body.validatedDurationMilliseconds);
+    expect(response.body.schools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ schoolId: 8, schoolName: 'School Eight', totalSessions: 5 }),
       expect.objectContaining({ schoolId: 99, schoolName: 'École supprimée', totalSessions: 1 }),
       expect.objectContaining({
         schoolId: 10,
@@ -778,6 +2055,7 @@ describe('teacher control API authorization and input validation', () => {
     };
 
     const requestStartedAt = Date.now();
+    mockDatabaseState.lockOrder = [];
     const startResponse = await request(app).post('/api/teacher-control/sessions/start').send(startBody);
     const responseReceivedAt = Date.now();
     expect(startResponse.status).toBe(200);
@@ -794,6 +2072,7 @@ describe('teacher control API authorization and input validation', () => {
     expect(Date.parse(startResponse.body.startedAt)).toBeGreaterThanOrEqual(requestStartedAt);
     expect(Date.parse(startResponse.body.startedAt)).toBeLessThanOrEqual(responseReceivedAt);
     expect(startResponse.body.startedAt).not.toBe(startBody.startedAt);
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher']);
     expect(startResponse.body).not.toHaveProperty('latitude');
     expect(startResponse.body).not.toHaveProperty('longitude');
     expect(mockDatabaseState.auditEvents).toHaveLength(1);
@@ -813,6 +2092,7 @@ describe('teacher control API authorization and input validation', () => {
       .send({ action: 'end_session', sessionId: startResponse.body.id });
     expect(endChallengeResponse.status).toBe(200);
     const endRequestStartedAt = Date.now();
+    mockDatabaseState.lockOrder = [];
     const endResponse = await request(app)
       .post(`/api/teacher-control/sessions/${startResponse.body.id}/end`)
       .send({
@@ -829,6 +2109,7 @@ describe('teacher control API authorization and input validation', () => {
     expect(Date.parse(endResponse.body.validatedEndedAt)).toBeGreaterThanOrEqual(endRequestStartedAt);
     expect(Date.parse(endResponse.body.validatedEndedAt)).toBeLessThanOrEqual(endResponseReceivedAt);
     expect(endResponse.body.validatedEndedAt).not.toBe('2099-12-31T23:59:59.999Z');
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
     expect(mockDatabaseState.auditEvents).toHaveLength(2);
   });
 
@@ -1056,6 +2337,7 @@ describe('teacher control API authorization and input validation', () => {
     expect(mockDatabaseState.sessions[0].status).toBe('open');
     expect(mockDatabaseState.challenges[1].consumedAt).toBeUndefined();
 
+    mockDatabaseState.lockOrder = [];
     const endValidation = await request(app)
       .post(`/api/teacher-control/sessions/${start.body.id}/validate-end`)
       .send({
@@ -1075,7 +2357,9 @@ describe('teacher control API authorization and input validation', () => {
     expect(endValidation.body.validatedAt).not.toBe('2000-01-01T00:00:00.000Z');
     expect(mockDatabaseState.sessions[0].status).toBe('open');
     expect(mockDatabaseState.challenges[1].consumedAt).toBeUndefined();
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
 
+    mockDatabaseState.lockOrder = [];
     const end = await request(app).post(`/api/teacher-control/sessions/${start.body.id}/end`).send({
       latitude: 6.1375,
       longitude: 1.2123,
@@ -1086,6 +2370,7 @@ describe('teacher control API authorization and input validation', () => {
     expect(end.status).toBe(200);
     expect(end.body).toMatchObject({ status: 'completed', teachingAssignmentId: null });
     expect(end.body.validatedEndedAt).not.toBe('2000-01-01T00:00:00.000Z');
+    expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
     expect(mockDatabaseState.sessions).toHaveLength(1);
     expect(mockDatabaseState.auditEvents).toHaveLength(2);
     const duplicateEnd = await request(app).post(`/api/teacher-control/sessions/${start.body.id}/end`).send({
