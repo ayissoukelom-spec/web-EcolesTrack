@@ -147,6 +147,12 @@ type BrowserGeolocationPolicy = {
 };
 
 type ViewTab = 'sessions' | 'requests' | 'gps' | 'rates';
+type SessionFilterOption = { id: number; name: string };
+type SessionFilterOptions = {
+  teachers: SessionFilterOption[];
+  classes: SessionFilterOption[];
+  subjects: SessionFilterOption[];
+};
 type SessionFilters = {
   period: 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
   from: string;
@@ -487,7 +493,14 @@ export default function TeacherControlView({
   const [hourlyRate, setHourlyRate] = useState('');
   const [rateLoaded, setRateLoaded] = useState(false);
   const [filterDraft, setFilterDraft] = useState<SessionFilters>(EMPTY_SESSION_FILTERS);
-  const [filters, setFilters] = useState<SessionFilters>(EMPTY_SESSION_FILTERS);
+  const filtersRef = useRef(EMPTY_SESSION_FILTERS);
+  const [filterResultsLoading, setFilterResultsLoading] = useState(false);
+  const filterRequestInFlightRef = useRef(false);
+  const filterRequestTokenRef = useRef(0);
+  const skipNextDataLoadRef = useRef(false);
+  const [sessionFilterOptions, setSessionFilterOptions] = useState<SessionFilterOptions | null>(null);
+  const [sessionFilterOptionsLoading, setSessionFilterOptionsLoading] = useState(false);
+  const [sessionFilterOptionsError, setSessionFilterOptionsError] = useState<string | null>(null);
   const [sessionCursors, setSessionCursors] = useState<Array<string | null>>([null]);
   const [sessionNextCursor, setSessionNextCursor] = useState<string | null>(null);
   const [sessionTotalCount, setSessionTotalCount] = useState(0);
@@ -502,19 +515,19 @@ export default function TeacherControlView({
   const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '', geofenceRadiusMeters: '200' });
 
   const currentCursor = sessionCursors[sessionCursors.length - 1] ?? null;
-  const makeFilterParams = useCallback((includeSchool: boolean) => {
+  const makeFilterParams = useCallback((includeSchool: boolean, selectedFilters = filtersRef.current) => {
     const params = new URLSearchParams();
     if (includeSchool && isSuperAdmin && schoolId != null) params.set('schoolId', String(schoolId));
-    if (filters.period !== 'all') params.set('period', filters.period);
-    if (filters.from) params.set('from', `${filters.from}T00:00:00.000Z`);
-    if (filters.to) params.set('to', `${filters.to}T23:59:59.999Z`);
-    if (filters.teacherId) params.set('teacherId', filters.teacherId);
-    if (filters.classId) params.set('classId', filters.classId);
-    if (filters.subjectId) params.set('subjectId', filters.subjectId);
-    if (filters.status) params.set('status', filters.status);
-    if (filters.regularizationState) params.set('regularizationState', filters.regularizationState);
+    if (selectedFilters.period !== 'all') params.set('period', selectedFilters.period);
+    if (selectedFilters.from) params.set('from', `${selectedFilters.from}T00:00:00.000Z`);
+    if (selectedFilters.to) params.set('to', `${selectedFilters.to}T23:59:59.999Z`);
+    if (selectedFilters.teacherId) params.set('teacherId', selectedFilters.teacherId);
+    if (selectedFilters.classId) params.set('classId', selectedFilters.classId);
+    if (selectedFilters.subjectId) params.set('subjectId', selectedFilters.subjectId);
+    if (selectedFilters.status) params.set('status', selectedFilters.status);
+    if (selectedFilters.regularizationState) params.set('regularizationState', selectedFilters.regularizationState);
     return params;
-  }, [filters, isSuperAdmin, schoolId]);
+  }, [isSuperAdmin, schoolId]);
 
   const loadData = useCallback(async () => {
     void filterRevision;
@@ -619,8 +632,52 @@ export default function TeacherControlView({
   }, [isSuperAdmin, schoolId]);
 
   useEffect(() => {
+    if (skipNextDataLoadRef.current) {
+      skipNextDataLoadRef.current = false;
+      return;
+    }
     if (schoolId != null || isSuperAdmin) void loadData();
   }, [loadData, schoolId, isSuperAdmin]);
+
+  useEffect(() => {
+    if (isTeacher) {
+      setSessionFilterOptions(null);
+      setSessionFilterOptionsLoading(false);
+      setSessionFilterOptionsError(null);
+      return;
+    }
+
+    let active = true;
+    setSessionFilterOptions(null);
+    setSessionFilterOptionsLoading(true);
+    setSessionFilterOptionsError(null);
+    const query = isSuperAdmin && schoolId != null ? `?schoolId=${schoolId}` : '';
+    void apiFetch(`/api/teacher-control/filter-options${query}`)
+      .then((response) => {
+        if (!active) return;
+        if (!response
+          || !Array.isArray(response.teachers)
+          || !Array.isArray(response.classes)
+          || !Array.isArray(response.subjects)) {
+          throw new Error('La réponse des options de filtres est invalide.');
+        }
+        setSessionFilterOptions(response as SessionFilterOptions);
+      })
+      .catch((optionsError) => {
+        if (active) {
+          setSessionFilterOptionsError(optionsError instanceof Error
+            ? optionsError.message
+            : 'Impossible de charger les options des filtres.');
+        }
+      })
+      .finally(() => {
+        if (active) setSessionFilterOptionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isSuperAdmin, isTeacher, schoolId]);
 
   useEffect(() => {
     if (isTeacher || schoolId == null) return;
@@ -1032,8 +1089,9 @@ export default function TeacherControlView({
     }
   };
 
-  const applySessionFilters = (event: FormEvent<HTMLFormElement>) => {
+  const applySessionFilters = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (filterRequestInFlightRef.current || loading || sessionFilterOptionsLoading) return;
     if (filterDraft.period === 'custom' && (!filterDraft.from || !filterDraft.to)) {
       setError('Une période personnalisée exige une date de début et une date de fin.');
       return;
@@ -1042,10 +1100,66 @@ export default function TeacherControlView({
       setError('La date de début doit précéder la date de fin.');
       return;
     }
-    setFilters({ ...filterDraft });
+    const nextFilters = { ...filterDraft };
+    const requestToken = ++filterRequestTokenRef.current;
+    filterRequestInFlightRef.current = true;
+    setFilterResultsLoading(true);
+    setError(null);
+    try {
+      if (isSuperAdmin && schoolId == null) {
+        const params = makeFilterParams(true, nextFilters);
+        const summary = await apiFetch(`/api/teacher-control/statistics/global${params.size ? `?${params}` : ''}`) as GlobalStatistics;
+        if (requestToken !== filterRequestTokenRef.current) return;
+        setGlobalStatistics(summary);
+        setStatistics(summary);
+        setSessions([]);
+        setSessionTotalCount(summary.totalSessions);
+        setSessionNextCursor(null);
+      } else {
+        const sessionParams = makeFilterParams(false, nextFilters);
+        sessionParams.set('limit', '50');
+        if (isSuperAdmin && schoolId != null) sessionParams.set('schoolId', String(schoolId));
+        const statisticsParams = makeFilterParams(true, nextFilters);
+        const [sessionPage, summary] = await Promise.all([
+          apiFetch(`/api/teacher-control/sessions?${sessionParams.toString()}`) as Promise<SessionPage>,
+          apiFetch(`/api/teacher-control/statistics${statisticsParams.size ? `?${statisticsParams}` : ''}`) as Promise<Statistics>,
+        ]);
+        if (requestToken !== filterRequestTokenRef.current) return;
+        const pageItems = Array.isArray(sessionPage) ? sessionPage : sessionPage?.items;
+        setSessions(Array.isArray(pageItems) ? pageItems : []);
+        setSessionTotalCount(sessionPage?.totalCount ?? (Array.isArray(pageItems) ? pageItems.length : 0));
+        setSessionNextCursor(sessionPage?.nextCursor ?? null);
+        setStatistics(summary);
+        setGlobalStatistics(null);
+      }
+
+      filtersRef.current = nextFilters;
+      if (currentCursor) skipNextDataLoadRef.current = true;
+      setSessionCursors([null]);
+      setSelectedSessionId(null);
+      setSessionAudit({});
+    } catch (loadError) {
+      if (requestToken === filterRequestTokenRef.current) {
+        setError(loadError instanceof Error ? loadError.message : 'Impossible d’appliquer les filtres.');
+      }
+    } finally {
+      if (requestToken === filterRequestTokenRef.current) {
+        filterRequestInFlightRef.current = false;
+        setFilterResultsLoading(false);
+      }
+    }
+  };
+
+  const handleSuperAdminSchoolChange = (nextSchoolId: number | null) => {
+    filterRequestTokenRef.current += 1;
+    filterRequestInFlightRef.current = false;
+    setFilterResultsLoading(false);
+    filtersRef.current = EMPTY_SESSION_FILTERS;
+    setFilterDraft(EMPTY_SESSION_FILTERS);
     setSessionCursors([null]);
     setSelectedSessionId(null);
     setSessionAudit({});
+    onSuperAdminSchoolFilterChange(nextSchoolId);
     setFilterRevision((revision) => revision + 1);
     setError(null);
   };
@@ -1097,10 +1211,23 @@ export default function TeacherControlView({
         {globalStatistics && (
           <>
             <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3" onSubmit={applySessionFilters}>
-              <SessionFilterControls filters={filterDraft} setFilters={setFilterDraft} />
-              <button type="submit" className={secondaryButtonClass}>Appliquer les filtres</button>
-              <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
-            </form>
+                <SessionFilterControls
+                  filters={filterDraft}
+                  setFilters={setFilterDraft}
+                  options={sessionFilterOptions}
+                  optionsLoading={sessionFilterOptionsLoading}
+                  resultsLoading={filterResultsLoading}
+                  optionsError={sessionFilterOptionsError}
+                  isSuperAdmin={isSuperAdmin}
+                  showAdministrativeFilters={!isTeacher}
+                  schoolsList={schoolsList}
+                  selectedSchoolId={schoolId}
+                  onSchoolChange={handleSuperAdminSchoolChange}
+                />
+                <button type="submit" className={secondaryButtonClass} disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}>Appliquer les filtres</button>
+                <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
+                {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des statistiques…</span>}
+              </form>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard label="Séances" value={String(globalStatistics.totalSessions)} detail={`${globalStatistics.openSessions} en cours · ${globalStatistics.incompleteSessions} sans fin validée`} />
               <StatCard label="Séances terminées" value={String(globalStatistics.completedSessions)} detail={`${globalStatistics.regularizedSessions} régularisée(s)`} />
@@ -1118,7 +1245,7 @@ export default function TeacherControlView({
                     type="button"
                     key={school.schoolId}
                     className="grid w-full gap-2 p-4 text-left hover:bg-slate-50 sm:grid-cols-2 xl:grid-cols-5"
-                    onClick={() => onSuperAdminSchoolFilterChange(school.schoolId)}
+                    onClick={() => handleSuperAdminSchoolChange(school.schoolId)}
                   >
                     <span className="font-semibold text-slate-900">{school.schoolName}</span>
                     <span className="text-sm text-slate-600">{school.totalSessions} séance(s) · {school.openSessions} en cours</span>
@@ -1133,13 +1260,6 @@ export default function TeacherControlView({
           </>
         )}
         {!loading && !globalStatistics && <EmptyState>Les statistiques globales ne sont pas disponibles.</EmptyState>}
-        <label className="block max-w-xl">
-          <span className="mb-1.5 block text-sm font-semibold text-slate-700">Établissement à consulter en détail</span>
-          <select className={inputClass} aria-label="Établissement" value="" onChange={(event) => onSuperAdminSchoolFilterChange(event.target.value ? Number(event.target.value) : null)}>
-            <option value="">Sélectionner un établissement</option>
-            {schoolsList.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
-          </select>
-        </label>
       </section>
     );
   }
@@ -1151,20 +1271,6 @@ export default function TeacherControlView({
   return (
     <section className="space-y-6" aria-labelledby="teacher-control-title">
       <ModuleHeading role={userRole} schoolName={selectedSchool?.name} onRefresh={() => void loadData()} loading={loading} />
-
-      {isSuperAdmin && (
-        <label className="block max-w-xl">
-          <span className="mb-1.5 block text-sm font-semibold text-slate-700">Établissement consulté</span>
-          <select
-            className={inputClass}
-            aria-label="Établissement"
-            value={schoolId}
-            onChange={(event) => onSuperAdminSchoolFilterChange(event.target.value ? Number(event.target.value) : null)}
-          >
-            {schoolsList.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
-          </select>
-        </label>
-      )}
 
       {error && <ErrorNotice message={error} />}
       {success && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{success}</p>}
@@ -1421,10 +1527,23 @@ export default function TeacherControlView({
 
           <form className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50 p-4" onSubmit={applySessionFilters}>
             <h2 className="font-bold text-slate-900">Filtres des séances</h2>
-            <SessionFilterControls filters={filterDraft} setFilters={setFilterDraft} />
+            <SessionFilterControls
+              filters={filterDraft}
+              setFilters={setFilterDraft}
+              options={sessionFilterOptions}
+              optionsLoading={sessionFilterOptionsLoading}
+              resultsLoading={filterResultsLoading}
+              optionsError={sessionFilterOptionsError}
+              isSuperAdmin={isSuperAdmin}
+              showAdministrativeFilters={!isTeacher}
+              schoolsList={schoolsList}
+              selectedSchoolId={schoolId}
+              onSchoolChange={handleSuperAdminSchoolChange}
+            />
             <div className="flex flex-wrap items-center gap-3">
-              <button type="submit" className={secondaryButtonClass}>Appliquer les filtres</button>
+              <button type="submit" className={secondaryButtonClass} disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}>Appliquer les filtres</button>
               <span className="text-xs text-slate-500">Filtres appliqués côté serveur · {sessionTotalCount} résultat(s) au total</span>
+              {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des séances et statistiques…</span>}
             </div>
           </form>
 
@@ -1745,9 +1864,27 @@ function ModuleHeading({
 function SessionFilterControls({
   filters,
   setFilters,
+  options,
+  optionsLoading,
+  resultsLoading,
+  optionsError,
+  isSuperAdmin,
+  showAdministrativeFilters,
+  schoolsList,
+  selectedSchoolId,
+  onSchoolChange,
 }: {
   filters: SessionFilters;
   setFilters: Dispatch<SetStateAction<SessionFilters>>;
+  options: SessionFilterOptions | null;
+  optionsLoading: boolean;
+  resultsLoading: boolean;
+  optionsError: string | null;
+  isSuperAdmin: boolean;
+  showAdministrativeFilters: boolean;
+  schoolsList: School[];
+  selectedSchoolId: number | null;
+  onSchoolChange: (schoolId: number | null) => void;
 }) {
   const update = (key: keyof SessionFilters, value: string) => {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -1762,9 +1899,24 @@ function SessionFilterControls({
 
   return (
     <div className="grid w-full gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {isSuperAdmin && (
+        <label className="text-xs font-semibold text-slate-600">
+          Établissement
+          <select
+            className={`${inputClass} mt-1`}
+            aria-label="Établissement"
+            value={selectedSchoolId ?? ''}
+            disabled={resultsLoading}
+            onChange={(event) => onSchoolChange(event.target.value ? Number(event.target.value) : null)}
+          >
+            <option value="">Tous les établissements</option>
+            {schoolsList.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
+          </select>
+        </label>
+      )}
       <label className="text-xs font-semibold text-slate-600">
         Période
-        <select className={`${inputClass} mt-1`} value={filters.period} onChange={(event) => selectPeriod(event.target.value as SessionFilters['period'])}>
+        <select className={`${inputClass} mt-1`} value={filters.period} onChange={(event) => selectPeriod(event.target.value as SessionFilters['period'])} disabled={resultsLoading}>
           <option value="all">Toute période</option>
           <option value="day">Aujourd’hui</option>
           <option value="week">Cette semaine</option>
@@ -1773,21 +1925,37 @@ function SessionFilterControls({
           <option value="custom">Personnalisée</option>
         </select>
       </label>
-      <label className="text-xs font-semibold text-slate-600">
-        ID enseignant
-        <input className={`${inputClass} mt-1`} type="number" min="1" value={filters.teacherId} onChange={(event) => update('teacherId', event.target.value)} />
-      </label>
-      <label className="text-xs font-semibold text-slate-600">
-        ID classe
-        <input className={`${inputClass} mt-1`} type="number" min="1" value={filters.classId} onChange={(event) => update('classId', event.target.value)} />
-      </label>
-      <label className="text-xs font-semibold text-slate-600">
-        ID matière
-        <input className={`${inputClass} mt-1`} type="number" min="1" value={filters.subjectId} onChange={(event) => update('subjectId', event.target.value)} />
-      </label>
+      {showAdministrativeFilters && (
+        <>
+          <label className="text-xs font-semibold text-slate-600">
+            Enseignant
+            <select className={`${inputClass} mt-1`} aria-label="Enseignant" value={filters.teacherId} onChange={(event) => update('teacherId', event.target.value)} disabled={optionsLoading || resultsLoading}>
+              <option value="">Tous</option>
+              {options?.teachers.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+              {!optionsLoading && options?.teachers.length === 0 && <option value="" disabled>Aucun enseignant disponible</option>}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-600">
+            Classe
+            <select className={`${inputClass} mt-1`} aria-label="Classe" value={filters.classId} onChange={(event) => update('classId', event.target.value)} disabled={optionsLoading || resultsLoading}>
+              <option value="">Toutes</option>
+              {options?.classes.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+              {!optionsLoading && options?.classes.length === 0 && <option value="" disabled>Aucune classe disponible</option>}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-600">
+            Matière
+            <select className={`${inputClass} mt-1`} aria-label="Matière" value={filters.subjectId} onChange={(event) => update('subjectId', event.target.value)} disabled={optionsLoading || resultsLoading}>
+              <option value="">Toutes</option>
+              {options?.subjects.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+              {!optionsLoading && options?.subjects.length === 0 && <option value="" disabled>Aucune matière disponible</option>}
+            </select>
+          </label>
+        </>
+      )}
       <label className="text-xs font-semibold text-slate-600">
         Statut de séance
-        <select className={`${inputClass} mt-1`} value={filters.status} onChange={(event) => update('status', event.target.value)}>
+        <select className={`${inputClass} mt-1`} value={filters.status} onChange={(event) => update('status', event.target.value)} disabled={resultsLoading}>
           <option value="">Tous</option>
           <option value="open">En cours</option>
           <option value="completed">Terminée</option>
@@ -1796,7 +1964,7 @@ function SessionFilterControls({
       </label>
       <label className="text-xs font-semibold text-slate-600">
         Régularisation
-        <select className={`${inputClass} mt-1`} value={filters.regularizationState} onChange={(event) => update('regularizationState', event.target.value)}>
+        <select className={`${inputClass} mt-1`} value={filters.regularizationState} onChange={(event) => update('regularizationState', event.target.value)} disabled={resultsLoading}>
           <option value="">Toutes</option>
           <option value="pending">En attente</option>
           <option value="resolved">Résolue</option>
@@ -1807,14 +1975,20 @@ function SessionFilterControls({
         <>
           <label className="text-xs font-semibold text-slate-600">
             Du
-            <input className={`${inputClass} mt-1`} type="date" value={filters.from} onChange={(event) => update('from', event.target.value)} />
+            <input className={`${inputClass} mt-1`} type="date" value={filters.from} onChange={(event) => update('from', event.target.value)} disabled={resultsLoading} />
           </label>
           <label className="text-xs font-semibold text-slate-600">
             Au
-            <input className={`${inputClass} mt-1`} type="date" value={filters.to} onChange={(event) => update('to', event.target.value)} />
+            <input className={`${inputClass} mt-1`} type="date" value={filters.to} onChange={(event) => update('to', event.target.value)} disabled={resultsLoading} />
           </label>
         </>
       )}
+      {optionsLoading && <p role="status" className="text-xs font-normal text-slate-500 sm:col-span-2 xl:col-span-4">Chargement des enseignants, classes et matières…</p>}
+      {!optionsLoading && optionsError && <p role="alert" className="text-xs font-normal text-rose-700 sm:col-span-2 xl:col-span-4">{optionsError}</p>}
+      {!optionsLoading && !optionsError && options
+        && options.teachers.length === 0 && options.classes.length === 0 && options.subjects.length === 0 && (
+          <p role="status" className="text-xs font-normal text-slate-500 sm:col-span-2 xl:col-span-4">Aucune option disponible : aucune séance ne correspond au périmètre sélectionné.</p>
+        )}
     </div>
   );
 }

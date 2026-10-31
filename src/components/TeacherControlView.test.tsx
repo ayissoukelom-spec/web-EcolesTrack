@@ -82,6 +82,9 @@ function configureTeacherApi() {
 
 function configureAdminGpsApi() {
   apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+    if (url.startsWith('/api/teacher-control/filter-options')) {
+      return { teachers: [], classes: [], subjects: [] };
+    }
     if (url.startsWith('/api/teacher-control/sessions')) return [];
     if (url.startsWith('/api/teacher-control/statistics')) {
       return {
@@ -147,6 +150,111 @@ describe('TeacherControlView', () => {
     expect(screen.getAllByRole('button', { name: 'Début' })).toHaveLength(1);
     expect(window.location.pathname).toBe('/');
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/teacher-document-session')).toBe(false);
+  });
+
+  it('shows readable admin filters and refreshes the super-admin school scope without stale selections', async () => {
+    const globalSummary = {
+      scope: 'global',
+      totalSessions: 2,
+      openSessions: 1,
+      completedSessions: 1,
+      incompleteSessions: 0,
+      regularizedSessions: 0,
+      pendingRegularizations: 0,
+      validatedDurationMilliseconds: 0,
+      estimatedCompensationXof: 0,
+      schools: [],
+    };
+    const scopedStatistics = {
+      totalSessions: 0,
+      openSessions: 0,
+      completedSessions: 0,
+      incompleteSessions: 0,
+      regularizedSessions: 0,
+      pendingRegularizations: 0,
+      validatedDurationMilliseconds: 0,
+      estimatedCompensationXof: 0,
+    };
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) {
+        return url.includes('schoolId=9')
+          ? {
+            teachers: [{ id: 22, name: 'Kossi Doe' }],
+            classes: [{ id: 32, name: '5e B' }],
+            subjects: [{ id: 42, name: 'Histoire-Géographie' }],
+          }
+          : {
+            teachers: [{ id: 20, name: 'Afi Mensah · École A' }, { id: 22, name: 'Kossi Doe · École B' }],
+            classes: [{ id: 30, name: '6e A · École A' }, { id: 32, name: '5e B · École B' }],
+            subjects: [{ id: 40, name: 'Mathématiques · École A' }, { id: 42, name: 'Histoire-Géographie · École B' }],
+          };
+      }
+      if (url.startsWith('/api/teacher-control/statistics/global')) return globalSummary;
+      if (url.startsWith('/api/teacher-control/sessions')) {
+        return { items: [], nextCursor: null, hasMore: false, limit: 50, totalCount: 0 };
+      }
+      if (url.startsWith('/api/teacher-control/statistics')) return scopedStatistics;
+      if (url.startsWith('/api/teacher-control/regularizations')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        return {
+          schoolId: 9,
+          schoolName: 'École B',
+          isEnabled: false,
+          latitude: null,
+          longitude: null,
+          geofenceRadiusMeters: 200,
+          updatedAt: null,
+        };
+      }
+      return {};
+    });
+
+    function SuperAdminView() {
+      const [schoolFilterId, setSchoolFilterId] = React.useState<number | null>(null);
+      return (
+        <TeacherControlView
+          {...defaultProps}
+          userRole="super_admin"
+          activeSchoolId={null}
+          schoolsList={[{ id: 8, name: 'École A' }, { id: 9, name: 'École B' }]}
+          superAdminSchoolFilterId={schoolFilterId}
+          onSuperAdminSchoolFilterChange={setSchoolFilterId}
+        />
+      );
+    }
+
+    render(<SuperAdminView />);
+    expect(await screen.findByText('Statistiques par établissement')).toBeTruthy();
+    expect(screen.getByLabelText('Établissement')).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Afi Mensah · École A' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: '6e A · École A' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Mathématiques · École A' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '20' } });
+    fireEvent.change(screen.getByLabelText('Classe'), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText('Matière'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Appliquer les filtres' }));
+    await waitFor(() => {
+      expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string'
+        && url.startsWith('/api/teacher-control/statistics/global?')
+        && url.includes('teacherId=20')
+        && url.includes('classId=30')
+        && url.includes('subjectId=40'))).toBe(true);
+    });
+
+    fireEvent.change(screen.getByLabelText('Établissement'), { target: { value: '9' } });
+    expect(await screen.findByText('Super Administrateur · consultation par établissement · École B')).toBeTruthy();
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/teacher-control/filter-options?schoolId=9');
+      expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string'
+        && url.startsWith('/api/teacher-control/statistics?schoolId=9'))).toBe(true);
+    });
+    expect(screen.getByLabelText('Enseignant')).toHaveValue('');
+    expect(screen.getByLabelText('Classe')).toHaveValue('');
+    expect(screen.getByLabelText('Matière')).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Kossi Doe' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Afi Mensah · École A' })).toBeNull();
   });
 
   it('starts the selected exact assignment after a fresh GPS fix and shows server time read-only', async () => {
@@ -893,6 +1001,13 @@ describe('TeacherControlView', () => {
         createdAt: '2026-10-31T09:00:00.000Z',
       };
       apiFetchMock.mockImplementation(async (url: string) => {
+        if (url.startsWith('/api/teacher-control/filter-options')) {
+          return {
+            teachers: [{ id: 20, name: 'Afi Mensah' }],
+            classes: [{ id: 30, name: '6e A' }],
+            subjects: [{ id: 40, name: 'Mathématiques' }],
+          };
+        }
         if (url.startsWith('/api/teacher-control/sessions/1/audit')) return [auditEvent];
         if (url.startsWith('/api/teacher-control/sessions')) {
           return {
@@ -930,7 +1045,10 @@ describe('TeacherControlView', () => {
       );
 
       expect(await screen.findByText('6e A · Mathématiques')).toBeTruthy();
-      fireEvent.change(screen.getByLabelText('ID enseignant'), { target: { value: '20' } });
+      expect(screen.queryByLabelText('Établissement')).toBeNull();
+      expect(screen.getByLabelText('Enseignant').tagName).toBe('SELECT');
+      expect(screen.getByRole('option', { name: 'Afi Mensah' })).toBeTruthy();
+      fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '20' } });
       fireEvent.change(screen.getByLabelText('Statut de séance'), { target: { value: 'open' } });
       fireEvent.click(screen.getByRole('button', { name: 'Appliquer les filtres' }));
       await waitFor(() => {
@@ -951,5 +1069,151 @@ describe('TeacherControlView', () => {
       expect(await screen.findByText(/session_closed · Admin école/)).toBeTruthy();
       expect(screen.getByText('Motif : Clôture administrative')).toBeTruthy();
       expect(apiFetchMock).toHaveBeenCalledWith('/api/teacher-control/sessions/1/audit');
+    });
+
+    it('updates combined admin filters in place without reloading or hiding existing results', async () => {
+      let resolveFilteredSessions: ((value: unknown) => void) | undefined;
+      let resolveFilteredStatistics: ((value: unknown) => void) | undefined;
+      const filteredSessions = new Promise<unknown>((resolve) => {
+        resolveFilteredSessions = resolve;
+      });
+      const filteredStatistics = new Promise<unknown>((resolve) => {
+        resolveFilteredStatistics = resolve;
+      });
+      apiFetchMock.mockImplementation(async (url: string) => {
+        if (url.startsWith('/api/teacher-control/filter-options')) {
+          return {
+            teachers: [{ id: 20, name: 'Afi Mensah' }],
+            classes: [{ id: 30, name: '6e A' }],
+            subjects: [{ id: 40, name: 'Mathématiques' }],
+          };
+        }
+        if (url.startsWith('/api/teacher-control/sessions?') && url.includes('teacherId=20')) return filteredSessions;
+        if (url.startsWith('/api/teacher-control/statistics?') && url.includes('teacherId=20')) return filteredStatistics;
+        if (url.startsWith('/api/teacher-control/sessions')) {
+          return { items: [session], nextCursor: null, hasMore: false, limit: 50, totalCount: 2 };
+        }
+        if (url.startsWith('/api/teacher-control/statistics')) {
+          return {
+            totalSessions: 2,
+            openSessions: 1,
+            completedSessions: 1,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: 0,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+          };
+        }
+        if (url.startsWith('/api/teacher-control/regularizations')) return [];
+        if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+        if (url.startsWith('/api/teacher-control/gps-settings')) {
+          return { isEnabled: false, latitude: null, longitude: null, geofenceRadiusMeters: 200 };
+        }
+        return {};
+      });
+      render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+      expect(await screen.findByText('6e A · Mathématiques')).toBeTruthy();
+      const ancillaryRequestCount = apiFetchMock.mock.calls.filter(([url]) => (
+        typeof url === 'string'
+        && (url.startsWith('/api/teacher-control/regularizations')
+          || url.startsWith('/api/teacher-control/gps-settings'))
+      )).length;
+      fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '20' } });
+      fireEvent.change(screen.getByLabelText('Classe'), { target: { value: '30' } });
+      fireEvent.change(screen.getByLabelText('Matière'), { target: { value: '40' } });
+      fireEvent.change(screen.getByLabelText('Statut de séance'), { target: { value: 'open' } });
+      const applyButton = screen.getByRole('button', { name: 'Appliquer les filtres' });
+      fireEvent.click(applyButton);
+      fireEvent.click(applyButton);
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Actualisation des séances et statistiques…');
+      expect(screen.getByText('6e A · Mathématiques')).toBeTruthy();
+      expect(screen.getByText(/2 résultat\(s\) au total/)).toBeTruthy();
+      expect(apiFetchMock.mock.calls.filter(([url]) => (
+        typeof url === 'string'
+        && (url.startsWith('/api/teacher-control/regularizations')
+          || url.startsWith('/api/teacher-control/gps-settings'))
+      ))).toHaveLength(ancillaryRequestCount);
+      expect(apiFetchMock.mock.calls.filter(([url]) => (
+        typeof url === 'string' && url.startsWith('/api/teacher-control/sessions?') && url.includes('teacherId=20')
+      ))).toHaveLength(1);
+      expect(window.location.pathname).toBe('/');
+
+      resolveFilteredSessions?.({
+        items: [session],
+        nextCursor: null,
+        hasMore: false,
+        limit: 50,
+        totalCount: 1,
+      });
+      resolveFilteredStatistics?.({
+        totalSessions: 1,
+        openSessions: 1,
+        completedSessions: 0,
+        incompleteSessions: 0,
+        regularizedSessions: 0,
+        pendingRegularizations: 0,
+        validatedDurationMilliseconds: 0,
+        estimatedCompensationXof: 0,
+      });
+      await waitFor(() => {
+        expect(screen.getByText(/1 résultat\(s\) au total/)).toBeTruthy();
+        expect(screen.queryByText('Actualisation des séances et statistiques…')).toBeNull();
+      });
+
+      fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText('Classe'), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText('Matière'), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText('Statut de séance'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Appliquer les filtres' }));
+      await waitFor(() => {
+        expect(screen.getByText(/2 résultat\(s\) au total/)).toBeTruthy();
+        expect(apiFetchMock).toHaveBeenCalledWith('/api/teacher-control/sessions?limit=50');
+      });
+    });
+
+    it('keeps admin filter selections and existing results when the filtered API request fails', async () => {
+      apiFetchMock.mockImplementation(async (url: string) => {
+        if (url.startsWith('/api/teacher-control/filter-options')) {
+          return { teachers: [{ id: 20, name: 'Afi Mensah' }], classes: [], subjects: [] };
+        }
+        if (url.startsWith('/api/teacher-control/sessions?') && url.includes('teacherId=20')) {
+          throw new Error('Erreur API de test');
+        }
+        if (url.startsWith('/api/teacher-control/sessions')) {
+          return { items: [session], nextCursor: null, hasMore: false, limit: 50, totalCount: 1 };
+        }
+        if (url.startsWith('/api/teacher-control/statistics')) {
+          return {
+            totalSessions: 1,
+            openSessions: 1,
+            completedSessions: 0,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: 0,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+          };
+        }
+        if (url.startsWith('/api/teacher-control/regularizations')) return [];
+        if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+        if (url.startsWith('/api/teacher-control/gps-settings')) {
+          return { isEnabled: false, latitude: null, longitude: null, geofenceRadiusMeters: 200 };
+        }
+        return {};
+      });
+      render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+      expect(await screen.findByText('6e A · Mathématiques')).toBeTruthy();
+      fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '20' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Appliquer les filtres' }));
+
+      expect(await screen.findByText('Erreur API de test')).toBeTruthy();
+      expect(screen.getByLabelText('Enseignant')).toHaveValue('20');
+      expect(screen.getByText('6e A · Mathématiques')).toBeTruthy();
+      expect(window.location.pathname).toBe('/');
+      expect(screen.queryByText('Chargement des données du module…')).toBeNull();
     });
 });

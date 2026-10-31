@@ -85,6 +85,30 @@ vi.mock('../../db/index.ts', async () => {
       orderBy() { return builder; },
       for() { return builder; },
       then(resolve: (value: Array<Record<string, unknown>>) => unknown, reject?: (error: unknown) => unknown) {
+        if (builder.table === schema.teacherControlSessions && builder.grouped && builder.selection?.name) {
+          let optionRows = [...mockDatabaseState.sessions];
+          if (builder.hasWhere) {
+            optionRows = optionRows.filter((row) => builder.params.every((param: unknown) => Object.values(row).includes(param)));
+          }
+          const idColumn = builder.selection.id;
+          const nameColumn = builder.selection.name;
+          const idKey = idColumn === schema.teacherControlSessions.teacherId ? 'teacherId'
+            : idColumn === schema.teacherControlSessions.classId ? 'classId'
+              : 'subjectId';
+          const nameKey = nameColumn === schema.teacherControlSessions.teacherNameSnapshot ? 'teacherNameSnapshot'
+            : nameColumn === schema.teacherControlSessions.classNameSnapshot ? 'classNameSnapshot'
+              : 'subjectNameSnapshot';
+          const groupedOptions = new Map<string, Record<string, unknown>>();
+          for (const row of optionRows) {
+            const option = {
+              id: row[idKey],
+              name: row[nameKey],
+              schoolName: row.schoolNameSnapshot,
+            };
+            groupedOptions.set(`${option.id}:${option.name}:${option.schoolName}`, option);
+          }
+          return Promise.resolve([...groupedOptions.values()]).then(resolve, reject);
+        }
         if (builder.table === schema.teacherControlSessions && builder.grouped) {
           const groupedSessions = new Map<number, Array<Record<string, unknown>>>();
           for (const session of mockDatabaseState.sessions) {
@@ -194,6 +218,18 @@ vi.mock('../../db/index.ts', async () => {
           rows = rows.filter((row) => builder.params.every((param: unknown) => (
             param instanceof Date || Object.values(row).includes(param)
           )));
+          if (builder.selection?.teacherName) {
+            rows = rows.map((row) => ({
+              schoolId: row.schoolId,
+              schoolName: row.schoolNameSnapshot,
+              teacherId: row.teacherId,
+              teacherName: row.teacherNameSnapshot,
+              classId: row.classId,
+              className: row.classNameSnapshot,
+              subjectId: row.subjectId,
+              subjectName: row.subjectNameSnapshot,
+            }));
+          }
         } else if (builder.table === schema.teacherControlGpsChallenges) {
           rows = rows.filter((row) => builder.params.includes(row.challengeHash)
             && builder.params.includes(row.actorUserId)
@@ -394,6 +430,76 @@ describe('teacher control API authorization and input validation', () => {
     expect(response.body.error).toContain('schoolId');
   });
 
+  it('returns filter options only from the school-admin school and rejects a forged school scope', async () => {
+    mockActor.role = 'school_admin';
+    mockActor.schoolId = 8;
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.schools = [
+      { id: 8, name: 'School Eight', isSuspended: false },
+      { id: 9, name: 'School Nine', isSuspended: false },
+    ];
+    mockDatabaseState.sessions = [
+      {
+        id: 1, schoolId: 8, schoolNameSnapshot: 'School Eight', teacherId: 21, teacherNameSnapshot: 'Afi Mensah',
+        classId: 31, classNameSnapshot: '6e A', subjectId: 41, subjectNameSnapshot: 'Mathématiques',
+      },
+      {
+        id: 2, schoolId: 9, schoolNameSnapshot: 'School Nine', teacherId: 22, teacherNameSnapshot: 'Kossi Doe',
+        classId: 32, classNameSnapshot: '5e B', subjectId: 42, subjectNameSnapshot: 'Histoire',
+      },
+    ];
+    const app = createTestApp();
+
+    const options = await request(app).get('/api/teacher-control/filter-options');
+    expect(options.status).toBe(200);
+    expect(options.body).toEqual({
+      teachers: [{ id: 21, name: 'Afi Mensah' }],
+      classes: [{ id: 31, name: '6e A' }],
+      subjects: [{ id: 41, name: 'Mathématiques' }],
+    });
+
+    const forgedOptions = await request(app).get('/api/teacher-control/filter-options?schoolId=9');
+    const forgedSessions = await request(app).get('/api/teacher-control/sessions?schoolId=9');
+    const forgedStatistics = await request(app).get('/api/teacher-control/statistics?schoolId=9');
+    expect(forgedOptions.status).toBe(403);
+    expect(forgedSessions.status).toBe(403);
+    expect(forgedStatistics.status).toBe(403);
+  });
+
+  it('limits super-admin filter options to existing selectable schools and supports the all-schools scope', async () => {
+    mockActor.role = 'super_admin';
+    mockActor.schoolId = null;
+    mockDatabaseState.schools = [
+      { id: 8, name: 'School Eight', isSuspended: false },
+      { id: 9, name: 'School Nine', isSuspended: false },
+    ];
+    mockDatabaseState.sessions = [
+      {
+        id: 1, schoolId: 8, schoolNameSnapshot: 'School Eight', teacherId: 21, teacherNameSnapshot: 'Afi Mensah',
+        classId: 31, classNameSnapshot: '6e A', subjectId: 41, subjectNameSnapshot: 'Mathématiques',
+      },
+      {
+        id: 2, schoolId: 9, schoolNameSnapshot: 'School Nine', teacherId: 22, teacherNameSnapshot: 'Kossi Doe',
+        classId: 32, classNameSnapshot: '5e B', subjectId: 42, subjectNameSnapshot: 'Histoire',
+      },
+    ];
+    const app = createTestApp();
+
+    const scoped = await request(app).get('/api/teacher-control/filter-options?schoolId=9');
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.teachers).toEqual([{ id: 22, name: 'Kossi Doe' }]);
+
+    const allSchools = await request(app).get('/api/teacher-control/filter-options');
+    expect(allSchools.status).toBe(200);
+    expect(allSchools.body.teachers).toEqual([
+      { id: 21, name: 'Afi Mensah · School Eight' },
+      { id: 22, name: 'Kossi Doe · School Nine' },
+    ]);
+
+    const unavailableSchool = await request(app).get('/api/teacher-control/filter-options?schoolId=999');
+    expect(unavailableSchool.status).toBe(404);
+  });
+
   it('creates a short-lived navigation cookie only for an authenticated teacher with enabled GPS', async () => {
     mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
     mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
@@ -540,14 +646,18 @@ describe('teacher control API authorization and input validation', () => {
     ]));
   });
 
-  it('keeps session history scoped to the school-admin school despite a different schoolId query', async () => {
+  it('rejects a school-admin session query for another school and serves its own school when unscoped', async () => {
     mockActor.role = 'school_admin';
     mockDatabaseState.sessions = [
       { id: 71, schoolId: 8, startedAt: new Date('2026-10-31T08:00:00.000Z'), status: 'open' },
       { id: 72, schoolId: 9, startedAt: new Date('2026-10-31T08:00:00.000Z'), status: 'open' },
     ];
 
-    const response = await request(createTestApp()).get('/api/teacher-control/sessions?schoolId=9');
+    const app = createTestApp();
+    const forgedResponse = await request(app).get('/api/teacher-control/sessions?schoolId=9');
+    expect(forgedResponse.status).toBe(403);
+
+    const response = await request(app).get('/api/teacher-control/sessions');
 
     expect(response.status).toBe(200);
     expect(response.body.items).toHaveLength(1);
@@ -565,10 +675,22 @@ describe('teacher control API authorization and input validation', () => {
       longitude: null,
       geofenceRadiusMeters: 200,
     }];
-    const response = await request(createTestApp())
+    const app = createTestApp();
+    const forgedResponse = await request(app)
       .put('/api/teacher-control/gps-settings')
       .send({
         schoolId: 999,
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 250,
+      });
+
+    expect(forgedResponse.status).toBe(403);
+    expect(mockDatabaseState.gpsSettings[0].isEnabled).toBe(false);
+    const response = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
         isEnabled: true,
         latitude: 6.1375,
         longitude: 1.2123,

@@ -320,6 +320,11 @@ async function requireSchoolAccess(
   if (!actor.id || !allowedRoles.includes(actor.role as TeacherControlRole)) {
     throw new TeacherControlApiError(403, 'Forbidden');
   }
+  if (actor.role !== 'super_admin' && requestedSchoolId != null && requestedSchoolId !== '') {
+    const requested = positiveInteger(requestedSchoolId);
+    if (requested == null) throw new TeacherControlApiError(400, 'schoolId must be a positive integer');
+    if (requested !== actor.schoolId) throw new TeacherControlApiError(403, 'schoolId is outside the actor school scope');
+  }
   const selectedSchoolId = actor.role === 'super_admin'
     ? positiveInteger(requestedSchoolId)
     : actor.schoolId;
@@ -1248,6 +1253,49 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       beforeValues: redactGpsCoordinates(event.beforeValues),
       afterValues: redactGpsCoordinates(event.afterValues),
     }));
+  }, resolveActor));
+
+  app.get('/api/teacher-control/filter-options', handleRoute(async (req, _res, actor) => {
+    if (actor.role !== 'school_admin' && actor.role !== 'super_admin') {
+      throw new TeacherControlApiError(403, 'Forbidden');
+    }
+
+    const schoolId = actor.role === 'super_admin' && (req.query.schoolId == null || req.query.schoolId === '')
+      ? null
+      : (await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'super_admin'])).schoolId;
+    const selectOptions = (
+      idColumn: typeof teacherControlSessions.teacherId | typeof teacherControlSessions.classId | typeof teacherControlSessions.subjectId,
+      nameColumn: typeof teacherControlSessions.teacherNameSnapshot | typeof teacherControlSessions.classNameSnapshot | typeof teacherControlSessions.subjectNameSnapshot,
+    ) => {
+      const query = db.select({
+        id: idColumn,
+        name: nameColumn,
+        schoolName: teacherControlSessions.schoolNameSnapshot,
+      }).from(teacherControlSessions);
+      const scopedQuery = schoolId == null
+        ? query
+        : query.where(eq(teacherControlSessions.schoolId, schoolId));
+      return scopedQuery.groupBy(idColumn, nameColumn, teacherControlSessions.schoolNameSnapshot)
+        .orderBy(asc(nameColumn), asc(idColumn));
+    };
+    const [teachersOptions, classesOptions, subjectsOptions] = await Promise.all([
+      selectOptions(teacherControlSessions.teacherId, teacherControlSessions.teacherNameSnapshot),
+      selectOptions(teacherControlSessions.classId, teacherControlSessions.classNameSnapshot),
+      selectOptions(teacherControlSessions.subjectId, teacherControlSessions.subjectNameSnapshot),
+    ]);
+
+    const mapOptions = (options: Array<{ id: number; name: string; schoolName: string }>) => options.map((option) => ({
+      id: option.id,
+      name: schoolId == null && actor.role === 'super_admin'
+        ? `${option.name} · ${option.schoolName}`
+        : option.name,
+    }));
+
+    return {
+      teachers: mapOptions(teachersOptions),
+      classes: mapOptions(classesOptions),
+      subjects: mapOptions(subjectsOptions),
+    };
   }, resolveActor));
 
   app.get('/api/teacher-control/sessions', handleRoute(async (req, _res, actor) => {
