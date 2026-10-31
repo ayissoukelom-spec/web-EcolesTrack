@@ -30,6 +30,8 @@ import rateLimit from 'express-rate-limit';
 import { db, withNotificationRecipientAccountLock } from './src/db/index.ts';
 import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest, assertSimulatedAuthConfiguration } from './src/middleware/auth.ts';
+import { buildContentSecurityPolicy } from './src/lib/securityPolicy.ts';
+import { shouldInitializeDatabaseAtStartup } from './src/lib/startupDatabasePolicy.ts';
 import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts';
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
@@ -1261,21 +1263,7 @@ export async function createApp() {
       ? req.headers['x-forwarded-proto'][0]
       : req.headers['x-forwarded-proto'];
     const isSecureRequest = req.secure || forwardedProto === 'https';
-    const cspDirectives = [
-      "default-src 'self'",
-      "script-src 'self'",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "img-src 'self' data: https://flagcdn.com https://*.flagcdn.com",
-      "font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com",
-      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com",
-      "frame-src 'none'",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-      "frame-ancestors 'none'",
-    ].join('; ');
-
-    res.setHeader('Content-Security-Policy', cspDirectives);
+    res.setHeader('Content-Security-Policy', buildContentSecurityPolicy(process.env.NODE_ENV === 'development'));
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -12073,27 +12061,31 @@ export async function startServer() {
   const PORT = 3000;
   const app = await createApp();
 
-  console.log('Verifying if database needs seeding...');
-  try {
-    await ensureEducationStructureSchema();
-    if (process.env.DISABLE_DEMO_SEED !== 'true') {
-      await seedDatabaseIfEmpty();
-    } else {
-      console.log('Demo seed disabled.');
+  if (shouldInitializeDatabaseAtStartup(process.env.NODE_ENV, process.env.ECOLETRACK_SKIP_LOCAL_DB_INIT)) {
+    console.log('Verifying if database needs seeding...');
+    try {
+      await ensureEducationStructureSchema();
+      if (process.env.DISABLE_DEMO_SEED !== 'true') {
+        await seedDatabaseIfEmpty();
+      } else {
+        console.log('Demo seed disabled.');
+      }
+      await ensureAbsenceDeclarationsSchema();
+      await ensureAbsenceTeachingAssignmentsSchema();
+      await ensureSchoolsTableSchema();
+      await ensureStudentMatriculesSchema();
+      await ensureStudentAcademicYearStatusesTableExists();
+      await ensureSchoolClassesTableExists();
+      await ensureClassHomeroomAssignmentsTableExists();
+      await ensureUsersTableSchema();
+      await ensureUserSchoolsTableExists();
+      await repairMissingSchoolAdminMemberships();
+    } catch (error) {
+      console.error('Database initialization failed, shutting down application.', error);
+      process.exit(1);
     }
-    await ensureAbsenceDeclarationsSchema();
-    await ensureAbsenceTeachingAssignmentsSchema();
-    await ensureSchoolsTableSchema();
-    await ensureStudentMatriculesSchema();
-    await ensureStudentAcademicYearStatusesTableExists();
-    await ensureSchoolClassesTableExists();
-    await ensureClassHomeroomAssignmentsTableExists();
-    await ensureUsersTableSchema();
-    await ensureUserSchoolsTableExists();
-    await repairMissingSchoolAdminMemberships();
-  } catch (error) {
-    console.error('Database initialization failed, shutting down application.', error);
-    process.exit(1);
+  } else {
+    console.warn('Skipping database initialization because ECOLETRACK_SKIP_LOCAL_DB_INIT=true in development mode.');
   }
 
   app.listen(PORT, '0.0.0.0', () => {
