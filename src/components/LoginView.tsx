@@ -246,13 +246,19 @@ export default function LoginView({ onLogin }: Props) {
       {showChangePassword && loggedInUser ? (
         <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
       ) : (
-        <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
+        <div className="relative isolate min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-0 bg-repeat bg-[length:360px_auto] md:bg-[length:640px_auto]"
+            style={{ backgroundImage: "url('/images/school-doodle-background.png')" }}
+          >
+          </div>
           <img
             src={togoFlag}
             alt="Drapeau du Togo"
             className="absolute top-6 left-6 w-24 md:w-28 lg:w-32 h-auto object-contain rounded-md shadow-md z-10"
           />
-          <form onSubmit={submit} className="bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
+          <form onSubmit={submit} className="relative z-10 bg-slate-900 text-slate-100 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-800">
             <div className="flex justify-center mb-6">
           <img src={logoImage} alt="ET Ecoles Track" className="w-24 h-24 object-contain" />
         </div>
@@ -260,7 +266,7 @@ export default function LoginView({ onLogin }: Props) {
         {sessionExpiredMessage && <div className="text-amber-300 mb-2">{sessionExpiredMessage}</div>}
         {error && <div className="text-rose-400 mb-2">{error}</div>}
         <label className="block text-sm mb-2">
-          <RequiredLabel label="Email ou numéro de téléphone" required />
+          <RequiredLabel label="Email ou numéro de téléphone" required className="!text-slate-200" />
           <div className="mt-1 flex gap-2">
             <input
               aria-label="Indicatif du pays"
@@ -274,7 +280,7 @@ export default function LoginView({ onLogin }: Props) {
           </div>
         </label>
         <label className="block text-sm mb-4">
-          <RequiredLabel label="Mot de passe" required />
+          <RequiredLabel label="Mot de passe" required className="!text-slate-200" />
           <div className="relative mt-1">
             <input
               className="w-full pr-10 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"

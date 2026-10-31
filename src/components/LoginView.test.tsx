@@ -164,6 +164,14 @@ describe('LoginView', () => {
     expect(passwordInput.type).toBe('password');
     expect(toggleButton.getAttribute('aria-label')).toBe('Afficher le mot de passe');
   });
+
+  it('keeps the decorative school background hidden from assistive technology', () => {
+    const { container } = render(<LoginView onLogin={mockOnLogin} />);
+    const decorations = container.querySelector('[aria-hidden="true"]');
+
+    expect(decorations?.getAttribute('style')).toContain('school-doodle-background.png');
+  });
+
   it('displays the session expired message when redirected after 401', () => {
     localStorage.setItem('ecoletrack_session_expired_message', 'Votre session a expiré. Veuillez vous reconnecter.');
     render(<LoginView onLogin={mockOnLogin} />);
