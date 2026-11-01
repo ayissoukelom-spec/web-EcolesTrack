@@ -140,7 +140,7 @@ describe('TeacherControlView', () => {
     configureTeacherApi();
     render(<TeacherControlView {...defaultProps} />);
 
-    expect(await screen.findByText('Contrôle des enseignants')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Déclaration de présence' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Début' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Fin' })).toBeTruthy();
     expect(screen.queryByRole('combobox', { name: 'Classe' })).toBeNull();
@@ -324,7 +324,7 @@ describe('TeacherControlView', () => {
     expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('timestamp');
     expect(requestOrder.indexOf('geolocation'))
       .toBeLessThan(requestOrder.indexOf('/api/teacher-control/gps-challenges'));
-    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getCurrentPosition).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('146');
     expect(await screen.findByRole('textbox', { name: 'Latitude de début' })).toHaveProperty('readOnly', true);
     expect(screen.getByRole('textbox', { name: 'Latitude de début' })).toHaveValue('6.1375');
@@ -697,7 +697,7 @@ describe('TeacherControlView', () => {
     fireEvent.click(locateButton);
     fireEvent.click(locateButton);
 
-    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getCurrentPosition).toHaveBeenCalledTimes(1));
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
   });
 
@@ -936,6 +936,7 @@ describe('TeacherControlView', () => {
     render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    expect(screen.getByRole('heading', { name: 'Contrôle des enseignants' })).toBeTruthy();
     const radiusInput = screen.getByRole('spinbutton', { name: 'Rayon de présence (mètres)' });
     expect(radiusInput).toHaveValue(500);
     expect(radiusInput).toHaveAttribute('min', '1');
@@ -953,7 +954,82 @@ describe('TeacherControlView', () => {
       latitude: 6.1375,
       longitude: 1.2123,
       geofenceRadiusMeters: 750,
+      maxGpsAccuracyMeters: 500,
     });
+  });
+
+  it('lets an authorized administrator persist the GPS accuracy threshold independently', async () => {
+    let savedAccuracy = 500;
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) return { teachers: [], classes: [], subjects: [] };
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url === '/api/teacher-control/regularizations') return [];
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings') && options?.method === 'PUT') {
+        savedAccuracy = JSON.parse(options.body as string).maxGpsAccuracyMeters as number;
+        return { maxGpsAccuracyMeters: savedAccuracy };
+      }
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        return {
+          schoolId: 8,
+          schoolName: 'École A',
+          isEnabled: true,
+          latitude: 6.1375,
+          longitude: 1.2123,
+          geofenceRadiusMeters: 750,
+          maxGpsAccuracyMeters: savedAccuracy,
+          updatedAt: null,
+        };
+      }
+      return {};
+    });
+    const { unmount } = render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    const accuracyInput = screen.getByRole('spinbutton', { name: 'Précision GPS maximale (mètres)' });
+    expect(accuracyInput).toHaveValue(500);
+    expect(accuracyInput).toHaveAttribute('min', '1');
+    expect(accuracyInput).toHaveAttribute('max', '5000');
+    expect(screen.getByRole('region', { name: 'Précision GPS maximale acceptée' }).textContent)
+      .toContain('Valeur actuellement enregistrée : 500 m · maximum configurable : 5000 m');
+
+    fireEvent.change(accuracyInput, { target: { value: '2000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer la précision' }));
+
+    expect(await screen.findByText('La précision GPS maximale a été enregistrée.')).toBeTruthy();
+    await waitFor(() => expect(accuracyInput).toHaveValue(2000));
+    const accuracyUpdate = apiFetchMock.mock.calls.find(([url, options]) => url === '/api/teacher-control/gps-settings' && options?.method === 'PUT');
+    expect(JSON.parse(accuracyUpdate?.[1]?.body as string)).toMatchObject({
+      isEnabled: true,
+      latitude: 6.1375,
+      longitude: 1.2123,
+      geofenceRadiusMeters: 750,
+      maxGpsAccuracyMeters: 2000,
+    });
+    const settingsReads = apiFetchMock.mock.calls.filter(([url, options]) => (
+      url.startsWith('/api/teacher-control/gps-settings')
+      && !url.includes('/history')
+      && options?.method !== 'PUT'
+    ));
+    expect(settingsReads.length).toBeGreaterThan(0);
+    expect(settingsReads[settingsReads.length - 1]?.[1]).toMatchObject({ cache: 'no-store' });
+    unmount();
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    const reloadedAccuracyInput = await screen.findByRole('spinbutton', { name: 'Précision GPS maximale (mètres)' });
+    await waitFor(() => expect(reloadedAccuracyInput).toHaveValue(2000));
   });
 
   it('does not expose GPS radius configuration to teachers', async () => {
@@ -963,6 +1039,7 @@ describe('TeacherControlView', () => {
     expect(await screen.findByRole('tab', { name: 'Séances' })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Configuration GPS' })).toBeNull();
     expect(screen.queryByRole('spinbutton', { name: 'Rayon de présence (mètres)' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Précision GPS maximale (mètres)' })).toBeNull();
   });
 
   it.each([

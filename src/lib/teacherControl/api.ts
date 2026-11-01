@@ -32,7 +32,9 @@ import {
 } from './security.ts';
 import {
   calculateTeacherControlCompensation,
+  MAX_CONFIGURABLE_GPS_ACCURACY_METERS,
   MAX_GEOFENCE_RADIUS_METERS,
+  MAX_GPS_ACCURACY_METERS,
   validateTeacherControlGpsFix,
 } from './domain.ts';
 import type { TeacherControlAuditInput } from './audit.ts';
@@ -514,14 +516,22 @@ function gpsSiteFromSettings(settings: {
   latitude: string | null;
   longitude: string | null;
   geofenceRadiusMeters: number;
+  maxGpsAccuracyMeters?: number | null;
 } | null | undefined) {
   if (!settings?.isEnabled || settings.latitude == null || settings.longitude == null) {
     throw new TeacherControlApiError(409, 'GPS control is not enabled for this school');
+  }
+  const maxGpsAccuracyMeters = settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS;
+  if (!Number.isSafeInteger(maxGpsAccuracyMeters)
+    || maxGpsAccuracyMeters < 1
+    || maxGpsAccuracyMeters > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+    throw new TeacherControlApiError(500, 'Stored GPS accuracy threshold is invalid');
   }
   return {
     latitude: Number(settings.latitude),
     longitude: Number(settings.longitude),
     geofenceRadiusMeters: settings.geofenceRadiusMeters,
+    maxGpsAccuracyMeters,
   };
 }
 
@@ -531,6 +541,7 @@ async function getEnabledGpsSettings(schoolId: number) {
     latitude: teacherControlGpsSettings.latitude,
     longitude: teacherControlGpsSettings.longitude,
     geofenceRadiusMeters: teacherControlGpsSettings.geofenceRadiusMeters,
+    maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
   }).from(teacherControlGpsSettings)
     .where(eq(teacherControlGpsSettings.schoolId, schoolId))
     .limit(1);
@@ -614,7 +625,19 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     return { ready: true };
   }, resolveActor));
 
-  app.get('/api/teacher-control/gps-settings', handleRoute(async (req, _res, actor) => {
+  app.get('/api/teacher-control/gps-settings', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (actor.role === 'teacher') {
+      const access = await requireSchoolAccess(actor, null, ['teacher']);
+      const [settings] = await db.select({
+        maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
+      }).from(teacherControlGpsSettings)
+        .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
+        .limit(1);
+      return {
+        maxGpsAccuracyMeters: settings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
+      };
+    }
     const access = await requireSchoolAccess(
       actor,
       req.query.schoolId,
@@ -630,6 +653,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       latitude: settings?.latitude ?? null,
       longitude: settings?.longitude ?? null,
       geofenceRadiusMeters: settings?.geofenceRadiusMeters ?? 200,
+      maxGpsAccuracyMeters: settings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
       updatedAt: settings?.updatedAt ?? null,
     };
   }, resolveActor));
@@ -650,7 +674,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       .offset(offset);
   }, resolveActor));
 
-  app.put('/api/teacher-control/gps-settings', handleRoute(async (req, _res, actor) => {
+  app.put('/api/teacher-control/gps-settings', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
     const body = req.body as Record<string, unknown>;
     const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'super_admin']);
     if (typeof body.isEnabled !== 'boolean') throw new TeacherControlApiError(400, 'isEnabled must be a boolean');
@@ -662,6 +687,17 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       || radius <= 0
       || radius > MAX_GEOFENCE_RADIUS_METERS) {
       throw new TeacherControlApiError(400, `geofenceRadiusMeters must be a positive integer no greater than ${MAX_GEOFENCE_RADIUS_METERS}`);
+    }
+    const requestedAccuracyValue: unknown = body.maxGpsAccuracyMeters;
+    let requestedAccuracy: number | null = null;
+    if (requestedAccuracyValue != null) {
+      if (typeof requestedAccuracyValue !== 'number'
+        || !Number.isSafeInteger(requestedAccuracyValue)
+        || requestedAccuracyValue < 1
+        || requestedAccuracyValue > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+        throw new TeacherControlApiError(400, `maxGpsAccuracyMeters must be a positive integer no greater than ${MAX_CONFIGURABLE_GPS_ACCURACY_METERS}`);
+      }
+      requestedAccuracy = requestedAccuracyValue;
     }
     if (latitude != null && (typeof latitude !== 'number' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90)) {
       throw new TeacherControlApiError(400, 'latitude is invalid');
@@ -679,6 +715,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       latitude: latitude == null ? null : String(latitude),
       longitude: longitude == null ? null : String(longitude),
       geofenceRadiusMeters: radius,
+      maxGpsAccuracyMeters: requestedAccuracy,
       updatedByUserId: actor.id ?? null,
       updatedByNameSnapshot: actorAuditName(actor),
       updatedAt: new Date(),
@@ -692,18 +729,23 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       const [previous] = await tx.select().from(teacherControlGpsSettings)
         .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
         .limit(1);
-      const [saved] = await tx.insert(teacherControlGpsSettings).values(next)
+      const maxGpsAccuracyMeters = next.maxGpsAccuracyMeters
+        ?? previous?.maxGpsAccuracyMeters
+        ?? MAX_GPS_ACCURACY_METERS;
+      const nextSettings = { ...next, maxGpsAccuracyMeters };
+      const [saved] = await tx.insert(teacherControlGpsSettings).values(nextSettings)
         .onConflictDoUpdate({
           target: teacherControlGpsSettings.schoolId,
           set: {
-            schoolNameSnapshot: next.schoolNameSnapshot,
-            isEnabled: next.isEnabled,
-            latitude: next.latitude,
-            longitude: next.longitude,
-            geofenceRadiusMeters: next.geofenceRadiusMeters,
-            updatedByUserId: next.updatedByUserId,
-            updatedByNameSnapshot: next.updatedByNameSnapshot,
-            updatedAt: next.updatedAt,
+            schoolNameSnapshot: nextSettings.schoolNameSnapshot,
+            isEnabled: nextSettings.isEnabled,
+            latitude: nextSettings.latitude,
+            longitude: nextSettings.longitude,
+            geofenceRadiusMeters: nextSettings.geofenceRadiusMeters,
+            maxGpsAccuracyMeters: nextSettings.maxGpsAccuracyMeters,
+            updatedByUserId: nextSettings.updatedByUserId,
+            updatedByNameSnapshot: nextSettings.updatedByNameSnapshot,
+            updatedAt: nextSettings.updatedAt,
           },
         })
         .returning();
@@ -718,12 +760,14 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           latitude: previous.latitude,
           longitude: previous.longitude,
           geofenceRadiusMeters: previous.geofenceRadiusMeters,
+          maxGpsAccuracyMeters: previous.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
         } : null,
         afterValues: {
           isEnabled: saved.isEnabled,
           latitude: saved.latitude,
           longitude: saved.longitude,
           geofenceRadiusMeters: saved.geofenceRadiusMeters,
+          maxGpsAccuracyMeters: saved.maxGpsAccuracyMeters,
         },
       }, actor));
       return saved;
@@ -862,7 +906,6 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     if (action !== 'start_session' && action !== 'end_session') throw new TeacherControlApiError(400, 'action is invalid');
     const access = await requireSchoolAccess(actor, null, ['teacher']);
     const settings = await getEnabledGpsSettings(access.schoolId);
-    void settings;
     const teacherId = await getTeacherId(actor, access.schoolId);
     const resourceId = action === 'end_session' ? positiveInteger(body.sessionId) : null;
     if (action === 'end_session') {
@@ -889,7 +932,13 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       resourceId,
       expiresAt,
     });
-    return { challenge: token, action, schoolId: access.schoolId, sessionId: resourceId, expiresAt };
+    return {
+      challenge: token,
+      action,
+      schoolId: access.schoolId,
+      sessionId: resourceId,
+      expiresAt,
+    };
   }, resolveActor));
 
   app.post('/api/teacher-control/sessions/start', handleRoute(async (req, _res, actor) => {
@@ -916,6 +965,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         latitude: teacherControlGpsSettings.latitude,
         longitude: teacherControlGpsSettings.longitude,
         geofenceRadiusMeters: teacherControlGpsSettings.geofenceRadiusMeters,
+        maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
       }).from(teacherControlGpsSettings)
         .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
         .limit(1);
@@ -1029,6 +1079,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         latitude: teacherControlGpsSettings.latitude,
         longitude: teacherControlGpsSettings.longitude,
         geofenceRadiusMeters: teacherControlGpsSettings.geofenceRadiusMeters,
+        maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
       }).from(teacherControlGpsSettings)
         .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
         .limit(1);
@@ -1078,6 +1129,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         latitude: teacherControlGpsSettings.latitude,
         longitude: teacherControlGpsSettings.longitude,
         geofenceRadiusMeters: teacherControlGpsSettings.geofenceRadiusMeters,
+        maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
       }).from(teacherControlGpsSettings)
         .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
         .limit(1);

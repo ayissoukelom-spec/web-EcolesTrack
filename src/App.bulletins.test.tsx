@@ -522,6 +522,31 @@ describe('App navigation', () => {
     );
   };
 
+  it('shows the teacher-specific name in the shared responsive navigation and opens the attendance module', async () => {
+    await renderWithRole('teacher', []);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const sidebar = document.getElementById('main-sidebar');
+    expect(sidebar?.className).toContain('w-full');
+    expect(sidebar?.className).toContain('lg:w-64');
+    const teacherControlButton = within(navigation).getByRole('button', { name: 'Déclaration de présence' });
+    expect(teacherControlButton).toBeEnabled();
+
+    fireEvent.click(teacherControlButton);
+    expect(await screen.findByRole('heading', { name: 'Déclaration de présence' })).toBeTruthy();
+  });
+
+  it.each(['school_admin', 'super_admin'])('%s keeps the administrative module name in the shared responsive navigation', async (role) => {
+    await renderWithRole(role, []);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const sidebar = document.getElementById('main-sidebar');
+    expect(sidebar?.className).toContain('w-full');
+    expect(sidebar?.className).toContain('lg:w-64');
+    expect(within(navigation).getByRole('button', { name: 'Contrôle des enseignants' })).toBeEnabled();
+    expect(within(navigation).queryByRole('button', { name: 'Déclaration de présence' })).toBeNull();
+  });
+
   it('shows the Absences badge only for unjustified absences', async () => {
     await renderWithRole('school_admin', [
       { id: 1, isJustified: false },

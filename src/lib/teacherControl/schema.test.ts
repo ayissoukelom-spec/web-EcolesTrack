@@ -3,6 +3,7 @@ import path from 'node:path';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import {
+  teacherControlGpsSettings,
   teacherControlRegularizationDecisions,
   teacherControlRegularizationRequests,
   teacherControlSessions,
@@ -20,6 +21,8 @@ const acceptanceLinkMigrationPath = path.join(process.cwd(), 'drizzle', 'manual'
 const acceptanceLinkMigration = readFileSync(acceptanceLinkMigrationPath, 'utf8');
 const gpsAccuracyMigrationPath = path.join(process.cwd(), 'drizzle', 'manual', '0149_teacher_control_gps_accuracy_500m.sql');
 const gpsAccuracyMigration = readFileSync(gpsAccuracyMigrationPath, 'utf8');
+const configurableGpsAccuracyMigrationPath = path.join(process.cwd(), 'drizzle', 'manual', '0150_teacher_control_configurable_gps_accuracy.sql');
+const configurableGpsAccuracyMigration = readFileSync(configurableGpsAccuracyMigrationPath, 'utf8');
 const drizzleSchema = readFileSync(path.join(process.cwd(), 'src', 'db', 'schema.ts'), 'utf8');
 
 describe('teacher control schema migration', () => {
@@ -116,15 +119,74 @@ describe('teacher control schema migration', () => {
     expect(unrecordedRegularizationMigration).toMatch(/start_geofence_radius_meters IS NULL OR/);
   });
 
-  it('raises the session GPS accuracy ceiling to 500 m without changing geofence validation', () => {
+  it('retains the 500 m baseline migration without changing geofence validation', () => {
     expect(gpsAccuracyMigration).toMatch(/DROP CONSTRAINT teacher_control_sessions_gps_values_check/);
     expect(gpsAccuracyMigration).toMatch(/start_accuracy_meters BETWEEN 0 AND 500/);
     expect(gpsAccuracyMigration).toMatch(/end_accuracy_meters IS NULL OR end_accuracy_meters BETWEEN 0 AND 500/);
     expect(gpsAccuracyMigration).toMatch(/start_geofence_radius_meters IS NULL OR start_geofence_radius_meters > 0/);
     expect(gpsAccuracyMigration).toMatch(/end_geofence_radius_meters IS NULL OR end_geofence_radius_meters > 0/);
     expect(gpsAccuracyMigration).not.toMatch(/accuracy_meters BETWEEN 0 AND 100/);
-    expect(drizzleSchema).toMatch(/startAccuracyMeters\} IS NULL OR \$\{table\.startAccuracyMeters\} BETWEEN 0 AND 500/);
-    expect(drizzleSchema).toMatch(/endAccuracyMeters\} IS NULL OR \$\{table\.endAccuracyMeters\} BETWEEN 0 AND 500/);
+    expect(drizzleSchema).toMatch(/startAccuracyMeters\} IS NULL OR \$\{table\.startAccuracyMeters\} BETWEEN 0 AND 5000/);
+    expect(drizzleSchema).toMatch(/endAccuracyMeters\} IS NULL OR \$\{table\.endAccuracyMeters\} BETWEEN 0 AND 5000/);
+  });
+
+  it('adds a persisted configurable accuracy threshold with a 500 m default', () => {
+    const gpsSettingsConfig = getTableConfig(teacherControlGpsSettings);
+
+    expect(teacherControlGpsSettings.maxGpsAccuracyMeters.default).toBe(500);
+    expect(gpsSettingsConfig.checks.map(({ name }) => name))
+      .toContain('teacher_control_gps_accuracy_check');
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/ADD COLUMN IF NOT EXISTS max_gps_accuracy_meters INTEGER NOT NULL DEFAULT 500/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/max_gps_accuracy_meters BETWEEN 1 AND 5000/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/start_accuracy_meters IS NULL OR start_accuracy_meters BETWEEN 0 AND 5000/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/end_accuracy_meters IS NULL OR end_accuracy_meters BETWEEN 0 AND 5000/);
+    expect(configurableGpsAccuracyMigration).not.toMatch(/DROP TABLE|DELETE FROM|TRUNCATE/i);
+  });
+
+  it('uses exact catalog expressions for GPS constraint replay and preserves a conforming threshold check', () => {
+    expect(configurableGpsAccuracyMigration).toMatch(/CREATE TEMP TABLE _teacher_control_0150_expected_checks/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/expected_accuracy_check\s+CHECK \(max_gps_accuracy_meters BETWEEN 1 AND 5000\)/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/current_accuracy_check IS DISTINCT FROM expected_accuracy_check/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/IF current_accuracy_check IS NULL THEN[\s\S]*ADD CONSTRAINT teacher_control_gps_accuracy_check/);
+    expect(configurableGpsAccuracyMigration).toMatch(/IS DISTINCT FROM expected_accuracy_check THEN\s+RAISE EXCEPTION/);
+    expect(configurableGpsAccuracyMigration).toMatch(/current_accuracy_check_valid IS NOT TRUE/);
+    expect(configurableGpsAccuracyMigration).not.toMatch(/position\(|LIKE\s+/i);
+  });
+
+  it('replaces only the exact historical session GPS checks and rejects unknown definitions', () => {
+    expect(configurableGpsAccuracyMigration).toMatch(/expected_sessions_0144_check CHECK \([\s\S]*start_accuracy_meters BETWEEN 0 AND 100/);
+    expect(configurableGpsAccuracyMigration).toMatch(/expected_sessions_0149_check CHECK \([\s\S]*start_accuracy_meters IS NULL OR start_accuracy_meters BETWEEN 0 AND 500/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/expected_sessions_0150_check CHECK \([\s\S]*start_accuracy_meters IS NULL OR start_accuracy_meters BETWEEN 0 AND 5000/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/current_sessions_check IS NOT DISTINCT FROM expected_sessions_0150_check THEN\s+NULL;/);
+    expect(configurableGpsAccuracyMigration).toMatch(/current_sessions_check_valid IS NOT TRUE/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/current_sessions_check IS NOT DISTINCT FROM expected_sessions_0144_check[\s\S]*OR current_sessions_check IS NOT DISTINCT FROM expected_sessions_0149_check/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/DROP CONSTRAINT teacher_control_sessions_gps_values_check;[\s\S]*ADD CONSTRAINT teacher_control_sessions_gps_values_check/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/ELSE\s+RAISE EXCEPTION 'Unknown definition for teacher_control_sessions\.teacher_control_sessions_gps_values_check'/);
+  });
+
+  it('keeps the replay transaction atomic and does not rewrite existing settings or sessions', () => {
+    expect(configurableGpsAccuracyMigration.trimStart()).toMatch(/^--[\s\S]*BEGIN;/);
+    expect(configurableGpsAccuracyMigration.trimEnd()).toMatch(/COMMIT;$/);
+    expect(configurableGpsAccuracyMigration)
+      .toMatch(/ADD COLUMN IF NOT EXISTS max_gps_accuracy_meters INTEGER NOT NULL DEFAULT 500/);
+    expect(configurableGpsAccuracyMigration).not.toMatch(/UPDATE\s+public\.teacher_control_(gps_settings|sessions)/i);
+    expect(configurableGpsAccuracyMigration).not.toMatch(/DELETE\s+FROM|TRUNCATE/i);
+    expect(configurableGpsAccuracyMigration).toMatch(/start_distance_meters IS NULL OR start_distance_meters >= 0/);
+    expect(configurableGpsAccuracyMigration).toMatch(/start_geofence_radius_meters IS NULL OR start_geofence_radius_meters > 0/);
+    expect(configurableGpsAccuracyMigration).toMatch(/end_distance_meters IS NULL OR end_distance_meters >= 0/);
+    expect(configurableGpsAccuracyMigration).toMatch(/end_geofence_radius_meters IS NULL OR end_geofence_radius_meters > 0/);
   });
 
   it('allows unrecorded requests to link a session only after acceptance', () => {

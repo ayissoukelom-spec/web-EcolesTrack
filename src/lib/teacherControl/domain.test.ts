@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateTeacherControlCompensation,
+  MAX_CONFIGURABLE_GPS_ACCURACY_METERS,
   MAX_GPS_ACCURACY_METERS,
   TEACHER_CONTROL_DISPLAY_TIME_ZONE,
   validateTeacherControlGpsFix,
@@ -32,6 +33,19 @@ describe('teacher control GPS and compensation rules', () => {
     );
 
     expect(result).toEqual({ accepted: false, reason: 'accuracy_too_low' });
+  });
+
+  it('applies a configured GPS accuracy threshold independently from the geofence', () => {
+    expect(validateTeacherControlGpsFix(
+      { latitude: 0, longitude: 0, accuracyMeters: 750 },
+      { latitude: 0, longitude: 0, geofenceRadiusMeters: 200, maxGpsAccuracyMeters: 750 },
+    ).accepted).toBe(true);
+    expect(validateTeacherControlGpsFix(
+      { latitude: 0, longitude: 0, accuracyMeters: 751 },
+      { latitude: 0, longitude: 0, geofenceRadiusMeters: 200, maxGpsAccuracyMeters: 750 },
+    )).toEqual({ accepted: false, reason: 'accuracy_too_low' });
+    expect(MAX_CONFIGURABLE_GPS_ACCURACY_METERS).toBe(5_000);
+    expect(MAX_GPS_ACCURACY_METERS).toBe(500);
   });
 
   it('rejects a valid-accuracy fix outside the school geofence', () => {

@@ -670,12 +670,14 @@ export const teacherControlGpsSettings = pgTable('teacher_control_gps_settings',
   latitude: numeric('latitude', { precision: 9, scale: 6 }),
   longitude: numeric('longitude', { precision: 10, scale: 6 }),
   geofenceRadiusMeters: integer('geofence_radius_meters').default(200).notNull(),
+  maxGpsAccuracyMeters: integer('max_gps_accuracy_meters').default(500).notNull(),
   updatedByUserId: integer('updated_by_user_id'),
   updatedByNameSnapshot: text('updated_by_name_snapshot'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   radiusCheck: check('teacher_control_gps_radius_check', sql`${table.geofenceRadiusMeters} > 0`),
+  accuracyCheck: check('teacher_control_gps_accuracy_check', sql`${table.maxGpsAccuracyMeters} BETWEEN 1 AND 5000`),
   latitudeCheck: check('teacher_control_gps_latitude_check', sql`${table.latitude} IS NULL OR ${table.latitude} BETWEEN -90 AND 90`),
   longitudeCheck: check('teacher_control_gps_longitude_check', sql`${table.longitude} IS NULL OR ${table.longitude} BETWEEN -180 AND 180`),
   enabledCoordinatesCheck: check('teacher_control_gps_enabled_coordinates_check', sql`
@@ -799,10 +801,10 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
   `),
   gpsValuesCheck: check('teacher_control_sessions_gps_values_check', sql`
     (${table.startDistanceMeters} IS NULL OR ${table.startDistanceMeters} >= 0)
-    AND (${table.startAccuracyMeters} IS NULL OR ${table.startAccuracyMeters} BETWEEN 0 AND 500)
+    AND (${table.startAccuracyMeters} IS NULL OR ${table.startAccuracyMeters} BETWEEN 0 AND 5000)
     AND (${table.startGeofenceRadiusMeters} IS NULL OR ${table.startGeofenceRadiusMeters} > 0)
     AND (${table.endDistanceMeters} IS NULL OR ${table.endDistanceMeters} >= 0)
-    AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 500)
+    AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 5000)
     AND (${table.endGeofenceRadiusMeters} IS NULL OR ${table.endGeofenceRadiusMeters} > 0)
   `),
   endGpsValuesCheck: check('teacher_control_sessions_end_gps_values_check', sql`

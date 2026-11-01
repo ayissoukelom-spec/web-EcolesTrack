@@ -14,7 +14,11 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api.ts';
-import { MAX_GEOFENCE_RADIUS_METERS, MAX_GPS_ACCURACY_METERS } from '../lib/teacherControl/domain.ts';
+import {
+  MAX_CONFIGURABLE_GPS_ACCURACY_METERS,
+  MAX_GEOFENCE_RADIUS_METERS,
+  MAX_GPS_ACCURACY_METERS,
+} from '../lib/teacherControl/domain.ts';
 import type { School, Teacher, UserRole } from '../types.ts';
 
 type Assignment = {
@@ -168,6 +172,7 @@ type GpsSettings = {
   latitude: number | string | null;
   longitude: number | string | null;
   geofenceRadiusMeters: number;
+  maxGpsAccuracyMeters: number;
   updatedAt: string | null;
 };
 
@@ -316,7 +321,10 @@ class GeolocationRequestError extends Error {
   }
 }
 
-function requestPosition(onReading: (fix: GpsFix) => void): Promise<GpsFix> {
+function requestPosition(
+  onReading: (fix: GpsFix) => void,
+  maxGpsAccuracyMeters = MAX_GPS_ACCURACY_METERS,
+): Promise<GpsFix> {
   if (!navigator.geolocation?.getCurrentPosition) {
     return Promise.reject(new GeolocationRequestError(
       'La géolocalisation n’est pas disponible sur cet appareil.',
@@ -338,9 +346,9 @@ function requestPosition(onReading: (fix: GpsFix) => void): Promise<GpsFix> {
         return;
       }
       onReading(fix);
-      if (fix.accuracyMeters > MAX_GPS_ACCURACY_METERS) {
+      if (fix.accuracyMeters > maxGpsAccuracyMeters) {
         reject(new GeolocationRequestError(
-          `Précision GPS insuffisante : ${Math.ceil(fix.accuracyMeters)} m (maximum autorisé : ${MAX_GPS_ACCURACY_METERS} m). Restez immobile et réessayez.`,
+          `Précision GPS insuffisante : ${Math.ceil(fix.accuracyMeters)} m (maximum autorisé : ${maxGpsAccuracyMeters} m). Restez immobile et réessayez.`,
           'imprecise',
           fix.accuracyMeters,
         ));
@@ -370,6 +378,19 @@ function requestPosition(onReading: (fix: GpsFix) => void): Promise<GpsFix> {
       timeout: 45_000,
     });
   });
+}
+
+async function getTeacherGpsAccuracyThreshold(): Promise<number> {
+  const settings = await apiFetch('/api/teacher-control/gps-settings') as {
+    maxGpsAccuracyMeters?: number;
+  };
+  const maxGpsAccuracyMeters = settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS;
+  if (!Number.isSafeInteger(maxGpsAccuracyMeters)
+    || maxGpsAccuracyMeters < 1
+    || maxGpsAccuracyMeters > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+    throw new Error('La configuration de précision GPS de l’établissement est invalide.');
+  }
+  return maxGpsAccuracyMeters;
 }
 
 function gpsFailureMessage(error: unknown): { message: string; status: GpsStatus } {
@@ -572,6 +593,7 @@ export default function TeacherControlView({
   const [closeReasons, setCloseReasons] = useState<Record<number, string>>({});
   const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '' });
   const [gpsRadius, setGpsRadius] = useState('200');
+  const [gpsAccuracyThreshold, setGpsAccuracyThreshold] = useState(String(MAX_GPS_ACCURACY_METERS));
 
   const currentCursor = sessionCursors[sessionCursors.length - 1] ?? null;
   const makeFilterParams = useCallback((includeSchool: boolean, selectedFilters = filtersRef.current) => {
@@ -644,7 +666,7 @@ export default function TeacherControlView({
         setAssignments(assignmentRows);
       } else {
         const [settings, history] = await Promise.all([
-          apiFetch(`/api/teacher-control/gps-settings${schoolQuery}`) as Promise<GpsSettings>,
+          apiFetch(`/api/teacher-control/gps-settings${schoolQuery}`, { cache: 'no-store' }) as Promise<GpsSettings>,
           apiFetch(`/api/teacher-control/gps-settings/history${schoolQuery ? `${schoolQuery}&limit=50` : '?limit=50'}`) as Promise<Array<Record<string, unknown>>>,
         ]);
         setGpsSettings(settings);
@@ -655,13 +677,16 @@ export default function TeacherControlView({
           longitude: settings.longitude == null ? '' : String(settings.longitude),
         });
         setGpsRadius(String(settings.geofenceRadiusMeters ?? 200));
+        setGpsAccuracyThreshold(String(settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS));
       }
     } catch (loadError) {
       if (isTeacher) {
         setAssignments(null);
         setTeacherOpenSessions([]);
       }
-      setError(loadError instanceof Error ? loadError.message : 'Impossible de charger le module Contrôle des enseignants.');
+      setError(loadError instanceof Error
+        ? loadError.message
+        : `Impossible de charger le module ${isTeacher ? 'Déclaration de présence' : 'Contrôle des enseignants'}.`);
     } finally {
       setLoading(false);
     }
@@ -841,7 +866,8 @@ export default function TeacherControlView({
     setGpsReading(null);
     setGpsStatus('locating');
     try {
-      const fix = await requestPosition((reading) => setGpsReading(reading));
+      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
+      const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
       setGpsReading(fix);
       setGpsStatus('obtained');
       const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', { action: 'start_session' });
@@ -885,7 +911,8 @@ export default function TeacherControlView({
     setGpsReading(null);
     setGpsStatus('locating');
     try {
-      const fix = await requestPosition((reading) => setGpsReading(reading));
+      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
+      const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
       setGpsReading(fix);
       setGpsStatus('obtained');
       const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', {
@@ -1163,6 +1190,7 @@ export default function TeacherControlView({
         latitude,
         longitude,
         geofenceRadiusMeters: gpsSettings?.geofenceRadiusMeters ?? 200,
+        maxGpsAccuracyMeters: gpsSettings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
       });
       await refreshAfterAction('La configuration GPS a été mise à jour et auditée.');
     } catch (actionError) {
@@ -1192,10 +1220,50 @@ export default function TeacherControlView({
         latitude: gpsSettings.latitude == null ? null : Number(gpsSettings.latitude),
         longitude: gpsSettings.longitude == null ? null : Number(gpsSettings.longitude),
         geofenceRadiusMeters: radius,
+        maxGpsAccuracyMeters: gpsSettings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
       });
       await refreshAfterAction('Le rayon de présence a été enregistré.');
     } catch (actionError) {
       showError(actionError, 'Impossible d’enregistrer le rayon de présence.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveGpsAccuracyThreshold = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const maxGpsAccuracyMeters = Number(gpsAccuracyThreshold);
+    if (!Number.isSafeInteger(maxGpsAccuracyMeters)
+      || maxGpsAccuracyMeters < 1
+      || maxGpsAccuracyMeters > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+      setError(`La précision maximale doit être un entier compris entre 1 et ${MAX_CONFIGURABLE_GPS_ACCURACY_METERS} mètres.`);
+      return;
+    }
+    if (!gpsSettings) {
+      setError('La configuration GPS de l’établissement n’est pas disponible.');
+      return;
+    }
+    setBusyAction('gps-accuracy');
+    setError(null);
+    try {
+      const saved = await putJson<{ maxGpsAccuracyMeters: number }>('/api/teacher-control/gps-settings', {
+        ...(isSuperAdmin ? { schoolId } : {}),
+        isEnabled: gpsSettings.isEnabled,
+        latitude: gpsSettings.latitude == null ? null : Number(gpsSettings.latitude),
+        longitude: gpsSettings.longitude == null ? null : Number(gpsSettings.longitude),
+        geofenceRadiusMeters: gpsSettings.geofenceRadiusMeters,
+        maxGpsAccuracyMeters,
+      });
+      if (saved.maxGpsAccuracyMeters !== maxGpsAccuracyMeters) {
+        throw new Error('Le serveur n’a pas confirmé la valeur de précision GPS enregistrée.');
+      }
+      setGpsAccuracyThreshold(String(saved.maxGpsAccuracyMeters));
+      setGpsSettings((current) => current
+        ? { ...current, maxGpsAccuracyMeters: saved.maxGpsAccuracyMeters }
+        : current);
+      await refreshAfterAction('La précision GPS maximale a été enregistrée.');
+    } catch (actionError) {
+      showError(actionError, 'Impossible d’enregistrer la précision GPS maximale.');
     } finally {
       setBusyAction(null);
     }
@@ -2088,13 +2156,13 @@ export default function TeacherControlView({
             <div className="rounded-xl bg-indigo-50 p-2 text-indigo-600"><Settings2 className="h-5 w-5" /></div>
             <div>
               <h2 className="font-bold text-slate-900">Paramètres de contrôle GPS</h2>
-              <p className="mt-1 text-sm text-slate-600">Le rayon est indépendant de la précision maximale acceptée (500 m). Aucun rayon n’est augmenté automatiquement.</p>
+              <p className="mt-1 text-sm text-slate-600">Le rayon est indépendant de la précision maximale acceptée ({gpsSettings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS} m). Aucun rayon n’est augmenté automatiquement.</p>
             </div>
           </div>
           {gpsSettings && (
             <section aria-labelledby="gps-radius-title" className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
               <h3 id="gps-radius-title" className="font-bold text-slate-900">Rayon de présence de l’établissement</h3>
-              <p className="mt-1 text-sm text-slate-600">Ce rayon détermine la distance maximale entre l’enseignant et l’établissement. Il est distinct de la précision GPS maximale de {MAX_GPS_ACCURACY_METERS} m.</p>
+              <p className="mt-1 text-sm text-slate-600">Ce rayon détermine la distance maximale entre l’enseignant et l’établissement. Il est distinct de la précision GPS maximale de {gpsSettings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS} m.</p>
               <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={(event) => void saveGeofenceRadius(event)}>
                 <label className="flex flex-col text-sm font-semibold text-slate-700">Rayon de présence (mètres)
                   <input
@@ -2114,6 +2182,34 @@ export default function TeacherControlView({
                   <button className={buttonClass} type="submit" disabled={busyAction != null}>
                     {busyAction === 'gps-radius' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                     Enregistrer le rayon
+                  </button>
+                )}
+              </form>
+            </section>
+          )}
+          {gpsSettings && (
+            <section aria-labelledby="gps-accuracy-title" className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+              <h3 id="gps-accuracy-title" className="font-bold text-slate-900">Précision GPS maximale acceptée</h3>
+              <p className="mt-1 text-sm text-slate-600">Ce seuil contrôle la qualité de la mesure GPS. Il est indépendant du rayon de présence de l’établissement.</p>
+              <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={(event) => void saveGpsAccuracyThreshold(event)}>
+                <label className="flex flex-col text-sm font-semibold text-slate-700">Précision GPS maximale (mètres)
+                  <input
+                    className={`${inputClass} mt-1 w-48`}
+                    type="number"
+                    step="1"
+                    min="1"
+                    max={MAX_CONFIGURABLE_GPS_ACCURACY_METERS}
+                    value={gpsAccuracyThreshold}
+                    onChange={(event) => setGpsAccuracyThreshold(event.target.value)}
+                    disabled={!canManageGps || busyAction != null}
+                    required
+                  />
+                </label>
+                <p className="pb-2 text-sm text-slate-600">Valeur actuellement enregistrée : <strong>{gpsSettings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS} m</strong> · maximum configurable : {MAX_CONFIGURABLE_GPS_ACCURACY_METERS} m</p>
+                {canManageGps && (
+                  <button className={buttonClass} type="submit" disabled={busyAction != null}>
+                    {busyAction === 'gps-accuracy' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                    Enregistrer la précision
                   </button>
                 )}
               </form>
@@ -2234,7 +2330,9 @@ function ModuleHeading({
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.16em] text-indigo-600">EcoleTrack · Suivi des séances</p>
-        <h1 id="teacher-control-title" className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Contrôle des enseignants</h1>
+        <h1 id="teacher-control-title" className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+          {role === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}
+        </h1>
         <p className="mt-1 text-sm text-slate-600">{roleTitle}{schoolName ? ` · ${schoolName}` : ''}</p>
       </div>
       {onRefresh && (

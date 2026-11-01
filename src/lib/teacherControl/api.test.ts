@@ -1975,6 +1975,7 @@ describe('teacher control API authorization and input validation', () => {
       });
 
     expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
     expect(response.body.schoolId).toBe(8);
     expect(response.body.isEnabled).toBe(true);
     expect(response.body.geofenceRadiusMeters).toBe(250);
@@ -1989,7 +1990,9 @@ describe('teacher control API authorization and input validation', () => {
 
     const persistedSettings = await request(app).get('/api/teacher-control/gps-settings');
     expect(persistedSettings.status).toBe(200);
+    expect(persistedSettings.headers['cache-control']).toBe('no-store');
     expect(persistedSettings.body.geofenceRadiusMeters).toBe(250);
+    expect(persistedSettings.body.maxGpsAccuracyMeters).toBe(500);
 
     const maximumRadiusUpdate = await request(app)
       .put('/api/teacher-control/gps-settings')
@@ -1998,6 +2001,57 @@ describe('teacher control API authorization and input validation', () => {
     const maximumRadiusSettings = await request(app).get('/api/teacher-control/gps-settings');
     expect(maximumRadiusSettings.body.geofenceRadiusMeters).toBe(10_000);
 
+    const accuracyUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 10_000,
+        maxGpsAccuracyMeters: 2_000,
+      });
+    expect(accuracyUpdate.status).toBe(200);
+    expect(accuracyUpdate.body.maxGpsAccuracyMeters).toBe(2_000);
+    const persistedAccuracy = await request(app).get('/api/teacher-control/gps-settings');
+    expect(persistedAccuracy.body).toMatchObject({
+      geofenceRadiusMeters: 10_000,
+      maxGpsAccuracyMeters: 2_000,
+    });
+
+    const minimumAccuracyUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 10_000,
+        maxGpsAccuracyMeters: 1,
+      });
+    expect(minimumAccuracyUpdate.status).toBe(200);
+    expect((await request(app).get('/api/teacher-control/gps-settings')).body.maxGpsAccuracyMeters).toBe(1);
+
+    const maximumAccuracyUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 10_000,
+        maxGpsAccuracyMeters: 5_000,
+      });
+    expect(maximumAccuracyUpdate.status).toBe(200);
+    expect((await request(app).get('/api/teacher-control/gps-settings')).body.maxGpsAccuracyMeters).toBe(5_000);
+    const restoreAccuracyUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 10_000,
+        maxGpsAccuracyMeters: 2_000,
+      });
+    expect(restoreAccuracyUpdate.status).toBe(200);
+
     for (const invalidRadius of [0, 1.5, 10_001, true, '250']) {
       const invalidUpdate = await request(app)
         .put('/api/teacher-control/gps-settings')
@@ -2005,14 +2059,31 @@ describe('teacher control API authorization and input validation', () => {
       expect(invalidUpdate.status).toBe(400);
       expect(mockDatabaseState.gpsSettings[0].geofenceRadiusMeters).toBe(10_000);
     }
-    expect(mockDatabaseState.auditEvents).toHaveLength(2);
+    for (const invalidAccuracy of [0, 1.5, 5_001, true, '750']) {
+      const invalidUpdate = await request(app)
+        .put('/api/teacher-control/gps-settings')
+        .send({
+          isEnabled: true,
+          latitude: 6.1375,
+          longitude: 1.2123,
+          geofenceRadiusMeters: 10_000,
+          maxGpsAccuracyMeters: invalidAccuracy,
+        });
+      expect(invalidUpdate.status).toBe(400);
+      expect(mockDatabaseState.gpsSettings[0].maxGpsAccuracyMeters).toBe(2_000);
+    }
+    expect(mockDatabaseState.auditEvents).toHaveLength(6);
 
     mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
     const teacherUpdate = await request(app)
       .put('/api/teacher-control/gps-settings')
       .send({ isEnabled: true, latitude: 6.1375, longitude: 1.2123, geofenceRadiusMeters: 300 });
     expect(teacherUpdate.status).toBe(403);
     expect(mockDatabaseState.gpsSettings[0].geofenceRadiusMeters).toBe(10_000);
+    const teacherRead = await request(app).get('/api/teacher-control/gps-settings');
+    expect(teacherRead.status).toBe(200);
+    expect(teacherRead.body).toEqual({ maxGpsAccuracyMeters: 2_000 });
   });
 
   it('rolls back a GPS configuration update when its audit insert fails', async () => {
@@ -2310,6 +2381,7 @@ describe('teacher control API authorization and input validation', () => {
       latitude: '6.1375',
       longitude: '1.2123',
       geofenceRadiusMeters: 200,
+      maxGpsAccuracyMeters: 600,
     }];
     const app = createTestApp();
     const invalidPair = await request(app).post('/api/teacher-control/sessions/start').send({
@@ -2331,11 +2403,12 @@ describe('teacher control API authorization and input validation', () => {
       subjectId: 41,
       latitude: 6.1375,
       longitude: 1.2123,
-      accuracyMeters: 20,
+      accuracyMeters: 501,
       gpsChallenge: challenge.body.challenge,
     });
 
     expect(start.status).toBe(200);
+    expect(start.body.startAccuracyMeters).toBe(501);
     expect(start.body).toMatchObject({
       teachingAssignmentId: null,
       classTeacherAssociationId: 301,
@@ -2357,12 +2430,22 @@ describe('teacher control API authorization and input validation', () => {
       .send({
         latitude: 6.1375,
         longitude: 1.2123,
-        accuracyMeters: 501,
+        accuracyMeters: 601,
         gpsChallenge: endChallenge.body.challenge,
       });
     expect(impreciseEndValidation.status).toBe(400);
     expect(mockDatabaseState.sessions[0].status).toBe('open');
     expect(mockDatabaseState.challenges[1].consumedAt).toBeUndefined();
+
+    const configuredAccuracyEndValidation = await request(app)
+      .post(`/api/teacher-control/sessions/${start.body.id}/validate-end`)
+      .send({
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 501,
+        gpsChallenge: endChallenge.body.challenge,
+      });
+    expect(configuredAccuracyEndValidation.status).toBe(200);
 
     const invalidEndValidation = await request(app)
       .post(`/api/teacher-control/sessions/${start.body.id}/validate-end`)

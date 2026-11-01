@@ -1,4 +1,5 @@
 export const MAX_GPS_ACCURACY_METERS = 500;
+export const MAX_CONFIGURABLE_GPS_ACCURACY_METERS = 5_000;
 export const MAX_GEOFENCE_RADIUS_METERS = 10_000;
 export const TEACHER_CONTROL_DISPLAY_TIME_ZONE = 'Africa/Lome';
 const EARTH_RADIUS_METERS = 6_371_000;
@@ -13,6 +14,7 @@ export interface TeacherControlGpsSite {
   latitude: number;
   longitude: number;
   geofenceRadiusMeters: number;
+  maxGpsAccuracyMeters?: number;
 }
 
 export type TeacherControlGpsValidation =
@@ -53,7 +55,13 @@ export function validateTeacherControlGpsFix(
   if (!Number.isFinite(fix.accuracyMeters) || fix.accuracyMeters < 0) {
     return { accepted: false, reason: 'invalid_accuracy' };
   }
-  if (fix.accuracyMeters > MAX_GPS_ACCURACY_METERS) {
+  const maxGpsAccuracyMeters = site.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS;
+  if (!Number.isSafeInteger(maxGpsAccuracyMeters)
+    || maxGpsAccuracyMeters < 1
+    || maxGpsAccuracyMeters > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+    return { accepted: false, reason: 'invalid_accuracy' };
+  }
+  if (fix.accuracyMeters > maxGpsAccuracyMeters) {
     return { accepted: false, reason: 'accuracy_too_low' };
   }
   if (!Number.isSafeInteger(site.geofenceRadiusMeters) || site.geofenceRadiusMeters <= 0) {

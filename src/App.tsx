@@ -1334,7 +1334,7 @@ export default function App() {
                   data-testid="sidebar-nav-teacher-control"
                 >
                   <ClipboardCheck className="h-4.5 w-4.5" />
-                  <span>Contrôle des enseignants</span>
+                  <span>{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
                 </button>
               )}
 
