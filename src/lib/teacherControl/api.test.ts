@@ -578,7 +578,7 @@ describe('teacher control API authorization and input validation', () => {
         subjectId: 41,
         latitude: 6.1375,
         longitude: 1.2123,
-        accuracyMeters: 20,
+        accuracyMeters: 500,
         gpsChallenge: challengeResponse.body.challenge as string,
       },
     };
@@ -991,7 +991,7 @@ describe('teacher control API authorization and input validation', () => {
       const endPromise = request(app).post('/api/teacher-control/sessions/701/end').send({
         latitude: 6.1375,
         longitude: 1.2123,
-        accuracyMeters: 20,
+        accuracyMeters: 500,
         gpsChallenge: challenge.body.challenge,
       }).then((response) => response);
       await acquired.promise;
@@ -1986,6 +1986,33 @@ describe('teacher control API authorization and input validation', () => {
       beforeValues: { isEnabled: false, geofenceRadiusMeters: 200 },
       afterValues: { isEnabled: true, latitude: '6.1375', longitude: '1.2123', geofenceRadiusMeters: 250 },
     });
+
+    const persistedSettings = await request(app).get('/api/teacher-control/gps-settings');
+    expect(persistedSettings.status).toBe(200);
+    expect(persistedSettings.body.geofenceRadiusMeters).toBe(250);
+
+    const maximumRadiusUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({ isEnabled: true, latitude: 6.1375, longitude: 1.2123, geofenceRadiusMeters: 10_000 });
+    expect(maximumRadiusUpdate.status).toBe(200);
+    const maximumRadiusSettings = await request(app).get('/api/teacher-control/gps-settings');
+    expect(maximumRadiusSettings.body.geofenceRadiusMeters).toBe(10_000);
+
+    for (const invalidRadius of [0, 1.5, 10_001, true, '250']) {
+      const invalidUpdate = await request(app)
+        .put('/api/teacher-control/gps-settings')
+        .send({ isEnabled: true, latitude: 6.1375, longitude: 1.2123, geofenceRadiusMeters: invalidRadius });
+      expect(invalidUpdate.status).toBe(400);
+      expect(mockDatabaseState.gpsSettings[0].geofenceRadiusMeters).toBe(10_000);
+    }
+    expect(mockDatabaseState.auditEvents).toHaveLength(2);
+
+    mockActor.role = 'teacher';
+    const teacherUpdate = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({ isEnabled: true, latitude: 6.1375, longitude: 1.2123, geofenceRadiusMeters: 300 });
+    expect(teacherUpdate.status).toBe(403);
+    expect(mockDatabaseState.gpsSettings[0].geofenceRadiusMeters).toBe(10_000);
   });
 
   it('rolls back a GPS configuration update when its audit insert fails', async () => {
@@ -2036,7 +2063,7 @@ describe('teacher control API authorization and input validation', () => {
       isEnabled: true,
       latitude: '6.1375',
       longitude: '1.2123',
-      geofenceRadiusMeters: 200,
+      geofenceRadiusMeters: 250,
     }];
     const app = createTestApp();
 
@@ -2048,12 +2075,18 @@ describe('teacher control API authorization and input validation', () => {
       classId: 31,
       subjectId: 41,
       latitude: 6.1375,
-      longitude: 1.2123,
-      accuracyMeters: 500,
+      longitude: 1.2143,
+      accuracyMeters: 501,
       startedAt: '2099-12-31T23:59:59.999Z',
       gpsChallenge: challengeResponse.body.challenge,
     };
 
+    const impreciseStartResponse = await request(app)
+      .post('/api/teacher-control/sessions/start')
+      .send(startBody);
+    expect(impreciseStartResponse.status).toBe(400);
+
+    startBody.accuracyMeters = 146;
     const requestStartedAt = Date.now();
     mockDatabaseState.lockOrder = [];
     const startResponse = await request(app).post('/api/teacher-control/sessions/start').send(startBody);
@@ -2065,10 +2098,12 @@ describe('teacher control API authorization and input validation', () => {
       classId: 31,
       subjectId: 41,
       status: 'open',
-      startDistanceMeters: 0,
-      startAccuracyMeters: 500,
-      startGeofenceRadiusMeters: 200,
+      startDistanceMeters: expect.any(Number),
+      startAccuracyMeters: 146,
+      startGeofenceRadiusMeters: 250,
     });
+    expect(startResponse.body.startDistanceMeters).toBeGreaterThan(200);
+    expect(startResponse.body.startDistanceMeters).toBeLessThanOrEqual(250);
     expect(Date.parse(startResponse.body.startedAt)).toBeGreaterThanOrEqual(requestStartedAt);
     expect(Date.parse(startResponse.body.startedAt)).toBeLessThanOrEqual(responseReceivedAt);
     expect(startResponse.body.startedAt).not.toBe(startBody.startedAt);
@@ -2097,7 +2132,7 @@ describe('teacher control API authorization and input validation', () => {
       .post(`/api/teacher-control/sessions/${startResponse.body.id}/end`)
       .send({
         latitude: 6.1375,
-        longitude: 1.2123,
+        longitude: 1.2143,
         accuracyMeters: 500,
         validatedEndedAt: '2099-12-31T23:59:59.999Z',
         endedAt: '2099-12-31T23:59:59.999Z',
@@ -2105,7 +2140,9 @@ describe('teacher control API authorization and input validation', () => {
       });
     const endResponseReceivedAt = Date.now();
     expect(endResponse.status).toBe(200);
-    expect(endResponse.body.status).toBe('completed');
+    expect(endResponse.body).toMatchObject({ status: 'completed', endGeofenceRadiusMeters: 250 });
+    expect(endResponse.body.endDistanceMeters).toBeGreaterThan(200);
+    expect(endResponse.body.endDistanceMeters).toBeLessThanOrEqual(250);
     expect(Date.parse(endResponse.body.validatedEndedAt)).toBeGreaterThanOrEqual(endRequestStartedAt);
     expect(Date.parse(endResponse.body.validatedEndedAt)).toBeLessThanOrEqual(endResponseReceivedAt);
     expect(endResponse.body.validatedEndedAt).not.toBe('2099-12-31T23:59:59.999Z');
@@ -2315,6 +2352,18 @@ describe('teacher control API authorization and input validation', () => {
       sessionId: start.body.id,
     });
     expect(endChallenge.status).toBe(200);
+    const impreciseEndValidation = await request(app)
+      .post(`/api/teacher-control/sessions/${start.body.id}/validate-end`)
+      .send({
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 501,
+        gpsChallenge: endChallenge.body.challenge,
+      });
+    expect(impreciseEndValidation.status).toBe(400);
+    expect(mockDatabaseState.sessions[0].status).toBe('open');
+    expect(mockDatabaseState.challenges[1].consumedAt).toBeUndefined();
+
     const invalidEndValidation = await request(app)
       .post(`/api/teacher-control/sessions/${start.body.id}/validate-end`)
       .send({

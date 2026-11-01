@@ -11,7 +11,7 @@ describe('teacher control GPS and compensation rules', () => {
     expect(TEACHER_CONTROL_DISPLAY_TIME_ZONE).toBe('Africa/Lome');
   });
 
-  it.each([100, 500])('accepts a GPS fix with %i m accuracy within the configured geofence', (accuracyMeters) => {
+  it.each([146, 500])('accepts a GPS fix with %i m accuracy within the configured geofence', (accuracyMeters) => {
     const result = validateTeacherControlGpsFix(
       { latitude: 0, longitude: 0.001, accuracyMeters },
       { latitude: 0, longitude: 0, geofenceRadiusMeters: 200 },
@@ -27,7 +27,7 @@ describe('teacher control GPS and compensation rules', () => {
 
   it('rejects accuracy above 500 m without expanding the school geofence', () => {
     const result = validateTeacherControlGpsFix(
-      { latitude: 0, longitude: 0, accuracyMeters: 500.01 },
+      { latitude: 0, longitude: 0, accuracyMeters: 501 },
       { latitude: 0, longitude: 0, geofenceRadiusMeters: 2_000 },
     );
 

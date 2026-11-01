@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api.ts';
-import { MAX_GPS_ACCURACY_METERS } from '../lib/teacherControl/domain.ts';
+import { MAX_GEOFENCE_RADIUS_METERS, MAX_GPS_ACCURACY_METERS } from '../lib/teacherControl/domain.ts';
 import type { School, Teacher, UserRole } from '../types.ts';
 
 type Assignment = {
@@ -570,7 +570,8 @@ export default function TeacherControlView({
   const [unrecordedEndedAt, setUnrecordedEndedAt] = useState('');
   const [unrecordedCompletionDescription, setUnrecordedCompletionDescription] = useState<Record<number, string>>({});
   const [closeReasons, setCloseReasons] = useState<Record<number, string>>({});
-  const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '', geofenceRadiusMeters: '200' });
+  const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '' });
+  const [gpsRadius, setGpsRadius] = useState('200');
 
   const currentCursor = sessionCursors[sessionCursors.length - 1] ?? null;
   const makeFilterParams = useCallback((includeSchool: boolean, selectedFilters = filtersRef.current) => {
@@ -652,8 +653,8 @@ export default function TeacherControlView({
           isEnabled: settings.isEnabled,
           latitude: settings.latitude == null ? '' : String(settings.latitude),
           longitude: settings.longitude == null ? '' : String(settings.longitude),
-          geofenceRadiusMeters: String(settings.geofenceRadiusMeters ?? 200),
         });
+        setGpsRadius(String(settings.geofenceRadiusMeters ?? 200));
       }
     } catch (loadError) {
       if (isTeacher) {
@@ -1149,11 +1150,6 @@ export default function TeacherControlView({
     event.preventDefault();
     const latitude = gpsForm.latitude.trim() ? Number(gpsForm.latitude) : null;
     const longitude = gpsForm.longitude.trim() ? Number(gpsForm.longitude) : null;
-    const radius = Number(gpsForm.geofenceRadiusMeters);
-    if (!Number.isSafeInteger(radius) || radius <= 0) {
-      setError('Le rayon doit être un nombre entier positif.');
-      return;
-    }
     if (gpsForm.isEnabled && (latitude == null || longitude == null)) {
       setError('Renseignez les coordonnées de l’établissement avant d’activer le contrôle GPS.');
       return;
@@ -1166,11 +1162,40 @@ export default function TeacherControlView({
         isEnabled: gpsForm.isEnabled,
         latitude,
         longitude,
-        geofenceRadiusMeters: radius,
+        geofenceRadiusMeters: gpsSettings?.geofenceRadiusMeters ?? 200,
       });
       await refreshAfterAction('La configuration GPS a été mise à jour et auditée.');
     } catch (actionError) {
       showError(actionError, 'Impossible d’enregistrer la configuration GPS.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveGeofenceRadius = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const radius = Number(gpsRadius);
+    if (!Number.isSafeInteger(radius) || radius < 1 || radius > MAX_GEOFENCE_RADIUS_METERS) {
+      setError(`Le rayon doit être un entier compris entre 1 et ${MAX_GEOFENCE_RADIUS_METERS} mètres.`);
+      return;
+    }
+    if (!gpsSettings) {
+      setError('La configuration GPS de l’établissement n’est pas disponible.');
+      return;
+    }
+    setBusyAction('gps-radius');
+    setError(null);
+    try {
+      await putJson('/api/teacher-control/gps-settings', {
+        ...(isSuperAdmin ? { schoolId } : {}),
+        isEnabled: gpsSettings.isEnabled,
+        latitude: gpsSettings.latitude == null ? null : Number(gpsSettings.latitude),
+        longitude: gpsSettings.longitude == null ? null : Number(gpsSettings.longitude),
+        geofenceRadiusMeters: radius,
+      });
+      await refreshAfterAction('Le rayon de présence a été enregistré.');
+    } catch (actionError) {
+      showError(actionError, 'Impossible d’enregistrer le rayon de présence.');
     } finally {
       setBusyAction(null);
     }
@@ -2067,16 +2092,44 @@ export default function TeacherControlView({
             </div>
           </div>
           {gpsSettings && (
+            <section aria-labelledby="gps-radius-title" className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
+              <h3 id="gps-radius-title" className="font-bold text-slate-900">Rayon de présence de l’établissement</h3>
+              <p className="mt-1 text-sm text-slate-600">Ce rayon détermine la distance maximale entre l’enseignant et l’établissement. Il est distinct de la précision GPS maximale de {MAX_GPS_ACCURACY_METERS} m.</p>
+              <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={(event) => void saveGeofenceRadius(event)}>
+                <label className="flex flex-col text-sm font-semibold text-slate-700">Rayon de présence (mètres)
+                  <input
+                    className={`${inputClass} mt-1 w-48`}
+                    type="number"
+                    step="1"
+                    min="1"
+                    max={MAX_GEOFENCE_RADIUS_METERS}
+                    value={gpsRadius}
+                    onChange={(event) => setGpsRadius(event.target.value)}
+                    disabled={!canManageGps || busyAction != null}
+                    required
+                  />
+                </label>
+                <p className="pb-2 text-sm text-slate-600">Valeur actuellement enregistrée : <strong>{gpsSettings.geofenceRadiusMeters} m</strong> · maximum : {MAX_GEOFENCE_RADIUS_METERS} m</p>
+                {canManageGps && (
+                  <button className={buttonClass} type="submit" disabled={busyAction != null}>
+                    {busyAction === 'gps-radius' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                    Enregistrer le rayon
+                  </button>
+                )}
+              </form>
+            </section>
+          )}
+          {gpsSettings && (
             <form className="grid gap-4 rounded-2xl border border-slate-200 p-4 sm:grid-cols-2" onSubmit={(event) => void saveGpsSettings(event)}>
               <label className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 text-sm font-semibold text-slate-800 sm:col-span-2">
-                <input type="checkbox" checked={gpsForm.isEnabled} onChange={(event) => setGpsForm({ ...gpsForm, isEnabled: event.target.checked })} disabled={!canManage} />
+                <input type="checkbox" checked={gpsForm.isEnabled} onChange={(event) => setGpsForm({ ...gpsForm, isEnabled: event.target.checked })} disabled={!canManageGps} />
                 Contrôle GPS activé
               </label>
               <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Latitude de l’établissement
-                <input className={`${inputClass} mt-1`} type="number" step="any" min="-90" max="90" value={gpsForm.latitude} onChange={(event) => setGpsForm({ ...gpsForm, latitude: event.target.value })} disabled={!canManage} />
+                <input className={`${inputClass} mt-1`} type="number" step="any" min="-90" max="90" value={gpsForm.latitude} onChange={(event) => setGpsForm({ ...gpsForm, latitude: event.target.value })} disabled={!canManageGps} />
               </label>
               <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Longitude de l’établissement
-                <input className={`${inputClass} mt-1`} type="number" step="any" min="-180" max="180" value={gpsForm.longitude} onChange={(event) => setGpsForm({ ...gpsForm, longitude: event.target.value })} disabled={!canManage} />
+                <input className={`${inputClass} mt-1`} type="number" step="any" min="-180" max="180" value={gpsForm.longitude} onChange={(event) => setGpsForm({ ...gpsForm, longitude: event.target.value })} disabled={!canManageGps} />
               </label>
               {canManageGps && (
                 <div className="space-y-2 sm:col-span-2">
@@ -2090,15 +2143,11 @@ export default function TeacherControlView({
                   <p className="text-xs text-slate-500">Effectuez cette action depuis l’établissement, puis vérifiez ou corrigez les coordonnées avant de les enregistrer.</p>
                 </div>
               )}
-              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Rayon de présence (mètres)
-                <input className={`${inputClass} mt-1 max-w-xs`} type="number" step="1" min="1" value={gpsForm.geofenceRadiusMeters} onChange={(event) => setGpsForm({ ...gpsForm, geofenceRadiusMeters: event.target.value })} disabled={!canManage} />
-                <span className="mt-1 block text-xs font-normal text-slate-500">Valeur initiale prévue : 200 m. Précision GPS maximale : 500 m.</span>
-              </label>
               {canManageGps && (
                 <div className="sm:col-span-2">
                   <button className={buttonClass} type="submit" disabled={busyAction != null}>
                     {busyAction === 'gps-settings' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    Enregistrer la configuration
+                    Enregistrer les coordonnées GPS
                   </button>
                 </div>
               )}

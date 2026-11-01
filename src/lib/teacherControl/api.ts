@@ -32,6 +32,7 @@ import {
 } from './security.ts';
 import {
   calculateTeacherControlCompensation,
+  MAX_GEOFENCE_RADIUS_METERS,
   validateTeacherControlGpsFix,
 } from './domain.ts';
 import type { TeacherControlAuditInput } from './audit.ts';
@@ -655,8 +656,13 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     if (typeof body.isEnabled !== 'boolean') throw new TeacherControlApiError(400, 'isEnabled must be a boolean');
     const latitude = body.latitude == null ? null : body.latitude;
     const longitude = body.longitude == null ? null : body.longitude;
-    const radius = body.geofenceRadiusMeters == null ? 200 : Number(body.geofenceRadiusMeters);
-    if (!Number.isSafeInteger(radius) || radius <= 0) throw new TeacherControlApiError(400, 'geofenceRadiusMeters must be a positive integer');
+    const radius = body.geofenceRadiusMeters == null ? 200 : body.geofenceRadiusMeters;
+    if (typeof radius !== 'number'
+      || !Number.isSafeInteger(radius)
+      || radius <= 0
+      || radius > MAX_GEOFENCE_RADIUS_METERS) {
+      throw new TeacherControlApiError(400, `geofenceRadiusMeters must be a positive integer no greater than ${MAX_GEOFENCE_RADIUS_METERS}`);
+    }
     if (latitude != null && (typeof latitude !== 'number' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90)) {
       throw new TeacherControlApiError(400, 'latitude is invalid');
     }

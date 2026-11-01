@@ -264,7 +264,7 @@ describe('TeacherControlView', () => {
     const getCurrentPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
       requestOrder.push('geolocation');
       success({
-        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 500 },
+        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 146 },
         timestamp: Date.now(),
       } as GeolocationPosition);
       expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 });
@@ -318,14 +318,14 @@ describe('TeacherControlView', () => {
       subjectId: 40,
       latitude: 6.1375,
       longitude: 1.2123,
-      accuracyMeters: 500,
+      accuracyMeters: 146,
       gpsChallenge: 'a'.repeat(43),
     });
     expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('timestamp');
     expect(requestOrder.indexOf('geolocation'))
       .toBeLessThan(requestOrder.indexOf('/api/teacher-control/gps-challenges'));
     expect(getCurrentPosition).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('500');
+    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('146');
     expect(await screen.findByRole('textbox', { name: 'Latitude de début' })).toHaveProperty('readOnly', true);
     expect(screen.getByRole('textbox', { name: 'Latitude de début' })).toHaveValue('6.1375');
     expect(screen.getByText('Heure du début')).toBeTruthy();
@@ -879,7 +879,7 @@ describe('TeacherControlView', () => {
 
     fireEvent.change(screen.getByLabelText('Latitude de l’établissement'), { target: { value: '6.1400' } });
     fireEvent.change(screen.getByLabelText('Longitude de l’établissement'), { target: { value: '1.2150' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer la configuration' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith(
@@ -895,6 +895,74 @@ describe('TeacherControlView', () => {
       longitude: 1.215,
       geofenceRadiusMeters: 200,
     });
+  });
+
+  it('lets an authorized administrator save a radius independently and refreshes the displayed value', async () => {
+    let savedRadius = 500;
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) return { teachers: [], classes: [], subjects: [] };
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url === '/api/teacher-control/regularizations') return [];
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings') && options?.method === 'PUT') {
+        savedRadius = JSON.parse(options.body as string).geofenceRadiusMeters as number;
+        return {};
+      }
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        return {
+          schoolId: 8,
+          schoolName: 'École A',
+          isEnabled: true,
+          latitude: 6.1375,
+          longitude: 1.2123,
+          geofenceRadiusMeters: savedRadius,
+          updatedAt: null,
+        };
+      }
+      return {};
+    });
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    const radiusInput = screen.getByRole('spinbutton', { name: 'Rayon de présence (mètres)' });
+    expect(radiusInput).toHaveValue(500);
+    expect(radiusInput).toHaveAttribute('min', '1');
+    expect(radiusInput).toHaveAttribute('max', '10000');
+    expect(screen.getByRole('button', { name: 'Enregistrer le rayon' })).toBeEnabled();
+
+    fireEvent.change(radiusInput, { target: { value: '750' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer le rayon' }));
+
+    expect(await screen.findByText('Le rayon de présence a été enregistré.')).toBeTruthy();
+    await waitFor(() => expect(radiusInput).toHaveValue(750));
+    const radiusUpdate = apiFetchMock.mock.calls.find(([url, options]) => url === '/api/teacher-control/gps-settings' && options?.method === 'PUT');
+    expect(JSON.parse(radiusUpdate?.[1]?.body as string)).toMatchObject({
+      isEnabled: true,
+      latitude: 6.1375,
+      longitude: 1.2123,
+      geofenceRadiusMeters: 750,
+    });
+  });
+
+  it('does not expose GPS radius configuration to teachers', async () => {
+    configureTeacherApi();
+    render(<TeacherControlView {...defaultProps} userRole="teacher" />);
+
+    expect(await screen.findByRole('tab', { name: 'Séances' })).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Configuration GPS' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Rayon de présence (mètres)' })).toBeNull();
   });
 
   it.each([
