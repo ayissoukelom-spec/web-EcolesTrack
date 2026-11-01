@@ -264,7 +264,7 @@ describe('TeacherControlView', () => {
     const getCurrentPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
       requestOrder.push('geolocation');
       success({
-        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
+        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 500 },
         timestamp: Date.now(),
       } as GeolocationPosition);
       expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 });
@@ -318,14 +318,14 @@ describe('TeacherControlView', () => {
       subjectId: 40,
       latitude: 6.1375,
       longitude: 1.2123,
-      accuracyMeters: 18,
+      accuracyMeters: 500,
       gpsChallenge: 'a'.repeat(43),
     });
     expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('timestamp');
     expect(requestOrder.indexOf('geolocation'))
       .toBeLessThan(requestOrder.indexOf('/api/teacher-control/gps-challenges'));
     expect(getCurrentPosition).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('18');
+    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('500');
     expect(await screen.findByRole('textbox', { name: 'Latitude de début' })).toHaveProperty('readOnly', true);
     expect(screen.getByRole('textbox', { name: 'Latitude de début' })).toHaveValue('6.1375');
     expect(screen.getByText('Heure du début')).toBeTruthy();
@@ -393,7 +393,7 @@ describe('TeacherControlView', () => {
     window.history.replaceState(null, '', '/teacher-control/teacher');
     const fixes = [
       { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
-      { latitude: 6.1378, longitude: 1.2126, accuracy: 24 },
+      { latitude: 6.1378, longitude: 1.2126, accuracy: 500 },
     ];
     let positionIndex = 0;
     const getCurrentPosition = vi.fn((success: PositionCallback) => {
@@ -500,7 +500,7 @@ describe('TeacherControlView', () => {
     expect(screen.queryByText('Heure de fin (Africa/Lome)')).toBeNull();
     expect((screen.getByRole('textbox', { name: 'Date de fin' }) as HTMLInputElement).value).toBeTruthy();
     expect((screen.getByRole('textbox', { name: 'Heure de fin' }) as HTMLInputElement).value).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Précision GPS de fin' })).toHaveValue('24');
+    expect(screen.getByRole('textbox', { name: 'Précision GPS de fin' })).toHaveValue('500');
   });
 
   it('shows a useful message when the teacher refuses location permission', async () => {
@@ -583,7 +583,7 @@ describe('TeacherControlView', () => {
       attempt += 1;
       if (attempt === 1) {
         success({
-          coords: { latitude: 6.1376, longitude: 1.2124, accuracy: 132 },
+          coords: { latitude: 6.1376, longitude: 1.2124, accuracy: 501 },
           timestamp: Date.now(),
         } as GeolocationPosition);
         return;
@@ -623,8 +623,8 @@ describe('TeacherControlView', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
 
-    expect(await screen.findByText('Position trop imprécise (132 m)')).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('132');
+    expect(await screen.findByText('Position trop imprécise (501 m)')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('501');
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
     expect(screen.getByRole('combobox', { name: 'Classe' })).toHaveValue('30');
     expect(screen.getByRole('combobox', { name: 'Matière' })).toHaveValue('40');

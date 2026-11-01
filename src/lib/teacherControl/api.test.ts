@@ -2049,7 +2049,7 @@ describe('teacher control API authorization and input validation', () => {
       subjectId: 41,
       latitude: 6.1375,
       longitude: 1.2123,
-      accuracyMeters: 100,
+      accuracyMeters: 500,
       startedAt: '2099-12-31T23:59:59.999Z',
       gpsChallenge: challengeResponse.body.challenge,
     };
@@ -2066,7 +2066,7 @@ describe('teacher control API authorization and input validation', () => {
       subjectId: 41,
       status: 'open',
       startDistanceMeters: 0,
-      startAccuracyMeters: 100,
+      startAccuracyMeters: 500,
       startGeofenceRadiusMeters: 200,
     });
     expect(Date.parse(startResponse.body.startedAt)).toBeGreaterThanOrEqual(requestStartedAt);
@@ -2098,7 +2098,7 @@ describe('teacher control API authorization and input validation', () => {
       .send({
         latitude: 6.1375,
         longitude: 1.2123,
-        accuracyMeters: 20,
+        accuracyMeters: 500,
         validatedEndedAt: '2099-12-31T23:59:59.999Z',
         endedAt: '2099-12-31T23:59:59.999Z',
         gpsChallenge: endChallengeResponse.body.challenge,

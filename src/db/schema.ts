@@ -799,10 +799,10 @@ export const teacherControlSessions = pgTable('teacher_control_sessions', {
   `),
   gpsValuesCheck: check('teacher_control_sessions_gps_values_check', sql`
     (${table.startDistanceMeters} IS NULL OR ${table.startDistanceMeters} >= 0)
-    AND (${table.startAccuracyMeters} IS NULL OR ${table.startAccuracyMeters} BETWEEN 0 AND 100)
+    AND (${table.startAccuracyMeters} IS NULL OR ${table.startAccuracyMeters} BETWEEN 0 AND 500)
     AND (${table.startGeofenceRadiusMeters} IS NULL OR ${table.startGeofenceRadiusMeters} > 0)
     AND (${table.endDistanceMeters} IS NULL OR ${table.endDistanceMeters} >= 0)
-    AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 100)
+    AND (${table.endAccuracyMeters} IS NULL OR ${table.endAccuracyMeters} BETWEEN 0 AND 500)
     AND (${table.endGeofenceRadiusMeters} IS NULL OR ${table.endGeofenceRadiusMeters} > 0)
   `),
   endGpsValuesCheck: check('teacher_control_sessions_end_gps_values_check', sql`

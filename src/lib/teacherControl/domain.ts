@@ -1,4 +1,4 @@
-export const MAX_GPS_ACCURACY_METERS = 100;
+export const MAX_GPS_ACCURACY_METERS = 500;
 export const TEACHER_CONTROL_DISPLAY_TIME_ZONE = 'Africa/Lome';
 const EARTH_RADIUS_METERS = 6_371_000;
 

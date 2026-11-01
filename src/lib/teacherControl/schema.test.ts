@@ -18,6 +18,8 @@ const unrecordedRegularizationMigrationPath = path.join(process.cwd(), 'drizzle'
 const unrecordedRegularizationMigration = readFileSync(unrecordedRegularizationMigrationPath, 'utf8');
 const acceptanceLinkMigrationPath = path.join(process.cwd(), 'drizzle', 'manual', '0148_teacher_control_regularization_acceptance_link.sql');
 const acceptanceLinkMigration = readFileSync(acceptanceLinkMigrationPath, 'utf8');
+const gpsAccuracyMigrationPath = path.join(process.cwd(), 'drizzle', 'manual', '0149_teacher_control_gps_accuracy_500m.sql');
+const gpsAccuracyMigration = readFileSync(gpsAccuracyMigrationPath, 'utf8');
 const drizzleSchema = readFileSync(path.join(process.cwd(), 'src', 'db', 'schema.ts'), 'utf8');
 
 describe('teacher control schema migration', () => {
@@ -112,6 +114,17 @@ describe('teacher control schema migration', () => {
     expect(unrecordedRegularizationMigration).toMatch(/start_distance_meters IS NULL OR/);
     expect(unrecordedRegularizationMigration).toMatch(/start_accuracy_meters IS NULL OR/);
     expect(unrecordedRegularizationMigration).toMatch(/start_geofence_radius_meters IS NULL OR/);
+  });
+
+  it('raises the session GPS accuracy ceiling to 500 m without changing geofence validation', () => {
+    expect(gpsAccuracyMigration).toMatch(/DROP CONSTRAINT teacher_control_sessions_gps_values_check/);
+    expect(gpsAccuracyMigration).toMatch(/start_accuracy_meters BETWEEN 0 AND 500/);
+    expect(gpsAccuracyMigration).toMatch(/end_accuracy_meters IS NULL OR end_accuracy_meters BETWEEN 0 AND 500/);
+    expect(gpsAccuracyMigration).toMatch(/start_geofence_radius_meters IS NULL OR start_geofence_radius_meters > 0/);
+    expect(gpsAccuracyMigration).toMatch(/end_geofence_radius_meters IS NULL OR end_geofence_radius_meters > 0/);
+    expect(gpsAccuracyMigration).not.toMatch(/accuracy_meters BETWEEN 0 AND 100/);
+    expect(drizzleSchema).toMatch(/startAccuracyMeters\} IS NULL OR \$\{table\.startAccuracyMeters\} BETWEEN 0 AND 500/);
+    expect(drizzleSchema).toMatch(/endAccuracyMeters\} IS NULL OR \$\{table\.endAccuracyMeters\} BETWEEN 0 AND 500/);
   });
 
   it('allows unrecorded requests to link a session only after acceptance', () => {

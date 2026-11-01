@@ -2063,7 +2063,7 @@ export default function TeacherControlView({
             <div className="rounded-xl bg-indigo-50 p-2 text-indigo-600"><Settings2 className="h-5 w-5" /></div>
             <div>
               <h2 className="font-bold text-slate-900">Paramètres de contrôle GPS</h2>
-              <p className="mt-1 text-sm text-slate-600">Le rayon est indépendant de la précision maximale acceptée (100 m). Aucun rayon n’est augmenté automatiquement.</p>
+              <p className="mt-1 text-sm text-slate-600">Le rayon est indépendant de la précision maximale acceptée (500 m). Aucun rayon n’est augmenté automatiquement.</p>
             </div>
           </div>
           {gpsSettings && (
@@ -2092,7 +2092,7 @@ export default function TeacherControlView({
               )}
               <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Rayon de présence (mètres)
                 <input className={`${inputClass} mt-1 max-w-xs`} type="number" step="1" min="1" value={gpsForm.geofenceRadiusMeters} onChange={(event) => setGpsForm({ ...gpsForm, geofenceRadiusMeters: event.target.value })} disabled={!canManage} />
-                <span className="mt-1 block text-xs font-normal text-slate-500">Valeur initiale prévue : 200 m. Précision GPS maximale : 100 m.</span>
+                <span className="mt-1 block text-xs font-normal text-slate-500">Valeur initiale prévue : 200 m. Précision GPS maximale : 500 m.</span>
               </label>
               {canManageGps && (
                 <div className="sm:col-span-2">
