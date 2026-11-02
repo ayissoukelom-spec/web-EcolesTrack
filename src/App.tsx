@@ -1888,6 +1888,8 @@ export default function App() {
                   onTabChange={handleTeacherControlTabChange}
                   onPendingRegularizationsCountChange={setPendingRegularizationsCount}
                   onInitialViewSettled={handleTeacherControlInitialViewSettled}
+                  currentTeacherId={currentTeacherProfile?.id}
+                  currentTeacherName={currentTeacherProfile?.name ?? authenticatedUser?.name ?? ''}
                 />
               </ErrorBoundary>
             </div>

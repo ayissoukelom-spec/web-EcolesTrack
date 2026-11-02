@@ -129,11 +129,200 @@ describe('TeacherControlView', () => {
     cleanup();
     window.history.replaceState(null, '', '/');
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     if (originalPermissionsPolicyDescriptor) {
       Object.defineProperty(document, 'permissionsPolicy', originalPermissionsPolicyDescriptor);
     } else {
       Reflect.deleteProperty(document, 'permissionsPolicy');
     }
+  });
+
+  it('downloads the teacher-owned report from all server pages in both formats', async () => {
+    const completedSession = {
+      ...session,
+      status: 'completed',
+      validatedEndedAt: '2026-10-31T10:00:00.000Z',
+      durationMilliseconds: 7_200_000,
+    };
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/teacher-control/sessions')) {
+        const query = new URL(url, 'http://localhost').searchParams;
+        if (query.get('status') === 'open') return { items: [], nextCursor: null, hasMore: false, limit: 100, totalCount: 0 };
+        if (query.get('limit') === '100' && query.get('cursor') === 'next-page') {
+          return { items: [{ ...completedSession, id: 2, startedAt: '2026-10-30T08:00:00.000Z' }], nextCursor: null, hasMore: false, limit: 100, totalCount: 2 };
+        }
+        if (query.get('limit') === '100') {
+          return { items: [completedSession], nextCursor: 'next-page', hasMore: true, limit: 100, totalCount: 2 };
+        }
+        return { items: [], nextCursor: null, hasMore: false, limit: 50, totalCount: 0 };
+      }
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url === '/api/teacher-control/regularizations') return [];
+      if (url === '/api/teacher-control/assignments') return [];
+      return {};
+    });
+
+    const OriginalURL = URL;
+    class DownloadURL extends OriginalURL {}
+    Object.defineProperty(DownloadURL, 'createObjectURL', { value: vi.fn(() => 'blob:teacher-report') });
+    Object.defineProperty(DownloadURL, 'revokeObjectURL', { value: vi.fn() });
+    vi.stubGlobal('URL', DownloadURL);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    render(<TeacherControlView {...defaultProps} currentTeacherId={20} currentTeacherName="Afi Mensah" />);
+
+    const excelButton = await screen.findByRole('button', { name: 'Télécharger en Excel (.xlsx)' });
+    fireEvent.change(screen.getByLabelText('Date de début du relevé'), { target: { value: '2026-10-30' } });
+    fireEvent.change(screen.getByLabelText('Date de fin du relevé'), { target: { value: '2026-10-31' } });
+    await waitFor(() => expect(excelButton.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(excelButton);
+    await waitFor(() => expect(screen.getByText('Le relevé a été téléchargé au format Excel.')).toBeTruthy());
+    const reportRequests = apiFetchMock.mock.calls.filter(([url]) => (
+      typeof url === 'string'
+      && url.startsWith('/api/teacher-control/sessions?')
+      && url.includes('status=completed')
+    ));
+    expect(reportRequests).toHaveLength(2);
+    expect(reportRequests.every(([url]) => (
+      String(url).includes('from=2026-10-30T00%3A00%3A00.000Z')
+      && String(url).includes('to=2026-10-31T23%3A59%3A59.999Z')
+      && String(url).includes('limit=100')
+      && !String(url).includes('teacherId=')
+    ))).toBe(true);
+    expect(click).toHaveBeenCalledTimes(1);
+
+    const pdfButton = screen.getByRole('button', { name: 'Télécharger en PDF' });
+    fireEvent.click(pdfButton);
+    await waitFor(() => expect(screen.getByText('Le relevé a été téléchargé au format PDF.')).toBeTruthy());
+    expect(click).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets an administrator export all teachers through the school-scoped sessions API', async () => {
+    const completedSession = {
+      ...session,
+      status: 'completed',
+      validatedEndedAt: '2026-10-31T10:00:00.000Z',
+      durationMilliseconds: 7_200_000,
+    };
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) {
+        return { teachers: [], classes: [], subjects: [] };
+      }
+      if (url.startsWith('/api/teacher-control/sessions')) {
+        const query = new URL(url, 'http://localhost').searchParams;
+        if (query.get('status') === 'open') return { items: [], nextCursor: null, hasMore: false, limit: 100, totalCount: 0 };
+        if (query.get('limit') === '100') return { items: [completedSession], nextCursor: null, hasMore: false, limit: 100, totalCount: 1 };
+        return { items: [], nextCursor: null, hasMore: false, limit: 50, totalCount: 0 };
+      }
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url.startsWith('/api/teacher-control/regularizations')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        return { isEnabled: false, latitude: null, longitude: null, geofenceRadiusMeters: 200 };
+      }
+      return {};
+    });
+
+    const OriginalURL = URL;
+    class DownloadURL extends OriginalURL {}
+    Object.defineProperty(DownloadURL, 'createObjectURL', { value: vi.fn(() => 'blob:admin-report') });
+    Object.defineProperty(DownloadURL, 'revokeObjectURL', { value: vi.fn() });
+    vi.stubGlobal('URL', DownloadURL);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    const pdfButton = await screen.findByRole('button', { name: 'Télécharger en PDF' });
+    fireEvent.change(screen.getByLabelText('Enseignant ou périmètre du relevé'), { target: { value: 'all' } });
+    fireEvent.change(screen.getByLabelText('Date de début du relevé'), { target: { value: '2026-10-30' } });
+    fireEvent.change(screen.getByLabelText('Date de fin du relevé'), { target: { value: '2026-10-31' } });
+    await waitFor(() => expect(pdfButton.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(pdfButton);
+    await waitFor(() => expect(screen.getByText('Le relevé a été téléchargé au format PDF.')).toBeTruthy());
+
+    const exportRequest = apiFetchMock.mock.calls.find(([url]) => (
+      typeof url === 'string' && url.startsWith('/api/teacher-control/sessions?') && url.includes('limit=100')
+    ));
+    expect(exportRequest).toBeTruthy();
+    expect(String(exportRequest?.[0])).not.toContain('teacherId=');
+    expect(String(exportRequest?.[0])).not.toContain('schoolId=');
+  });
+
+  it('exports only the administrator-selected teacher for the explicit date range', async () => {
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) {
+        return { teachers: [{ id: 20, name: 'Afi Mensah' }], classes: [], subjects: [] };
+      }
+      if (url.startsWith('/api/teacher-control/sessions')) {
+        const query = new URL(url, 'http://localhost').searchParams;
+        if (query.get('status') === 'open') return { items: [], nextCursor: null, hasMore: false, limit: 100, totalCount: 0 };
+        if (query.get('limit') === '100') {
+          return { items: [{ ...session, status: 'completed', validatedEndedAt: '2026-10-31T10:00:00.000Z' }], nextCursor: null, hasMore: false, limit: 100, totalCount: 1 };
+        }
+        return { items: [], nextCursor: null, hasMore: false, limit: 50, totalCount: 1 };
+      }
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 1,
+          openSessions: 0,
+          completedSessions: 1,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 7_200_000,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url.startsWith('/api/teacher-control/regularizations')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        return { isEnabled: false, latitude: null, longitude: null, geofenceRadiusMeters: 200 };
+      }
+      return {};
+    });
+
+    const OriginalURL = URL;
+    class DownloadURL extends OriginalURL {}
+    Object.defineProperty(DownloadURL, 'createObjectURL', { value: vi.fn(() => 'blob:selected-teacher-report') });
+    Object.defineProperty(DownloadURL, 'revokeObjectURL', { value: vi.fn() });
+    vi.stubGlobal('URL', DownloadURL);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    await screen.findByRole('combobox', { name: 'Enseignant ou périmètre du relevé' });
+    fireEvent.change(screen.getByLabelText('Enseignant ou périmètre du relevé'), { target: { value: '20' } });
+    fireEvent.change(screen.getByLabelText('Date de début du relevé'), { target: { value: '2026-10-31' } });
+    fireEvent.change(screen.getByLabelText('Date de fin du relevé'), { target: { value: '2026-10-31' } });
+    const excelButton = screen.getByRole('button', { name: 'Télécharger en Excel (.xlsx)' });
+    await waitFor(() => expect(excelButton.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(excelButton);
+    await waitFor(() => expect(screen.getByText('Le relevé a été téléchargé au format Excel.')).toBeTruthy());
+    const exportRequest = apiFetchMock.mock.calls.find(([url]) => (
+      typeof url === 'string' && url.startsWith('/api/teacher-control/sessions?') && url.includes('limit=100')
+    ));
+    expect(String(exportRequest?.[0])).toContain('teacherId=20');
+    expect(String(exportRequest?.[0])).toContain('from=2026-10-31T00%3A00%3A00.000Z');
+    expect(String(exportRequest?.[0])).toContain('to=2026-10-31T23%3A59%3A59.999Z');
   });
 
   it('opens the start form from one Début action without navigating or reloading', async () => {
@@ -459,7 +648,7 @@ describe('TeacherControlView', () => {
     render(<SuperAdminView />);
     expect(await screen.findByText('Statistiques par établissement')).toBeTruthy();
     expect(screen.getByLabelText('Établissement')).toHaveValue('');
-    expect(screen.getByRole('option', { name: 'Afi Mensah · École A' })).toBeTruthy();
+    expect(within(screen.getByLabelText('Enseignant')).getByRole('option', { name: 'Afi Mensah · École A' })).toBeTruthy();
     expect(screen.getByRole('option', { name: '6e A · École A' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Mathématiques · École A' })).toBeTruthy();
 
@@ -485,8 +674,8 @@ describe('TeacherControlView', () => {
     expect(screen.getByLabelText('Enseignant')).toHaveValue('');
     expect(screen.getByLabelText('Classe')).toHaveValue('');
     expect(screen.getByLabelText('Matière')).toHaveValue('');
-    expect(screen.getByRole('option', { name: 'Kossi Doe' })).toBeTruthy();
-    expect(screen.queryByRole('option', { name: 'Afi Mensah · École A' })).toBeNull();
+    expect(within(screen.getByLabelText('Enseignant')).getByRole('option', { name: 'Kossi Doe' })).toBeTruthy();
+    expect(within(screen.getByLabelText('Enseignant')).queryByRole('option', { name: 'Afi Mensah · École A' })).toBeNull();
   });
 
   it('starts the selected exact assignment after a fresh GPS fix and shows server time read-only', async () => {
@@ -1674,7 +1863,7 @@ describe('TeacherControlView', () => {
       expect(await screen.findByText('6e A · Mathématiques')).toBeTruthy();
       expect(screen.queryByLabelText('Établissement')).toBeNull();
       expect(screen.getByLabelText('Enseignant').tagName).toBe('SELECT');
-      expect(screen.getByRole('option', { name: 'Afi Mensah' })).toBeTruthy();
+      expect(within(screen.getByLabelText('Enseignant')).getByRole('option', { name: 'Afi Mensah' })).toBeTruthy();
       fireEvent.change(screen.getByLabelText('Enseignant'), { target: { value: '20' } });
       fireEvent.change(screen.getByLabelText('Statut de séance'), { target: { value: 'open' } });
       fireEvent.click(screen.getByRole('button', { name: 'Appliquer les filtres' }));

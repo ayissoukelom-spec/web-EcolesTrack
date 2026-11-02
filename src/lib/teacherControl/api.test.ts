@@ -2034,6 +2034,48 @@ describe('teacher control API authorization and input validation', () => {
     expect(response.body.items[0]).toMatchObject({ id: 71, schoolId: 8 });
   });
 
+  it('limits teacher session reports to the authenticated teacher even when another teacherId is requested', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.sessions = [
+      {
+        id: 71,
+        schoolId: 8,
+        schoolNameSnapshot: 'School Eight',
+        teacherId: 21,
+        teacherNameSnapshot: 'Afi Mensah',
+        classId: 31,
+        classNameSnapshot: '6e A',
+        subjectId: 41,
+        subjectNameSnapshot: 'Mathématiques',
+        status: 'open',
+        startedAt: new Date('2026-10-31T08:00:00.000Z'),
+        validatedEndedAt: null,
+      },
+      {
+        id: 72,
+        schoolId: 8,
+        schoolNameSnapshot: 'School Eight',
+        teacherId: 22,
+        teacherNameSnapshot: 'Kossi Doe',
+        classId: 32,
+        classNameSnapshot: '5e B',
+        subjectId: 42,
+        subjectNameSnapshot: 'Histoire',
+        status: 'open',
+        startedAt: new Date('2026-10-31T09:00:00.000Z'),
+        validatedEndedAt: null,
+      },
+    ];
+
+    const response = await request(createTestApp())
+      .get('/api/teacher-control/sessions?teacherId=22&limit=100');
+
+    expect(response.status).toBe(200);
+    expect(response.body.items.map((row: { id: number }) => row.id)).toEqual([71]);
+  });
+
   it('updates GPS configuration only in the school-admin scope and records before and after values', async () => {
     mockActor.role = 'school_admin';
     mockDatabaseState.gpsSettings = [{

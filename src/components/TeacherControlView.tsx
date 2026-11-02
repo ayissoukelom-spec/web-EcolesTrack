@@ -6,6 +6,8 @@ import {
   Check,
   ClipboardCheck,
   Clock3,
+  FileSpreadsheet,
+  FileText,
   GraduationCap,
   MapPin,
   RefreshCw,
@@ -19,6 +21,12 @@ import {
   MAX_GEOFENCE_RADIUS_METERS,
   MAX_GPS_ACCURACY_METERS,
 } from '../lib/teacherControl/domain.ts';
+import {
+  buildTeacherHoursReport,
+  createTeacherHoursExcel,
+  createTeacherHoursPdf,
+  type TeacherHoursReportIdentity,
+} from '../lib/teacherControl/hoursReport.ts';
 import type { School, Teacher, UserRole } from '../types.ts';
 
 type Assignment = {
@@ -222,7 +230,17 @@ interface TeacherControlViewProps {
   onTabChange?: (tab: ViewTab) => void;
   onPendingRegularizationsCountChange?: (count: number) => void;
   onInitialViewSettled?: () => void;
+  currentTeacherId?: number;
+  currentTeacherName?: string;
 }
+
+type ReportTeacherOption = TeacherHoursReportIdentity;
+
+type ReportSelection = {
+  teacherId: string;
+  from: string;
+  to: string;
+};
 
 const timeZone = 'Africa/Lome';
 const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100';
@@ -578,6 +596,8 @@ export default function TeacherControlView({
   onTabChange,
   onPendingRegularizationsCountChange,
   onInitialViewSettled,
+  currentTeacherId,
+  currentTeacherName,
 }: TeacherControlViewProps) {
   const isTeacher = userRole === 'teacher';
   const isSchoolAdmin = userRole === 'school_admin';
@@ -595,6 +615,8 @@ export default function TeacherControlView({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [exportingReport, setExportingReport] = useState<'excel' | 'pdf' | null>(null);
+  const [reportSelection, setReportSelection] = useState<ReportSelection>({ teacherId: '', from: '', to: '' });
   const [assignments, setAssignments] = useState<Assignment[] | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [teacherOpenSessions, setTeacherOpenSessions] = useState<Session[]>([]);
@@ -618,6 +640,7 @@ export default function TeacherControlView({
   const [endConfirmation, setEndConfirmation] = useState<EndConfirmation | null>(null);
   const initialTabRef = useRef(initialTab);
   const actionInFlight = useRef(false);
+  const reportExportInFlight = useRef(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
   const [rateLoaded, setRateLoaded] = useState(false);
@@ -655,6 +678,43 @@ export default function TeacherControlView({
   const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '' });
   const [gpsRadius, setGpsRadius] = useState('200');
   const [gpsAccuracyThreshold, setGpsAccuracyThreshold] = useState(String(MAX_GPS_ACCURACY_METERS));
+
+  const reportTeacherOptions = useMemo<ReportTeacherOption[]>(() => {
+    const options = new Map<string, ReportTeacherOption>();
+    for (const teacher of teachersList) {
+      if (teacher.isDeleted) continue;
+      const teacherSchoolIds = teacher.schoolIds?.length ? teacher.schoolIds : [teacher.schoolId];
+      for (const teacherSchoolId of teacherSchoolIds) {
+        if (schoolId != null && teacherSchoolId !== schoolId) continue;
+        const schoolName = schoolsList.find((school) => school.id === teacherSchoolId)?.name
+          ?? `Établissement #${teacherSchoolId}`;
+        options.set(`${teacherSchoolId}:${teacher.id}`, {
+          schoolId: teacherSchoolId,
+          schoolName,
+          teacherId: teacher.id,
+          teacherName: teacher.name,
+        });
+      }
+    }
+    for (const teacher of sessionFilterOptions?.teachers ?? []) {
+      const [teacherName, optionSchoolName] = teacher.name.split(' · ');
+      const optionSchoolId = schoolId
+        ?? schoolsList.find((school) => school.name === optionSchoolName)?.id
+        ?? activeSchoolId
+        ?? 0;
+      const key = `${optionSchoolId}:${teacher.id}`;
+      if (!options.has(key)) {
+        options.set(key, {
+          schoolId: optionSchoolId,
+          schoolName: optionSchoolName ?? selectedSchool?.name ?? `Établissement #${optionSchoolId}`,
+          teacherId: teacher.id,
+          teacherName,
+        });
+      }
+    }
+    return [...options.values()].sort((left, right) => left.schoolName.localeCompare(right.schoolName, 'fr')
+      || left.teacherName.localeCompare(right.teacherName, 'fr'));
+  }, [activeSchoolId, schoolId, schoolsList, selectedSchool?.name, sessionFilterOptions?.teachers, teachersList]);
 
   const currentCursor = sessionCursors[sessionCursors.length - 1] ?? null;
   const makeFilterParams = useCallback((includeSchool: boolean, selectedFilters = filtersRef.current) => {
@@ -1520,6 +1580,119 @@ export default function TeacherControlView({
     }
   };
 
+  const getReportPeriodLabel = (from: string, to: string) => {
+    const formatDate = (value: string) => new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'UTC',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date(`${value}T00:00:00.000Z`));
+    return `Du ${formatDate(from)} au ${formatDate(to)}`;
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  const exportTeacherHours = async (format: 'excel' | 'pdf') => {
+    if (reportExportInFlight.current) return;
+    reportExportInFlight.current = true;
+    setExportingReport(format);
+    setError(null);
+    setSuccess(null);
+    try {
+      if (!reportSelection.from || !reportSelection.to || reportSelection.from > reportSelection.to) {
+        throw new Error('Sélectionnez une date de début et une date de fin valides pour le relevé.');
+      }
+      if (!isTeacher && !reportSelection.teacherId) {
+        throw new Error('Sélectionnez un enseignant ou « Tous les enseignants » avant le téléchargement.');
+      }
+
+      const selectedTeacherId = !isTeacher && reportSelection.teacherId !== 'all'
+        ? Number(reportSelection.teacherId)
+        : null;
+      if (selectedTeacherId != null && !Number.isSafeInteger(selectedTeacherId)) {
+        throw new Error('L’enseignant sélectionné est invalide.');
+      }
+      const selectedTeacher = selectedTeacherId == null
+        ? undefined
+        : reportTeacherOptions.find((teacher) => teacher.teacherId === selectedTeacherId);
+      if (selectedTeacherId != null && !selectedTeacher) {
+        throw new Error('L’enseignant sélectionné n’est pas disponible dans ce périmètre.');
+      }
+
+      const params = new URLSearchParams();
+      params.set('from', `${reportSelection.from}T00:00:00.000Z`);
+      params.set('to', `${reportSelection.to}T23:59:59.999Z`);
+      params.set('status', 'completed');
+      params.set('limit', '100');
+      if (isSuperAdmin && schoolId != null) params.set('schoolId', String(schoolId));
+      if (selectedTeacherId != null) params.set('teacherId', String(selectedTeacherId));
+
+      const sessions: Session[] = [];
+      const cursors = new Set<string>();
+      let expectedTotal: number | null = null;
+      while (true) {
+        const page = await apiFetch(`/api/teacher-control/sessions?${params.toString()}`) as SessionPage;
+        if (!page || !Array.isArray(page.items) || typeof page.totalCount !== 'number') {
+          throw new Error('La réponse des séances est invalide ; le relevé ne peut pas être généré.');
+        }
+        if (expectedTotal == null) expectedTotal = page.totalCount;
+        sessions.push(...page.items);
+        if (!page.nextCursor) {
+          if (page.hasMore) throw new Error('La pagination des séances est incomplète ; réessayez le téléchargement.');
+          break;
+        }
+        if (cursors.has(page.nextCursor)) {
+          throw new Error('La pagination des séances est incohérente ; réessayez le téléchargement.');
+        }
+        cursors.add(page.nextCursor);
+        params.set('cursor', page.nextCursor);
+      }
+      if (expectedTotal !== sessions.length) {
+        throw new Error('Le nombre de séances reçues ne correspond pas au relevé complet ; réessayez le téléchargement.');
+      }
+
+      const emptyTeacher: TeacherHoursReportIdentity | undefined = isTeacher
+        ? {
+          schoolId: schoolId ?? 0,
+          schoolName: selectedSchool?.name ?? `Établissement #${schoolId ?? 0}`,
+          teacherId: currentTeacherId ?? 0,
+          teacherName: currentTeacherName?.trim() || 'Enseignant',
+        }
+        : selectedTeacher;
+      const report = buildTeacherHoursReport(sessions, {
+        periodLabel: getReportPeriodLabel(reportSelection.from, reportSelection.to),
+        scopeLabel: selectedSchool?.name ?? (isSuperAdmin ? 'Tous les établissements' : 'Établissement'),
+        emptyTeacher,
+        teachers: !isTeacher && reportSelection.teacherId === 'all' ? reportTeacherOptions : undefined,
+        includeGeneralSummary: !isTeacher && reportSelection.teacherId === 'all',
+      });
+      const data = format === 'excel'
+        ? await createTeacherHoursExcel(report)
+        : await createTeacherHoursPdf(report);
+      const mimeType = format === 'excel'
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'application/pdf';
+      const extension = format === 'excel' ? 'xlsx' : 'pdf';
+      const filename = `releve-heures-effectuees-${new Date().toISOString().slice(0, 10)}.${extension}`;
+      downloadBlob(new Blob([data], { type: mimeType }), filename);
+      setSuccess(`Le relevé a été téléchargé au format ${format === 'excel' ? 'Excel' : 'PDF'}.`);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Impossible de générer le relevé.');
+    } finally {
+      reportExportInFlight.current = false;
+      setExportingReport(null);
+    }
+  };
+
   const applySessionFilters = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (filterRequestInFlightRef.current || loading || sessionFilterOptionsLoading) return;
@@ -1865,6 +2038,15 @@ export default function TeacherControlView({
                 <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
                 {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des statistiques…</span>}
               </form>
+            <TeacherHoursReportControls
+              isTeacher={isTeacher}
+              teachers={reportTeacherOptions}
+              selection={reportSelection}
+              setSelection={setReportSelection}
+              exporting={exportingReport}
+              disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}
+              onExport={(format) => void exportTeacherHours(format)}
+            />
             <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="teacher-control-statistics-grid">
                 <StatCard label="Séances" value={String(globalStatistics.totalSessions)} detail={`${globalStatistics.openSessions} en cours · ${globalStatistics.incompleteSessions} sans fin validée`} tone="indigo" icon={CalendarClock} />
@@ -2303,6 +2485,15 @@ export default function TeacherControlView({
               {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des séances et statistiques…</span>}
             </div>
           </form>
+          <TeacherHoursReportControls
+            isTeacher={isTeacher}
+            teachers={reportTeacherOptions}
+            selection={reportSelection}
+            setSelection={setReportSelection}
+            exporting={exportingReport}
+            disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}
+            onExport={(format) => void exportTeacherHours(format)}
+          />
 
           {isTeacher && sessions.some((session) => session.status === 'open' && !regularizations.some((entry) => entry.request.sessionId === session.id && entry.request.status === 'pending')) && (
             <TeacherRegularizationForms
@@ -2869,6 +3060,104 @@ function SessionFilterControls({
         && options.teachers.length === 0 && options.classes.length === 0 && options.subjects.length === 0 && (
           <p role="status" className="text-xs font-normal text-slate-500 sm:col-span-2 xl:col-span-4">Aucune option disponible : aucune séance ne correspond au périmètre sélectionné.</p>
         )}
+    </div>
+  );
+}
+
+function TeacherHoursReportControls({
+  isTeacher,
+  teachers,
+  selection,
+  setSelection,
+  exporting,
+  disabled,
+  onExport,
+}: {
+  isTeacher: boolean;
+  teachers: ReportTeacherOption[];
+  selection: ReportSelection;
+  setSelection: Dispatch<SetStateAction<ReportSelection>>;
+  exporting: 'excel' | 'pdf' | null;
+  disabled: boolean;
+  onExport: (format: 'excel' | 'pdf') => void;
+}) {
+  const isDisabled = disabled
+    || exporting != null
+    || !selection.from
+    || !selection.to
+    || selection.from > selection.to
+    || (!isTeacher && !selection.teacherId);
+  return (
+    <div className="w-full space-y-3 rounded-xl border border-slate-200 bg-white p-3" aria-label="Paramètres du relevé d'heures">
+      {!isTeacher && (
+        <label className="block max-w-xl text-xs font-semibold text-slate-600">
+          Enseignant ou périmètre du relevé
+          <select
+            className={`${inputClass} mt-1`}
+            aria-label="Enseignant ou périmètre du relevé"
+            required
+            value={selection.teacherId}
+            onChange={(event) => setSelection((current) => ({ ...current, teacherId: event.target.value }))}
+            disabled={disabled || exporting != null}
+          >
+            <option value="">Sélectionnez un enseignant</option>
+            <option value="all">Tous les enseignants</option>
+            {teachers.map((teacher) => (
+              <option key={`${teacher.schoolId}:${teacher.teacherId}`} value={teacher.teacherId}>
+                {teachers.some((item) => item.schoolId !== teacher.schoolId)
+                  ? `${teacher.teacherName} · ${teacher.schoolName}`
+                  : teacher.teacherName}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-xs font-semibold text-slate-600">
+          Date de début
+          <input
+            className={`${inputClass} mt-1`}
+            type="date"
+            aria-label="Date de début du relevé"
+            required
+            value={selection.from}
+            onChange={(event) => setSelection((current) => ({ ...current, from: event.target.value }))}
+            disabled={disabled || exporting != null}
+          />
+        </label>
+        <label className="text-xs font-semibold text-slate-600">
+          Date de fin
+          <input
+            className={`${inputClass} mt-1`}
+            type="date"
+            aria-label="Date de fin du relevé"
+            required
+            value={selection.to}
+            onChange={(event) => setSelection((current) => ({ ...current, to: event.target.value }))}
+            disabled={disabled || exporting != null}
+          />
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={secondaryButtonClass}
+          disabled={isDisabled}
+          onClick={() => onExport('excel')}
+        >
+          <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+          {exporting === 'excel' ? 'Génération Excel…' : 'Télécharger en Excel (.xlsx)'}
+        </button>
+        <button
+          type="button"
+          className={secondaryButtonClass}
+          disabled={isDisabled}
+          onClick={() => onExport('pdf')}
+        >
+          <FileText className="h-4 w-4" aria-hidden="true" />
+          {exporting === 'pdf' ? 'Génération PDF…' : 'Télécharger en PDF'}
+        </button>
+      </div>
     </div>
   );
 }
