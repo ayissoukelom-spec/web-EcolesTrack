@@ -52,6 +52,111 @@ describe('AdminView school term cycle availability', () => {
     });
   });
 
+  describe('student birth date editing', () => {
+    const renderStudentEditor = (userRole: 'super_admin' | 'school_admin', onUpdateStudent = vi.fn(async () => undefined)) => {
+      renderWithAuth(
+        <AdminView
+          userRole={userRole}
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[{ id: 1, name: '2026-2027', isActive: true, schoolId: 1 }]}
+          classesList={[{ id: 11, schoolId: 1, academicYearId: 1, name: 'CM2' }]}
+          teachersList={[]}
+          studentsList={[{
+            id: 5,
+            firstName: 'Awa',
+            lastName: 'Amani',
+            birthDate: '2015-04-12',
+            schoolId: 1,
+            classId: 11,
+            className: 'CM2',
+            parentId: 7,
+            parentName: 'Parent Amani',
+          }]}
+          parentsList={[{ id: 7, userId: 17, name: 'Parent Amani', schoolId: 1 }]}
+          usersList={[]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onUpdateStudent={onUpdateStudent}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Élèves/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      return screen.getByRole('dialog', { name: "Modifier l'élève" });
+    };
+
+    afterEach(() => {
+      cleanup();
+    });
+
+    it.each(['super_admin', 'school_admin'] as const)('%s can open the day, month, and year selectors', (userRole) => {
+      const dialog = renderStudentEditor(userRole);
+      const selectors = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'));
+      expect(selectors).toHaveLength(3);
+
+      for (const selector of selectors) {
+        fireEvent.click(selector);
+        expect(screen.getByRole('listbox')).toBeInTheDocument();
+        fireEvent.click(selector);
+        expect(screen.queryByRole('listbox')).toBeNull();
+      }
+
+      fireEvent.click(selectors[2]);
+      const yearList = screen.getByRole('listbox');
+      expect(within(yearList).queryByText(String(new Date().getFullYear()))).toBeNull();
+    });
+
+    it.each(['super_admin', 'school_admin'] as const)('%s can dismiss the birth date selector without changing its value', (userRole) => {
+      const dialog = renderStudentEditor(userRole);
+      const [daySelector, monthSelector, yearSelector] = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'),
+      );
+
+      fireEvent.click(daySelector);
+      expect(screen.getByRole('listbox')).toBeInTheDocument();
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole('listbox')).toBeNull();
+
+      fireEvent.click(daySelector);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByRole('listbox')).toBeNull();
+
+      expect(daySelector).toHaveTextContent('12');
+      expect(monthSelector).toHaveTextContent('avril');
+      expect(yearSelector).toHaveTextContent('2015');
+    });
+
+    it('saves a selected birth date for a school admin without changing the school scope', async () => {
+      const onUpdateStudent = vi.fn(async () => undefined);
+      const dialog = renderStudentEditor('school_admin', onUpdateStudent);
+      const [daySelector, monthSelector, yearSelector] = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'),
+      );
+
+      fireEvent.click(daySelector);
+      fireEvent.click(within(screen.getByRole('listbox')).getByText('22'));
+      fireEvent.click(monthSelector);
+      fireEvent.click(within(screen.getByRole('listbox')).getByText('septembre'));
+      fireEvent.click(yearSelector);
+      fireEvent.click(within(screen.getByRole('listbox')).getByText('2014'));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enregistrer' }));
+
+      await waitFor(() => {
+        expect(onUpdateStudent).toHaveBeenCalledWith(5, expect.objectContaining({
+          birthDate: '2014-09-22',
+          schoolId: 1,
+        }));
+      });
+    });
+  });
+
   afterEach(() => {
     cleanup();
   });

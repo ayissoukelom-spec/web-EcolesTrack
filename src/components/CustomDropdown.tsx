@@ -23,34 +23,73 @@ export default function CustomDropdown({ options, value, onChange, placeholder =
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    function handleOutside(e: MouseEvent) {
-      if (!triggerRef.current) return;
-      const trg = triggerRef.current;
-      const list = listRef.current;
-      if (trg.contains(e.target as Node)) return;
-      if (list && list.contains(e.target as Node)) return;
+    function handleOutside(event: Event) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const path = event.composedPath();
+      const isInside = (element: HTMLElement | null) =>
+        element !== null && (element.contains(target) || path.includes(element));
+
+      if (isInside(triggerRef.current) || isInside(listRef.current)) return;
       setOpen(false);
     }
 
-    if (open) document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false);
+    }
+
+    if (open) {
+      document.addEventListener('pointerdown', handleOutside, true);
+      document.addEventListener('mousedown', handleOutside, true);
+      document.addEventListener('touchstart', handleOutside, true);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('pointerdown', handleOutside, true);
+      document.removeEventListener('mousedown', handleOutside, true);
+      document.removeEventListener('touchstart', handleOutside, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open || !triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    setPortalStyle({ position: 'absolute', top: rect.bottom + window.scrollY + 6, left: rect.left + window.scrollX, minWidth: rect.width, zIndex: 10000 });
 
-    function onScrollOrResize() {
-      const r = triggerRef.current!.getBoundingClientRect();
-      setPortalStyle({ position: 'absolute', top: r.bottom + window.scrollY + 6, left: r.left + window.scrollX, minWidth: r.width, zIndex: 10000 });
-    }
+    const updatePortalPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
 
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
+      const viewportPadding = 8;
+      const gap = 6;
+      const menuHeight = Math.min(224, Math.max(0, window.innerHeight - viewportPadding * 2));
+      const menuWidth = Math.min(rect.width, Math.max(0, window.innerWidth - viewportPadding * 2));
+      const openAbove = rect.bottom + gap + menuHeight > window.innerHeight
+        && rect.top > menuHeight + gap;
+      const top = openAbove
+        ? rect.top - gap - menuHeight
+        : Math.max(viewportPadding, Math.min(rect.bottom + gap, window.innerHeight - menuHeight - viewportPadding));
+      const left = Math.max(
+        viewportPadding,
+        Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding),
+      );
+
+      setPortalStyle({
+        position: 'fixed',
+        top,
+        left,
+        width: menuWidth,
+        maxHeight: menuHeight,
+        zIndex: 10000,
+      });
+    };
+
+    updatePortalPosition();
+
+    window.addEventListener('scroll', updatePortalPosition, true);
+    window.addEventListener('resize', updatePortalPosition);
     return () => {
-      window.removeEventListener('scroll', onScrollOrResize, true);
-      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', updatePortalPosition, true);
+      window.removeEventListener('resize', updatePortalPosition);
     };
   }, [open]);
 

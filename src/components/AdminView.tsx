@@ -34,6 +34,7 @@ import ExcelJS from 'exceljs';
 import { readFirstExcelSheetRecords } from '../lib/excelImport';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+import CustomDropdown from './CustomDropdown';
 import TeachingAssignmentsEditor, { type TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
 import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
 import { matchesParentSearch } from '../lib/parentSearch';
@@ -949,51 +950,12 @@ export default function AdminView({
     window.localStorage.setItem('ecoletrack-subject-groups', JSON.stringify(subjectGroups));
   }, [subjectGroups]);
 
-  const [creationDayOpen, setCreationDayOpen] = useState(false);
-  const [creationMonthOpen, setCreationMonthOpen] = useState(false);
-  const [creationYearOpen, setCreationYearOpen] = useState(false);
-  const [editDayOpen, setEditDayOpen] = useState(false);
-  const [editMonthOpen, setEditMonthOpen] = useState(false);
-  const [editYearOpen, setEditYearOpen] = useState(false);
   const [studentBDay, setStudentBDay] = useState('');
   const [studentBMonth, setStudentBMonth] = useState('');
   const [studentBYear, setStudentBYear] = useState('');
   const [editBDay, setEditBDay] = useState('');
   const [editBMonth, setEditBMonth] = useState('');
   const [editBYear, setEditBYear] = useState('');
-
-  // Custom dropdown to replace native <select> for date parts
-  function CustomDropdown({ value, options, placeholder, onChange }: { value: string; options: { value: string; label: string }[]; placeholder?: string; onChange: (v: string) => void }) {
-    const [open, setOpen] = useState(false);
-    const ref = useRef<HTMLDivElement | null>(null);
-    useEffect(() => {
-      function onDoc(e: MouseEvent) {
-        if (!ref.current) return;
-        if (!ref.current.contains(e.target as Node)) setOpen(false);
-      }
-      document.addEventListener('mousedown', onDoc);
-      return () => document.removeEventListener('mousedown', onDoc);
-    }, []);
-
-    const selectedLabel = options.find((o) => o.value === value)?.label || '';
-
-    return (
-      <div className="relative" ref={ref}>
-        <button type="button" onClick={() => setOpen((s) => !s)} className="w-full text-left px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
-          {selectedLabel || placeholder}
-        </button>
-        {open && (
-          <div className="absolute left-0 top-full mt-1 w-full bg-white border border-slate-200 rounded shadow-lg z-50 max-h-56 overflow-auto">
-            {options.map((opt) => (
-              <button key={opt.value} type="button" onClick={() => { onChange(opt.value); setOpen(false); }} className={`w-full text-left px-3 py-2 hover:bg-slate-100 ${opt.value === value ? 'bg-slate-100 font-semibold' : ''}`}>
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
 
   // Filter items
   const filterBySearch = (text: string) => {
