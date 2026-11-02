@@ -170,6 +170,14 @@ describe('LoginView', () => {
     const decorations = container.querySelector('[aria-hidden="true"]');
 
     expect(decorations?.getAttribute('style')).toContain('school-doodle-background.png');
+    expect(decorations?.className).toContain('absolute inset-0');
+    expect(decorations?.className).toContain('bg-repeat');
+    expect(decorations?.className).toContain('bg-[length:360px_auto]');
+    expect(decorations?.className).toContain('md:bg-[length:640px_auto]');
+
+    const imagePreload = document.querySelector('link[rel="preload"][as="image"]');
+    expect(imagePreload?.getAttribute('href')).toBe('/images/school-doodle-background.png');
+    expect(imagePreload?.getAttribute('fetchpriority')).toBe('high');
   });
 
   it('displays the session expired message when redirected after 401', () => {

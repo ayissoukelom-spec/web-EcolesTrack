@@ -247,8 +247,15 @@ export default function LoginView({ onLogin }: Props) {
         <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
       ) : (
         <div className="relative isolate min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4">
+          <link
+            rel="preload"
+            as="image"
+            href="/images/school-doodle-background.png"
+            fetchPriority="high"
+          />
           <div
             aria-hidden="true"
+            data-testid="login-background"
             className="pointer-events-none absolute inset-0 z-0 bg-repeat bg-[length:360px_auto] md:bg-[length:640px_auto]"
             style={{ backgroundImage: "url('/images/school-doodle-background.png')" }}
           >
