@@ -152,6 +152,52 @@ describe('TeacherControlView', () => {
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/teacher-document-session')).toBe(false);
   });
 
+  it.each(['teacher', 'school_admin', 'super_admin'] as const)('%s dashboard statistics use the shared responsive dashboard card style', async (role) => {
+    if (role === 'teacher') configureTeacherApi();
+    else if (role === 'school_admin') configureAdminGpsApi();
+    else {
+      apiFetchMock.mockImplementation(async (url: string) => {
+        if (url === '/api/teacher-control/statistics/global') {
+          return {
+            totalSessions: 0,
+            openSessions: 0,
+            completedSessions: 0,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: 0,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+            schools: [],
+          };
+        }
+        if (url === '/api/teacher-control/regularizations') return [];
+        if (url.startsWith('/api/teacher-control/filter-options')) {
+          return { teachers: [], classes: [], subjects: [] };
+        }
+        return {};
+      });
+    }
+
+    render(
+      <TeacherControlView
+        {...defaultProps}
+        userRole={role}
+        activeSchoolId={role === 'super_admin' ? null : 8}
+      />,
+    );
+
+    const grid = await screen.findByTestId('teacher-control-statistics-grid');
+    expect(grid.className).toContain('grid-cols-1');
+    expect(grid.className).toContain('sm:grid-cols-2');
+    expect(grid.className).toContain('xl:grid-cols-4');
+    expect(grid.querySelectorAll('article')).toHaveLength(4);
+    const durationCard = Array.from(grid.querySelectorAll('article')).find((card) => card.textContent?.includes('Durée validée'));
+    expect(durationCard?.className).toContain('rounded-3xl');
+    expect(durationCard?.className).toContain('bg-gradient-to-br');
+    expect(durationCard?.className).toContain('hover:-translate-y-1');
+    expect(durationCard?.querySelector('svg')).toBeTruthy();
+  });
+
   it('shows readable admin filters and refreshes the super-admin school scope without stale selections', async () => {
     const globalSummary = {
       scope: 'global',

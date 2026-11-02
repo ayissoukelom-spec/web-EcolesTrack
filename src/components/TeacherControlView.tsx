@@ -508,12 +508,59 @@ function EmptyState({ children }: { children: string }) {
   return <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">{children}</p>;
 }
 
-function StatCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function StatCard({
+  label,
+  value,
+  detail,
+  tone,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  tone: 'indigo' | 'emerald' | 'sky' | 'amber';
+  icon: typeof CalendarClock;
+}) {
+  const styles = {
+    indigo: {
+      card: 'border-indigo-200/80 bg-gradient-to-br from-indigo-600 via-indigo-500 to-blue-500 shadow-[0_18px_35px_rgba(79,70,229,0.20)] hover:shadow-[0_22px_40px_rgba(79,70,229,0.28)]',
+      glow: 'bg-white/10',
+      label: 'text-indigo-100',
+      detail: 'text-indigo-100/90',
+    },
+    emerald: {
+      card: 'border-emerald-200/80 bg-gradient-to-br from-emerald-400 via-emerald-500 to-teal-500 shadow-[0_18px_35px_rgba(16,185,129,0.18)] hover:shadow-[0_22px_40px_rgba(16,185,129,0.24)]',
+      glow: 'bg-white/10',
+      label: 'text-emerald-50',
+      detail: 'text-emerald-50/90',
+    },
+    sky: {
+      card: 'border-sky-200/80 bg-gradient-to-br from-sky-500 via-cyan-500 to-teal-500 shadow-[0_18px_35px_rgba(14,116,144,0.20)] hover:shadow-[0_22px_40px_rgba(14,116,144,0.27)]',
+      glow: 'bg-white/10',
+      label: 'text-sky-100',
+      detail: 'text-sky-50/90',
+    },
+    amber: {
+      card: 'border-amber-200/80 bg-gradient-to-br from-orange-400 via-amber-400 to-yellow-300 shadow-[0_18px_35px_rgba(251,146,60,0.18)] hover:shadow-[0_22px_40px_rgba(251,146,60,0.26)]',
+      glow: 'bg-white/10',
+      label: 'text-amber-50',
+      detail: 'text-amber-50/90',
+    },
+  }[tone];
+
   return (
-    <article className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-bold text-slate-900">{value}</p>
-      {detail && <p className="mt-1 text-xs text-slate-500">{detail}</p>}
+    <article className={`group relative min-w-0 overflow-hidden rounded-3xl border p-5 text-white transition-all duration-200 hover:-translate-y-1 ${styles.card}`}>
+      <div className={`pointer-events-none absolute -right-6 -top-7 h-24 w-24 rounded-full blur-2xl ${styles.glow}`} />
+      <div className="relative flex min-w-0 items-center justify-between gap-4">
+        <div className="min-w-0 space-y-2">
+          <span className={`text-[0.68rem] font-semibold uppercase tracking-[0.18em] sm:tracking-[0.22em] ${styles.label}`}>{label}</span>
+          <p className="break-words text-3xl font-black leading-none sm:text-4xl">{value}</p>
+          {detail && <p className={`break-words text-xs font-semibold tracking-tight ${styles.detail}`}>{detail}</p>}
+        </div>
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/10 text-white shadow-inner">
+          <Icon className="h-6 w-6" aria-hidden="true" />
+        </div>
+      </div>
     </article>
   );
 }
@@ -1758,15 +1805,17 @@ export default function TeacherControlView({
                 <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
                 {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des statistiques…</span>}
               </form>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard label="Séances" value={String(globalStatistics.totalSessions)} detail={`${globalStatistics.openSessions} en cours · ${globalStatistics.incompleteSessions} sans fin validée`} />
-              <StatCard label="Séances terminées" value={String(globalStatistics.completedSessions)} detail={`${globalStatistics.regularizedSessions} régularisée(s)`} />
-              <StatCard label="Durée validée" value={formatDuration(globalStatistics.validatedDurationMilliseconds)} />
-              <StatCard label="Rémunération validée" value={formatAmount(globalStatistics.estimatedCompensationXof)} detail={`${globalStatistics.pendingRegularizations} demande(s) en attente`} />
+            <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="teacher-control-statistics-grid">
+                <StatCard label="Séances" value={String(globalStatistics.totalSessions)} detail={`${globalStatistics.openSessions} en cours · ${globalStatistics.incompleteSessions} sans fin validée`} tone="indigo" icon={CalendarClock} />
+                <StatCard label="Séances terminées" value={String(globalStatistics.completedSessions)} detail={`${globalStatistics.regularizedSessions} régularisée(s)`} tone="emerald" icon={ShieldCheck} />
+                <StatCard label="Durée validée" value={formatDuration(globalStatistics.validatedDurationMilliseconds)} tone="sky" icon={Clock3} />
+                <StatCard label="Rémunération validée" value={formatAmount(globalStatistics.estimatedCompensationXof)} detail={`${globalStatistics.pendingRegularizations} demande(s) en attente`} tone="amber" icon={Banknote} />
+              </div>
+              <p className="rounded-2xl border border-slate-200/80 bg-white/70 px-4 py-3 text-xs text-slate-600 shadow-[0_10px_25px_rgba(15,23,42,0.05)] backdrop-blur-sm">
+                Durées comptabilisées : GPS {formatDuration(globalStatistics.gpsDurationMilliseconds ?? 0)} ({globalStatistics.gpsCompletedSessions ?? 0} séances) · régularisation après séance incomplète {formatDuration(globalStatistics.incompleteRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.incompleteSessionRegularizations ?? 0}) · signalements immédiats {formatDuration(globalStatistics.immediateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.immediateRegularizedSessions ?? 0}) · déclarations tardives {formatDuration(globalStatistics.lateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.lateRegularizedSessions ?? 0}).
+              </p>
             </div>
-            <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
-              Durées comptabilisées : GPS {formatDuration(globalStatistics.gpsDurationMilliseconds ?? 0)} ({globalStatistics.gpsCompletedSessions ?? 0} séances) · régularisation après séance incomplète {formatDuration(globalStatistics.incompleteRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.incompleteSessionRegularizations ?? 0}) · signalements immédiats {formatDuration(globalStatistics.immediateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.immediateRegularizedSessions ?? 0}) · déclarations tardives {formatDuration(globalStatistics.lateRegularizedDurationMilliseconds ?? 0)} ({globalStatistics.lateRegularizedSessions ?? 0}).
-            </p>
             <div className="overflow-hidden rounded-2xl border border-slate-200">
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
                 <h2 className="font-bold text-slate-900">Statistiques par établissement</h2>
@@ -1820,14 +1869,14 @@ export default function TeacherControlView({
       )}
 
       {!loading && statistics && (
-        <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Séances" value={String(statistics.totalSessions)} detail={`${statistics.openSessions} en cours`} />
-            <StatCard label="Séances terminées" value={String(statistics.completedSessions)} detail={`${statistics.incompleteSessions} sans fin validée · ${statistics.regularizedSessions} régularisée(s)`} />
-            <StatCard label="Durée validée" value={formatDuration(statistics.validatedDurationMilliseconds)} />
-            <StatCard label="Montant validé" value={formatAmount(statistics.estimatedCompensationXof)} detail={`${statistics.pendingRegularizations} demande(s) en attente · fins validées uniquement`} />
+        <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="teacher-control-statistics-grid">
+            <StatCard label="Séances" value={String(statistics.totalSessions)} detail={`${statistics.openSessions} en cours`} tone="indigo" icon={CalendarClock} />
+            <StatCard label="Séances terminées" value={String(statistics.completedSessions)} detail={`${statistics.incompleteSessions} sans fin validée · ${statistics.regularizedSessions} régularisée(s)`} tone="emerald" icon={ShieldCheck} />
+            <StatCard label="Durée validée" value={formatDuration(statistics.validatedDurationMilliseconds)} tone="sky" icon={Clock3} />
+            <StatCard label="Montant validé" value={formatAmount(statistics.estimatedCompensationXof)} detail={`${statistics.pendingRegularizations} demande(s) en attente · fins validées uniquement`} tone="amber" icon={Banknote} />
           </div>
-          <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+          <p className="rounded-2xl border border-slate-200/80 bg-white/70 px-4 py-3 text-xs text-slate-600 shadow-[0_10px_25px_rgba(15,23,42,0.05)] backdrop-blur-sm">
             Durées comptabilisées : GPS {formatDuration(statistics.gpsDurationMilliseconds ?? 0)} ({statistics.gpsCompletedSessions ?? 0} séances) · régularisation après séance incomplète {formatDuration(statistics.incompleteRegularizedDurationMilliseconds ?? 0)} ({statistics.incompleteSessionRegularizations ?? 0}) · signalements immédiats {formatDuration(statistics.immediateRegularizedDurationMilliseconds ?? 0)} ({statistics.immediateRegularizedSessions ?? 0}) · déclarations tardives {formatDuration(statistics.lateRegularizedDurationMilliseconds ?? 0)} ({statistics.lateRegularizedSessions ?? 0}).
           </p>
         </div>
