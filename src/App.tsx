@@ -69,11 +69,63 @@ import {
   ClipboardCheck,
   ClipboardList,
   Table2,
+  ChevronDown,
   LogOut,
   RefreshCw,
   AlertCircle,
   Wallet,
 } from 'lucide-react';
+
+function SidebarNavigationGroup({
+  id,
+  expanded,
+  activeChild,
+  hasSubmenu,
+  onToggle,
+  parent,
+  children,
+}: {
+  id: string;
+  expanded: boolean;
+  activeChild: boolean;
+  hasSubmenu: boolean;
+  onToggle: () => void;
+  parent: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-testid={`${id}-navigation-group`}
+      className={`rounded-2xl transition-colors ${activeChild ? 'bg-indigo-50/70 ring-1 ring-indigo-100' : ''}`}
+    >
+      <div className="flex items-center gap-1">
+        <div className="min-w-0 flex-1">{parent}</div>
+        {hasSubmenu && (
+          <button
+            type="button"
+            aria-label={`${expanded ? 'Réduire' : 'Développer'} le sous-menu`}
+            aria-expanded={expanded}
+            aria-controls={`${id}-submenu`}
+            onClick={onToggle}
+            disabled={activeChild}
+            className="mr-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white hover:text-indigo-700 disabled:cursor-default disabled:opacity-70"
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      {hasSubmenu && expanded && (
+        <div
+          id={`${id}-submenu`}
+          data-testid={`${id}-submenu`}
+          className="relative ml-5 space-y-1 border-l border-indigo-200/80 pb-2 pl-3"
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
@@ -83,6 +135,17 @@ export default function App() {
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
+  const [expandedNavigationGroups, setExpandedNavigationGroups] = useState({
+    absences: true,
+    teacherControl: true,
+  });
+  const activeAbsenceSubmenu = activeTab === 'absence-declaration-validations' || activeTab === 'absence-validations';
+  const activeTeacherControlSubmenu = activeTab === 'teacher-control-regularizations';
+  const absenceGroupExpanded = expandedNavigationGroups.absences || activeAbsenceSubmenu;
+  const teacherControlGroupExpanded = expandedNavigationGroups.teacherControl || activeTeacherControlSubmenu;
+  const toggleNavigationGroup = (group: 'absences' | 'teacherControl') => {
+    setExpandedNavigationGroups((previous) => ({ ...previous, [group]: !previous[group] }));
+  };
   const [teacherControlRequestedTab, setTeacherControlRequestedTab] = useState<'sessions' | 'requests'>('sessions');
   const [shouldPrepareTeacherControl, setShouldPrepareTeacherControl] = useState(false);
   const [teacherControlSettledScopeKey, setTeacherControlSettledScopeKey] = useState<string | null>(null);
@@ -1431,48 +1494,52 @@ export default function App() {
               </button>
 
               {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
-                <button
-                  onClick={openTeacherControl}
-                  onPointerEnter={() => setShouldPrepareTeacherControl(true)}
-                  onFocus={() => setShouldPrepareTeacherControl(true)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'teacher-control'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-teacher-control"
-                  data-testid="sidebar-nav-teacher-control"
-                >
-                  <ClipboardCheck className="h-4.5 w-4.5" />
-                  <span>{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
-                </button>
-              )}
-
-              {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
-                <button
-                  onClick={() => {
-                    openTeacherControlDestination('teacher-control-regularizations');
-                  }}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'teacher-control-regularizations'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-regularizations"
-                  data-testid="sidebar-nav-regularizations"
-                >
-                  <ClipboardList className="h-4.5 w-4.5" />
-                  <span>{currentRole === 'teacher' ? 'Régularisations en attente' : 'Régularisations à traiter'}</span>
-                  {pendingRegularizationsCount > 0 && (
-                    <span className={`ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      activeTab === 'teacher-control-regularizations'
-                        ? 'bg-white text-indigo-700'
-                        : 'bg-rose-600 text-white'
-                    }`}>
-                      {pendingRegularizationsCount > 99 ? '99+' : pendingRegularizationsCount}
-                    </span>
+                <SidebarNavigationGroup
+                  id="teacher-control"
+                  expanded={teacherControlGroupExpanded}
+                  activeChild={activeTeacherControlSubmenu}
+                  hasSubmenu
+                  onToggle={() => toggleNavigationGroup('teacherControl')}
+                  parent={(
+                    <button
+                      onClick={openTeacherControl}
+                      onPointerEnter={() => setShouldPrepareTeacherControl(true)}
+                      onFocus={() => setShouldPrepareTeacherControl(true)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                        activeTab === 'teacher-control'
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                      id="sidebar-nav-teacher-control"
+                      data-testid="sidebar-nav-teacher-control"
+                    >
+                      <ClipboardCheck className="h-4.5 w-4.5" />
+                      <span>{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
+                    </button>
                   )}
-                </button>
+                >
+                  <button
+                    onClick={() => openTeacherControlDestination('teacher-control-regularizations')}
+                    className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
+                      activeTeacherControlSubmenu
+                        ? 'bg-indigo-100 text-indigo-800'
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-700'
+                    }`}
+                    id="sidebar-nav-regularizations"
+                    data-testid="sidebar-nav-regularizations"
+                    data-nav-child="true"
+                  >
+                    <ClipboardList className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1">{currentRole === 'teacher' ? 'Régularisations en attente' : 'Régularisations à traiter'}</span>
+                    {pendingRegularizationsCount > 0 && (
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                        activeTeacherControlSubmenu ? 'bg-indigo-700 text-white' : 'bg-rose-600 text-white'
+                      }`}>
+                        {pendingRegularizationsCount > 99 ? '99+' : pendingRegularizationsCount}
+                      </span>
+                    )}
+                  </button>
+                </SidebarNavigationGroup>
               )}
 
               {/* Tab 2: Admin standard dashboard */}
@@ -1520,76 +1587,83 @@ export default function App() {
               )}
 
               {/* Tab 3: Absences */}
-              <button
-                onClick={() => setActiveTab('absences')}
-                className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'absences'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-                id="sidebar-nav-absences"
-                data-testid="sidebar-nav-absences"
-              >
-                <div className="flex items-center gap-3">
-                  <CalendarDays className="h-4.5 w-4.5" />
-                  <span>Absences</span>
-                </div>
-                {unjustifiedAbsencesCount > 0 && (
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                    activeTab === 'absences' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
-                  }`}>
-                    {unjustifiedAbsencesCount > 99 ? '99+' : unjustifiedAbsencesCount}
-                  </span>
+              <SidebarNavigationGroup
+                id="absences"
+                expanded={absenceGroupExpanded}
+                activeChild={activeAbsenceSubmenu}
+                hasSubmenu={['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole)}
+                onToggle={() => toggleNavigationGroup('absences')}
+                parent={(
+                  <button
+                    onClick={() => setActiveTab('absences')}
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                      activeTab === 'absences'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                        : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                    }`}
+                    id="sidebar-nav-absences"
+                    data-testid="sidebar-nav-absences"
+                  >
+                    <div className="flex items-center gap-3">
+                      <CalendarDays className="h-4.5 w-4.5" />
+                      <span>Absences</span>
+                    </div>
+                    {unjustifiedAbsencesCount > 0 && (
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        activeTab === 'absences' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
+                      }`}>
+                        {unjustifiedAbsencesCount > 99 ? '99+' : unjustifiedAbsencesCount}
+                      </span>
+                    )}
+                  </button>
                 )}
-              </button>
+              >
+                {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                  <button
+                    onClick={() => setActiveTab('absence-declaration-validations')}
+                    className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
+                      activeTab === 'absence-declaration-validations'
+                        ? 'bg-indigo-100 text-indigo-800'
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-700'
+                    }`}
+                    id="sidebar-nav-absence-declaration-validations"
+                    data-testid="sidebar-nav-absence-declaration-validations"
+                    data-nav-child="true"
+                  >
+                    <ClipboardList className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1">Déclarations d’absence à traiter</span>
+                    {pendingAbsenceDeclarationsCount > 0 && (
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                        activeTab === 'absence-declaration-validations' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white'
+                      }`}>
+                        {pendingAbsenceDeclarationsCount > 99 ? '99+' : pendingAbsenceDeclarationsCount}
+                      </span>
+                    )}
+                  </button>
+                )}
 
-              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
-                <button
-                  onClick={() => setActiveTab('absence-declaration-validations')}
-                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'absence-declaration-validations'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-absence-declaration-validations"
-                  data-testid="sidebar-nav-absence-declaration-validations"
-                >
-                  <div className="flex items-center gap-3">
-                    <ClipboardList className="h-4.5 w-4.5" />
-                    <span>Déclarations d’absence à traiter</span>
-                  </div>
-                  {pendingAbsenceDeclarationsCount > 0 && (
-                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      activeTab === 'absence-declaration-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
+                {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                  <button
+                    onClick={() => setActiveTab('absence-validations')}
+                    className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
+                      activeTab === 'absence-validations'
+                        ? 'bg-indigo-100 text-indigo-800'
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-700'
+                    }`}
+                    id="sidebar-nav-absence-validations"
+                    data-testid="sidebar-nav-absence-validations"
+                    data-nav-child="true"
+                  >
+                    <ClipboardCheck className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1">Validation des absences à traiter</span>
+                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                      activeTab === 'absence-validations' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white'
                     }`}>
-                      {pendingAbsenceDeclarationsCount > 99 ? '99+' : pendingAbsenceDeclarationsCount}
+                      {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
                     </span>
-                  )}
-                </button>
-              )}
-
-              {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
-                <button
-                  onClick={() => setActiveTab('absence-validations')}
-                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'absence-validations'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-absence-validations"
-                  data-testid="sidebar-nav-absence-validations"
-                >
-                  <div className="flex items-center gap-3">
-                    <ClipboardCheck className="h-4.5 w-4.5" />
-                    <span>Validation des absences à traiter</span>
-                  </div>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                    activeTab === 'absence-validations' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white'
-                  }`}>
-                    {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
-                  </span>
-                </button>
-              )}
+                  </button>
+                )}
+              </SidebarNavigationGroup>
 
               {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
                 <button

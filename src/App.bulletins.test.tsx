@@ -604,7 +604,7 @@ describe('App navigation', () => {
 
     fireEvent.click(regularizationsMenu);
     const teacherControlMenu = await screen.findByTestId('sidebar-nav-teacher-control');
-    expect(regularizationsMenu.className).toContain('bg-indigo-600');
+    expect(regularizationsMenu.className).toContain('bg-indigo-100');
     expect(teacherControlMenu.className).not.toContain('bg-indigo-600');
     if (role === 'super_admin') {
       expect(await screen.findByRole('region', { name: 'Régularisations à traiter' })).toBeInTheDocument();
@@ -619,7 +619,7 @@ describe('App navigation', () => {
     fireEvent.click(teacherControlMenu);
     await waitFor(() => expect(teacherControlMenu.className).toContain('bg-indigo-600'));
     expect(teacherControlMenu.className).toContain('bg-indigo-600');
-    expect(regularizationsMenu.className).not.toContain('bg-indigo-600');
+    expect(regularizationsMenu.className).not.toContain('bg-indigo-100');
     if (role === 'super_admin') {
       expect(await screen.findByRole('heading', { name: 'Statistiques par établissement' })).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Régularisations à traiter' })).toBeNull();
@@ -628,7 +628,7 @@ describe('App navigation', () => {
     }
 
     fireEvent.click(regularizationsMenu);
-    expect(regularizationsMenu.className).toContain('bg-indigo-600');
+    expect(regularizationsMenu.className).toContain('bg-indigo-100');
     expect(teacherControlMenu.className).not.toContain('bg-indigo-600');
     if (role === 'super_admin') {
       expect(await screen.findByRole('region', { name: 'Régularisations à traiter' })).toBeInTheDocument();
@@ -703,6 +703,42 @@ describe('App navigation', () => {
     expect(screen.getByTestId('teacher-control-statistics-grid')).toBeInTheDocument();
     expect(within(screen.getByTestId('teacher-control-statistics-grid')).getByText('4')).toBeInTheDocument();
     expect(menu.className).toContain('bg-indigo-600');
+  });
+
+  it('renders absence and teacher-control destinations as expandable nested menus', async () => {
+    await renderWithRole('school_admin', [], 0, [{ id: 1, status: 'RECEIVED' }]);
+
+    const absenceGroup = await screen.findByTestId('absences-navigation-group');
+    const teacherControlGroup = await screen.findByTestId('teacher-control-navigation-group');
+    const absenceParent = within(absenceGroup).getByTestId('sidebar-nav-absences');
+    const teacherControlParent = within(teacherControlGroup).getByTestId('sidebar-nav-teacher-control');
+    const absenceSubmenu = within(absenceGroup).getByTestId('absences-submenu');
+    const teacherControlSubmenu = within(teacherControlGroup).getByTestId('teacher-control-submenu');
+
+    expect(absenceSubmenu.className).toContain('ml-5');
+    expect(absenceSubmenu.className).toContain('border-l');
+    expect(teacherControlSubmenu.className).toContain('ml-5');
+    expect(within(absenceSubmenu).getByTestId('sidebar-nav-absence-declaration-validations')).toBeInTheDocument();
+    expect(within(absenceSubmenu).getByTestId('sidebar-nav-absence-validations')).toBeInTheDocument();
+    expect(within(teacherControlSubmenu).getByTestId('sidebar-nav-regularizations')).toBeInTheDocument();
+
+    fireEvent.click(within(absenceGroup).getByRole('button', { name: 'Réduire le sous-menu' }));
+    expect(screen.queryByTestId('absences-submenu')).toBeNull();
+    expect(absenceParent).toBeInTheDocument();
+    fireEvent.click(within(absenceGroup).getByRole('button', { name: 'Développer le sous-menu' }));
+    expect(screen.getByTestId('absences-submenu')).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('absences-submenu')).getByTestId('sidebar-nav-absence-declaration-validations'));
+    expect(await screen.findByText('DeclarationValidationsView: 1')).toBeInTheDocument();
+    expect(screen.getByTestId('absences-submenu')).toBeInTheDocument();
+    expect(absenceGroup.className).toContain('bg-indigo-50/70');
+    expect(absenceParent).not.toHaveClass('bg-indigo-600');
+
+    fireEvent.click(within(teacherControlGroup).getByRole('button', { name: 'Réduire le sous-menu' }));
+    expect(screen.queryByTestId('teacher-control-submenu')).toBeNull();
+    expect(teacherControlParent).toBeInTheDocument();
+    fireEvent.click(within(teacherControlGroup).getByRole('button', { name: 'Développer le sous-menu' }));
+    expect(screen.getByTestId('teacher-control-submenu')).toBeInTheDocument();
   });
 
   it('refreshes an administrator regularization badge from backend statistics on window focus', async () => {
