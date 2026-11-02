@@ -84,8 +84,61 @@ export default function App() {
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
   const [teacherControlRequestedTab, setTeacherControlRequestedTab] = useState<'sessions' | 'requests'>('sessions');
+  const [shouldPrepareTeacherControl, setShouldPrepareTeacherControl] = useState(false);
+  const [teacherControlSettledScopeKey, setTeacherControlSettledScopeKey] = useState<string | null>(null);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const pendingTeacherControlNavigationRef = useRef<{
+    scopeKey: string;
+    fromTab: string;
+    destination: 'teacher-control' | 'teacher-control-regularizations';
+  } | null>(null);
   const [pendingRegularizationsCount, setPendingRegularizationsCount] = useState(0);
   const regularizationsCountRequestsInFlightRef = useRef(new Set<string>());
+  const teacherControlScopeKey = `${currentRole}:${currentRole === 'super_admin' ? superAdminSchoolFilterId ?? 'global' : currentSchoolId ?? 'none'}`;
+  const teacherControlScopeKeyRef = useRef(teacherControlScopeKey);
+  teacherControlScopeKeyRef.current = teacherControlScopeKey;
+  const handleTeacherControlInitialViewSettled = useCallback(() => {
+    if (teacherControlScopeKeyRef.current !== teacherControlScopeKey) return;
+    setTeacherControlSettledScopeKey(teacherControlScopeKey);
+    const pendingNavigation = pendingTeacherControlNavigationRef.current;
+    if (!pendingNavigation) return;
+    pendingTeacherControlNavigationRef.current = null;
+    if (pendingNavigation.scopeKey === teacherControlScopeKey
+      && activeTabRef.current === pendingNavigation.fromTab) {
+      setTeacherControlRequestedTab(pendingNavigation.destination === 'teacher-control' ? 'sessions' : 'requests');
+      setActiveTab(pendingNavigation.destination);
+    }
+  }, [teacherControlScopeKey]);
+  useEffect(() => {
+    setTeacherControlSettledScopeKey(null);
+    pendingTeacherControlNavigationRef.current = null;
+  }, [teacherControlScopeKey]);
+  const openTeacherControlDestination = (destination: 'teacher-control' | 'teacher-control-regularizations') => {
+    setShouldPrepareTeacherControl(true);
+    setTeacherControlRequestedTab(destination === 'teacher-control' ? 'sessions' : 'requests');
+    if (destination === 'teacher-control-regularizations') {
+      pendingTeacherControlNavigationRef.current = null;
+      setActiveTab(destination);
+      return;
+    }
+    if (activeTabRef.current === 'teacher-control-regularizations') {
+      pendingTeacherControlNavigationRef.current = null;
+      setActiveTab(destination);
+      return;
+    }
+    if (teacherControlSettledScopeKey === teacherControlScopeKey) {
+      pendingTeacherControlNavigationRef.current = null;
+      setActiveTab(destination);
+      return;
+    }
+    pendingTeacherControlNavigationRef.current = {
+      scopeKey: teacherControlScopeKey,
+      fromTab: activeTabRef.current,
+      destination,
+    };
+  };
+  const openTeacherControl = () => openTeacherControlDestination('teacher-control');
   const handleTeacherControlTabChange = useCallback((tab: 'sessions' | 'requests' | 'gps' | 'rates') => {
     setTeacherControlRequestedTab(tab === 'requests' ? 'requests' : 'sessions');
   }, []);
@@ -1322,6 +1375,9 @@ export default function App() {
     }
     return isEvaluationArchived(ev, studentsList, gradesList);
   });
+  const isTeacherControlDestination = (activeTab === 'teacher-control'
+    || activeTab === 'teacher-control-regularizations')
+    && ['teacher', 'school_admin', 'super_admin'].includes(currentRole);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -1376,10 +1432,9 @@ export default function App() {
 
               {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
                 <button
-                  onClick={() => {
-                    setTeacherControlRequestedTab('sessions');
-                    setActiveTab('teacher-control');
-                  }}
+                  onClick={openTeacherControl}
+                  onPointerEnter={() => setShouldPrepareTeacherControl(true)}
+                  onFocus={() => setShouldPrepareTeacherControl(true)}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                     activeTab === 'teacher-control'
                       ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
@@ -1396,8 +1451,7 @@ export default function App() {
               {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
                 <button
                   onClick={() => {
-                    setTeacherControlRequestedTab('requests');
-                    setActiveTab('teacher-control-regularizations');
+                    openTeacherControlDestination('teacher-control-regularizations');
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                     activeTab === 'teacher-control-regularizations'
@@ -1740,6 +1794,31 @@ export default function App() {
             </div>
           )}
 
+          {shouldPrepareTeacherControl && ['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+            <div
+              className={!isSyncing && isTeacherControlDestination
+                ? 'bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in'
+                : 'hidden'}
+              id={isTeacherControlDestination ? 'content-card' : undefined}
+            >
+              <ErrorBoundary>
+                <TeacherControlView
+                  userRole={currentRole}
+                  activeSchoolId={currentSchoolId}
+                  schoolsList={schoolsList}
+                  teachersList={teachersList}
+                  superAdminSchoolFilterId={superAdminSchoolFilterId}
+                  onSuperAdminSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  viewMode={activeTab === 'teacher-control-regularizations' ? 'regularizations' : 'full'}
+                  initialTab={activeTab === 'teacher-control-regularizations' ? 'requests' : teacherControlRequestedTab}
+                  onTabChange={handleTeacherControlTabChange}
+                  onPendingRegularizationsCountChange={setPendingRegularizationsCount}
+                  onInitialViewSettled={handleTeacherControlInitialViewSettled}
+                />
+              </ErrorBoundary>
+            </div>
+          )}
+
           {/* LOADING SCREEN */}
           {isSyncing && (
             <div className="bg-white/60 p-12 text-center rounded-2xl border border-slate-50 shadow-sm flex flex-col justify-center items-center gap-3 my-12">
@@ -1749,7 +1828,7 @@ export default function App() {
           )}
 
           {/* DYNAMIC RENDERING PANEL BASED ON ACTIVE TABS */}
-          {!isSyncing && (
+          {!isSyncing && !isTeacherControlDestination && (
             <div className="bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in" id="content-card">
               {activeTab === 'tableau-de-bord' && (
                 <DashboardView
@@ -1764,24 +1843,6 @@ export default function App() {
                   absenceStatusCounts={stats.absenceStatusCounts}
                 />
               )}
-
-              {(activeTab === 'teacher-control' || activeTab === 'teacher-control-regularizations')
-                && ['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
-                  <ErrorBoundary>
-                    <TeacherControlView
-                      userRole={currentRole}
-                      activeSchoolId={currentSchoolId}
-                      schoolsList={schoolsList}
-                      teachersList={teachersList}
-                      superAdminSchoolFilterId={superAdminSchoolFilterId}
-                      onSuperAdminSchoolFilterChange={setSuperAdminSchoolFilterId}
-                      viewMode={activeTab === 'teacher-control-regularizations' ? 'regularizations' : 'full'}
-                      initialTab={activeTab === 'teacher-control-regularizations' ? 'requests' : teacherControlRequestedTab}
-                      onTabChange={handleTeacherControlTabChange}
-                      onPendingRegularizationsCountChange={setPendingRegularizationsCount}
-                    />
-                  </ErrorBoundary>
-                )}
 
               {activeTab === 'homeroom' && currentRole === 'teacher' && homeroomClassesList.length > 0 && (
                 <HomeroomView classes={homeroomClassesList} />

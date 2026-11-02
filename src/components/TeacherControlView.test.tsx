@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import TeacherControlView from './TeacherControlView';
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
@@ -196,6 +196,192 @@ describe('TeacherControlView', () => {
     expect(durationCard?.className).toContain('bg-gradient-to-br');
     expect(durationCard?.className).toContain('hover:-translate-y-1');
     expect(durationCard?.querySelector('svg')).toBeTruthy();
+  });
+
+  it('keeps the initial admin dashboard coordinated until its parallel data requests are ready', async () => {
+    let resolveSettings!: (settings: Record<string, unknown>) => void;
+    let resolveHistory!: (history: Array<Record<string, unknown>>) => void;
+    const settingsPromise = new Promise<Record<string, unknown>>((resolve) => {
+      resolveSettings = resolve;
+    });
+    const historyPromise = new Promise<Array<Record<string, unknown>>>((resolve) => {
+      resolveHistory = resolve;
+    });
+
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) {
+        return Promise.resolve({ teachers: [], classes: [], subjects: [] });
+      }
+      if (url.startsWith('/api/teacher-control/sessions')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return Promise.resolve({
+          totalSessions: 3,
+          openSessions: 1,
+          completedSessions: 2,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        });
+      }
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return historyPromise;
+      if (url.startsWith('/api/teacher-control/gps-settings')) return settingsPromise;
+      return Promise.resolve({});
+    });
+
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    expect(screen.getByTestId('teacher-control-statistics-loading-grid')).toBeTruthy();
+    expect(screen.getByText(/Chargement des statistiques et des informations/)).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(apiFetchMock.mock.calls.some(([url]) => url.startsWith('/api/teacher-control/statistics'))).toBe(true);
+    expect(apiFetchMock.mock.calls.some(([url]) => url.startsWith('/api/teacher-control/gps-settings'))).toBe(true);
+
+    await act(async () => {
+      resolveSettings({
+        schoolId: 8,
+        schoolName: 'École A',
+        isEnabled: false,
+        latitude: null,
+        longitude: null,
+        geofenceRadiusMeters: 200,
+        updatedAt: null,
+      });
+      resolveHistory([]);
+      await Promise.all([settingsPromise, historyPromise]);
+    });
+
+    expect(await screen.findByTestId('teacher-control-statistics-grid')).toBeTruthy();
+    expect(screen.getByText('3')).toBeTruthy();
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    expect(screen.queryByTestId('teacher-control-statistics-loading-grid')).toBeNull();
+  });
+
+  it('keeps the initial teacher dashboard coordinated until assignments are ready', async () => {
+    let resolveAssignments!: (assignments: Array<Record<string, unknown>>) => void;
+    const assignmentsPromise = new Promise<Array<Record<string, unknown>>>((resolve) => {
+      resolveAssignments = resolve;
+    });
+
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/teacher-control/sessions')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return Promise.resolve({
+          totalSessions: 2,
+          openSessions: 0,
+          completedSessions: 2,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        });
+      }
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url === '/api/teacher-control/assignments') return assignmentsPromise;
+      return Promise.resolve({});
+    });
+
+    render(<TeacherControlView {...defaultProps} />);
+
+    expect(screen.getByTestId('teacher-control-statistics-loading-grid')).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/assignments')).toBe(true);
+
+    await act(async () => {
+      resolveAssignments([]);
+      await assignmentsPromise;
+    });
+
+    expect(await screen.findByTestId('teacher-control-statistics-grid')).toBeTruthy();
+    expect(screen.getByRole('tablist')).toBeTruthy();
+  });
+
+  it('keeps the initial dashboard isolated and retryable when a required request fails', async () => {
+    let failSettings = true;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/teacher-control/filter-options')) {
+        return Promise.resolve({ teachers: [], classes: [], subjects: [] });
+      }
+      if (url.startsWith('/api/teacher-control/sessions')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return Promise.resolve({
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        });
+      }
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/gps-settings/history')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/gps-settings')) {
+        if (failSettings) return Promise.reject(new Error('Configuration GPS indisponible.'));
+        return Promise.resolve({
+          schoolId: 8,
+          schoolName: 'École A',
+          isEnabled: false,
+          latitude: null,
+          longitude: null,
+          geofenceRadiusMeters: 200,
+          updatedAt: null,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Configuration GPS indisponible.');
+    expect(screen.queryByRole('tablist')).toBeNull();
+    failSettings = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Réessayer' }));
+    expect(await screen.findByTestId('teacher-control-statistics-grid')).toBeTruthy();
+  });
+
+  it('keeps loaded statistics visible while refreshing the teacher-control data', async () => {
+    configureTeacherApi();
+    render(<TeacherControlView {...defaultProps} />);
+
+    const grid = await screen.findByTestId('teacher-control-statistics-grid');
+    let pendingResolvers: Array<() => void> = [];
+    apiFetchMock.mockImplementation((url: string) => new Promise((resolve) => {
+      pendingResolvers.push(() => {
+        if (url.startsWith('/api/teacher-control/statistics')) {
+          resolve({
+            totalSessions: 1,
+            openSessions: 1,
+            completedSessions: 0,
+            incompleteSessions: 0,
+            regularizedSessions: 0,
+            pendingRegularizations: 0,
+            validatedDurationMilliseconds: 0,
+            estimatedCompensationXof: 0,
+          });
+        } else if (url === '/api/teacher-control/assignments') {
+          resolve([]);
+        } else {
+          resolve([]);
+        }
+      });
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Actualiser/ }));
+    expect(grid).toBeInTheDocument();
+    expect(within(grid).getAllByText('0').length).toBeGreaterThan(0);
+    await waitFor(() => expect(pendingResolvers.length).toBeGreaterThanOrEqual(5));
+
+    await act(async () => {
+      pendingResolvers.forEach((resolveRequest) => resolveRequest());
+    });
+
+    expect(screen.getByTestId('teacher-control-statistics-grid')).toBeInTheDocument();
+    expect(within(screen.getByTestId('teacher-control-statistics-grid')).getByText('1')).toBeInTheDocument();
   });
 
   it('shows readable admin filters and refreshes the super-admin school scope without stale selections', async () => {

@@ -221,6 +221,7 @@ interface TeacherControlViewProps {
   initialTab?: ViewTab;
   onTabChange?: (tab: ViewTab) => void;
   onPendingRegularizationsCountChange?: (count: number) => void;
+  onInitialViewSettled?: () => void;
 }
 
 const timeZone = 'Africa/Lome';
@@ -576,6 +577,7 @@ export default function TeacherControlView({
   initialTab = 'sessions',
   onTabChange,
   onPendingRegularizationsCountChange,
+  onInitialViewSettled,
 }: TeacherControlViewProps) {
   const isTeacher = userRole === 'teacher';
   const isSchoolAdmin = userRole === 'school_admin';
@@ -585,9 +587,11 @@ export default function TeacherControlView({
   const schoolId = isSuperAdmin ? superAdminSchoolFilterId : activeSchoolId;
   const selectedSchool = schoolsList.find((school) => school.id === schoolId);
   const schoolQuery = isSuperAdmin && schoolId != null ? `?schoolId=${schoolId}` : '';
+  const viewScopeKey = `${userRole}:${schoolId ?? 'global'}`;
 
   const [activeTab, setActiveTab] = useState<ViewTab>(initialTab);
   const [loading, setLoading] = useState(false);
+  const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -674,6 +678,7 @@ export default function TeacherControlView({
     setLoading(true);
     setError(null);
     if (isTeacher) setAssignments(null);
+    let loadSucceeded = false;
     try {
       if (viewMode === 'regularizations') {
         if (globalOverview) {
@@ -685,6 +690,7 @@ export default function TeacherControlView({
           setStatistics(summary);
           setRegularizations(Array.isArray(requestRows) ? requestRows : []);
           onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
+          loadSucceeded = true;
           return;
         }
 
@@ -696,6 +702,7 @@ export default function TeacherControlView({
         setGlobalStatistics(null);
         setRegularizations(Array.isArray(requestRows) ? requestRows : []);
         onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
+        loadSucceeded = true;
         return;
       }
 
@@ -711,6 +718,7 @@ export default function TeacherControlView({
         setGpsHistory([]);
         setGpsSettings(null);
         onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
+        loadSucceeded = true;
         return;
       }
 
@@ -719,12 +727,22 @@ export default function TeacherControlView({
       if (currentCursor) sessionParams.set('cursor', currentCursor);
       if (isSuperAdmin && schoolId != null) sessionParams.set('schoolId', String(schoolId));
       const scopedQuery = schoolQuery;
-      const [sessionPage, summary, requestRows, openSessionResponse] = await Promise.all([
+      const gpsHistoryEndpoint = `/api/teacher-control/gps-settings/history${scopedQuery ? `${scopedQuery}&limit=50` : '?limit=50'}`;
+      const [sessionPage, summary, requestRows, openSessionResponse, assignmentRows, settings, history] = await Promise.all([
         apiFetch(`/api/teacher-control/sessions?${sessionParams.toString()}`) as Promise<SessionPage>,
         apiFetch(`/api/teacher-control/statistics${filterQuery ? `?${filterQuery}` : ''}`) as Promise<Statistics>,
         apiFetch(`/api/teacher-control/regularizations${scopedQuery}`) as Promise<Regularization[]>,
         isTeacher
           ? apiFetch('/api/teacher-control/sessions?status=open&limit=100') as Promise<SessionPage>
+          : Promise.resolve(null),
+        isTeacher
+          ? apiFetch('/api/teacher-control/assignments') as Promise<Assignment[]>
+          : Promise.resolve(null),
+        !isTeacher
+          ? apiFetch(`/api/teacher-control/gps-settings${scopedQuery}`, { cache: 'no-store' }) as Promise<GpsSettings>
+          : Promise.resolve(null),
+        !isTeacher
+          ? apiFetch(gpsHistoryEndpoint) as Promise<Array<Record<string, unknown>>>
           : Promise.resolve(null),
       ]);
       const pageItems = Array.isArray(sessionPage) ? sessionPage : sessionPage?.items;
@@ -741,16 +759,12 @@ export default function TeacherControlView({
       if (!isSuperAdmin) onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
 
       if (isTeacher) {
-        const assignmentRows = await apiFetch('/api/teacher-control/assignments') as Assignment[];
         if (!Array.isArray(assignmentRows)) {
           throw new Error('La réponse des associations pédagogiques est invalide.');
         }
         setAssignments(assignmentRows);
       } else {
-        const [settings, history] = await Promise.all([
-          apiFetch(`/api/teacher-control/gps-settings${schoolQuery}`, { cache: 'no-store' }) as Promise<GpsSettings>,
-          apiFetch(`/api/teacher-control/gps-settings/history${schoolQuery ? `${schoolQuery}&limit=50` : '?limit=50'}`) as Promise<Array<Record<string, unknown>>>,
-        ]);
+        if (!settings) throw new Error('La réponse de la configuration GPS est invalide.');
         setGpsSettings(settings);
         setGpsHistory(Array.isArray(history) ? history : []);
         setGpsForm({
@@ -761,6 +775,7 @@ export default function TeacherControlView({
         setGpsRadius(String(settings.geofenceRadiusMeters ?? 200));
         setGpsAccuracyThreshold(String(settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS));
       }
+      loadSucceeded = true;
     } catch (loadError) {
       if (isTeacher) {
         setAssignments(null);
@@ -771,8 +786,10 @@ export default function TeacherControlView({
         : `Impossible de charger le module ${isTeacher ? 'Déclaration de présence' : 'Contrôle des enseignants'}.`);
     } finally {
       setLoading(false);
+      if (loadSucceeded) setLoadedScopeKey(viewScopeKey);
+      if (viewMode === 'full') onInitialViewSettled?.();
     }
-  }, [currentCursor, filterRevision, isSuperAdmin, isTeacher, makeFilterParams, onPendingRegularizationsCountChange, schoolId, schoolQuery, viewMode]);
+  }, [currentCursor, filterRevision, isSuperAdmin, isTeacher, makeFilterParams, onInitialViewSettled, onPendingRegularizationsCountChange, schoolId, schoolQuery, viewMode, viewScopeKey]);
 
   const refreshRegularizations = useCallback(async () => {
     try {
@@ -830,6 +847,7 @@ export default function TeacherControlView({
     setPendingEndValidation(null);
     setStartedSession(null);
     setEndConfirmation(null);
+    setLoadedScopeKey(null);
   }, [isSuperAdmin, schoolId]);
 
   useEffect(() => {
@@ -936,6 +954,48 @@ export default function TeacherControlView({
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
   const visibleTeachers = teachersList.filter((teacher) => teacher.schoolId === schoolId && !teacher.isDeleted);
   const visibleRegularizations = regularizations.filter((entry) => entry.request.status === 'pending');
+  const assignmentLoadErrorMessage = 'Vos associations pédagogiques n’ont pas pu être vérifiées. Consultez le message d’erreur avant de réessayer.';
+
+  if (viewMode === 'full'
+    && loadedScopeKey !== viewScopeKey
+    && (schoolId != null || isSuperAdmin)) {
+    return (
+      <section className="space-y-5" aria-busy={loading}>
+        <ModuleHeading role={userRole} schoolName={selectedSchool?.name} onRefresh={() => void loadData()} loading />
+        {error ? (
+          <div className="space-y-3">
+            <ErrorNotice message={error} />
+            {isTeacher && assignments === null && <p role="status">{assignmentLoadErrorMessage}</p>}
+            <button type="button" onClick={() => void loadData()} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+              Réessayer
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
+            <div
+              className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+              data-testid="teacher-control-statistics-loading-grid"
+              aria-hidden="true"
+            >
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} className="flex min-h-32 items-center justify-between gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
+                  <div className="space-y-3">
+                    <div className="h-3 w-28 rounded bg-slate-200" />
+                    <div className="h-8 w-24 rounded bg-slate-200" />
+                    <div className="h-3 w-36 max-w-full rounded bg-slate-100" />
+                  </div>
+                  <div className="h-12 w-12 shrink-0 rounded-2xl bg-slate-100" />
+                </div>
+              ))}
+            </div>
+            <p role="status" className="text-center text-sm text-slate-500">
+              Chargement des statistiques et des informations du module…
+            </p>
+          </div>
+        )}
+      </section>
+    );
+  }
 
   const showError = (actionError: unknown, fallback: string) => {
     setError(actionError instanceof Error ? actionError.message : fallback);
@@ -1868,7 +1928,7 @@ export default function TeacherControlView({
         </p>
       )}
 
-      {!loading && statistics && (
+      {statistics && (
         <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="teacher-control-statistics-grid">
             <StatCard label="Séances" value={String(statistics.totalSessions)} detail={`${statistics.openSessions} en cours`} tone="indigo" icon={CalendarClock} />
@@ -1949,7 +2009,7 @@ export default function TeacherControlView({
                     </p>
                   ) : assignments === null ? (
                     <p role="status" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-                      {loading ? 'Chargement de vos associations pédagogiques…' : 'Vos associations pédagogiques n’ont pas pu être vérifiées. Consultez le message d’erreur avant de réessayer.'}
+                    {loading ? 'Chargement de vos associations pédagogiques…' : assignmentLoadErrorMessage}
                     </p>
                   ) : assignments.length === 0 ? (
                     <EmptyState>Aucune association classe-matière active n’est disponible pour votre compte dans cette école. Vérifiez vos associations pédagogiques existantes.</EmptyState>

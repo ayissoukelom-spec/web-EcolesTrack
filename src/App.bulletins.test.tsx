@@ -617,6 +617,7 @@ describe('App navigation', () => {
     expect(screen.queryByText('Statistiques par établissement')).toBeNull();
 
     fireEvent.click(teacherControlMenu);
+    await waitFor(() => expect(teacherControlMenu.className).toContain('bg-indigo-600'));
     expect(teacherControlMenu.className).toContain('bg-indigo-600');
     expect(regularizationsMenu.className).not.toContain('bg-indigo-600');
     if (role === 'super_admin') {
@@ -635,6 +636,73 @@ describe('App navigation', () => {
       expect(await screen.findByRole('heading', { name: label })).toBeInTheDocument();
     }
     expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it.each([
+    ['school_admin', 'Contrôle des enseignants'],
+    ['teacher', 'Déclaration de présence'],
+  ] as const)('%s prepares the teacher-control view before activating its navigation destination', async (role, title) => {
+    mockGetSimulatedRole.mockReturnValue(role);
+    mockGetSimulatedUser.mockReturnValue({
+      uid: `sim-${role}`,
+      email: `${role}@example.com`,
+      name: role,
+      schoolId: 1,
+      role,
+      id: 1,
+    });
+
+    let releaseModuleRequests!: () => void;
+    const moduleRequestsGate = new Promise<void>((resolve) => {
+      releaseModuleRequests = resolve;
+    });
+    const statistics = {
+      totalSessions: 4,
+      openSessions: 1,
+      completedSessions: 3,
+      incompleteSessions: 0,
+      regularizedSessions: 0,
+      pendingRegularizations: 0,
+      validatedDurationMilliseconds: 0,
+      estimatedCompensationXof: 0,
+    };
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url.startsWith('/api/teacher-control/')) {
+        return moduleRequestsGate.then(() => {
+          if (url.startsWith('/api/teacher-control/filter-options')) {
+            return { teachers: [], classes: [], subjects: [] };
+          }
+          if (url.startsWith('/api/teacher-control/statistics')) return statistics;
+          if (url.startsWith('/api/teacher-control/gps-settings/history')) return [];
+          if (url.startsWith('/api/teacher-control/gps-settings')) {
+            return { schoolId: 1, isEnabled: false, geofenceRadiusMeters: 200 };
+          }
+          if (url === '/api/teacher-control/assignments') return [];
+          return [];
+        });
+      }
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers'
+        || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades'
+        || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    const menu = await screen.findByTestId('sidebar-nav-teacher-control');
+    expect(await screen.findByText('DashboardView')).toBeInTheDocument();
+
+    fireEvent.click(menu);
+    expect(menu.className).not.toContain('bg-indigo-600');
+    expect(screen.getByText('DashboardView')).toBeInTheDocument();
+    expect(mockApiFetch.mock.calls.some(([url]) => url.startsWith('/api/teacher-control/sessions'))).toBe(true);
+
+    await act(async () => releaseModuleRequests());
+
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+    expect(screen.getByTestId('teacher-control-statistics-grid')).toBeInTheDocument();
+    expect(within(screen.getByTestId('teacher-control-statistics-grid')).getByText('4')).toBeInTheDocument();
+    expect(menu.className).toContain('bg-indigo-600');
   });
 
   it('refreshes an administrator regularization badge from backend statistics on window focus', async () => {
