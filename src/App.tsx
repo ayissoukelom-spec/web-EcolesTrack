@@ -127,6 +127,19 @@ function SidebarNavigationGroup({
   );
 }
 
+function SidebarNavigationIcon({ children, testId }: { children: React.ReactNode; testId?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-5 w-5 shrink-0 items-center justify-center"
+      data-nav-icon="true"
+      data-testid={testId ?? 'sidebar-navigation-icon'}
+    >
+      {children}
+    </span>
+  );
+}
+
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
   const { justifyAbsence, recordAbsenceControl } = useAbsences();
@@ -139,7 +152,9 @@ export default function App() {
     absences: true,
     teacherControl: true,
   });
-  const activeAbsenceSubmenu = activeTab === 'absence-declaration-validations' || activeTab === 'absence-validations';
+  const activeAbsenceSubmenu = activeTab === 'absence-declaration-validations'
+    || activeTab === 'absence-validations'
+    || activeTab === 'absence-controls';
   const activeTeacherControlSubmenu = activeTab === 'teacher-control-regularizations';
   const absenceGroupExpanded = expandedNavigationGroups.absences || activeAbsenceSubmenu;
   const teacherControlGroupExpanded = expandedNavigationGroups.teacherControl || activeTeacherControlSubmenu;
@@ -1478,8 +1493,7 @@ export default function App() {
               <p className="text-xs text-slate-400">Cliquez pour basculer d'un module à l'autre</p>
             </div>
 
-            <nav className="space-y-1" aria-label="Navigation principale">
-              {/* Tab 1: Dashboard */}
+            <nav className="space-y-1 border-b border-slate-100 pb-3" aria-label="Accueil">
               <button
                 onClick={() => setActiveTab('tableau-de-bord')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -1489,10 +1503,27 @@ export default function App() {
                 }`}
                 id="sidebar-nav-dashboard"
               >
-                <LayoutDashboard className="h-4.5 w-4.5" />
-                <span>Tableau de Bord</span>
+                <SidebarNavigationIcon><LayoutDashboard className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                <span className="text-left">Tableau de Bord</span>
               </button>
+            </nav>
 
+            <nav className="space-y-1" aria-label="Navigation principale">
+              {/* Administration */}
+              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
+                onClick={() => setActiveTab('administration')}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'administration'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+                id="sidebar-nav-admin"
+              >
+                <SidebarNavigationIcon><Building2 className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                <span className="text-left">Administration</span>
+              </button>}
+
+              {/* Teacher control */}
               {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
                 <SidebarNavigationGroup
                   id="teacher-control"
@@ -1513,8 +1544,10 @@ export default function App() {
                       id="sidebar-nav-teacher-control"
                       data-testid="sidebar-nav-teacher-control"
                     >
-                      <ClipboardCheck className="h-4.5 w-4.5" />
-                      <span>{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
+                      <SidebarNavigationIcon testId="sidebar-nav-teacher-control-icon">
+                        <ClipboardCheck className="h-5 w-5 shrink-0" />
+                      </SidebarNavigationIcon>
+                      <span className="text-left">{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
                     </button>
                   )}
                 >
@@ -1529,8 +1562,8 @@ export default function App() {
                     data-testid="sidebar-nav-regularizations"
                     data-nav-child="true"
                   >
-                    <ClipboardList className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1">{currentRole === 'teacher' ? 'Régularisations en attente' : 'Régularisations à traiter'}</span>
+                    <SidebarNavigationIcon><ClipboardList className="h-4 w-4" /></SidebarNavigationIcon>
+                    <span className="min-w-0 flex-1 text-left">{currentRole === 'teacher' ? 'Régularisations en attente' : 'Régularisations à traiter'}</span>
                     {pendingRegularizationsCount > 0 && (
                       <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
                         activeTeacherControlSubmenu ? 'bg-indigo-700 text-white' : 'bg-rose-600 text-white'
@@ -1541,20 +1574,6 @@ export default function App() {
                   </button>
                 </SidebarNavigationGroup>
               )}
-
-              {/* Tab 2: Admin standard dashboard */}
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
-                onClick={() => setActiveTab('administration')}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'administration'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-                id="sidebar-nav-admin"
-              >
-                <Building2 className="h-4.5 w-4.5" />
-                <span>Administration</span>
-              </button>}
 
               <button
                 disabled={currentRole !== 'super_admin'}
@@ -1571,8 +1590,8 @@ export default function App() {
                 id="sidebar-nav-accounting"
                 aria-disabled={currentRole !== 'super_admin'}
               >
-                <Wallet className="h-4.5 w-4.5" />
-                <span>Comptabilité</span>
+                <SidebarNavigationIcon><Wallet className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                <span className="text-left">Comptabilité</span>
               </button>
 
               {currentRole === 'teacher' && homeroomClassesList.length > 0 && (
@@ -1581,8 +1600,8 @@ export default function App() {
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${activeTab === 'homeroom' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'}`}
                   id="sidebar-nav-homeroom"
                 >
-                  <Building2 className="h-4.5 w-4.5" />
-                  <span>Mes classes titulaires</span>
+                  <SidebarNavigationIcon><Building2 className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Mes classes titulaires</span>
                 </button>
               )}
 
@@ -1605,8 +1624,8 @@ export default function App() {
                     data-testid="sidebar-nav-absences"
                   >
                     <div className="flex items-center gap-3">
-                      <CalendarDays className="h-4.5 w-4.5" />
-                      <span>Absences</span>
+                      <SidebarNavigationIcon><CalendarDays className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                      <span className="text-left">Absences</span>
                     </div>
                     {unjustifiedAbsencesCount > 0 && (
                       <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1630,8 +1649,8 @@ export default function App() {
                     data-testid="sidebar-nav-absence-declaration-validations"
                     data-nav-child="true"
                   >
-                    <ClipboardList className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1">Déclarations d’absence à traiter</span>
+                    <SidebarNavigationIcon><ClipboardList className="h-4 w-4" /></SidebarNavigationIcon>
+                    <span className="min-w-0 flex-1 text-left">Déclarations d’absence à traiter</span>
                     {pendingAbsenceDeclarationsCount > 0 && (
                       <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
                         activeTab === 'absence-declaration-validations' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white'
@@ -1654,8 +1673,8 @@ export default function App() {
                     data-testid="sidebar-nav-absence-validations"
                     data-nav-child="true"
                   >
-                    <ClipboardCheck className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1">Validation des absences à traiter</span>
+                    <SidebarNavigationIcon><ClipboardCheck className="h-4 w-4" /></SidebarNavigationIcon>
+                    <span className="min-w-0 flex-1 text-left">Validation des absences à traiter</span>
                     <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
                       activeTab === 'absence-validations' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white'
                     }`}>
@@ -1663,22 +1682,24 @@ export default function App() {
                     </span>
                   </button>
                 )}
-              </SidebarNavigationGroup>
 
-              {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
-                <button
-                  onClick={() => setActiveTab('absence-controls')}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                    activeTab === 'absence-controls'
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                  id="sidebar-nav-absence-controls"
-                >
-                  <CalendarDays className="h-4.5 w-4.5" />
-                  <span>Contrôles Néant</span>
-                </button>
-              )}
+                {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
+                  <button
+                    onClick={() => setActiveTab('absence-controls')}
+                    className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
+                      activeTab === 'absence-controls'
+                        ? 'bg-indigo-100 text-indigo-800'
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-700'
+                    }`}
+                    id="sidebar-nav-absence-controls"
+                    data-testid="sidebar-nav-absence-controls"
+                    data-nav-child="true"
+                  >
+                    <SidebarNavigationIcon><CalendarDays className="h-4 w-4" /></SidebarNavigationIcon>
+                    <span className="min-w-0 flex-1 text-left">Contrôles Néant</span>
+                  </button>
+                )}
+              </SidebarNavigationGroup>
 
               {currentRole === 'parent' && (
                 <button
@@ -1690,8 +1711,8 @@ export default function App() {
                   }`}
                   id="sidebar-nav-parent-grades"
                 >
-                  <Award className="h-4.5 w-4.5" />
-                  <span>Notes</span>
+                  <SidebarNavigationIcon><Award className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Notes</span>
                 </button>
               )}
 
@@ -1708,8 +1729,8 @@ export default function App() {
                     id="sidebar-nav-grades"
                   >
                     <div className="flex items-center gap-3">
-                      <Award className="h-4.5 w-4.5" />
-                      <span>Notes & Bulletins</span>
+                      <SidebarNavigationIcon><Award className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                      <span className="text-left">Notes & Bulletins</span>
                     </div>
                     {noteOverdueCount > 0 && (
                       <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1729,8 +1750,8 @@ export default function App() {
                     }`}
                     id="sidebar-nav-archive"
                   >
-                    <BookOpen className="h-4.5 w-4.5" />
-                    <span>Archive</span>
+                    <SidebarNavigationIcon><BookOpen className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                    <span className="text-left">Archive</span>
                   </button>
                 </>
               )}
@@ -1756,8 +1777,8 @@ export default function App() {
                 aria-disabled={currentRole !== 'super_admin' && currentRole !== 'school_admin'}
               >
                 <div className="flex items-center gap-3">
-                  <FileText className="h-4.5 w-4.5" />
-                  <span>Bulletins</span>
+                  <SidebarNavigationIcon><FileText className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Bulletins</span>
                 </div>
                 {noteOverdueCount > 0 && (
                   <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1778,8 +1799,8 @@ export default function App() {
                   }`}
                   id="sidebar-nav-class-results"
                 >
-                  <Award className="h-4.5 w-4.5" />
-                  <span>Résultats / Proclamation</span>
+                  <SidebarNavigationIcon><Award className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Résultats / Proclamation</span>
                 </button>
               )}
 
@@ -1793,8 +1814,8 @@ export default function App() {
                   }`}
                   id="sidebar-nav-class-subject-pivot"
                 >
-                  <Table2 className="h-4.5 w-4.5" />
-                  <span>Résultats par matière</span>
+                  <SidebarNavigationIcon><Table2 className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Résultats par matière</span>
                 </button>
               )}
 
@@ -1808,8 +1829,8 @@ export default function App() {
                   }`}
                   id="sidebar-nav-audit"
                 >
-                  <Info className="h-4.5 w-4.5" />
-                  <span>Journal des actions</span>
+                  <SidebarNavigationIcon><Info className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Journal des actions</span>
                 </button>
               )}
 
@@ -1824,8 +1845,8 @@ export default function App() {
                 id="sidebar-nav-notifications"
               >
                 <div className="flex items-center gap-3">
-                  <Bell className="h-4.5 w-4.5" />
-                  <span>Messagerie & Push</span>
+                  <SidebarNavigationIcon><Bell className="h-4.5 w-4.5" /></SidebarNavigationIcon>
+                  <span className="text-left">Messagerie & Push</span>
                 </div>
                 {notificationsList.filter((n) => !n.isRead).length > 0 && (
                   <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${

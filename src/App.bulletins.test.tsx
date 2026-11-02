@@ -446,7 +446,8 @@ describe('App navigation', () => {
 
     expect(await screen.findByRole('button', { name: /Tableau de Bord/i })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /^Absences$/i })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: /Contrôles Néant/i })).toBeTruthy();
+    const absenceGroup = await screen.findByTestId('absences-navigation-group');
+    expect(await within(absenceGroup).findByRole('button', { name: /Contrôles Néant/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Notes & Bulletins/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Administration$/i })).toBeNull();
@@ -526,11 +527,13 @@ describe('App navigation', () => {
     await renderWithRole('teacher', []);
 
     const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const absenceGroup = await screen.findByTestId('absences-navigation-group');
     const sidebar = document.getElementById('main-sidebar');
     expect(sidebar?.className).toContain('w-full');
     expect(sidebar?.className).toContain('lg:w-64');
     const teacherControlButton = within(navigation).getByRole('button', { name: 'Déclaration de présence' });
     expect(teacherControlButton).toBeEnabled();
+    expect(within(absenceGroup).queryByTestId('sidebar-nav-absence-controls')).toBeNull();
 
     fireEvent.click(teacherControlButton);
     expect(await screen.findByRole('heading', { name: 'Déclaration de présence' })).toBeTruthy();
@@ -539,12 +542,23 @@ describe('App navigation', () => {
   it.each(['school_admin', 'super_admin'])('%s keeps the administrative module name in the shared responsive navigation', async (role) => {
     await renderWithRole(role, []);
 
+    const homeNavigation = await screen.findByRole('navigation', { name: 'Accueil' });
     const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    const absenceGroup = await screen.findByTestId('absences-navigation-group');
     const sidebar = document.getElementById('main-sidebar');
     expect(sidebar?.className).toContain('w-full');
     expect(sidebar?.className).toContain('lg:w-64');
+    expect(within(homeNavigation).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      'Tableau de Bord',
+    ]);
+    expect(within(navigation).getAllByRole('button').slice(0, 2).map((button) => button.textContent?.trim())).toEqual([
+      'Administration',
+      'Contrôle des enseignants',
+    ]);
+    expect(homeNavigation.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(navigation).getByRole('button', { name: 'Contrôle des enseignants' })).toBeEnabled();
     expect(within(navigation).queryByRole('button', { name: 'Déclaration de présence' })).toBeNull();
+    expect(within(absenceGroup).queryByTestId('sidebar-nav-absence-controls') !== null).toBe(role === 'school_admin');
   });
 
   it.each([
@@ -714,6 +728,11 @@ describe('App navigation', () => {
     const teacherControlParent = within(teacherControlGroup).getByTestId('sidebar-nav-teacher-control');
     const absenceSubmenu = within(absenceGroup).getByTestId('absences-submenu');
     const teacherControlSubmenu = within(teacherControlGroup).getByTestId('teacher-control-submenu');
+    const navigation = screen.getByRole('navigation', { name: 'Navigation principale' });
+    const navigationIcons = within(navigation).getAllByTestId('sidebar-navigation-icon');
+    const mainMenuButtons = Array.from(navigation.querySelectorAll('button:not([data-nav-child="true"]):not([aria-controls])'));
+    const absenceControlsEntry = within(absenceSubmenu).getByTestId('sidebar-nav-absence-controls');
+    const teacherControlIcon = within(teacherControlParent).getByTestId('sidebar-nav-teacher-control-icon');
 
     expect(absenceSubmenu.className).toContain('ml-5');
     expect(absenceSubmenu.className).toContain('border-l');
@@ -721,6 +740,26 @@ describe('App navigation', () => {
     expect(within(absenceSubmenu).getByTestId('sidebar-nav-absence-declaration-validations')).toBeInTheDocument();
     expect(within(absenceSubmenu).getByTestId('sidebar-nav-absence-validations')).toBeInTheDocument();
     expect(within(teacherControlSubmenu).getByTestId('sidebar-nav-regularizations')).toBeInTheDocument();
+    expect(absenceControlsEntry).toHaveAttribute('data-nav-child', 'true');
+    expect(within(navigation).getAllByTestId('sidebar-nav-absence-controls')).toHaveLength(1);
+    expect(within(teacherControlParent).getByText('Contrôle des enseignants').parentElement).toHaveClass('gap-3', 'px-3.5');
+    expect(teacherControlIcon).toHaveClass('h-5', 'w-5');
+    expect(teacherControlIcon.querySelector('svg')).toHaveClass('h-5', 'w-5');
+    expect(navigationIcons.length).toBeGreaterThan(10);
+    navigationIcons.forEach((icon) => expect(icon).toHaveClass('h-5', 'w-5', 'shrink-0'));
+    mainMenuButtons.forEach((menuButton) => {
+      expect(menuButton).toHaveClass('px-3.5');
+      expect(menuButton.querySelector('[data-nav-icon="true"]')).toHaveClass('w-5');
+      expect(menuButton.querySelector('span.text-left')).not.toBeNull();
+    });
+    [absenceSubmenu, teacherControlSubmenu].forEach((submenu) => {
+      expect(submenu).toHaveClass('ml-5', 'pl-3');
+      within(submenu).getAllByRole('button').forEach((submenuButton) => {
+        expect(submenuButton).toHaveClass('gap-2', 'px-3');
+        expect(within(submenuButton).getByTestId('sidebar-navigation-icon')).toHaveClass('w-5');
+        expect(submenuButton.querySelector('span.text-left')).not.toBeNull();
+      });
+    });
 
     fireEvent.click(within(absenceGroup).getByRole('button', { name: 'Réduire le sous-menu' }));
     expect(screen.queryByTestId('absences-submenu')).toBeNull();
@@ -733,6 +772,11 @@ describe('App navigation', () => {
     expect(screen.getByTestId('absences-submenu')).toBeInTheDocument();
     expect(absenceGroup.className).toContain('bg-indigo-50/70');
     expect(absenceParent).not.toHaveClass('bg-indigo-600');
+
+    fireEvent.click(within(screen.getByTestId('absences-submenu')).getByTestId('sidebar-nav-absence-controls'));
+    expect(await screen.findByRole('heading', { name: 'Contrôles Néant' })).toBeInTheDocument();
+    expect(screen.getByTestId('absences-submenu')).toBeInTheDocument();
+    expect(absenceGroup.className).toContain('bg-indigo-50/70');
 
     fireEvent.click(within(teacherControlGroup).getByRole('button', { name: 'Réduire le sous-menu' }));
     expect(screen.queryByTestId('teacher-control-submenu')).toBeNull();
