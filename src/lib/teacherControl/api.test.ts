@@ -216,9 +216,29 @@ vi.mock('../../db/index.ts', async () => {
           return Promise.resolve(groupedRows).then(resolve, reject);
         }
         if (builder.table === schema.teacherControlRegularizationRequests && builder.grouped) {
-          return Promise.resolve([]).then(resolve, reject);
+          const counts = new Map<number, number>();
+          for (const row of mockDatabaseState.regularizationRequests) {
+            if (row.status !== 'pending') continue;
+            const schoolId = Number(row.schoolId);
+            counts.set(schoolId, (counts.get(schoolId) ?? 0) + 1);
+          }
+          return Promise.resolve([...counts].map(([schoolId, pendingRegularizations]) => ({
+            schoolId,
+            pendingRegularizations,
+          }))).then(resolve, reject);
         }
         let rows = [...rowsFor(builder.table)];
+        if (builder.table === schema.teacherControlRegularizationRequests
+          && builder.selection?.pendingRegularizations) {
+          rows = mockDatabaseState.regularizationRequests.filter((row) => (
+            row.status === 'pending'
+            && builder.params.includes(row.schoolId)
+            && (builder.joinedTables.has(schema.teacherControlSessions)
+              ? mockDatabaseState.sessions.some((session) => session.id === row.sessionId)
+              : ['immediate_report', 'late_declaration'].includes(String(row.requestType)))
+          ));
+          return Promise.resolve([{ pendingRegularizations: rows.length }]).then(resolve, reject);
+        }
         if (builder.table === schema.userSchools) {
           rows = rows.filter((row) => builder.params.includes(row.userId)
             && builder.params.includes(row.schoolId)
@@ -317,7 +337,11 @@ vi.mock('../../db/index.ts', async () => {
               ? row.resourceId == null
               : builder.params.includes(row.resourceId)));
         }
-        return Promise.resolve(rows.map((row) => ({ ...row }))).then(resolve, reject);
+        const selectedRows = builder.table === schema.teacherControlRegularizationRequests
+          && builder.joinedTables.has(schema.teacherControlRegularizationDecisions)
+          ? rows.map((row) => ({ request: row, decision: null }))
+          : rows.map((row) => ({ ...row }));
+        return Promise.resolve(selectedRows).then(resolve, reject);
       },
     };
     return builder;
@@ -1921,6 +1945,75 @@ describe('teacher control API authorization and input validation', () => {
         estimatedCompensationXof: 0,
       }),
     ]));
+  });
+
+  it('returns only the authenticated teacher regularizations, including their real statuses', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
+    mockDatabaseState.regularizationRequests = [
+      { id: 1, schoolId: 8, teacherId: 21, status: 'pending', createdAt: new Date('2026-10-31T08:00:00.000Z') },
+      { id: 2, schoolId: 8, teacherId: 21, status: 'rejected', createdAt: new Date('2026-10-30T08:00:00.000Z') },
+      { id: 3, schoolId: 8, teacherId: 22, status: 'pending', createdAt: new Date('2026-10-31T09:00:00.000Z') },
+      { id: 4, schoolId: 9, teacherId: 21, status: 'pending', createdAt: new Date('2026-10-31T10:00:00.000Z') },
+    ];
+
+    const response = await request(createTestApp())
+      .get('/api/teacher-control/regularizations?schoolId=9');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body.map((entry: { request: { id: number; status: string } }) => ({
+      id: entry.request.id,
+      status: entry.request.status,
+    }))).toEqual([
+      { id: 1, status: 'pending' },
+      { id: 2, status: 'rejected' },
+    ]);
+  });
+
+  it('rejects regularization listing for roles without teacher-control access', async () => {
+    mockActor.role = 'surveillant';
+
+    const response = await request(createTestApp()).get('/api/teacher-control/regularizations');
+
+    expect(response.status).toBe(403);
+  });
+
+  it('lets a super admin list regularizations across the authorized global scope', async () => {
+    mockActor.role = 'super_admin';
+    mockDatabaseState.regularizationRequests = [
+      { id: 1, schoolId: 8, teacherId: 21, status: 'pending', createdAt: new Date('2026-10-31T08:00:00.000Z') },
+      { id: 2, schoolId: 9, teacherId: 22, status: 'accepted', createdAt: new Date('2026-10-30T08:00:00.000Z') },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/regularizations');
+
+    expect(response.status).toBe(200);
+    expect(response.body.map((entry: { request: { id: number; schoolId: number } }) => ({
+      id: entry.request.id,
+      schoolId: entry.request.schoolId,
+    }))).toEqual([
+      { id: 1, schoolId: 8 },
+      { id: 2, schoolId: 9 },
+    ]);
+  });
+
+  it('counts only pending requests and decreases after acceptance or rejection', async () => {
+    mockActor.role = 'school_admin';
+    mockDatabaseState.regularizationRequests = [
+      { id: 1, schoolId: 8, teacherId: 21, requestType: 'immediate_report', status: 'pending' },
+      { id: 2, schoolId: 8, teacherId: 21, requestType: 'late_declaration', status: 'pending' },
+      { id: 3, schoolId: 8, teacherId: 21, requestType: 'late_declaration', status: 'accepted' },
+      { id: 4, schoolId: 8, teacherId: 21, requestType: 'immediate_report', status: 'rejected' },
+    ];
+    const app = createTestApp();
+
+    expect((await request(app).get('/api/teacher-control/statistics')).body.pendingRegularizations).toBe(2);
+    mockDatabaseState.regularizationRequests[0].status = 'accepted';
+    expect((await request(app).get('/api/teacher-control/statistics')).body.pendingRegularizations).toBe(1);
+    mockDatabaseState.regularizationRequests[1].status = 'rejected';
+    expect((await request(app).get('/api/teacher-control/statistics')).body.pendingRegularizations).toBe(0);
   });
 
   it('rejects a school-admin session query for another school and serves its own school when unscoped', async () => {

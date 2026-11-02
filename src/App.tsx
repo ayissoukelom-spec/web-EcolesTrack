@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from 'react';
 import {
   School,
   AcademicYear,
@@ -83,6 +83,12 @@ export default function App() {
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
+  const [teacherControlRequestedTab, setTeacherControlRequestedTab] = useState<'sessions' | 'requests'>('sessions');
+  const [pendingRegularizationsCount, setPendingRegularizationsCount] = useState(0);
+  const regularizationsCountRequestsInFlightRef = useRef(new Set<string>());
+  const handleTeacherControlTabChange = useCallback((tab: 'sessions' | 'requests' | 'gps' | 'rates') => {
+    setTeacherControlRequestedTab(tab === 'requests' ? 'requests' : 'sessions');
+  }, []);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
@@ -498,6 +504,52 @@ export default function App() {
       fetchAllData();
     }
   }, [activeSchoolId, currentRole, role]);
+
+  useEffect(() => {
+    setPendingRegularizationsCount(0);
+    if (!['teacher', 'school_admin', 'super_admin'].includes(currentRole)) {
+      return;
+    }
+    if (currentRole !== 'super_admin' && activeSchoolId == null) {
+      return;
+    }
+
+    let active = true;
+    const refreshPendingRegularizationsCount = async () => {
+      const endpoint = currentRole === 'super_admin'
+        ? '/api/teacher-control/statistics/global'
+        : '/api/teacher-control/statistics';
+      const requestKey = `${endpoint}:${currentRole === 'super_admin' ? 'global' : activeSchoolId}`;
+      if (regularizationsCountRequestsInFlightRef.current.has(requestKey)) return;
+      regularizationsCountRequestsInFlightRef.current.add(requestKey);
+      try {
+        const summary = await apiFetch(endpoint, { cache: 'no-store' }) as { pendingRegularizations?: number };
+        const count = summary?.pendingRegularizations;
+        if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+          throw new Error('Le nombre de régularisations en attente retourné par le serveur est invalide.');
+        }
+        if (active) setPendingRegularizationsCount(count);
+      } catch (error) {
+        console.warn('Impossible d’actualiser le nombre de régularisations en attente :', error);
+      } finally {
+        regularizationsCountRequestsInFlightRef.current.delete(requestKey);
+      }
+    };
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshPendingRegularizationsCount();
+    };
+    void refreshPendingRegularizationsCount();
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    window.addEventListener('focus', refreshPendingRegularizationsCount);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshPendingRegularizationsCount);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [activeSchoolId, currentRole]);
 
   useEffect(() => {
     if (!notificationsList || notificationsList.length === 0) return;
@@ -1324,7 +1376,10 @@ export default function App() {
 
               {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
                 <button
-                  onClick={() => setActiveTab('teacher-control')}
+                  onClick={() => {
+                    setTeacherControlRequestedTab('sessions');
+                    setActiveTab('teacher-control');
+                  }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                     activeTab === 'teacher-control'
                       ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
@@ -1335,6 +1390,34 @@ export default function App() {
                 >
                   <ClipboardCheck className="h-4.5 w-4.5" />
                   <span>{currentRole === 'teacher' ? 'Déclaration de présence' : 'Contrôle des enseignants'}</span>
+                </button>
+              )}
+
+              {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+                <button
+                  onClick={() => {
+                    setTeacherControlRequestedTab('requests');
+                    setActiveTab('teacher-control-regularizations');
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                    activeTab === 'teacher-control-regularizations'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  id="sidebar-nav-regularizations"
+                  data-testid="sidebar-nav-regularizations"
+                >
+                  <ClipboardList className="h-4.5 w-4.5" />
+                  <span>{currentRole === 'teacher' ? 'Régularisations en attente' : 'Régularisations à traiter'}</span>
+                  {pendingRegularizationsCount > 0 && (
+                    <span className={`ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      activeTab === 'teacher-control-regularizations'
+                        ? 'bg-white text-indigo-700'
+                        : 'bg-rose-600 text-white'
+                    }`}>
+                      {pendingRegularizationsCount > 99 ? '99+' : pendingRegularizationsCount}
+                    </span>
+                  )}
                 </button>
               )}
 
@@ -1682,7 +1765,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'teacher-control'
+              {(activeTab === 'teacher-control' || activeTab === 'teacher-control-regularizations')
                 && ['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
                   <ErrorBoundary>
                     <TeacherControlView
@@ -1692,6 +1775,10 @@ export default function App() {
                       teachersList={teachersList}
                       superAdminSchoolFilterId={superAdminSchoolFilterId}
                       onSuperAdminSchoolFilterChange={setSuperAdminSchoolFilterId}
+                      viewMode={activeTab === 'teacher-control-regularizations' ? 'regularizations' : 'full'}
+                      initialTab={activeTab === 'teacher-control-regularizations' ? 'requests' : teacherControlRequestedTab}
+                      onTabChange={handleTeacherControlTabChange}
+                      onPendingRegularizationsCountChange={setPendingRegularizationsCount}
                     />
                   </ErrorBoundary>
                 )}

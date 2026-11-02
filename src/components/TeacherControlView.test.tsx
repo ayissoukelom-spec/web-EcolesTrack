@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import TeacherControlView from './TeacherControlView';
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
@@ -43,7 +43,7 @@ const defaultProps = {
 };
 
 function configureTeacherApi() {
-  apiFetchMock.mockImplementation(async (url: string) => {
+  apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
     if (url.startsWith('/api/teacher-control/sessions')) return [];
     if (url.startsWith('/api/teacher-control/statistics')) {
       return {
@@ -703,14 +703,21 @@ describe('TeacherControlView', () => {
 
   it('allows a super admin to review a regularization within the selected school scope', async () => {
     const onSchoolChange = vi.fn();
+    let pendingCount = 1;
+    let requestStatus = 'pending';
     const superApi = vi.fn(async (url: string, _options?: RequestInit) => {
       if (url.startsWith('/api/teacher-control/sessions')) return [session];
-      if (url.startsWith('/api/teacher-control/regularizations/7/decision')) return { request: {}, decision: {}, session };
+      if (url.startsWith('/api/teacher-control/regularizations/7/decision')) {
+        pendingCount = 0;
+        requestStatus = 'accepted';
+        return { request: {}, decision: {}, session };
+      }
       if (url.startsWith('/api/teacher-control/statistics')) {
         return {
           totalSessions: 1,
           openSessions: 1,
           completedSessions: 0,
+          pendingRegularizations: pendingCount,
           validatedDurationMilliseconds: 0,
           estimatedCompensationXof: 0,
         };
@@ -736,7 +743,7 @@ describe('TeacherControlView', () => {
           gpsLatitude: null,
           gpsLongitude: null,
           gpsAccuracyMeters: null,
-          status: 'pending',
+          status: requestStatus,
           createdAt: '2026-10-31T09:10:00.000Z',
         },
         decisions: [],
@@ -783,9 +790,223 @@ describe('TeacherControlView', () => {
         schoolId: 8,
       });
     });
+    expect(await screen.findByText('Acceptée')).toBeTruthy();
+  });
+
+  it('keeps a teacher request history visible and refreshes its real status on focus', async () => {
+    let status: 'pending' | 'accepted' | 'rejected' = 'pending';
+    const onPendingCountChange = vi.fn();
+    const requestRow = {
+      id: 77,
+      schoolId: 8,
+      sessionId: 12,
+      requestType: 'incomplete_session',
+      schoolNameSnapshot: 'École A',
+      classId: null,
+      classNameSnapshot: null,
+      subjectId: null,
+      subjectNameSnapshot: null,
+      referenceStartedAt: null,
+      declaredStartedAt: null,
+      teacherNameSnapshot: 'Afi Mensah',
+      proposedEndedAt: '2026-10-31T09:00:00.000Z',
+      reason: 'Sortie urgente',
+      description: null,
+      incidentType: null,
+      technicalDetails: null,
+      gpsLatitude: null,
+      gpsLongitude: null,
+      gpsAccuracyMeters: null,
+      get status() { return status; },
+      createdAt: '2026-10-31T09:10:00.000Z',
+    };
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          incompleteSessions: 0,
+          regularizedSessions: 0,
+          pendingRegularizations: status === 'pending' ? 1 : 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url === '/api/teacher-control/regularizations') return [{ request: requestRow, decisions: [] }];
+      if (url === '/api/teacher-control/assignments') return [];
+      return {};
+    });
+
+    render(
+      <TeacherControlView
+        {...defaultProps}
+        initialTab="requests"
+        onPendingRegularizationsCountChange={onPendingCountChange}
+      />,
+    );
+
+    expect(await screen.findByText('En attente')).toBeTruthy();
+    expect(onPendingCountChange).toHaveBeenLastCalledWith(1);
+    expect(screen.getByText(/Séance #12/)).toBeTruthy();
+    expect(screen.getByText(/Sortie urgente/)).toBeTruthy();
+    status = 'accepted';
+    await act(async () => window.dispatchEvent(new Event('focus')));
+
+    expect(await screen.findByText('Acceptée')).toBeTruthy();
+    expect(apiFetchMock.mock.calls.filter(([url]) => url === '/api/teacher-control/regularizations').length)
+      .toBeGreaterThan(1);
+  });
+
+  it('renders only the regularization review page for an administrator and preserves decision actions', async () => {
+    const statuses: Record<number, string> = { 7: 'pending', 8: 'pending' };
+    const onPendingCountChange = vi.fn();
+    const request = {
+      id: 7,
+      sessionId: 1,
+      requestType: 'incomplete_session',
+      schoolId: 8,
+      schoolNameSnapshot: 'École A',
+      classNameSnapshot: '6e A',
+      subjectNameSnapshot: 'Mathématiques',
+      teacherNameSnapshot: 'Afi Mensah',
+      proposedEndedAt: '2026-10-31T09:00:00.000Z',
+      reason: 'Sortie urgente',
+      description: null,
+      status: statuses[7],
+      createdAt: '2026-10-31T09:10:00.000Z',
+    };
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === '/api/teacher-control/statistics') {
+        return { totalSessions: 0, openSessions: 0, pendingRegularizations: Object.values(statuses).filter((status) => status === 'pending').length };
+      }
+      if (url === '/api/teacher-control/regularizations') {
+        return [
+          { request: { ...request, status: statuses[7] }, decisions: [] },
+          { request: { ...request, id: 8, sessionId: 2, status: statuses[8] }, decisions: [] },
+        ];
+      }
+      const decisionMatch = url.match(/\/regularizations\/(\d+)\/decision$/);
+      if (decisionMatch) {
+        const requestId = Number(decisionMatch[1]);
+        const body = JSON.parse(String(options?.body ?? '{}'));
+        statuses[requestId] = body.decision === 'rejected' ? 'rejected' : 'accepted';
+        return { request: { ...request, id: requestId, status: statuses[requestId] }, decision: {}, session };
+      }
+      return {};
+    });
+
+    render(
+      <TeacherControlView
+        {...defaultProps}
+        userRole="school_admin"
+        viewMode="regularizations"
+        onPendingRegularizationsCountChange={onPendingCountChange}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Régularisations à traiter' })).toBeTruthy();
+    expect(onPendingCountChange).toHaveBeenLastCalledWith(2);
+    expect(await screen.findByText(/Afi Mensah · École A · Demande #7/)).toBeTruthy();
+    expect(screen.getAllByText(/Motif : Sortie urgente/)).toHaveLength(2);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByText('Paramètres de contrôle GPS')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Début' })).toBeNull();
+    expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string' && url.startsWith('/api/teacher-control/sessions'))).toBe(false);
+    expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string' && url.startsWith('/api/teacher-control/filter-options'))).toBe(false);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accepter l’heure proposée' })[0]);
+    expect(await screen.findByText(/Demande #8/)).toBeTruthy();
+    expect(screen.queryByText(/Demande #7/)).toBeNull();
+    expect(onPendingCountChange).toHaveBeenLastCalledWith(1);
+    fireEvent.change(screen.getByLabelText('Motif (obligatoire pour refus ou modification)'), {
+      target: { value: 'Présence non confirmée' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refuser' }));
+    expect(await screen.findByText('Aucune demande de régularisation à afficher.')).toBeTruthy();
+    expect(onPendingCountChange).toHaveBeenLastCalledWith(0);
+    expect(apiFetchMock.mock.calls.some(([url, options]) => url === '/api/teacher-control/regularizations/8/decision'
+      && JSON.parse(String((options as RequestInit)?.body ?? '{}')).reason === 'Présence non confirmée')).toBe(true);
+  });
+
+  it('shows only a teacher’s regularization history in isolated mode', async () => {
+    let teacherStatus = 'pending';
+    const rows = [
+      {
+        request: {
+          id: 77,
+          schoolId: 8,
+          sessionId: 12,
+          requestType: 'incomplete_session',
+          schoolNameSnapshot: 'École A',
+          teacherNameSnapshot: 'Afi Mensah',
+          proposedEndedAt: '2026-10-31T09:00:00.000Z',
+          reason: 'Sortie urgente',
+          get status() { return teacherStatus; },
+          createdAt: '2026-10-31T09:10:00.000Z',
+        },
+        decisions: [],
+      },
+      {
+        request: {
+          id: 78,
+          schoolId: 8,
+          sessionId: 13,
+          requestType: 'incomplete_session',
+          schoolNameSnapshot: 'École A',
+          teacherNameSnapshot: 'Afi Mensah',
+          proposedEndedAt: '2026-10-30T09:00:00.000Z',
+          reason: 'Régularisation ancienne',
+          status: 'accepted',
+          createdAt: '2026-10-30T09:10:00.000Z',
+        },
+        decisions: [{
+          id: 10,
+          decision: 'accepted',
+          actorNameSnapshot: 'Administrateur',
+          decidedStartedAt: null,
+          decidedEndedAt: '2026-10-30T09:00:00.000Z',
+          reason: 'Validée',
+          createdAt: '2026-10-30T10:00:00.000Z',
+        }],
+      },
+    ];
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/teacher-control/statistics') {
+        return { totalSessions: 0, openSessions: 0, pendingRegularizations: teacherStatus === 'pending' ? 1 : 0 };
+      }
+      if (url === '/api/teacher-control/regularizations') {
+        return rows.map((entry) => ({ ...entry, request: { ...entry.request, status: entry.request.status } }));
+      }
+      return {};
+    });
+
+    render(<TeacherControlView {...defaultProps} viewMode="regularizations" initialTab="requests" />);
+
+    expect(await screen.findByRole('heading', { name: 'Régularisations en attente' })).toBeTruthy();
+    expect(await screen.findByText('En attente')).toBeTruthy();
+    expect(screen.queryByText('Acceptée')).toBeNull();
+    expect(screen.queryByText(/Régularisation ancienne/)).toBeNull();
+    expect(screen.getAllByText(/Demandée le/)).toHaveLength(1);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Accepter l’heure proposée' })).toBeNull();
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/teacher-control/regularizations', { cache: 'no-store' });
+    expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string' && url.startsWith('/api/teacher-control/sessions'))).toBe(false);
+    expect(apiFetchMock.mock.calls.some(([url]) => typeof url === 'string' && url.startsWith('/api/teacher-control/filter-options'))).toBe(false);
+
+    teacherStatus = 'accepted';
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(await screen.findByText('Vous n’avez aucune demande de régularisation.')).toBeTruthy();
+    expect(screen.queryByText('En attente')).toBeNull();
   });
 
   it('requires a reason before a school administrator can reject a regularization request', async () => {
+    let pendingCount = 1;
+    let requestStatus = 'pending';
+    const onPendingCountChange = vi.fn();
     apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
       if (url.startsWith('/api/teacher-control/sessions')) return [session];
       if (url.startsWith('/api/teacher-control/statistics')) {
@@ -793,11 +1014,16 @@ describe('TeacherControlView', () => {
           totalSessions: 1,
           openSessions: 1,
           completedSessions: 0,
+          pendingRegularizations: pendingCount,
           validatedDurationMilliseconds: 0,
           estimatedCompensationXof: 0,
         };
       }
-      if (url.startsWith('/api/teacher-control/regularizations/7/decision')) return { request: {}, decision: {}, session };
+      if (url.startsWith('/api/teacher-control/regularizations/7/decision')) {
+        pendingCount = 0;
+        requestStatus = 'rejected';
+        return { request: {}, decision: {}, session };
+      }
       if (url.startsWith('/api/teacher-control/regularizations')) {
         return [{
           request: {
@@ -806,7 +1032,7 @@ describe('TeacherControlView', () => {
             teacherNameSnapshot: 'Afi Mensah',
             proposedEndedAt: '2026-10-31T09:00:00.000Z',
             reason: 'Sortie urgente',
-            status: 'pending',
+            status: requestStatus,
             createdAt: '2026-10-31T09:10:00.000Z',
           },
           decisions: [],
@@ -826,7 +1052,7 @@ describe('TeacherControlView', () => {
       }
       return {};
     });
-    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" onPendingRegularizationsCountChange={onPendingCountChange} />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Régularisations' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Refuser' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Un motif est obligatoire');
@@ -846,6 +1072,8 @@ describe('TeacherControlView', () => {
       decision: 'rejected',
       reason: 'Justificatif insuffisant',
     });
+    await waitFor(() => expect(onPendingCountChange).toHaveBeenLastCalledWith(0));
+    expect(await screen.findByText('Refusée')).toBeTruthy();
   });
 
   it('lets a super administrator capture school coordinates and edit them before saving', async () => {

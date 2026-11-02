@@ -547,6 +547,142 @@ describe('App navigation', () => {
     expect(within(navigation).queryByRole('button', { name: 'Déclaration de présence' })).toBeNull();
   });
 
+  it.each([
+    ['school_admin', 'Régularisations à traiter', '/api/teacher-control/statistics'],
+    ['super_admin', 'Régularisations à traiter', '/api/teacher-control/statistics/global'],
+    ['teacher', 'Régularisations en attente', '/api/teacher-control/statistics'],
+  ] as const)('%s has independent teacher-control and regularization navigation destinations', async (role, label, statisticsEndpoint) => {
+    mockGetSimulatedRole.mockReturnValue(role);
+    mockGetSimulatedUser.mockReturnValue({
+      uid: `sim-${role}`,
+      email: `${role}@example.com`,
+      name: role,
+      schoolId: role === 'super_admin' ? null : 1,
+      role,
+      id: 1,
+    });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === statisticsEndpoint) return Promise.resolve({
+        totalSessions: 0,
+        openSessions: 0,
+        completedSessions: 0,
+        incompleteSessions: 0,
+        regularizedSessions: 0,
+        pendingRegularizations: 3,
+        validatedDurationMilliseconds: 0,
+        estimatedCompensationXof: 0,
+        ...(role === 'super_admin' ? { schools: [] } : {}),
+      });
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url === '/api/teacher-control/assignments') return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/sessions')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/statistics')) return Promise.resolve({
+        totalSessions: 0,
+        openSessions: 0,
+        completedSessions: 0,
+        incompleteSessions: 0,
+        regularizedSessions: 0,
+        pendingRegularizations: 3,
+        validatedDurationMilliseconds: 0,
+        estimatedCompensationXof: 0,
+        ...(role === 'super_admin' ? { schools: [] } : {}),
+      });
+      if (url.startsWith('/api/teacher-control/gps-settings')) return Promise.resolve({ geofenceRadiusMeters: 200 });
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers'
+        || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades'
+        || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    const regularizationsMenu = await screen.findByTestId('sidebar-nav-regularizations');
+    expect(within(regularizationsMenu).getByText('3')).toBeInTheDocument();
+    expect(within(regularizationsMenu).getByText(label)).toBeInTheDocument();
+    expect(mockApiFetch).toHaveBeenCalledWith(statisticsEndpoint, expect.objectContaining({ cache: 'no-store' }));
+
+    fireEvent.click(regularizationsMenu);
+    const teacherControlMenu = await screen.findByTestId('sidebar-nav-teacher-control');
+    expect(regularizationsMenu.className).toContain('bg-indigo-600');
+    expect(teacherControlMenu.className).not.toContain('bg-indigo-600');
+    if (role === 'super_admin') {
+      expect(await screen.findByRole('region', { name: 'Régularisations à traiter' })).toBeInTheDocument();
+    } else {
+      expect(await screen.findByRole('heading', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByText('Paramètres de contrôle GPS')).toBeNull();
+    expect(screen.queryByText('Statistiques par établissement')).toBeNull();
+
+    fireEvent.click(teacherControlMenu);
+    expect(teacherControlMenu.className).toContain('bg-indigo-600');
+    expect(regularizationsMenu.className).not.toContain('bg-indigo-600');
+    if (role === 'super_admin') {
+      expect(await screen.findByRole('heading', { name: 'Statistiques par établissement' })).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Régularisations à traiter' })).toBeNull();
+    } else {
+      expect(await screen.findByRole('tab', { name: 'Séances' })).toHaveAttribute('aria-selected', 'true');
+    }
+
+    fireEvent.click(regularizationsMenu);
+    expect(regularizationsMenu.className).toContain('bg-indigo-600');
+    expect(teacherControlMenu.className).not.toContain('bg-indigo-600');
+    if (role === 'super_admin') {
+      expect(await screen.findByRole('region', { name: 'Régularisations à traiter' })).toBeInTheDocument();
+    } else {
+      expect(await screen.findByRole('heading', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it('refreshes an administrator regularization badge from backend statistics on window focus', async () => {
+    let pendingCount = 0;
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/teacher-control/statistics') return Promise.resolve({
+        totalSessions: 0,
+        openSessions: 0,
+        completedSessions: 0,
+        incompleteSessions: 0,
+        regularizedSessions: 0,
+        pendingRegularizations: pendingCount,
+        validatedDurationMilliseconds: 0,
+        estimatedCompensationXof: 0,
+      });
+      if (url === '/api/teacher-control/regularizations') return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/sessions')) return Promise.resolve([]);
+      if (url.startsWith('/api/teacher-control/statistics')) return Promise.resolve({
+        pendingRegularizations: pendingCount,
+        totalSessions: 0,
+        openSessions: 0,
+        completedSessions: 0,
+        incompleteSessions: 0,
+        regularizedSessions: 0,
+        validatedDurationMilliseconds: 0,
+        estimatedCompensationXof: 0,
+      });
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers'
+        || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades'
+        || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    render(<AuthProvider><App /></AuthProvider>);
+    const regularizationsMenu = await screen.findByTestId('sidebar-nav-regularizations');
+    expect(within(regularizationsMenu).queryByText('1')).toBeNull();
+
+    pendingCount = 1;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(within(regularizationsMenu).getByText('1')).toBeInTheDocument());
+
+    pendingCount = 0;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(within(regularizationsMenu).queryByText('1')).toBeNull());
+  });
+
   it('shows the Absences badge only for unjustified absences', async () => {
     await renderWithRole('school_admin', [
       { id: 1, isJustified: false },

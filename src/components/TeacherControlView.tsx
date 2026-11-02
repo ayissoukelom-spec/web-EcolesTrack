@@ -106,6 +106,7 @@ type Decision = {
 type Regularization = {
   request: {
     id: number;
+    schoolId: number;
     sessionId: number | null;
     requestType: 'incomplete_session' | 'immediate_report' | 'late_declaration';
     schoolNameSnapshot: string;
@@ -211,11 +212,15 @@ const EMPTY_SESSION_FILTERS: SessionFilters = {
 
 interface TeacherControlViewProps {
   userRole: UserRole;
+  viewMode?: 'full' | 'regularizations';
   activeSchoolId: number | null;
   schoolsList: School[];
   teachersList: Teacher[];
   superAdminSchoolFilterId: number | null;
   onSuperAdminSchoolFilterChange: (schoolId: number | null) => void;
+  initialTab?: ViewTab;
+  onTabChange?: (tab: ViewTab) => void;
+  onPendingRegularizationsCountChange?: (count: number) => void;
 }
 
 const timeZone = 'Africa/Lome';
@@ -515,11 +520,15 @@ function StatCard({ label, value, detail }: { label: string; value: string; deta
 
 export default function TeacherControlView({
   userRole,
+  viewMode = 'full',
   activeSchoolId,
   schoolsList,
   teachersList,
   superAdminSchoolFilterId,
   onSuperAdminSchoolFilterChange,
+  initialTab = 'sessions',
+  onTabChange,
+  onPendingRegularizationsCountChange,
 }: TeacherControlViewProps) {
   const isTeacher = userRole === 'teacher';
   const isSchoolAdmin = userRole === 'school_admin';
@@ -530,7 +539,7 @@ export default function TeacherControlView({
   const selectedSchool = schoolsList.find((school) => school.id === schoolId);
   const schoolQuery = isSuperAdmin && schoolId != null ? `?schoolId=${schoolId}` : '';
 
-  const [activeTab, setActiveTab] = useState<ViewTab>('sessions');
+  const [activeTab, setActiveTab] = useState<ViewTab>(initialTab);
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -556,6 +565,7 @@ export default function TeacherControlView({
   const [pendingEndValidation, setPendingEndValidation] = useState<PendingEndValidation | null>(null);
   const [startedSession, setStartedSession] = useState<Session | null>(null);
   const [endConfirmation, setEndConfirmation] = useState<EndConfirmation | null>(null);
+  const initialTabRef = useRef(initialTab);
   const actionInFlight = useRef(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
@@ -618,6 +628,30 @@ export default function TeacherControlView({
     setError(null);
     if (isTeacher) setAssignments(null);
     try {
+      if (viewMode === 'regularizations') {
+        if (globalOverview) {
+          const [summary, requestRows] = await Promise.all([
+            apiFetch('/api/teacher-control/statistics/global') as Promise<GlobalStatistics>,
+            apiFetch('/api/teacher-control/regularizations', { cache: 'no-store' }) as Promise<Regularization[]>,
+          ]);
+          setGlobalStatistics(summary);
+          setStatistics(summary);
+          setRegularizations(Array.isArray(requestRows) ? requestRows : []);
+          onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
+          return;
+        }
+
+        const [summary, requestRows] = await Promise.all([
+          apiFetch(`/api/teacher-control/statistics${schoolQuery}`, { cache: 'no-store' }) as Promise<Statistics>,
+          apiFetch(`/api/teacher-control/regularizations${schoolQuery}`, { cache: 'no-store' }) as Promise<Regularization[]>,
+        ]);
+        setStatistics(summary);
+        setGlobalStatistics(null);
+        setRegularizations(Array.isArray(requestRows) ? requestRows : []);
+        onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
+        return;
+      }
+
       const filterParams = makeFilterParams(true);
       const filterQuery = filterParams.toString();
       if (globalOverview) {
@@ -627,9 +661,9 @@ export default function TeacherControlView({
         setSessions([]);
         setSessionTotalCount(summary.totalSessions);
         setSessionNextCursor(null);
-        setRegularizations([]);
         setGpsHistory([]);
         setGpsSettings(null);
+        onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
         return;
       }
 
@@ -657,6 +691,7 @@ export default function TeacherControlView({
       setStatistics(summary);
       setGlobalStatistics(null);
       setRegularizations(Array.isArray(requestRows) ? requestRows : []);
+      if (!isSuperAdmin) onPendingRegularizationsCountChange?.(summary.pendingRegularizations);
 
       if (isTeacher) {
         const assignmentRows = await apiFetch('/api/teacher-control/assignments') as Assignment[];
@@ -690,7 +725,42 @@ export default function TeacherControlView({
     } finally {
       setLoading(false);
     }
-  }, [currentCursor, filterRevision, isSuperAdmin, isTeacher, makeFilterParams, schoolId, schoolQuery]);
+  }, [currentCursor, filterRevision, isSuperAdmin, isTeacher, makeFilterParams, onPendingRegularizationsCountChange, schoolId, schoolQuery, viewMode]);
+
+  const refreshRegularizations = useCallback(async () => {
+    try {
+      const rows = await apiFetch(`/api/teacher-control/regularizations${schoolQuery}`, { cache: 'no-store' }) as Regularization[];
+      if (!Array.isArray(rows)) throw new Error('La réponse des régularisations est invalide.');
+      setRegularizations(rows);
+    } catch (refreshError) {
+      setError(refreshError instanceof Error
+        ? refreshError.message
+        : 'Impossible d’actualiser les demandes de régularisation.');
+    }
+  }, [onPendingRegularizationsCountChange, schoolQuery]);
+
+  useEffect(() => {
+    if (initialTabRef.current !== initialTab) {
+      initialTabRef.current = initialTab;
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (viewMode !== 'regularizations' && activeTab !== 'requests') return;
+    if (viewMode !== 'regularizations' && isSuperAdmin && schoolId == null) void refreshRegularizations();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshRegularizations();
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    window.addEventListener('focus', refreshRegularizations);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshRegularizations);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [activeTab, isSuperAdmin, refreshRegularizations, schoolId, viewMode]);
 
   useEffect(() => {
     setSessions([]);
@@ -724,7 +794,7 @@ export default function TeacherControlView({
   }, [loadData, schoolId, isSuperAdmin]);
 
   useEffect(() => {
-    if (isTeacher) {
+    if (isTeacher || viewMode === 'regularizations') {
       setSessionFilterOptions(null);
       setSessionFilterOptionsLoading(false);
       setSessionFilterOptionsError(null);
@@ -761,7 +831,7 @@ export default function TeacherControlView({
     return () => {
       active = false;
     };
-  }, [isSuperAdmin, isTeacher, schoolId]);
+  }, [isSuperAdmin, isTeacher, schoolId, viewMode]);
 
   useEffect(() => {
     if (isTeacher || schoolId == null) return;
@@ -818,6 +888,7 @@ export default function TeacherControlView({
   const filteredSessions = sessions;
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
   const visibleTeachers = teachersList.filter((teacher) => teacher.schoolId === schoolId && !teacher.isDeleted);
+  const visibleRegularizations = regularizations.filter((entry) => entry.request.status === 'pending');
 
   const showError = (actionError: unknown, fallback: string) => {
     setError(actionError instanceof Error ? actionError.message : fallback);
@@ -1145,9 +1216,10 @@ export default function TeacherControlView({
         ...(reason ? { reason } : {}),
         ...(proposedEndedAt ? { proposedEndedAt } : {}),
         ...(proposedStartedAt ? { proposedStartedAt } : {}),
-        ...(isSuperAdmin ? { schoolId } : {}),
+        ...(isSuperAdmin ? { schoolId: schoolId ?? request.schoolId } : {}),
       });
       await refreshAfterAction('La décision a été enregistrée et auditée.');
+      if (isSuperAdmin && schoolId == null) await refreshRegularizations();
     } catch (actionError) {
       showError(actionError, 'Impossible d’enregistrer la décision.');
     } finally {
@@ -1445,6 +1517,169 @@ export default function TeacherControlView({
     setSessionCursors((current) => current.slice(0, -1));
   };
 
+  if (viewMode === 'regularizations') {
+    return (
+      <section className="space-y-5" aria-label={isTeacher ? 'Régularisations en attente' : 'Régularisations à traiter'}>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-slate-900">
+              {isTeacher ? 'Régularisations en attente' : 'Régularisations à traiter'}
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              {isTeacher
+                ? 'Consultez le statut et l’historique de vos demandes.'
+                : 'Examinez les demandes et enregistrez une décision.'}
+            </p>
+          </div>
+          <button type="button" className={secondaryButtonClass} disabled={loading} onClick={() => void loadData()}>
+            {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
+            Actualiser
+          </button>
+        </header>
+
+        {error && <ErrorNotice message={error} />}
+        {success && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{success}</p>}
+        {loading && <p role="status" className="text-sm text-slate-500">Chargement des régularisations…</p>}
+        {!loading && visibleRegularizations.length === 0 && (
+          <EmptyState>{isTeacher ? 'Vous n’avez aucune demande de régularisation.' : 'Aucune demande de régularisation à afficher.'}</EmptyState>
+        )}
+
+        {visibleRegularizations.map((entry) => (
+          <article key={entry.request.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-slate-900">
+                  {regularizationTypeLabel(entry.request.requestType)}
+                  {!isTeacher && entry.request.teacherNameSnapshot ? ` · ${entry.request.teacherNameSnapshot}` : ''}
+                  {entry.request.schoolNameSnapshot ? ` · ${entry.request.schoolNameSnapshot}` : ''}
+                  {` · Demande #${entry.request.id}`}
+                </p>
+                {entry.request.requestType === 'incomplete_session' ? (
+                  <p className="mt-1 text-sm text-slate-600">
+                    Séance #{entry.request.sessionId} · fin proposée {formatLomeDate(entry.request.proposedEndedAt)}
+                  </p>
+                ) : (
+                  <div className="mt-1 space-y-1 text-sm text-slate-600">
+                    <p>{entry.request.classNameSnapshot || 'Classe non précisée'} · {entry.request.subjectNameSnapshot || 'Matière non précisée'}</p>
+                    <p>
+                      {entry.request.requestType === 'immediate_report'
+                        ? `Signalement et début de référence : ${formatLomeDate(entry.request.referenceStartedAt)}`
+                        : `Début déclaré : ${formatLomeDate(entry.request.declaredStartedAt)}`}
+                    </p>
+                    <p>Fin déclarée : {formatLomeDate(entry.request.proposedEndedAt)}</p>
+                    {entry.request.incidentType && <p>Origine : {incidentTypeLabel(entry.request.incidentType)}</p>}
+                    {(entry.request.gpsLatitude != null || entry.request.gpsLongitude != null) && (
+                      <p className="text-xs text-amber-800">
+                        Position déclarée : {entry.request.gpsLatitude ?? '—'}, {entry.request.gpsLongitude ?? '—'} · précision {entry.request.gpsAccuracyMeters ?? '—'} m.
+                      </p>
+                    )}
+                  </div>
+                )}
+                {entry.request.sessionId != null && (
+                  <p className="mt-1 text-sm text-slate-600">Séance concernée : #{entry.request.sessionId}</p>
+                )}
+                <p className="mt-1 text-sm text-slate-600">Demandée le {formatLomeDate(entry.request.createdAt)}</p>
+                <p className="mt-2 text-sm text-slate-700">Motif : {entry.request.reason}</p>
+                {entry.request.description && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{entry.request.description}</p>}
+              </div>
+              <StatusBadge status={entry.request.status} />
+            </div>
+
+            {entry.decisions?.map((decision) => (
+              <div key={decision.id} className="mt-4 rounded-xl bg-slate-50 p-3 text-sm">
+                <p className="font-semibold text-slate-800">{requestStatusLabel(decision.decision)} — {decision.actorNameSnapshot}</p>
+                <p className="mt-1 text-slate-600">
+                  {decision.decidedStartedAt ? `Début retenu : ${formatLomeDate(decision.decidedStartedAt)} · ` : ''}
+                  {decision.decidedEndedAt ? `Fin validée : ${formatLomeDate(decision.decidedEndedAt)} · ` : ''}
+                  {decision.reason || 'Aucun motif saisi'} · {formatLomeDate(decision.createdAt)}
+                </p>
+              </div>
+            ))}
+
+            {isTeacher && entry.request.requestType === 'immediate_report'
+              && entry.request.status === 'pending' && entry.request.proposedEndedAt == null && (
+              <div className="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:grid-cols-2">
+                <p className="text-sm text-slate-700 sm:col-span-2">Après le cours, complétez le signalement avec l’heure de fin déclarée.</p>
+                <label className="text-xs font-semibold text-slate-700">
+                  Heure de fin déclarée · heure de Lomé
+                  <input
+                    type="datetime-local"
+                    className={`${inputClass} mt-1`}
+                    aria-label={`Heure de fin déclarée demande ${entry.request.id}`}
+                    min={entry.request.referenceStartedAt ? formatLomeInput(new Date(entry.request.referenceStartedAt)) : undefined}
+                    max={formatLomeInput()}
+                    value={requestEndTimes[entry.request.id] ?? ''}
+                    onChange={(event) => setRequestEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-700">
+                  Précision facultative
+                  <textarea
+                    className={`${inputClass} mt-1 min-h-16`}
+                    value={unrecordedCompletionDescription[entry.request.id] ?? ''}
+                    maxLength={2000}
+                    onChange={(event) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                  />
+                </label>
+                <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void completeImmediateRegularization(entry.request)}>
+                  {busyAction === `complete-report-${entry.request.id}` && <RefreshCw className="h-4 w-4 animate-spin" />}
+                  Ajouter l’heure de fin déclarée
+                </button>
+              </div>
+            )}
+
+            {(isSchoolAdmin || isSuperAdmin) && entry.request.status === 'pending' && (
+              <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                {entry.request.requestType !== 'incomplete_session' && (
+                  <label className="text-xs font-semibold text-slate-700">
+                    Heure de début retenue · heure de Lomé
+                    <input
+                      type="datetime-local"
+                      className={`${inputClass} mt-1`}
+                      value={regularizationStartTimes[entry.request.id]
+                        ?? formatLomeInput(new Date(entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
+                      max={formatLomeInput()}
+                      onChange={(event) => setRegularizationStartTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                    />
+                  </label>
+                )}
+                <label className="text-xs font-semibold text-slate-700">
+                  Heure de fin modifiée (facultative sauf acceptation après modification)
+                  <input
+                    type="datetime-local"
+                    className={`${inputClass} mt-1`}
+                    value={regularizationEndTimes[entry.request.id] ?? (entry.request.proposedEndedAt ? formatLomeInput(new Date(entry.request.proposedEndedAt)) : '')}
+                    max={formatLomeInput()}
+                    onChange={(event) => setRegularizationEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-700">
+                  Motif (obligatoire pour refus ou modification)
+                  <textarea
+                    className={`${inputClass} mt-1 min-h-20`}
+                    value={regularizationReasons[entry.request.id] ?? ''}
+                    onChange={(event) => setRegularizationReasons((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void decideRegularization(entry.request, 'accepted')}>
+                    <Check className="h-4 w-4" /> {entry.request.requestType === 'incomplete_session' ? 'Accepter l’heure proposée' : 'Confirmer les heures proposées'}
+                  </button>
+                  <button className={secondaryButtonClass} type="button" disabled={busyAction != null} onClick={() => void decideRegularization(entry.request, 'modified_accepted')}>
+                    <CalendarClock className="h-4 w-4" /> Modifier et accepter
+                  </button>
+                  <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50" type="button" disabled={busyAction != null} onClick={() => void decideRegularization(entry.request, 'rejected')}>
+                    <X className="h-4 w-4" /> Refuser
+                  </button>
+                </div>
+              </div>
+            )}
+          </article>
+        ))}
+      </section>
+    );
+  }
+
   const tabs: Array<{ id: ViewTab; label: string; icon: typeof ClipboardCheck }> = [
     { id: 'sessions', label: 'Séances', icon: CalendarClock },
     { id: 'requests', label: 'Régularisations', icon: ClipboardCheck },
@@ -1462,6 +1697,49 @@ export default function TeacherControlView({
         {loading && <p role="status" className="text-sm text-slate-500">Chargement des statistiques globales…</p>}
         {globalStatistics && (
           <>
+            {activeTab === 'requests' && (
+              <section className="space-y-3" aria-label="Régularisations à traiter">
+                <h2 className="font-bold text-slate-900">Régularisations à traiter · tous les établissements</h2>
+                {regularizations.length === 0 ? (
+                  <EmptyState>Aucune demande de régularisation.</EmptyState>
+                ) : regularizations.map(({ request }) => (
+                  <article key={request.id} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-bold text-slate-900">
+                          {regularizationTypeLabel(request.requestType)} · {request.teacherNameSnapshot} · {request.schoolNameSnapshot} · Demande #{request.id}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {request.classNameSnapshot ?? (request.sessionId == null ? 'Séance non enregistrée' : `Séance #${request.sessionId}`)}
+                          {request.subjectNameSnapshot ? ` · ${request.subjectNameSnapshot}` : ''}
+                          {` · Demandée le ${formatLomeDate(request.createdAt)}`}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-700">Motif : {request.reason}</p>
+                      </div>
+                      <StatusBadge status={request.status} />
+                    </div>
+                    {request.status === 'pending' && (
+                      <div className="mt-4 flex flex-wrap items-end gap-3">
+                        <label className="min-w-56 flex-1 text-xs font-semibold text-slate-700">
+                          Motif de refus (obligatoire pour refuser)
+                          <input
+                            className={`${inputClass} mt-1`}
+                            value={regularizationReasons[request.id] ?? ''}
+                            onChange={(event) => setRegularizationReasons((current) => ({ ...current, [request.id]: event.target.value }))}
+                          />
+                        </label>
+                        <button type="button" className={buttonClass} disabled={busyAction != null} onClick={() => void decideRegularization(request, 'accepted')}>
+                          Accepter
+                        </button>
+                        <button type="button" className={secondaryButtonClass} disabled={busyAction != null || !regularizationReasons[request.id]?.trim()} onClick={() => void decideRegularization(request, 'rejected')}>
+                          Refuser
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </section>
+            )}
             <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3" onSubmit={applySessionFilters}>
                 <SessionFilterControls
                   filters={filterDraft}
@@ -1562,7 +1840,13 @@ export default function TeacherControlView({
             type="button"
             role="tab"
             aria-selected={activeTab === id}
-            onClick={() => setActiveTab(id)}
+            onClick={() => {
+              if (id === 'requests' && activeTab !== 'requests' && !(isSuperAdmin && schoolId == null)) {
+                void refreshRegularizations();
+              }
+              setActiveTab(id);
+              onTabChange?.(id);
+            }}
             className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
               activeTab === id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
             }`}
@@ -2041,7 +2325,7 @@ export default function TeacherControlView({
                       ) : (
                         <p>Début déclaré : {formatLomeDate(entry.request.declaredStartedAt)}</p>
                       )}
-                      <p>Fin déclarée : {formatLomeDate(entry.request.proposedEndedAt)} · Soumise le {formatLomeDate(entry.request.createdAt)}</p>
+                      <p>Fin déclarée : {formatLomeDate(entry.request.proposedEndedAt)}</p>
                       {entry.request.incidentType && <p>Origine : {incidentTypeLabel(entry.request.incidentType)}</p>}
                       {(entry.request.gpsLatitude != null || entry.request.gpsLongitude != null) && (
                         <p className="text-xs text-amber-800">
@@ -2050,6 +2334,10 @@ export default function TeacherControlView({
                       )}
                     </div>
                   )}
+                  {entry.request.sessionId != null && (
+                    <p className="mt-1 text-sm text-slate-600">Séance concernée : #{entry.request.sessionId}</p>
+                  )}
+                  <p className="mt-1 text-sm text-slate-600">Demandée le {formatLomeDate(entry.request.createdAt)}</p>
                   <p className="mt-2 text-sm text-slate-700">{entry.request.reason}</p>
                   {entry.request.description && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{entry.request.description}</p>}
                 </div>

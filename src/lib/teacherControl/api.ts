@@ -1439,7 +1439,20 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     });
   }, resolveActor));
 
-  app.get('/api/teacher-control/regularizations', handleRoute(async (req, _res, actor) => {
+  app.get('/api/teacher-control/regularizations', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (actor.role === 'super_admin' && actor.id != null && (req.query.schoolId == null || req.query.schoolId === '')) {
+      const rows = await db.select({
+        request: teacherControlRegularizationRequests,
+        decision: teacherControlRegularizationDecisions,
+      }).from(teacherControlRegularizationRequests)
+        .leftJoin(teacherControlRegularizationDecisions, eq(
+          teacherControlRegularizationDecisions.requestId,
+          teacherControlRegularizationRequests.id,
+        ))
+        .orderBy(desc(teacherControlRegularizationRequests.createdAt));
+      return groupRegularizationHistory(rows);
+    }
     if (actor.role === 'teacher') {
       const access = await requireSchoolAccess(actor, null, ['teacher']);
       const teacherId = await getTeacherId(actor, access.schoolId);
@@ -1863,7 +1876,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     };
   }, resolveActor));
 
-  app.get('/api/teacher-control/statistics', handleRoute(async (req, _res, actor) => {
+  app.get('/api/teacher-control/statistics', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
     const isTeacher = actor.role === 'teacher';
     const access = await requireSchoolAccess(
       actor,
@@ -1945,7 +1959,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     };
   }, resolveActor));
 
-  app.get('/api/teacher-control/statistics/global', handleRoute(async (req, _res, actor) => {
+  app.get('/api/teacher-control/statistics/global', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
     if (actor.role !== 'super_admin' || actor.id == null) throw new TeacherControlApiError(403, 'Forbidden');
     const filters = parseSessionFilters(req.query);
     const sessionConditions = sessionFilterConditions(filters);
