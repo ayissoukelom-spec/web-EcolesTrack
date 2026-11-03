@@ -1185,12 +1185,30 @@ export default function AdminView({
   const exportStudentsExcel = async () => {
     if (!isStudentExportAllowed) return;
 
+    const formatBirthDate = (value?: string) => {
+      if (!value) return '';
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+      if (!match) return value;
+
+      const [, year, month, day] = match;
+      const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+      if (date.getUTCFullYear() !== Number(year)
+        || date.getUTCMonth() !== Number(month) - 1
+        || date.getUTCDate() !== Number(day)) {
+        return value;
+      }
+
+      return `${day}/${month}/${year}`;
+    };
     const rows = sortedVisibleStudents.map((st) => ({
       Nom: st.lastName || '',
       'Prénom': st.firstName || '',
       Classe: st.className || '',
       'Année scolaire': getStudentAcademicYearName(st),
       Tuteur: st.parentName || '',
+      Sexe: st.gender || '',
+      Statut: st.studentStatus || '',
+      'Date de naissance': formatBirthDate(st.birthDate),
     }));
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Élèves');

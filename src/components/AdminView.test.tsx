@@ -1228,9 +1228,9 @@ describe('AdminView create-user teacher form', () => {
   it('keeps student edit actions visible and exports the filtered roster', async () => {
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
     const students: Student[] = [
-      { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearName: '2024-2025', parentName: 'Parent Tano' },
-      { id: 2, firstName: 'Awa', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearName: '2024-2025', parentName: 'Parent Amani' },
-      { id: 3, firstName: 'Kossi', lastName: 'Ancien', schoolId: 1, classId: null, className: '', parentName: 'Parent Ancien', isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z' },
+      { id: 1, firstName: 'Moussa', lastName: 'Tano', schoolId: 1, classId: 11, className: 'CM2', yearName: '2024-2025', parentName: 'Parent Tano', gender: 'M', studentStatus: 'Doublant', birthDate: '2014-07-09' },
+      { id: 2, firstName: 'Awa', lastName: 'Amani', schoolId: 1, classId: 10, className: 'CM1', yearName: '2024-2025', parentName: 'Parent Amani', gender: 'F', studentStatus: 'Nouveau', birthDate: '2015-04-12' },
+      { id: 3, firstName: 'Kossi', lastName: 'Ancien', schoolId: 1, classId: null, className: '', parentName: 'Parent Ancien', isActive: false, withdrawnAt: '2026-09-01T10:00:00.000Z', gender: 'M', studentStatus: 'Nouveau' },
     ];
     const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
     const originalRevokeObjectURL = (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
@@ -1281,8 +1281,8 @@ describe('AdminView create-user teacher form', () => {
       expect(click).toHaveBeenCalled();
       expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves-actifs.xlsx');
       expect(rows).toEqual([
-        { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Tuteur: 'Parent Amani' },
-        { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Tuteur: 'Parent Tano' },
+        { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Tuteur: 'Parent Amani', Sexe: 'F', Statut: 'Nouveau', 'Date de naissance': '12/04/2015' },
+        { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Tuteur: 'Parent Tano', Sexe: 'M', Statut: 'Doublant', 'Date de naissance': '09/07/2014' },
       ]);
 
       fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'former' } });
@@ -1293,7 +1293,7 @@ describe('AdminView create-user teacher form', () => {
       const formerRows = await readFirstExcelSheetRecords(await formerBlob.arrayBuffer());
       expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('liste-anciens-eleves.xlsx');
       expect(formerRows).toEqual([
-        { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Tuteur: 'Parent Ancien' },
+        { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Tuteur: 'Parent Ancien', Sexe: 'M', Statut: 'Nouveau', 'Date de naissance': '' },
       ]);
 
       fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'all' } });
