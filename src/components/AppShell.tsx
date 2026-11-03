@@ -275,7 +275,7 @@ export default function AppShell() {
 
   const handleBatchCreateStudents = async (records: any[]) => {
     const json = await batchCreateStudents(records);
-    setImportResult(json);
+    setImportResult({ ...json, entityType: 'students' });
     if (json.insertedCount && json.insertedCount > 0) {
       await fetchAllData();
     }
@@ -283,7 +283,7 @@ export default function AppShell() {
 
   const handleBatchCreateParents = async (records: any[]) => {
     const json = await apiFetch('/api/parents/batch', { method: 'POST', body: JSON.stringify(records) });
-    setImportResult(json);
+    setImportResult({ ...json, entityType: 'parents' });
     if (json.insertedCount && json.insertedCount > 0) {
       await fetchAllData();
     }

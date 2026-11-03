@@ -1041,6 +1041,7 @@ export default function App() {
       fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message);
+      throw err;
     }
   };
 
@@ -1050,7 +1051,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify(records),
       });
-      setImportResult(json);
+      setImportResult({ ...json, entityType: 'students' });
       if (json.insertedCount && json.insertedCount > 0) fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message || 'Import CSV impossible');
@@ -1063,7 +1064,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify(records),
       });
-      setImportResult(json);
+      setImportResult({ ...json, entityType: 'parents' });
       if (json.insertedCount && json.insertedCount > 0) fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message || 'Import parents impossible');

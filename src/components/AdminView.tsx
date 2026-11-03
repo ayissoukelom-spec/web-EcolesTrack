@@ -436,7 +436,7 @@ interface AdminViewProps {
   onRejectClass?: (id: number) => Promise<any>;
   onRefreshClasses?: (schoolId: number) => Promise<Class[]>;
   onAddParent: (data: { name: string; email: string; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => Promise<any>;
-  onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string; studentStatus?: string | null }) => void;
+  onAddStudent: (data: { firstName: string; lastName: string; birthDate: string; schoolId: number; classId: number; parentId?: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; gender?: string; studentStatus?: string | null }) => Promise<void>;
   onBatchCreateStudents?: (records: any[]) => void;
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
@@ -1560,15 +1560,15 @@ export default function AdminView({
       return;
     }
 
+    const simSchoolId = getSimulatedSchoolId();
+    const targetSchoolId = userRole === 'school_admin'
+      ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
+      : parseInt(newParentForm.schoolId);
+    if (!targetSchoolId) {
+      setStudentError('L’école du parent doit être sélectionnée.');
+      return;
+    }
     try {
-      const simSchoolId = getSimulatedSchoolId();
-      const targetSchoolId = userRole === 'school_admin'
-        ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
-        : parseInt(newParentForm.schoolId);
-      if (!targetSchoolId) {
-        setStudentError('L’école du parent doit être sélectionnée.');
-        return;
-      }
       const createdParent = await onAddParent({
         name: newParentForm.name,
         email: newParentForm.email,
@@ -1582,10 +1582,8 @@ export default function AdminView({
         setStudentError('Impossible de créer le parent rattaché.');
         return;
       }
-
       setStudentForm((prev) => ({ ...prev, parentId: String(resolvedParentId) }));
       setNewParentMode(false);
-      setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
     } catch (err: any) {
       setStudentError(err?.message || 'Erreur lors de la création du parent.');
       console.error('Failed to save new parent:', err);
@@ -1908,45 +1906,7 @@ export default function AdminView({
       const selectedSchoolAdminId = studentForm.schoolAdminId ? parseInt(studentForm.schoolAdminId) : undefined;
 
       if (newParentMode) {
-        if (!newParentForm.name.trim() || !newParentForm.email.trim() || !newParentForm.phone.trim()) {
-          setStudentError('Le parent rattaché doit contenir un nom, un email et un téléphone.');
-          return;
-        }
-        if (!newParentForm.parentType) {
-          setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
-          return;
-        }
-        const newParentGender = newParentForm.parentType === 'pere'
-          ? 'M'
-          : newParentForm.parentType === 'mere'
-            ? 'F'
-            : newParentForm.gender;
-        if (newParentForm.parentType === 'tuteur' && !newParentGender) {
-          setStudentError('Veuillez sélectionner le sexe pour le tuteur.');
-          return;
-        }
-        const newParentPhone = canonicalizeUserPhone(newParentForm.phone, newParentForm.phonePrefix);
-        if (!newParentPhone) {
-          setStudentError('Le téléphone du parent doit être valide.');
-          return;
-        }
-        const createdParent = await onAddParent({
-          name: newParentForm.name,
-          email: newParentForm.email,
-          phone: newParentPhone,
-          address: newParentForm.address,
-          schoolId: targetSchoolId,
-          gender: newParentGender,
-        });
-        const resolvedParentId = createdParent?.parentId || createdParent?.id;
-        if (!resolvedParentId) {
-          setStudentError('Impossible de créer le parent rattaché.');
-          return;
-        }
-        setStudentForm({ ...studentForm, parentId: String(resolvedParentId) });
-        setNewParentMode(false);
-        setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
-        setStudentError(null);
+        await handleSaveNewParent();
         return;
       }
 
@@ -1999,19 +1959,24 @@ export default function AdminView({
       const resolvedTeacherIds = studentForm.teacherIds && studentForm.teacherIds.length > 0 ? studentForm.teacherIds : undefined;
 
       setStudentError(null);
-      await onAddStudent({
-        firstName: studentForm.firstName,
-        lastName: studentForm.lastName,
-        birthDate: studentForm.birthDate,
-        schoolId: targetSchoolId,
-        classId: parseInt(studentForm.classId) || classesList[0]?.id,
-        parentId: resolvedParentId,
-        academicYearId: parseInt(studentForm.academicYearId) || yearsList[0]?.id,
-        teacherIds: resolvedTeacherIds,
-        schoolAdminId: selectedSchoolAdminId,
-        gender: studentForm.gender,
-        studentStatus: studentForm.studentStatus || null,
-      });
+      try {
+        await onAddStudent({
+          firstName: studentForm.firstName,
+          lastName: studentForm.lastName,
+          birthDate: studentForm.birthDate,
+          schoolId: targetSchoolId,
+          classId: parseInt(studentForm.classId) || classesList[0]?.id,
+          parentId: resolvedParentId,
+          academicYearId: parseInt(studentForm.academicYearId) || yearsList[0]?.id,
+          teacherIds: resolvedTeacherIds,
+          schoolAdminId: selectedSchoolAdminId,
+          gender: studentForm.gender,
+          studentStatus: studentForm.studentStatus || null,
+        });
+      } catch (err: any) {
+        setStudentError(err?.message || 'Impossible de créer l’élève.');
+        return;
+      }
       setStudentForm({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [], schoolAdminId: '', gender: '', studentStatus: '' });
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
@@ -4868,7 +4833,9 @@ export default function AdminView({
           <div className="p-4 border-b border-slate-100 bg-slate-50 text-sm">
             <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
               <h3 className="font-bold text-slate-800">Importation terminée</h3>
-              <p className="mt-1 text-slate-600">{Number(importResult.insertedCount || 0)} parent(s) importé(s).</p>
+              <p className="mt-1 text-slate-600">
+                {Number(importResult.insertedCount || 0)} {importResult.entityType === 'students' ? 'élève(s)' : 'parent(s)'} importé(s).
+              </p>
               {(userRole === 'super_admin' || userRole === 'school_admin')
                 && Array.isArray(importResult.inserted)
                 && importResult.inserted.some((item: any) => item.temporaryPassword) && (

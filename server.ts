@@ -128,11 +128,22 @@ import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
 import { buildClassAgeStats } from './src/lib/studentAgeStats.ts';
 import { SCHOOL_SUSPENDED_MESSAGE } from './src/lib/schoolSuspensionMessage.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
+import { buildStudentDuplicateIdentity, getStudentParentIdentity, isDuplicateStudent } from './src/lib/studentDuplicate.ts';
 
 const parsePositiveInteger = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
+
+const STUDENT_DUPLICATE_ERROR = {
+  code: 'STUDENT_DUPLICATE',
+  message: 'Un élève avec les mêmes informations existe déjà dans cette école.',
+};
+
+function isStudentDuplicateError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error
+    && error.code === STUDENT_DUPLICATE_ERROR.code);
+}
 
 const findActiveClassExamConfiguration = async ({
   classId,
@@ -4005,6 +4016,7 @@ export async function createApp() {
 
       for (let i = 0; i < payload.length; i++) {
         const s = payload[i];
+        const importRowNumber = i + 2;
         const firstName = normalizeFirstName(s.firstName);
         const lastName = s.lastName?.trim().toUpperCase();
         const birthDate = s.birthDate?.trim() || '';
@@ -4030,45 +4042,45 @@ export async function createApp() {
         const gender = s.gender != null && s.gender !== '' ? String(s.gender).trim() : null;
 
         if (!firstName || !lastName) {
-          errors.push({ row: i, reason: 'Missing firstName or lastName', data: s });
+          errors.push({ row: importRowNumber, reason: 'Missing firstName or lastName', data: s });
           continue;
         }
         if (!gender) {
-          errors.push({ row: i, reason: 'Gender is required for each student', data: s });
+          errors.push({ row: importRowNumber, reason: 'Gender is required for each student', data: s });
           continue;
         }
         const normalizedGenderKey = gender.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         if (!validGenderValues.includes(gender) && !validGenderValues.includes(normalizedGenderKey)) {
-          errors.push({ row: i, reason: 'Invalid gender value. Use M or F / Masculin or Féminin.', data: s });
+          errors.push({ row: importRowNumber, reason: 'Invalid gender value. Use M or F / Masculin or Féminin.', data: s });
           continue;
         }
         if (!schoolId || !existingSchoolIds.has(schoolId)) {
-          errors.push({ row: i, reason: `Invalid or missing schoolId: ${schoolId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Invalid or missing schoolId: ${schoolId}`, data: s });
           continue;
         }
         if (!classId || !existingClassIds.has(classId)) {
-          errors.push({ row: i, reason: `Invalid or missing classId: ${classId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Invalid or missing classId: ${classId}`, data: s });
           continue;
         }
         if (hasParentId && (!/^\d+$/.test(parentIdText) || parentId === null || parentId <= 0)) {
-          errors.push({ row: i, reason: `Invalid parentId: ${parentIdText}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Invalid parentId: ${parentIdText}`, data: s });
           continue;
         }
         if (!hasParentId && !hasParentPhone && !hasParentEmail) {
-          errors.push({ row: i, reason: 'Parent non identifiable : fournissez parentId, parentPhone ou parentEmail', data: s });
+          errors.push({ row: importRowNumber, reason: 'Parent non identifiable : fournissez parentId, parentPhone ou parentEmail', data: s });
           continue;
         }
         if (hasParentPhone && !normalizedParentPhone) {
-          errors.push({ row: i, reason: 'parentPhone invalide ou impossible à normaliser', data: s });
+          errors.push({ row: importRowNumber, reason: 'parentPhone invalide ou impossible à normaliser', data: s });
           continue;
         }
         if (hasParentEmail && !normalizedParentEmail) {
-          errors.push({ row: i, reason: 'parentEmail invalide', data: s });
+          errors.push({ row: importRowNumber, reason: 'parentEmail invalide', data: s });
           continue;
         }
         const parentLookupSchoolId = schoolId;
         if (!parentLookupSchoolId) {
-          errors.push({ row: i, reason: 'Établissement invalide pour rechercher le parent', data: s });
+          errors.push({ row: importRowNumber, reason: 'Établissement invalide pour rechercher le parent', data: s });
           continue;
         }
 
@@ -4076,7 +4088,7 @@ export async function createApp() {
           ? existingParentRows.find((parent: any) => Number(parent.id) === parentId)
           : null;
         if (hasParentId && !requestedParentRow) {
-          errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Invalid or missing parentId: ${parentId}`, data: s });
           continue;
         }
 
@@ -4103,11 +4115,11 @@ export async function createApp() {
         if (normalizedParentPhone) {
           const result = resolveContactMatch(phoneMatches, normalizedParentPhone, 'phone');
           if ('error' in result) {
-            errors.push({ row: i, reason: result.error, data: s });
+            errors.push({ row: importRowNumber, reason: result.error, data: s });
             continue;
           }
           if (hasParentId && Number(result.parent.id) !== Number(parentId)) {
-            errors.push({ row: i, reason: 'Le parentId fourni ne correspond pas au parentPhone fourni', data: s });
+            errors.push({ row: importRowNumber, reason: 'Le parentId fourni ne correspond pas au parentPhone fourni', data: s });
             continue;
           }
           if (!hasParentId) parentId = Number(result.parent.id);
@@ -4115,11 +4127,11 @@ export async function createApp() {
         if (normalizedParentEmail) {
           const result = resolveContactMatch(emailMatches, normalizedParentEmail, 'email');
           if ('error' in result) {
-            errors.push({ row: i, reason: result.error, data: s });
+            errors.push({ row: importRowNumber, reason: result.error, data: s });
             continue;
           }
           if (parentId !== null && Number(result.parent.id) !== Number(parentId)) {
-            errors.push({ row: i, reason: hasParentId
+            errors.push({ row: importRowNumber, reason: hasParentId
               ? 'Le parentId fourni ne correspond pas au parentEmail fourni'
               : 'Le parentPhone fourni ne correspond pas au parentEmail fourni', data: s });
             continue;
@@ -4127,27 +4139,27 @@ export async function createApp() {
           if (!hasParentId && !normalizedParentPhone) parentId = Number(result.parent.id);
         }
         if (!parentId || !existingParentIds.has(parentId)) {
-          errors.push({ row: i, reason: `Invalid or missing parentId: ${parentId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Invalid or missing parentId: ${parentId}`, data: s });
           continue;
         }
 
         const classRow = existingClassRows.find((c: any) => c.id === classId);
         if (!classRow) {
-          errors.push({ row: i, reason: `Class not found: ${classId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Class not found: ${classId}`, data: s });
           continue;
         }
         if (normalizedStudentStatus !== null && !isStudentAcademicYearStatus(normalizedStudentStatus)) {
-          errors.push({ row: i, reason: `studentStatus invalide: ${normalizedStudentStatus}`, data: s });
+          errors.push({ row: importRowNumber, reason: `studentStatus invalide: ${normalizedStudentStatus}`, data: s });
           continue;
         }
         if (parsedAcademicYearId !== null && (!Number.isInteger(parsedAcademicYearId) || parsedAcademicYearId <= 0 || parsedAcademicYearId !== classRow.academicYearId)) {
-          errors.push({ row: i, reason: `academicYearId ${parsedAcademicYearId} ne correspond pas à l'année de la classe ${classRow.academicYearId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `academicYearId ${parsedAcademicYearId} ne correspond pas à l'année de la classe ${classRow.academicYearId}`, data: s });
           continue;
         }
         if (classRow.schoolId !== schoolId) {
           const classAllowed = classRow.schoolId == null && await isApprovedClassForSchool(classId, schoolId);
           if (!classAllowed) {
-            errors.push({ row: i, reason: `Class ${classId} does not belong to school ${schoolId}`, data: s });
+            errors.push({ row: importRowNumber, reason: `Class ${classId} does not belong to school ${schoolId}`, data: s });
             continue;
           }
         }
@@ -4155,18 +4167,18 @@ export async function createApp() {
         const parentRow = existingParentRows.find((p: any) => p.id === parentId);
         const resolvedParentRow = parentRow || contactParentRows.find((p: any) => p.id === parentId);
         if (!resolvedParentRow) {
-          errors.push({ row: i, reason: `Parent not found: ${parentId}`, data: s });
+          errors.push({ row: importRowNumber, reason: `Parent not found: ${parentId}`, data: s });
           continue;
         }
         if (resolvedParentRow.schoolId !== schoolId) {
           const membership = await ensureUserSchoolMembership(resolvedParentRow.userId, schoolId, 'parent');
           if (!membership) {
-            errors.push({ row: i, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
+            errors.push({ row: importRowNumber, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
             continue;
           }
         }
         if (normalizedParentEmail && parentEmailById.get(Number(resolvedParentRow.id)) !== normalizedParentEmail) {
-          errors.push({ row: i, reason: 'Le parentId fourni ne correspond pas au parentEmail fourni', data: s });
+          errors.push({ row: importRowNumber, reason: 'Le parentId fourni ne correspond pas au parentEmail fourni', data: s });
           continue;
         }
 
@@ -4213,6 +4225,20 @@ export async function createApp() {
           })();
 
           const result = await db.transaction(async (tx) => {
+            const parentIdentity = parentId ? await getStudentParentIdentity(tx, parentId) : undefined;
+            const duplicateIdentity = buildStudentDuplicateIdentity(
+              schoolId,
+              firstName,
+              lastName,
+              gender,
+              birthDate,
+              parentIdentity?.name,
+              parentIdentity?.gender,
+            );
+            if (duplicateIdentity && await isDuplicateStudent(tx, duplicateIdentity)) {
+              throw Object.assign(new Error(STUDENT_DUPLICATE_ERROR.message), { code: STUDENT_DUPLICATE_ERROR.code });
+            }
+
             const createdStudents = await tx.insert(students).values({
               firstName,
               lastName,
@@ -4238,8 +4264,13 @@ export async function createApp() {
 
           inserted.push(result);
         } catch (e: any) {
-          console.error('Insert student failed for row', i, e?.message || e);
-          errors.push({ row: i, reason: e?.message || 'Insert failed', data: s });
+          console.error('Insert student failed for row', importRowNumber, e?.message || e);
+          errors.push({
+            row: importRowNumber,
+            reason: e?.message || 'Insert failed',
+            ...(e?.code === STUDENT_DUPLICATE_ERROR.code ? { code: STUDENT_DUPLICATE_ERROR.code } : {}),
+            data: s,
+          });
         }
       }
 
@@ -6994,7 +7025,10 @@ export async function createApp() {
               });
             }
 
-            return { createdUser: newUser, createdParent: newParent };
+            return {
+              createdUser: newUser,
+              createdParent: newParent,
+            };
           });
 
           res.status(201).json({
@@ -7430,7 +7464,6 @@ export async function createApp() {
       const parsedParentId = parentId !== undefined && parentId !== null && String(parentId).trim() !== '' ? parseInt(String(parentId)) : null;
       const parsedSchoolAdminId = schoolAdminId !== undefined && schoolAdminId !== null && String(schoolAdminId).trim() !== '' ? parseInt(String(schoolAdminId)) : null;
       const parsedEnrolledAt = enrolledAt ? new Date(enrolledAt) : new Date();
-
       // Load user and validate school permission
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
@@ -7549,7 +7582,23 @@ export async function createApp() {
         throw new Error('Plusieurs admins école existent pour cette école. Veuillez sélectionner explicitement un compte Admin École.');
       })();
 
-      const createdStudent = await db.transaction(async (tx) => {
+      const creationResult = await db.transaction(async (tx) => {
+        const existingParentIdentity = parsedParentId
+          ? await getStudentParentIdentity(tx, parsedParentId)
+          : undefined;
+        const duplicateIdentity = buildStudentDuplicateIdentity(
+          targetSchoolId,
+          normalizedFirstName,
+          normalizedLastName,
+          normalizedGender,
+          birthDate,
+          existingParentIdentity?.name,
+          existingParentIdentity?.gender,
+        );
+        if (duplicateIdentity && await isDuplicateStudent(tx, duplicateIdentity)) {
+          return { duplicate: true as const };
+        }
+
         const [student] = await tx.insert(students).values({
           firstName: normalizedFirstName,
           lastName: normalizedLastName,
@@ -7568,11 +7617,22 @@ export async function createApp() {
           status: normalizedStudentStatus,
         });
 
-        return student;
+        return { duplicate: false as const, student };
       });
 
-      res.status(201).json(createdStudent);
+      if (creationResult.duplicate) {
+        return res.status(409).json({
+          error: STUDENT_DUPLICATE_ERROR.message,
+          code: STUDENT_DUPLICATE_ERROR.code,
+        });
+      }
+      res.status(201).json(creationResult.student);
     } catch (err: any) {
+      if (isStudentDuplicateError(err)) {
+        return res.status(409).json({ error: STUDENT_DUPLICATE_ERROR.message, code: STUDENT_DUPLICATE_ERROR.code });
+      }
+      if (isUsersEmailUniqueViolation(err)) return sendDuplicateEmailResponse(res);
+      if (isUsersPhoneUniqueViolation(err)) return sendDuplicatePhoneResponse(res);
       console.error('Error creating student profile:', err);
       res.status(500).json({ error: 'Internal server error' });
     }

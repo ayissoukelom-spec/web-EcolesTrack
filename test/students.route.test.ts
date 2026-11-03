@@ -22,6 +22,8 @@ const mockState = {
   studentGenderSelected: false,
 };
 
+const defaultDbExecute = async (_query: any) => [];
+
 const createBuilder = (rows: any[], projection?: any) => {
   const builder: any = {
     _rows: rows,
@@ -126,6 +128,22 @@ const createBuilder = (rows: any[], projection?: any) => {
       return builder;
     },
     where(condition?: any) {
+      if (builder.table === users && condition) {
+        const query = new PgDialect().sqlToQuery(condition);
+        const params = query.params as any[];
+        if (query.sql.includes('"users"."phone"')) {
+          const phone = params.find((value) => typeof value === 'string' && value.startsWith('+'));
+          if (phone) builder._rows = builder._rows.filter((user: any) => user.phone === phone);
+        }
+        if (query.sql.includes('"users"."email"')) {
+          const email = params.find((value) => typeof value === 'string' && value.includes('@'));
+          if (email) builder._rows = builder._rows.filter((user: any) => String(user.email ?? '').trim().toLowerCase() === email.trim().toLowerCase());
+        }
+        if (query.sql.includes('"users"."uid"')) {
+          const uid = params.find((value) => typeof value === 'string' && value.startsWith('sim_'));
+          if (uid) builder._rows = builder._rows.filter((user: any) => user.uid === uid);
+        }
+      }
       if (builder.table === grades && condition) {
         const query = new PgDialect().sqlToQuery(condition);
         if (query.sql.includes('"evaluations"."school_id"')) {
@@ -194,14 +212,74 @@ const createBuilder = (rows: any[], projection?: any) => {
   return builder;
 };
 
-const mockDb = {
+const mockDb: any = {
   select: (projection?: any) => createBuilder(mockState.students, projection),
   selectDistinct: (projection?: any) => createBuilder(mockState.students, projection),
   insert: () => ({ values: () => ({ returning: async () => [] }) }),
   transaction: async (callback: (tx: any) => Promise<any>) => callback(mockDb),
   update: () => ({ set: () => ({ where: async () => [] }) }),
   delete: () => ({ where: async () => [] }),
-  execute: async (_sql: any) => [],
+  execute: defaultDbExecute,
+};
+
+const normalizeDuplicateName = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+const normalizeDuplicateGender = (value: unknown) => {
+  const normalized = String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (['m', 'male', 'masculin', 'homme', 'garcon', 'boy', 'boys'].includes(normalized)) return 'm';
+  if (['f', 'female', 'feminin', 'feminine', 'femme', 'fille', 'girl', 'girls'].includes(normalized)) return 'f';
+  return normalized;
+};
+
+const executeStudentDuplicateSql = async (rawQuery: any) => {
+  const query = new PgDialect().sqlToQuery(rawQuery);
+  const normalizedSql = query.sql.toLowerCase();
+  if (normalizedSql.includes('pg_advisory_xact_lock')) return { rows: [] };
+  if (normalizedSql.includes('from parents p') && normalizedSql.includes('inner join users u')) {
+    const parentId = query.params[0];
+    const parent = mockState.parentRows.find((row) => row.id === parentId);
+    const user = mockState.users.find((row) => row.id === parent?.userId);
+    return { rows: user ? [{ name: user.name, gender: user.gender, userId: parent?.userId }] : [] };
+  }
+  if (normalizedSql.includes('from students s')) {
+    const [schoolId, firstName, lastName, studentGender, birthDate, parentName, parentGender] = query.params;
+    const duplicate = mockState.students.find((student: any) => {
+      const parent = mockState.parentRows.find((row) => row.id === student.parentId);
+      const user = mockState.users.find((row) => row.id === parent?.userId);
+      return student.schoolId === schoolId
+        && normalizeDuplicateName(student.firstName) === firstName
+        && normalizeDuplicateName(student.lastName) === lastName
+        && normalizeDuplicateGender(student.gender) === studentGender
+        && String(student.birthDate ?? '').trim() === birthDate
+        && normalizeDuplicateName(user?.name) === parentName
+        && normalizeDuplicateGender(user?.gender) === parentGender;
+    });
+    return { rows: duplicate ? [{ id: duplicate.id }] : [] };
+  }
+  return [];
+};
+
+const configureStudentCreationMock = () => {
+  const insertedTables: any[] = [];
+  let nextId = 500;
+  mockDb.execute = executeStudentDuplicateSql;
+  mockDb.insert = (table: any) => ({
+    values: (values: any) => {
+      const execute = async () => {
+        insertedTables.push(table);
+        const row = { id: nextId++, ...values };
+        if (table === students) mockState.students.push(row);
+        else if (table === parents) mockState.parentRows.push(row);
+        else if (table === users) mockState.users.push(row);
+        else if (table === studentAcademicYearStatuses) mockState.studentStatuses.push(row);
+        return [row];
+      };
+      return {
+        returning: execute,
+        then: (resolve: (result: any) => void, reject: (error: unknown) => void) => execute().then(resolve, reject),
+      };
+    },
+  });
+  return insertedTables;
 };
 
 const configureBatchImportMock = () => {
@@ -221,6 +299,7 @@ const configureBatchImportMock = () => {
       innerJoin() { return builder; },
       leftJoin() { return builder; },
       where() { return builder; },
+      limit() { return builder; },
       then(resolve: (value: any) => void) { return Promise.resolve(builder._rows).then(resolve); },
       catch(reject: (reason?: any) => void) { return Promise.resolve(builder._rows).catch(reject); },
       finally(cb: () => void) { return Promise.resolve(builder._rows).finally(cb); },
@@ -233,7 +312,14 @@ const configureBatchImportMock = () => {
     values: (values: any) => {
       insertedRows.push({ table, values });
       return {
-        returning: async () => table === students ? [{ id: 123, ...values }] : [{ id: 1, ...values }],
+        returning: async () => {
+          if (table === students) {
+            const row = { id: 123 + mockState.students.length, ...values };
+            mockState.students.push(row);
+            return [row];
+          }
+          return [{ id: 1, ...values }];
+        },
       };
     },
   });
@@ -334,6 +420,250 @@ describe('GET /api/students (scope)', () => {
     mockState.users = [];  // Reset users mock data
     mockState.studentStatuses = [];
     mockState.studentGenderSelected = false;
+    mockDb.select = (projection?: any) => createBuilder(mockState.students, projection);
+    mockDb.selectDistinct = (projection?: any) => createBuilder(mockState.students, projection);
+    mockDb.insert = () => ({ values: () => ({ returning: async () => [] }) });
+    mockDb.transaction = async (callback: (tx: any) => Promise<any>) => callback(mockDb);
+    mockDb.update = () => ({ set: () => ({ where: async () => [] }) });
+    mockDb.delete = () => ({ where: async () => [] });
+    mockDb.execute = defaultDbExecute;
+  });
+
+  describe('POST /api/students duplicate detection', () => {
+    const setupExistingStudent = () => {
+      mockState.actorRole = 'school_admin';
+      mockState.actorSchoolId = 10;
+      mockState.actorId = 2;
+      mockState.users = [
+        { id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10, phone: '+22890000002' },
+        { id: 99, name: 'Ama Diallo', gender: 'F', role: 'parent', phone: '+22890000003' },
+      ];
+      mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10, studentId: null }];
+      mockState.students = [{
+        id: 456,
+        firstName: 'Mila',
+        lastName: 'DIALLO',
+        birthDate: '2015-04-12',
+        schoolId: 10,
+        classId: 5,
+        parentId: 7,
+        gender: 'F',
+      }];
+      mockDb.select = (projection?: any) => createBuilder(mockState.students, projection);
+      mockDb.transaction = async (callback: (tx: any) => Promise<any>) => callback(mockDb);
+      return configureStudentCreationMock();
+    };
+
+    const studentPayload = (overrides: Record<string, unknown> = {}) => ({
+      firstName: 'Mila',
+      lastName: 'Diallo',
+      birthDate: '2015-04-12',
+      schoolId: 10,
+      classId: 5,
+      parentId: 7,
+      academicYearId: 2,
+      gender: 'F',
+      ...overrides,
+    });
+
+    const postStudent = (payload: Record<string, unknown>) => request(app)
+      .post('/api/students')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'sim_admin_school')
+      .set('x-simulated-school-id', '10')
+      .set('x-simulated-user-id', '2')
+      .send(payload);
+
+    it('rejects a matching student in the same school with a conflict code', async () => {
+      const insertedTables = setupExistingStudent();
+      const response = await postStudent(studentPayload());
+
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ code: 'STUDENT_DUPLICATE' });
+      expect(response.body.error).toContain('existe déjà');
+      expect(insertedTables).toEqual([]);
+      expect(mockState.students).toHaveLength(1);
+    });
+
+    it.each([
+      ['student first name', { firstName: 'Mila Grace' }],
+      ['student last name', { lastName: 'Kouassi' }],
+      ['student gender', { gender: 'M' }],
+      ['birth date', { birthDate: '2015-04-13' }],
+    ])('allows creation when only %s differs', async (_criterion, override) => {
+      setupExistingStudent();
+      const response = await postStudent(studentPayload(override));
+      expect(response.status).toBe(201);
+      expect(mockState.students).toHaveLength(2);
+    });
+
+    it('allows creation when only the parent name differs', async () => {
+      setupExistingStudent();
+      mockState.users.push({ id: 100, name: 'Ama Diallo', gender: 'F', role: 'parent' });
+      mockState.parentRows.push({ id: 8, userId: 100, schoolId: 10, studentId: null });
+      mockState.students[0].parentId = 8;
+      mockState.users[1].name = 'Afi Diallo';
+      const response = await postStudent(studentPayload());
+      expect(response.status).toBe(201);
+      expect(mockState.students).toHaveLength(2);
+    });
+
+    it('allows creation when only the parent gender differs', async () => {
+      setupExistingStudent();
+      mockState.users.push({ id: 100, name: 'Ama Diallo', gender: 'F', role: 'parent' });
+      mockState.parentRows.push({ id: 8, userId: 100, schoolId: 10, studentId: null });
+      mockState.students[0].parentId = 8;
+      mockState.users[1].gender = 'M';
+      const response = await postStudent(studentPayload());
+      expect(response.status).toBe(201);
+      expect(mockState.students).toHaveLength(2);
+    });
+
+    it('allows an identical student in a different school', async () => {
+      setupExistingStudent();
+      mockState.students[0].schoolId = 20;
+      const response = await postStudent(studentPayload());
+      expect(response.status).toBe(201);
+      expect(mockState.students).toHaveLength(2);
+    });
+
+    it('detects names that differ only by case and whitespace', async () => {
+      setupExistingStudent();
+      mockState.students[0].firstName = '  mIlA   ';
+      mockState.students[0].lastName = '  dIaLlO ';
+      mockState.users[1].name = '  aMa   dIaLlO ';
+      const response = await postStudent(studentPayload({ firstName: ' MILA ', lastName: '  dIALLO  ' }));
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('STUDENT_DUPLICATE');
+    });
+
+    it('does not compare incomplete identities when birth date or parent details are missing', async () => {
+      const insertedTables = setupExistingStudent();
+      const noBirthDate = await postStudent(studentPayload({ birthDate: '' }));
+      expect(noBirthDate.status).toBe(201);
+
+      mockState.students = [{
+        id: 456,
+        firstName: 'Mila',
+        lastName: 'DIALLO',
+        birthDate: '2015-04-12',
+        schoolId: 10,
+        classId: 5,
+        parentId: null,
+        gender: 'F',
+      }];
+      const noParent = await postStudent(studentPayload({ parentId: undefined }));
+      expect(noParent.status).toBe(201);
+      expect(insertedTables).toEqual([students, studentAcademicYearStatuses, students, studentAcademicYearStatuses]);
+    });
+
+    it('reports and skips duplicate rows within one batch import', async () => {
+      setupExistingStudent();
+      mockState.students = [];
+      configureBatchImportMock();
+      mockDb.execute = executeStudentDuplicateSql;
+      const row = {
+        firstName: 'Mila',
+        lastName: 'Diallo',
+        birthDate: '2015-04-12',
+        schoolId: 10,
+        classId: 5,
+        parentId: 7,
+        academicYearId: 2,
+        gender: 'F',
+      };
+      const response = await request(app)
+        .post('/api/students/batch')
+        .set('x-simulated-role', 'school_admin')
+        .set('x-simulated-uid', 'sim_admin_school')
+        .set('x-simulated-school-id', '10')
+        .set('x-simulated-user-id', '2')
+        .send([row, { ...row }]);
+
+      expect(response.status).toBe(200);
+      expect(response.body.insertedCount).toBe(1);
+      expect(response.body.inserted).toHaveLength(1);
+      expect(response.body.errors).toEqual([expect.objectContaining({
+        row: 3,
+        code: 'STUDENT_DUPLICATE',
+        reason: expect.stringContaining('existe déjà'),
+      })]);
+    });
+
+    it('serializes simultaneous matching creations with the PostgreSQL transaction lock', async () => {
+      setupExistingStudent();
+      mockState.students = [];
+      const originalTransaction = mockDb.transaction;
+      const lockTails = new Map<string, Promise<void>>();
+      mockDb.transaction = async (callback: (tx: any) => Promise<any>) => {
+        const releases: Array<() => void> = [];
+        const tx = {
+          ...mockDb,
+          execute: async (rawQuery: any) => {
+            const query = new PgDialect().sqlToQuery(rawQuery);
+            if (query.sql.toLowerCase().includes('pg_advisory_xact_lock')) {
+              const lockKey = String(query.params[0]);
+              const previous = lockTails.get(lockKey) ?? Promise.resolve();
+              let release!: () => void;
+              const gate = new Promise<void>((resolve) => { release = resolve; });
+              lockTails.set(lockKey, previous.then(() => gate));
+              await previous;
+              releases.push(release);
+              return { rows: [] };
+            }
+            return executeStudentDuplicateSql(rawQuery);
+          },
+        };
+        try {
+          return await callback(tx);
+        } finally {
+          releases.forEach((release) => release());
+        }
+      };
+
+      try {
+        const results = await Promise.all([
+          postStudent(studentPayload()),
+          postStudent(studentPayload()),
+        ]);
+        expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+        expect(mockState.students).toHaveLength(1);
+      } finally {
+        mockDb.transaction = originalTransaction;
+      }
+    });
+
+    it('keeps a newly created parent when the student is rejected as a duplicate', async () => {
+      setupExistingStudent();
+      const parentResponse = await request(app)
+        .post('/api/parents')
+        .set('x-simulated-role', 'school_admin')
+        .set('x-simulated-uid', 'sim_admin_school')
+        .set('x-simulated-school-id', '10')
+        .set('x-simulated-user-id', '2')
+        .send({
+          name: 'Ama Diallo',
+          email: 'new-parent@school.test',
+          phone: '+22890000004',
+          address: '',
+          schoolId: 10,
+          gender: 'F',
+        });
+      expect(parentResponse.status).toBe(201);
+
+      const response = await postStudent(studentPayload({ parentId: parentResponse.body.parentId }));
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ code: 'STUDENT_DUPLICATE' });
+      expect(response.body).not.toHaveProperty('parentRemoved');
+      expect(mockState.parentRows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 7, userId: 99 }),
+        expect.objectContaining({ userId: parentResponse.body.id }),
+      ]));
+      expect(mockState.users).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'Ama Diallo', email: 'new-parent@school.test' }),
+      ]));
+      expect(mockState.students).toHaveLength(1);
+    });
   });
 
   it('returns [] for teacher without schoolId', async () => {
