@@ -1205,10 +1205,10 @@ export default function AdminView({
       'Prénom': st.firstName || '',
       Classe: st.className || '',
       'Année scolaire': getStudentAcademicYearName(st),
-      Tuteur: st.parentName || '',
       Sexe: st.gender || '',
       Statut: st.studentStatus || '',
       'Date de naissance': formatBirthDate(st.birthDate),
+      Tuteur: st.parentName || '',
     }));
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Élèves');

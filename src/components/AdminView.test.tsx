@@ -1280,9 +1280,19 @@ describe('AdminView create-user teacher form', () => {
 
       expect(click).toHaveBeenCalled();
       expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-eleves-actifs.xlsx');
+      expect(Object.keys(rows[0])).toEqual([
+        'Nom',
+        'Prénom',
+        'Classe',
+        'Année scolaire',
+        'Sexe',
+        'Statut',
+        'Date de naissance',
+        'Tuteur',
+      ]);
       expect(rows).toEqual([
-        { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Tuteur: 'Parent Amani', Sexe: 'F', Statut: 'Nouveau', 'Date de naissance': '12/04/2015' },
-        { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Tuteur: 'Parent Tano', Sexe: 'M', Statut: 'Doublant', 'Date de naissance': '09/07/2014' },
+        { Nom: 'Amani', 'Prénom': 'Awa', Classe: 'CM1', 'Année scolaire': '2024-2025', Sexe: 'F', Statut: 'Nouveau', 'Date de naissance': '12/04/2015', Tuteur: 'Parent Amani' },
+        { Nom: 'Tano', 'Prénom': 'Moussa', Classe: 'CM2', 'Année scolaire': '2024-2025', Sexe: 'M', Statut: 'Doublant', 'Date de naissance': '09/07/2014', Tuteur: 'Parent Tano' },
       ]);
 
       fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'former' } });
@@ -1293,7 +1303,7 @@ describe('AdminView create-user teacher form', () => {
       const formerRows = await readFirstExcelSheetRecords(await formerBlob.arrayBuffer());
       expect((click.mock.instances[1] as HTMLAnchorElement).download).toBe('liste-anciens-eleves.xlsx');
       expect(formerRows).toEqual([
-        { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Tuteur: 'Parent Ancien', Sexe: 'M', Statut: 'Nouveau', 'Date de naissance': '' },
+        { Nom: 'Ancien', 'Prénom': 'Kossi', Classe: '', 'Année scolaire': '', Sexe: 'M', Statut: 'Nouveau', 'Date de naissance': '', Tuteur: 'Parent Ancien' },
       ]);
 
       fireEvent.change(screen.getByLabelText('Statut'), { target: { value: 'all' } });
