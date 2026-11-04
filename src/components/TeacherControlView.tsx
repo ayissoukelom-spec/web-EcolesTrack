@@ -2158,7 +2158,6 @@ export default function TeacherControlView({
                     ? 'Contrôle de présence des enseignants'
                     : teacherAction === 'start' ? 'Début — nouvelle séance' : 'Fin — clôturer une séance'}</h2>
                   <p className="mt-1 text-sm text-slate-600">Le GPS est demandé uniquement après votre clic. L’heure officielle est fournie par le serveur et affichée à l’heure de Lomé.</p>
-                  <p className="mt-2 text-xs text-amber-800">Le GPS du navigateur reste falsifiable ; le challenge à usage unique limite le rejeu, mais ne prouve pas une position physique.</p>
                 </div>
               </div>
 
