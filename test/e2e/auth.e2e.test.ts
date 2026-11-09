@@ -225,6 +225,8 @@ function createMockDb() {
     __failNextNotificationAttachmentInsert: false,
     __failNextParentInsert: false,
     __failNextParentMembershipInsert: false,
+    __failNextTeacherClassSubjectInsert: false,
+    __failNextClassTeacherInsert: false,
     __legacyUserSchoolPairConstraint: false,
     __failNextUsersUpdateError: null,
     __failNextMobileParentSessionRevocationError: null,
@@ -1239,6 +1241,10 @@ function createMockDb() {
       const studentsBefore = structuredClone(FIXTURES.students);
       const usersBefore = structuredClone(FIXTURES.users);
       const localAuthsBefore = structuredClone(FIXTURES.localAuths);
+      const teachersBefore = structuredClone(FIXTURES.teachers);
+      const teacherSubjectsBefore = structuredClone(FIXTURES.teacherSubjects);
+      const teacherClassSubjectsBefore = structuredClone(FIXTURES.teacherClassSubjects);
+      const classTeachersBefore = structuredClone(FIXTURES.classTeachers);
       const accessSessionsBefore = FIXTURES.accessSessions.map((row) => ({
         ...row,
         expiresAt: new Date(row.expiresAt),
@@ -1259,6 +1265,10 @@ function createMockDb() {
         FIXTURES.students.splice(0, FIXTURES.students.length, ...studentsBefore);
         FIXTURES.users.splice(0, FIXTURES.users.length, ...usersBefore);
         FIXTURES.localAuths.splice(0, FIXTURES.localAuths.length, ...localAuthsBefore);
+        FIXTURES.teachers.splice(0, FIXTURES.teachers.length, ...teachersBefore);
+        FIXTURES.teacherSubjects.splice(0, FIXTURES.teacherSubjects.length, ...teacherSubjectsBefore);
+        FIXTURES.teacherClassSubjects.splice(0, FIXTURES.teacherClassSubjects.length, ...teacherClassSubjectsBefore);
+        FIXTURES.classTeachers.splice(0, FIXTURES.classTeachers.length, ...classTeachersBefore);
         FIXTURES.accessSessions.splice(0, FIXTURES.accessSessions.length, ...accessSessionsBefore);
         FIXTURES.parents.splice(0, FIXTURES.parents.length, ...parentsBefore);
         FIXTURES.userSchools.splice(0, FIXTURES.userSchools.length, ...userSchoolsBefore);
@@ -1320,10 +1330,18 @@ function createMockDb() {
             }
 
             if (tableName === 'classTeachers') {
+              if (db.__failNextClassTeacherInsert) {
+                db.__failNextClassTeacherInsert = false;
+                throw new Error('Simulated DB failure for teacher class assignment');
+              }
               FIXTURES.classTeachers.push(obj as any);
               return [obj];
             }
             if (tableName === 'teacherClassSubjects') {
+              if (db.__failNextTeacherClassSubjectInsert) {
+                db.__failNextTeacherClassSubjectInsert = false;
+                throw new Error('Simulated DB failure for teacher class-subject assignment');
+              }
               const nextId = FIXTURES.teacherClassSubjects.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1;
               const row = { id: nextId, ...obj };
               FIXTURES.teacherClassSubjects.push(row as any);
@@ -1953,6 +1971,7 @@ describe('E2E security: auth & privilege checks', () => {
     mockDb.db.__activeTestContext = null;
     mockDb.db.__returnUsersWithBigIntAccessSessionGeneration = false;
     mockDb.db.__skipNextNormalizedEmailLookup = false;
+    mockDb.db.__failNextTeacherClassSubjectInsert = false;
     mockDb.db.__failNextUsersUpdateError = null;
     mockDb.db.__legacyUserSchoolPairConstraint = false;
     mockDb.db.__failNextMobileParentSessionRevocationError = null;
@@ -7155,6 +7174,7 @@ describe('E2E security: auth & privilege checks', () => {
   });
 
   it('creates a teacher with the selected class assignment immediately', async () => {
+    FIXTURES.subjects.push({ id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any);
     const createRes = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-school')
@@ -7169,6 +7189,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+228 90000000',
         specialization: 'Science',
         classIds: [1],
+        teachingAssignments: [{ classId: 1, subjectId: 902 }],
       });
 
     expect(createRes.status).toBe(201);
@@ -7179,12 +7200,68 @@ describe('E2E security: auth & privilege checks', () => {
     const createdUser = FIXTURES.users.find((user) => user.uid === 'teacher-assigned-at-create');
     const teacherProfile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
     expect(teacherProfile).toBeDefined();
+    expect(FIXTURES.userSchools.filter((membership) => (
+      membership.userId === createdUser?.id
+      && membership.schoolId === 10
+      && membership.role === 'teacher'
+    ))).toHaveLength(1);
+    expect(FIXTURES.teachers.filter((teacher: any) => teacher.userId === createdUser?.id)).toHaveLength(1);
     expect(FIXTURES.classTeachers).toContainEqual(expect.objectContaining({
       classId: 1,
       teacherId: teacherProfile?.id,
       schoolId: 10,
     }));
+    expect(FIXTURES.teacherClassSubjects).toContainEqual(expect.objectContaining({
+      teacherId: teacherProfile?.id,
+      schoolId: 10,
+      classId: 1,
+      subjectId: 902,
+      isActive: true,
+    }));
     expect(createRes.body.classIds).toContain(1);
+  });
+
+  it('rolls back a teacher account when a pedagogical assignment fails during creation', async () => {
+    FIXTURES.subjects.push({ id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any);
+    const usersBefore = FIXTURES.users.length;
+    const localAuthsBefore = FIXTURES.localAuths.length;
+    const membershipsBefore = FIXTURES.userSchools.length;
+    const teachersBefore = FIXTURES.teachers.length;
+    const classTeachersBefore = FIXTURES.classTeachers.length;
+    const teacherClassSubjectsBefore = FIXTURES.teacherClassSubjects.length;
+    const auditEventsBefore = FIXTURES.auditEvents.length;
+    const rollbacksBefore = mockDb.db.__transactionRollbackCount;
+    mockDb.db.__failNextClassTeacherInsert = true;
+
+    const response = await request(app)
+      .post('/api/admin/users')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        uid: 'teacher-assignment-failure',
+        email: 'teacher-assignment-failure@x.test',
+        lastName: 'Failed',
+        firstNames: 'Teacher',
+        name: 'Failed Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        phone: '+228 99999999',
+        specialization: 'Science',
+        classIds: [1],
+        teachingAssignments: [{ classId: 1, subjectId: 902 }],
+      });
+
+    expect(response.status).toBe(500);
+    expect(FIXTURES.users).toHaveLength(usersBefore);
+    expect(FIXTURES.localAuths).toHaveLength(localAuthsBefore);
+    expect(FIXTURES.userSchools).toHaveLength(membershipsBefore);
+    expect(FIXTURES.teachers).toHaveLength(teachersBefore);
+    expect(FIXTURES.classTeachers).toHaveLength(classTeachersBefore);
+    expect(FIXTURES.teacherClassSubjects).toHaveLength(teacherClassSubjectsBefore);
+    expect(FIXTURES.auditEvents).toHaveLength(auditEventsBefore);
+    expect(FIXTURES.users.some((user) => user.uid === 'teacher-assignment-failure')).toBe(false);
+    expect(mockDb.db.__transactionRollbackCount).toBe(rollbacksBefore + 1);
   });
 
   it('does not associate a subject approved only for another school when creating a teacher', async () => {

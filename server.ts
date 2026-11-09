@@ -443,18 +443,25 @@ async function getUserSchoolMemberships(userId: number | null | undefined) {
 
 const localMembershipRoles = ['parent', 'teacher', 'school_admin', 'surveillant'] as const;
 type LocalMembershipRole = typeof localMembershipRoles[number];
+type MembershipDatabaseExecutor = Pick<typeof db, 'select' | 'insert'>;
+type TeacherCreationDatabaseExecutor = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>;
 
 function isLocalMembershipRole(role: unknown): role is LocalMembershipRole {
   return typeof role === 'string' && localMembershipRoles.includes(role as LocalMembershipRole);
 }
 
-async function ensureUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, requiredRole: string) {
+async function ensureUserSchoolMembership(
+  userId: number | null | undefined,
+  schoolId: number | null | undefined,
+  requiredRole: string,
+  executor: MembershipDatabaseExecutor = db,
+) {
   if (!isLocalMembershipRole(requiredRole)) {
     throw new Error('A valid membership role is required');
   }
   if (!userId || schoolId == null) return null;
 
-  const existing = await db.select().from(userSchools).where(and(
+  const existing = await executor.select().from(userSchools).where(and(
     eq(userSchools.userId, userId),
     eq(userSchools.schoolId, schoolId),
     eq(userSchools.role, requiredRole),
@@ -500,16 +507,22 @@ async function getActiveSchoolAdminUserIds(schoolId: number) {
   return admins.map((admin) => admin.id);
 }
 
-async function upsertUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, role: string, isActive = true) {
+async function upsertUserSchoolMembership(
+  userId: number | null | undefined,
+  schoolId: number | null | undefined,
+  role: string,
+  isActive = true,
+  executor: MembershipDatabaseExecutor = db,
+) {
   if (!isLocalMembershipRole(role)) {
     throw new Error('A valid membership role is required');
   }
   if (!userId || schoolId == null) return null;
 
-  const existing = await ensureUserSchoolMembership(userId, schoolId, role);
+  const existing = await ensureUserSchoolMembership(userId, schoolId, role, executor);
   if (existing) return existing;
 
-  const [inserted] = await db.insert(userSchools).values({
+  const [inserted] = await executor.insert(userSchools).values({
     userId,
     schoolId,
     role,
@@ -547,14 +560,19 @@ function normalizeSpecialization(value: any) {
   return '';
 }
 
-async function syncTeacherSubjectAssignments(teacherId: number, schoolId: number, subjectIds: unknown) {
+async function syncTeacherSubjectAssignments(
+  teacherId: number,
+  schoolId: number,
+  subjectIds: unknown,
+  executor: TeacherCreationDatabaseExecutor = db,
+) {
   if (!Array.isArray(subjectIds)) return null;
   const requestedIds = Array.from(new Set(subjectIds
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0)));
   const approvedSubjects = requestedIds.length === 0
     ? []
-    : await db.select({ id: subjects.id, name: subjects.name })
+    : await executor.select({ id: subjects.id, name: subjects.name })
       .from(subjects)
       .leftJoin(schoolSubjects, and(
         eq(schoolSubjects.subjectId, subjects.id),
@@ -569,12 +587,12 @@ async function syncTeacherSubjectAssignments(teacherId: number, schoolId: number
         ),
       ));
 
-  await db.delete(teacherSubjects).where(and(
+  await executor.delete(teacherSubjects).where(and(
     eq(teacherSubjects.teacherId, teacherId),
     eq(teacherSubjects.schoolId, schoolId),
   ));
   if (approvedSubjects.length > 0) {
-    await db.insert(teacherSubjects).values(approvedSubjects.map((subject) => ({
+    await executor.insert(teacherSubjects).values(approvedSubjects.map((subject) => ({
       teacherId,
       schoolId,
       subjectId: subject.id,
@@ -627,13 +645,17 @@ async function ensureTeacherTeachingAssignment(
   ) ?? null;
 }
 
-async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
+async function isApprovedClassForSchool(
+  classId: number,
+  targetSchoolId: number | null,
+  executor: Pick<typeof db, 'select'> = db,
+) {
   if (targetSchoolId == null) return false;
-  const [cls] = await db.select().from(classes).where(eq(classes.id, classId));
+  const [cls] = await executor.select().from(classes).where(eq(classes.id, classId));
   if (!cls) return false;
   if (cls.schoolId === targetSchoolId) return true;
   if (cls.schoolId != null) return false;
-  const [schoolClass] = await db.select().from(schoolClasses).where(
+  const [schoolClass] = await executor.select().from(schoolClasses).where(
     and(
       eq(schoolClasses.classId, classId),
       eq(schoolClasses.schoolId, targetSchoolId),
@@ -670,9 +692,10 @@ async function syncTeacherClassSubjectAssignments(
   teacherId: number,
   schoolId: number,
   assignments: Array<{ classId: number; subjectId: number }>,
+  executor: TeacherCreationDatabaseExecutor = db,
 ) {
   const now = new Date();
-  await db.update(teacherClassSubjects).set({ isActive: false, updatedAt: now }).where(and(
+  await executor.update(teacherClassSubjects).set({ isActive: false, updatedAt: now }).where(and(
     eq(teacherClassSubjects.teacherId, teacherId),
     eq(teacherClassSubjects.schoolId, schoolId),
   ));
@@ -683,11 +706,11 @@ async function syncTeacherClassSubjectAssignments(
       eq(teacherClassSubjects.classId, assignment.classId),
       eq(teacherClassSubjects.subjectId, assignment.subjectId),
     );
-    const [existing] = await db.select().from(teacherClassSubjects).where(where);
+    const [existing] = await executor.select().from(teacherClassSubjects).where(where);
     if (existing) {
-      await db.update(teacherClassSubjects).set({ isActive: true, updatedAt: now }).where(eq(teacherClassSubjects.id, existing.id));
+      await executor.update(teacherClassSubjects).set({ isActive: true, updatedAt: now }).where(eq(teacherClassSubjects.id, existing.id));
     } else {
-      await db.insert(teacherClassSubjects).values({
+      await executor.insert(teacherClassSubjects).values({
         teacherId,
         schoolId,
         classId: assignment.classId,
@@ -2114,7 +2137,7 @@ export async function createApp() {
       }
 
       const temporaryCredential = generateTemporaryLocalPassword();
-      const createdUser = await db.transaction(async (tx) => {
+      const { user: createdUser, teacherProfile, teacherClassIds } = await db.transaction(async (tx) => {
         const [newUser] = await tx.insert(users).values({
           uid: finalUid,
           email: normalizedEmail,
@@ -2133,6 +2156,81 @@ export async function createApp() {
           salt: temporaryCredential.salt,
           mustReset: true,
         });
+
+        let newTeacherProfile: typeof teachers.$inferSelect | null = null;
+        let newTeacherClassIds: number[] = [];
+        if (role === 'teacher' && resolvedSchoolId != null) {
+          await upsertUserSchoolMembership(newUser.id, resolvedSchoolId, 'teacher', true, tx);
+          const [profile] = await tx.insert(teachers)
+            .values({
+              userId: newUser.id,
+              schoolId: resolvedSchoolId,
+              phone: phone || '',
+              specialization: normalizeSpecialization(specialization) || null,
+            })
+            .returning();
+          newTeacherProfile = profile;
+
+          if (Array.isArray(effectiveSubjectIds)) {
+            await syncTeacherSubjectAssignments(profile.id, resolvedSchoolId, effectiveSubjectIds, tx);
+          }
+          if (normalizedTeachingAssignments) {
+            await syncTeacherClassSubjectAssignments(profile.id, resolvedSchoolId, normalizedTeachingAssignments, tx);
+          }
+
+          if (Array.isArray(effectiveClassIds) && effectiveClassIds.length > 0) {
+            for (const rawClassId of effectiveClassIds) {
+              const classId = Number(rawClassId);
+              if (Number.isNaN(classId)) continue;
+
+              const [classRow] = await tx.select().from(classes).where(eq(classes.id, classId));
+              const approved = await isApprovedClassForSchool(classId, resolvedSchoolId, tx);
+              if (
+                !classRow
+                || (classRow.schoolId != null && classRow.schoolId !== resolvedSchoolId)
+                || !approved
+              ) {
+                continue;
+              }
+
+              const existingAssignment = await tx.select().from(classTeachers).where(and(
+                eq(classTeachers.classId, classId),
+                eq(classTeachers.teacherId, profile.id),
+                eq(classTeachers.schoolId, resolvedSchoolId),
+              ));
+              if (existingAssignment.length === 0) {
+                await tx.insert(classTeachers).values({
+                  classId,
+                  teacherId: profile.id,
+                  schoolId: resolvedSchoolId,
+                });
+              }
+            }
+          }
+
+          const assignments = await tx
+            .select({ classId: classTeachers.classId })
+            .from(classTeachers)
+            .where(and(
+              eq(classTeachers.teacherId, profile.id),
+              eq(classTeachers.schoolId, resolvedSchoolId),
+            ));
+          newTeacherClassIds = assignments.map((assignment) => assignment.classId);
+        }
+
+        if (role === 'teacher') {
+          await tx.insert(auditEvents).values({
+            actorUserId: actor.id ?? null,
+            actorRole: actor.role,
+            actorEmail: actor.email ?? null,
+            actorName: actor.name ?? null,
+            action: 'create',
+            resourceType: 'user',
+            resourceId: newUser.id,
+            schoolId: actor.schoolId ?? null,
+            description: `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created teacher account ${newUser.email}`,
+          }).returning();
+        }
 
         let newParent: typeof parents.$inferSelect | null = null;
         if (role === 'parent') {
@@ -2169,7 +2267,11 @@ export async function createApp() {
           }
         }
 
-        return newUser;
+        return {
+          user: newUser,
+          teacherProfile: newTeacherProfile,
+          teacherClassIds: newTeacherClassIds,
+        };
       });
 
       if (role === 'school_admin' && resolvedSchoolId != null) {
@@ -2178,81 +2280,7 @@ export async function createApp() {
       if (role === 'surveillant' && resolvedSchoolId != null) {
         await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'surveillant', true);
       }
-      if (role === 'teacher' && resolvedSchoolId != null) {
-        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'teacher', true);
-      }
-
-      // Create linked profile for teacher/parent
-      let teacherProfile: any = null;
-      if (role === 'teacher' && resolvedSchoolId == null) {
-        return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
-      }
-
       if (role === 'teacher') {
-        const teacherResult = await db.insert(teachers)
-          .values({ userId: createdUser.id, schoolId: resolvedSchoolId ?? 0, phone: phone || '', specialization: normalizeSpecialization(specialization) || null })
-          .returning();
-        teacherProfile = teacherResult[0];
-
-        if (Array.isArray(effectiveSubjectIds) && resolvedSchoolId != null) {
-          await syncTeacherSubjectAssignments(teacherProfile.id, resolvedSchoolId, effectiveSubjectIds);
-        }
-        if (normalizedTeachingAssignments && resolvedSchoolId != null) {
-          await syncTeacherClassSubjectAssignments(teacherProfile.id, resolvedSchoolId, normalizedTeachingAssignments);
-        }
-
-        if (resolvedSchoolId != null) {
-          await db.insert(userSchools).values({
-            userId: createdUser.id,
-            schoolId: resolvedSchoolId,
-            role: 'teacher',
-            isActive: true,
-          });
-        }
-
-        // Assign provided classes to this teacher when classIds are supplied
-        if (Array.isArray(effectiveClassIds) && effectiveClassIds.length > 0) {
-          for (const rawClassId of effectiveClassIds) {
-            const cid = Number(rawClassId);
-            if (Number.isNaN(cid)) {
-              continue;
-            }
-            const [cls] = await db.select().from(classes).where(eq(classes.id, cid));
-            const [schoolClassRow] = resolvedSchoolId != null ? await db.select().from(schoolClasses).where(and(eq(schoolClasses.classId, cid), eq(schoolClasses.schoolId, resolvedSchoolId))) : [null];
-            const approved = await isApprovedClassForSchool(cid, resolvedSchoolId);
-
-            if (!cls) {
-              continue;
-            }
-
-            if (resolvedSchoolId != null && cls.schoolId != null && cls.schoolId !== resolvedSchoolId) {
-              continue;
-            }
-
-            if (!approved) {
-              continue;
-            }
-
-            try {
-              const existingAssignment = await db.select().from(classTeachers).where(and(
-                eq(classTeachers.classId, cid),
-                eq(classTeachers.teacherId, teacherProfile.id),
-                eq(classTeachers.schoolId, resolvedSchoolId),
-              ));
-              if (existingAssignment.length === 0) {
-                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfile.id, schoolId: resolvedSchoolId });
-              }
-            } catch (e: any) {
-              console.warn('Failed to assign teacher to class');
-            }
-          }
-        }
-          // Ensure users.schoolId stays consistent with teachers.schoolId
-        try {
-          await db.update(users).set({ schoolId: resolvedSchoolId ?? null }).where(eq(users.id, createdUser.id));
-        } catch (e: any) {
-          console.warn('Failed to sync teacher and user school association');
-        }
         // Log if inconsistency exists after creation
         try {
           await logIfTeacherUserMismatch(createdUser.id, teacherProfile?.id);
@@ -2261,7 +2289,9 @@ export async function createApp() {
         }
       }
 
-      await logAuditEvent(actor, 'create', 'user', createdUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created ${role} account ${createdUser.email}`);
+      if (role !== 'teacher') {
+        await logAuditEvent(actor, 'create', 'user', createdUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created ${role} account ${createdUser.email}`);
+      }
 
       // Build response with classIds for teachers
       const responseBody: any = {
@@ -2273,14 +2303,7 @@ export async function createApp() {
 
       if (role === 'teacher' && teacherProfile?.id) {
         responseBody.teacherId = teacherProfile.id;
-        const assignments = await db
-          .select({ classId: classTeachers.classId })
-          .from(classTeachers)
-          .where(and(
-            eq(classTeachers.teacherId, teacherProfile.id),
-            eq(classTeachers.schoolId, resolvedSchoolId),
-          ));
-        responseBody.classIds = assignments.map((a) => a.classId);
+        responseBody.classIds = teacherClassIds;
       }
 
       res.status(201).json(responseBody);
