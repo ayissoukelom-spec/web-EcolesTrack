@@ -30,7 +30,6 @@ import {
 } from '../lib/evaluationUtils';
 import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
-import { getTeacherAvailableSubjects, isSubjectAssignedToTeacher } from '../lib/subjectMatching';
 import { sortStudentsAlphabetically } from '../lib/studentOrdering';
 
 interface NotesViewProps {
@@ -41,9 +40,8 @@ interface NotesViewProps {
   schoolsList: { id: number; name: string }[];
   schoolFilterId?: number | null;
   onSchoolFilterChange?: (schoolId: number | null) => void;
-  teacherClassIds?: number[];
-  teacherSpecializations?: string[];
-  teacherSubjectIds?: number[];
+  teacherHomeroomClassIds?: number[];
+  teacherTeachingAssignments?: Array<{ classId: number; subjectId: number; isActive?: boolean }>;
   approvedSubjectsList?: { id: number; name: string; status?: string }[];
   teacherId?: number;
   onAddEvaluation: (data: { classId: number; subject: string; subjectId?: number; type: string; coefficient: number; maxScore: number; date: string }) => void;
@@ -64,9 +62,7 @@ export default function NotesView({
   schoolsList,
   schoolFilterId,
   onSchoolFilterChange,
-  teacherClassIds = [],
-  teacherSpecializations = [],
-  teacherSubjectIds = [],
+  teacherTeachingAssignments = [],
   approvedSubjectsList = [],
   teacherId,
   onAddEvaluation,
@@ -81,27 +77,30 @@ export default function NotesView({
   const currentSchoolId = activeSchoolId;
   const sortedClasses = useMemo(() => sortClasses(classesList || []), [classesList]);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
+  const activeTeacherAssignments = userRole === 'teacher'
+    ? teacherTeachingAssignments.filter((assignment) => assignment.isActive === true)
+    : [];
+  const teachingClassIds = new Set(activeTeacherAssignments.map((assignment) => Number(assignment.classId)));
+  const readableTeacherClassIds = teachingClassIds;
 
   const availableClasses = useMemo(() => userRole === 'teacher'
-    ? teacherClassIds.length > 0
-      ? sortedClasses.filter((c) => teacherClassIds.includes(Number(c.id)))
-      : sortedClasses
+    ? sortedClasses.filter((c) => readableTeacherClassIds.has(Number(c.id)))
     : userRole === 'school_admin'
       ? sortedClasses.filter((c) => isApprovedForSchool(c, currentSchoolId))
-      : sortedClasses, [userRole, teacherClassIds, sortedClasses, currentSchoolId]);
+      : sortedClasses, [userRole, readableTeacherClassIds, sortedClasses, currentSchoolId]);
   const filteredClasses = useMemo(() => schoolFilterId
     ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
     : availableClasses, [availableClasses, schoolFilterId]);
+  const filteredTeachingClasses = filteredClasses.filter((klass) => teachingClassIds.has(Number(klass.id)));
 
   const isTeacherEvaluationVisible = (evaluation: Evaluation) => {
     if (userRole !== 'teacher') return true;
     const evaluationClass = classesList.find((klass) => Number(klass.id) === Number(evaluation.classId));
-    return teacherClassIds.includes(Number(evaluation.classId))
-      && evaluationClass != null
-      && isClassVisibleToSchool(evaluationClass, currentSchoolId)
-      && (evaluation.subjectId != null
-        ? teacherSubjectIds.includes(evaluation.subjectId)
-        : isSubjectAssignedToTeacher(evaluation.subject, teacherSpecializations));
+    if (!evaluationClass || !isClassVisibleToSchool(evaluationClass, currentSchoolId)) return false;
+    return evaluation.subjectId != null && activeTeacherAssignments.some((assignment) =>
+      Number(assignment.classId) === Number(evaluation.classId)
+        && Number(assignment.subjectId) === Number(evaluation.subjectId),
+    );
   };
 
   const approvedEvaluations = userRole === 'teacher'
@@ -142,13 +141,12 @@ export default function NotesView({
     { value: 'composition', label: 'Composition' },
   ];
 
-  const approvedSubjectNames = approvedSubjectsList && approvedSubjectsList.length > 0
-    ? approvedSubjectsList.map((subject) => String(subject.name || '').trim()).filter(Boolean)
-    : [];
-
-  const availableSubjects = userRole === 'teacher'
-    ? getTeacherAvailableSubjects(approvedSubjectsList, teacherSpecializations, teacherSubjectIds)
-    : approvedSubjectNames;
+  const availableSubjectOptions = userRole === 'teacher'
+    ? approvedSubjectsList.filter((subject) => activeTeacherAssignments.some((assignment) =>
+      Number(assignment.classId) === Number(newEvalClassId)
+        && Number(assignment.subjectId) === Number(subject.id),
+    ))
+    : approvedSubjectsList.map((subject) => ({ id: subject.id, name: String(subject.name || '').trim() }));
 
   const currentEvaluation = approvedEvaluations.find((ev) => String(ev.id) === selectedEvalId) || null;
 
@@ -179,6 +177,12 @@ export default function NotesView({
     }
     if (!newEvalSubject) {
       console.warn('NotesView: missing subject for evaluation');
+      return;
+    }
+    if (userRole === 'teacher' && (newEvalSubjectId == null || !activeTeacherAssignments.some((assignment) =>
+      Number(assignment.classId) === Number(newEvalClassId)
+        && Number(assignment.subjectId) === newEvalSubjectId,
+    ))) {
       return;
     }
     if (!newEvalType) {
@@ -464,9 +468,9 @@ export default function NotesView({
 
   useEffect(() => {
     if (!filteredClasses.length) {
-      setSelectedClassId('');
-      setSelectedEvalId('');
-      setGradeInputValues({});
+      if (selectedClassId) setSelectedClassId('');
+      if (selectedEvalId) setSelectedEvalId('');
+      if (Object.keys(gradeInputValues).length > 0) setGradeInputValues({});
       return;
     }
 
@@ -498,7 +502,7 @@ export default function NotesView({
         }
       } else {
         setSelectedEvalId('');
-        setGradeInputValues({});
+        if (Object.keys(gradeInputValues).length > 0) setGradeInputValues({});
       }
       return;
     }
@@ -521,10 +525,10 @@ export default function NotesView({
           populateGradeInputsForEvaluation(String(firstSelectableEval.id));
         }
       } else {
-        setGradeInputValues({});
+        if (Object.keys(gradeInputValues).length > 0) setGradeInputValues({});
       }
     }
-  }, [filteredClasses, selectableEvaluations, selectedClassId]);
+  }, [filteredClasses, selectableEvaluations, selectedClassId, selectedEvalId, gradeInputValues]);
 
   const archivedEvaluations = approvedEvaluations
     .filter((ev) => {
@@ -777,11 +781,15 @@ export default function NotesView({
               <select
                 required
                 value={newEvalClassId}
-                onChange={(e) => setNewEvalClassId(e.target.value)}
+                onChange={(e) => {
+                  setNewEvalClassId(e.target.value);
+                  setNewEvalSubject('');
+                  setNewEvalSubjectId(null);
+                }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none placeholder-slate-400"
               >
                 <option value="">-- Choisissez --</option>
-                {filteredClasses.map((c) => (
+                {(userRole === 'teacher' ? filteredTeachingClasses : filteredClasses).map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
@@ -790,19 +798,20 @@ export default function NotesView({
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matière</label>
               <select
                 required
-                value={newEvalSubject}
+                value={userRole === 'teacher' ? newEvalSubjectId?.toString() ?? '' : newEvalSubject}
                 onChange={(e) => {
-                  console.debug('NotesView: subject changed to', e.target.value);
-                  const selectedSubject = approvedSubjectsList.find((subject) => subject.name === e.target.value);
-                  setNewEvalSubject(e.target.value);
+                  const selectedSubject = userRole === 'teacher'
+                    ? availableSubjectOptions.find((subject) => Number(subject.id) === Number(e.target.value))
+                    : availableSubjectOptions.find((subject) => subject.name === e.target.value);
+                  setNewEvalSubject(selectedSubject?.name ?? '');
                   setNewEvalSubjectId(selectedSubject?.id ?? null);
                 }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
               >
                 <option value="">-- Choisir une matière --</option>
-                {availableSubjects.length > 0 ? (
-                  availableSubjects.map((m) => (
-                    <option key={m} value={m}>{m}</option>
+                {availableSubjectOptions.length > 0 ? (
+                  availableSubjectOptions.map((subject) => (
+                    <option key={subject.id} value={userRole === 'teacher' ? subject.id : subject.name}>{subject.name}</option>
                   ))
                 ) : (
                   <option value="" disabled>Aucune matière approuvée disponible</option>
@@ -916,7 +925,9 @@ export default function NotesView({
           >
             <option value="">Sélectionner une classe</option>
             {filteredClasses.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}{userRole === 'teacher' && !teachingClassIds.has(Number(c.id)) ? ' (titulaire)' : ''}
+              </option>
             ))}
           </select>
           {userRole === 'teacher' && availableClasses.length === 0 && (

@@ -37,7 +37,7 @@ export const registerClassRankingRoute = (
   const {
     resolveActor,
     verifyMiddleware = verifyToken as any,
-    accessMiddleware = requireRole(['admin']) as any,
+    accessMiddleware = requireRole(['school_admin', 'super_admin']) as any,
     resolveAvailableTerm = resolveSchoolTermForClass,
   } = options;
 

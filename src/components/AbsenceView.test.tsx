@@ -728,6 +728,7 @@ describe('AbsenceView teacher teaching assignment payload', () => {
         schoolsList={[]}
         teachersList={[]}
         teacherSubjectIds={[5]}
+        teacherTeachingAssignments={[{ classId: 10, subjectId: 5, isActive: true }]}
         approvedSubjectsList={[{ id: 5, name: 'Mathématiques' }, { id: 6, name: 'Physique' }]}
         onAddAbsence={onAddAbsence}
         onJustifyAbsence={vi.fn()}
@@ -750,6 +751,44 @@ describe('AbsenceView teacher teaching assignment payload', () => {
     renderTeacherAbsenceForm(true);
     expect(screen.getByRole('radio', { name: 'Mathématiques' })).toBeTruthy();
     expect(screen.queryByRole('radio', { name: 'Physique' })).toBeNull();
+  });
+
+  it('allows a homeroom teacher to choose their class without implying a subject assignment', async () => {
+    const onAddAbsence = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AbsenceView
+        userRole="teacher"
+        absencesList={[]}
+        studentsList={[{ id: 2, classId: 12, firstName: 'Ada', lastName: 'Lovelace', schoolId: 7 } as any]}
+        classesList={[{ id: 11, name: '3e A', schoolId: 7 } as any, { id: 12, name: '4e B', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        teacherTeachingAssignments={[{ classId: 11, subjectId: 5, isActive: true }]}
+        teacherHomeroomClassIds={[12]}
+        approvedSubjectsList={[{ id: 5, name: 'Mathématiques' }, { id: 6, name: 'Physique' }]}
+        onAddAbsence={onAddAbsence}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Signaler une absence/i }));
+    fireEvent.click(document.querySelector('#box-absence-form [aria-haspopup="listbox"]') as HTMLButtonElement);
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('4e B'));
+
+    expect(screen.getByText('Le titulaire peut enregistrer une présence pour sa classe sans attribuer de matière.')).toBeTruthy();
+    expect(screen.queryByRole('radio')).toBeNull();
+
+    const studentFields = document.querySelectorAll('#box-absence-form select');
+    fireEvent.change(studentFields[0], { target: { value: 'Lovelace' } });
+    fireEvent.change(studentFields[1], { target: { value: 'Ada' } });
+    fireEvent.change(studentFields[2], { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
+
+    await waitFor(() => expect(onAddAbsence).toHaveBeenCalledWith(expect.objectContaining({
+      studentId: 2,
+      classId: 12,
+      subjectId: undefined,
+    })));
   });
 
   it('submits an individual absence without requiring a canonical assignment in the frontend', async () => {

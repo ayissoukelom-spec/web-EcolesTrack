@@ -3,7 +3,14 @@ import request from 'supertest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { schools, academicYears, users, localAuths, subjects, classes, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles, schoolPeriodTypeApprovals, financialObligations, auditEvents } from '../src/db/schema.ts';
+import {
+  schools, academicYears, users, userSchools, localAuths, teachers, parents, students, subjects, classes,
+  classTeachers, teacherClassSubjects, schoolClasses, schoolSubjects, schoolTerms, cycles, schoolCycles,
+  schoolPeriodTypeApprovals, financialObligations, auditEvents, studentAcademicYearStatuses, examResults,
+  evaluations, grades, evaluationParticipations, bulletins, bulletinGenerations, absences, lateArrivals,
+  classHomeroomAssignments, classSuccessions, classExamConfigurations, absenceControls, teacherSubjects,
+  accountingCategories, accountingTariffs, accountingScheduleTemplates, accountingFeeDefinitions, financialPayments,
+} from '../src/db/schema.ts';
 import { hashLocalPassword } from '../src/lib/localPassword.ts';
 
 const schoolLogoS3 = vi.hoisted(() => ({
@@ -14,8 +21,14 @@ const schoolLogoS3 = vi.hoisted(() => ({
 const mockState = {
   users: [
     { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'super_admin', schoolId: null },
-  ],
+  ] as Array<Record<string, any>>,
+  userSchools: [] as Array<Record<string, any>>,
   localAuths: [] as Array<{ userId: number; passwordHash: string; salt: string }>,
+  teachers: [] as Array<Record<string, any>>,
+  parents: [] as Array<Record<string, any>>,
+  students: [] as Array<Record<string, any>>,
+  classTeachers: [] as Array<Record<string, any>>,
+  teacherClassSubjects: [] as Array<Record<string, any>>,
   authenticated: true,
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
@@ -36,8 +49,31 @@ const mockState = {
   periodApprovals: [] as Array<{ id: number; schoolId: number; periodType: string; status: string }>,
   subjects: [] as Array<{ id: number; name: string; schoolId: number | null }>,
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
-  financialObligations: [] as Array<{ id: number; schoolId: number }>,
+  financialObligations: [] as Array<Record<string, any>>,
+  financialPayments: [] as Array<Record<string, any>>,
+  evaluations: [] as Array<Record<string, any>>,
+  grades: [] as Array<Record<string, any>>,
+  evaluationParticipations: [] as Array<Record<string, any>>,
+  studentAcademicYearStatuses: [] as Array<Record<string, any>>,
+  examResults: [] as Array<Record<string, any>>,
+  bulletins: [] as Array<Record<string, any>>,
+  bulletinGenerations: [] as Array<Record<string, any>>,
+  absences: [] as Array<Record<string, any>>,
+  lateArrivals: [] as Array<Record<string, any>>,
+  classHomeroomAssignments: [] as Array<Record<string, any>>,
+  classSuccessions: [] as Array<Record<string, any>>,
+  classExamConfigurations: [] as Array<Record<string, any>>,
+  absenceControls: [] as Array<Record<string, any>>,
+  teacherSubjects: [] as Array<Record<string, any>>,
+  accountingCategories: [] as Array<Record<string, any>>,
+  accountingTariffs: [] as Array<Record<string, any>>,
+  accountingScheduleTemplates: [] as Array<Record<string, any>>,
+  accountingFeeDefinitions: [] as Array<Record<string, any>>,
   auditEvents: [] as Array<Record<string, any>>,
+  failOnDeleteTable: null as any,
+  transactionIsolationLevels: [] as Array<string | undefined>,
+  transactionLockTableCalls: 0,
+  onTransactionLock: null as (() => void) | null,
 };
 
 const setSuperAdminPassword = () => {
@@ -79,11 +115,123 @@ const conditionContainsOr = (condition: any): boolean => (condition?.queryChunks
   || conditionContainsOr(chunk)
 ));
 
+const conditionMatchesRow = (condition: any, row: Record<string, any>): boolean => {
+  const chunks = condition?.queryChunks ?? [];
+  const nested = chunks.filter((chunk: any) => Array.isArray(chunk?.queryChunks));
+  const connector = chunks.flatMap((chunk: any) => chunk?.value ?? [])
+    .find((part: any) => typeof part === 'string' && (part.includes(' or ') || part.includes(' and ')));
+  if (connector && nested.length >= 2) {
+    const matches = nested.map((chunk: any) => conditionMatchesRow(chunk, row));
+    return connector.includes(' or ') ? matches.some(Boolean) : matches.every(Boolean);
+  }
+  if (nested.length === 1) return conditionMatchesRow(nested[0], row);
+
+  const columnIndex = chunks.findIndex((chunk: any) => chunk?.config?.name);
+  if (columnIndex < 0) return true;
+  const column = normalizeColumnName(chunks[columnIndex].config.name);
+  const operator = chunks[columnIndex + 1]?.value?.join?.('').trim().toLowerCase();
+  const operand = chunks[columnIndex + 2];
+  if (operator === 'in') {
+    const values = Array.isArray(operand) ? operand.map((item: any) => item?.value ?? item) : [];
+    return values.includes(row[column]);
+  }
+  if (operator === '=') {
+    const value = operand && Object.prototype.hasOwnProperty.call(operand, 'value') ? operand.value : operand;
+    return row[column] === value;
+  }
+  if (operator === 'is null') return row[column] == null;
+  return true;
+};
+
+const matchesConditions = (row: Record<string, any>, conditions: any[]): boolean => (
+  conditions.every((condition) => conditionMatchesRow(condition, row))
+);
+
+const getRowsForTable = (table: any): Array<Record<string, any>> | null => {
+  const tableRows = new Map<any, Array<Record<string, any>>>([
+    [schools, mockState.schools as Array<Record<string, any>>],
+    [academicYears, mockState.academicYears as Array<Record<string, any>>],
+    [users, mockState.users],
+    [userSchools, mockState.userSchools],
+    [teachers, mockState.teachers],
+    [parents, mockState.parents],
+    [students, mockState.students],
+    [classes, mockState.classes as Array<Record<string, any>>],
+    [subjects, mockState.subjects as Array<Record<string, any>>],
+    [schoolClasses, mockState.schoolClasses as Array<Record<string, any>>],
+    [schoolSubjects, mockState.schoolSubjects as Array<Record<string, any>>],
+    [schoolTerms, mockState.schoolTerms],
+    [classTeachers, mockState.classTeachers],
+    [teacherClassSubjects, mockState.teacherClassSubjects],
+    [financialObligations, mockState.financialObligations as Array<Record<string, any>>],
+    [studentAcademicYearStatuses, mockState.studentAcademicYearStatuses],
+    [examResults, mockState.examResults],
+    [evaluations, mockState.evaluations],
+    [grades, mockState.grades],
+    [evaluationParticipations, mockState.evaluationParticipations],
+    [bulletins, mockState.bulletins],
+    [bulletinGenerations, mockState.bulletinGenerations],
+    [absences, mockState.absences],
+    [lateArrivals, mockState.lateArrivals],
+    [classHomeroomAssignments, mockState.classHomeroomAssignments],
+    [classSuccessions, mockState.classSuccessions],
+    [classExamConfigurations, mockState.classExamConfigurations],
+    [absenceControls, mockState.absenceControls],
+    [teacherSubjects, mockState.teacherSubjects],
+    [accountingCategories, mockState.accountingCategories],
+    [accountingTariffs, mockState.accountingTariffs],
+    [accountingScheduleTemplates, mockState.accountingScheduleTemplates],
+    [accountingFeeDefinitions, mockState.accountingFeeDefinitions],
+    [financialPayments, mockState.financialPayments],
+  ]);
+  return tableRows.get(table) ?? null;
+};
+
+const snapshotSchoolDeletionState = () => structuredClone({
+  schools: mockState.schools,
+  academicYears: mockState.academicYears,
+  users: mockState.users,
+  userSchools: mockState.userSchools,
+  localAuths: mockState.localAuths,
+  teachers: mockState.teachers,
+  parents: mockState.parents,
+  students: mockState.students,
+  classes: mockState.classes,
+  schoolClasses: mockState.schoolClasses,
+  schoolSubjects: mockState.schoolSubjects,
+  subjects: mockState.subjects,
+  schoolTerms: mockState.schoolTerms,
+  classTeachers: mockState.classTeachers,
+  teacherClassSubjects: mockState.teacherClassSubjects,
+  studentAcademicYearStatuses: mockState.studentAcademicYearStatuses,
+  examResults: mockState.examResults,
+  evaluations: mockState.evaluations,
+  grades: mockState.grades,
+  evaluationParticipations: mockState.evaluationParticipations,
+  bulletins: mockState.bulletins,
+  bulletinGenerations: mockState.bulletinGenerations,
+  absences: mockState.absences,
+  lateArrivals: mockState.lateArrivals,
+  classHomeroomAssignments: mockState.classHomeroomAssignments,
+  classSuccessions: mockState.classSuccessions,
+  classExamConfigurations: mockState.classExamConfigurations,
+  absenceControls: mockState.absenceControls,
+  teacherSubjects: mockState.teacherSubjects,
+  accountingCategories: mockState.accountingCategories,
+  accountingTariffs: mockState.accountingTariffs,
+  accountingScheduleTemplates: mockState.accountingScheduleTemplates,
+  accountingFeeDefinitions: mockState.accountingFeeDefinitions,
+  financialObligations: mockState.financialObligations,
+  financialPayments: mockState.financialPayments,
+  auditEvents: mockState.auditEvents,
+});
+
 const createBuilder = () => {
   const builder: any = {
     table: null as any,
     joins: [] as any[],
     conditions: [] as any[],
+    limitValue: 0,
     from(table: any) {
       builder.table = table;
       return builder;
@@ -100,15 +248,42 @@ const createBuilder = () => {
       builder.conditions = conditions;
       return builder;
     },
-    limit() {
+    limit(value: number) {
+      builder.limitValue = value;
       return builder;
     },
     orderBy() {
       return builder;
     },
+    for() {
+      return builder;
+    },
     then(resolve: (value: any) => void) {
+      const stateRows = getRowsForTable(builder.table);
+      if (stateRows && !(builder.table === subjects && builder.joins.includes(schoolSubjects))) {
+        const rows = stateRows.filter((row) => matchesConditions(row, builder.conditions));
+        return Promise.resolve(builder.limitValue ? rows.slice(0, builder.limitValue) : rows).then(resolve);
+      }
       if (builder.table === users) {
-        return Promise.resolve(mockState.users).then(resolve);
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        const rows = mockState.users.filter((row) => conditions.every((entry) => row[entry.column] === entry.value));
+        return Promise.resolve(rows).then(resolve);
+      }
+      if (builder.table === userSchools || builder.table === teachers || builder.table === parents || builder.table === students
+        || builder.table === classTeachers || builder.table === teacherClassSubjects) {
+        const rows = builder.table === userSchools
+          ? mockState.userSchools
+          : builder.table === teachers
+            ? mockState.teachers
+            : builder.table === parents
+              ? mockState.parents
+              : builder.table === students
+                ? mockState.students
+                : builder.table === classTeachers
+                  ? mockState.classTeachers
+                  : mockState.teacherClassSubjects;
+        const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
+        return Promise.resolve(rows.filter((row) => conditions.every((entry) => row[entry.column] === entry.value))).then(resolve);
       }
       if (builder.table === localAuths) {
         const conditions = builder.conditions.flatMap((condition: any) => extractConditionPairs(condition));
@@ -280,11 +455,39 @@ const mockDb = {
   update: (table: any) => ({
     set: (values: any) => ({
       where: (...conditions: any[]) => {
+        const conditionPairs = conditions.flatMap((condition) => extractConditionPairs(condition));
+        const updateRows = (rows: Array<Record<string, any>>) => {
+          const updatedRows: Array<Record<string, any>> = [];
+          const updated = rows.map((row) => {
+            if (!conditionPairs.every((entry) => row[entry.column] === entry.value)) return row;
+            const next = { ...row, ...values };
+            updatedRows.push(next);
+            return next;
+          });
+          return { updated, updatedRows };
+        };
+        if (table === users || table === parents || table === teachers || table === students) {
+          const stateRows = table === users
+            ? mockState.users
+            : table === parents
+              ? mockState.parents
+              : table === teachers
+                ? mockState.teachers
+                : mockState.students;
+          const result = updateRows(stateRows);
+          if (table === users) mockState.users = result.updated;
+          else if (table === parents) mockState.parents = result.updated;
+          else if (table === teachers) mockState.teachers = result.updated;
+          else mockState.students = result.updated;
+          return {
+            then(resolve: (value: any) => void) { return Promise.resolve(result.updatedRows).then(resolve); },
+            returning: async () => result.updatedRows,
+          };
+        }
         if (table === schoolTerms) {
-          const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
           const updatedRows: Array<Record<string, any>> = [];
           mockState.schoolTerms = mockState.schoolTerms.map((item) => {
-            const matches = pairs.every((entry) => item[entry.column] === entry.value);
+            const matches = conditionPairs.every((entry) => item[entry.column] === entry.value);
             if (!matches) return item;
             const updated = { ...item, ...values };
             updatedRows.push(updated);
@@ -296,10 +499,9 @@ const mockDb = {
           };
         }
         if (table === schoolSubjects) {
-          const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
           const updatedRows: Array<{ id: number; schoolId: number; subjectId: number; status: string }> = [];
           mockState.schoolSubjects = mockState.schoolSubjects.map((row) => {
-            const matches = pairs.every((entry) => row[entry.column as keyof typeof row] === entry.value);
+            const matches = conditionPairs.every((entry) => row[entry.column as keyof typeof row] === entry.value);
             if (!matches) return row;
             updatedRows.push({ ...row, ...values });
             mockState.schoolSubjectUpdateCalls.push({ schoolId: row.schoolId, subjectId: row.subjectId });
@@ -342,25 +544,78 @@ const mockDb = {
   }),
   delete: (table: any) => ({
     where: async (...conditions: any[]) => {
+      if (mockState.failOnDeleteTable === table) throw new Error('Simulated transactional delete failure');
+      const filterRows = (rows: Array<Record<string, any>>) => conditions.length === 0
+        ? rows
+        : rows.filter((row) => !matchesConditions(row, conditions));
       if (table === schools) {
-        const pairs = conditions.flatMap((condition: any) => extractConditionPairs(condition));
-        mockState.schools = mockState.schools.filter((row) => !pairs.every((entry) => row[entry.column as keyof typeof row] === entry.value));
+        const deletedSchoolIds = mockState.schools
+          .filter((row) => matchesConditions(row, conditions))
+          .map((row) => row.id);
+        mockState.schools = mockState.schools.filter((row) => !matchesConditions(row, conditions));
+        mockState.userSchools = mockState.userSchools.filter((row) => !deletedSchoolIds.includes(row.schoolId));
+      }
+      if (table === userSchools) mockState.userSchools = filterRows(mockState.userSchools);
+      if (table === users) mockState.users = filterRows(mockState.users);
+      if (table === teachers) mockState.teachers = filterRows(mockState.teachers);
+      if (table === parents) mockState.parents = filterRows(mockState.parents);
+      if (table === students) mockState.students = filterRows(mockState.students);
+      if (table === classes && conditions.length > 0) {
+        const deletedClassIds = mockState.classes
+          .filter((row) => matchesConditions(row as Record<string, any>, conditions))
+          .map((row) => row.id);
+        mockState.classes = mockState.classes.filter((row) => !matchesConditions(row as Record<string, any>, conditions));
+        mockState.classTeachers = mockState.classTeachers.filter((row) => !deletedClassIds.includes(row.classId));
+        mockState.teacherClassSubjects = mockState.teacherClassSubjects.filter((row) => !deletedClassIds.includes(row.classId));
       }
       if (table === schoolTerms) {
-        const pairs = conditions.flatMap((condition) => extractConditionPairs(condition));
-        mockState.schoolTerms = mockState.schoolTerms.filter((row) => !pairs.every((entry) => row[entry.column] === entry.value));
+        mockState.schoolTerms = filterRows(mockState.schoolTerms);
       }
       if (table === schoolCycles) mockState.schoolCycles = [];
+      const genericRows = getRowsForTable(table);
+      if (genericRows && ![schools, userSchools, users, teachers, parents, students, classes, schoolTerms, schoolCycles].includes(table)) {
+        const remainingRows = filterRows(genericRows);
+        genericRows.splice(0, genericRows.length, ...remainingRows);
+      }
       return [];
     },
   }),
   execute: async (_sql: any) => [],
-  transaction: async (run: (tx: any) => Promise<any>) => run({
-    ...mockDb,
-    execute: async () => ({
-      rows: mockState.schools.map((school) => ({ id: school.id, is_suspended: Boolean((school as any).isSuspended) })),
-    }),
-  }),
+  transaction: async (run: (tx: any) => Promise<any>, options?: { isolationLevel?: string }) => {
+    const snapshot = {
+      ...structuredClone({ ...mockState, failOnDeleteTable: null, onTransactionLock: null }),
+      failOnDeleteTable: mockState.failOnDeleteTable,
+      onTransactionLock: mockState.onTransactionLock,
+    };
+    mockState.transactionIsolationLevels.push(options?.isolationLevel);
+    try {
+      return await run({
+        ...mockDb,
+        execute: async (query: any) => {
+          if (query?.queryChunks?.some((chunk: any) => chunk?.value?.some?.((value: any) => (
+            typeof value === 'string' && value.includes('LOCK TABLE user_schools')
+          )))) {
+            mockState.transactionLockTableCalls += 1;
+            mockState.onTransactionLock?.();
+          }
+          return {
+            rows: mockState.schools.map((school) => ({ id: school.id, is_suspended: Boolean((school as any).isSuspended) })),
+          };
+        },
+      });
+    } catch (error) {
+      const concurrentMemberships = mockState.userSchools.filter((row) => (
+        !snapshot.userSchools.some((snapshotRow: Record<string, any>) => snapshotRow.id === row.id)
+      ));
+      const isolationLevels = mockState.transactionIsolationLevels;
+      const lockTableCalls = mockState.transactionLockTableCalls;
+      Object.assign(mockState, snapshot);
+      mockState.transactionIsolationLevels = isolationLevels;
+      mockState.transactionLockTableCalls = lockTableCalls;
+      mockState.userSchools.push(...concurrentMemberships);
+      throw error;
+    }
+  },
 };
 
 vi.mock('@aws-sdk/client-s3', () => ({
@@ -457,7 +712,13 @@ describe('POST /api/schools', () => {
     mockState.users = [
       { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'super_admin', schoolId: null },
     ];
+    mockState.userSchools = [];
     mockState.localAuths = [];
+    mockState.teachers = [];
+    mockState.parents = [];
+    mockState.students = [];
+    mockState.classTeachers = [];
+    mockState.teacherClassSubjects = [];
     mockState.authenticated = true;
     mockState.academicYears = [
       { id: 1, name: '2024-2025', isActive: true, schoolId: null },
@@ -479,7 +740,30 @@ describe('POST /api/schools', () => {
     mockState.subjects = [];
     mockState.createdClasses = [];
     mockState.financialObligations = [];
+    mockState.financialPayments = [];
+    mockState.evaluations = [];
+    mockState.grades = [];
+    mockState.evaluationParticipations = [];
+    mockState.studentAcademicYearStatuses = [];
+    mockState.examResults = [];
+    mockState.bulletins = [];
+    mockState.bulletinGenerations = [];
+    mockState.absences = [];
+    mockState.lateArrivals = [];
+    mockState.classHomeroomAssignments = [];
+    mockState.classSuccessions = [];
+    mockState.classExamConfigurations = [];
+    mockState.absenceControls = [];
+    mockState.teacherSubjects = [];
+    mockState.accountingCategories = [];
+    mockState.accountingTariffs = [];
+    mockState.accountingScheduleTemplates = [];
+    mockState.accountingFeeDefinitions = [];
     mockState.auditEvents = [];
+    mockState.failOnDeleteTable = null;
+    mockState.transactionIsolationLevels = [];
+    mockState.transactionLockTableCalls = 0;
+    mockState.onTransactionLock = null;
   });
 
   it('refuses to delete a school that has an accounting obligation history', async () => {
@@ -531,6 +815,243 @@ describe('POST /api/schools', () => {
     expect(mockState.schools).toHaveLength(0);
     expect(JSON.stringify(response.body)).not.toContain('passwordHash');
     expect(JSON.stringify(response.body)).not.toContain('salt');
+  });
+
+  it('blocks school deletion while a Parent profile belongs to that school', async () => {
+    mockState.schools = [{ id: 1, name: 'École unique' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'parent-only', role: 'parent', schoolId: 1 });
+    mockState.userSchools = [{ id: 1, userId: 2, schoolId: 1, role: 'parent', isActive: true }];
+    mockState.localAuths.push({ userId: 2, salt: 'parent-salt', passwordHash: 'parent-hash' });
+    mockState.parents = [{ id: 20, userId: 2, schoolId: 1, phone: 'preserve' }];
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('does not detach a shared Parent profile or remove memberships when deleting its school', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'shared-parent', role: 'parent', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'parent', isActive: true },
+      { id: 2, userId: 2, schoolId: 2, role: 'parent', isActive: false },
+    ];
+    mockState.parents = [{ id: 20, userId: 2, schoolId: 1 }];
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('keeps a shared parent profile and links to students in the other school', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'parent-two-schools', role: 'parent', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'parent', isActive: true },
+      { id: 2, userId: 2, schoolId: 2, role: 'parent', isActive: null },
+    ];
+    mockState.parents = [{ id: 20, userId: 2, schoolId: 1 }];
+    mockState.students = [
+      { id: 30, schoolId: 1, parentId: 20 },
+      { id: 31, schoolId: 2, parentId: 20 },
+    ];
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('blocks school deletion rather than transferring a Teacher profile to another school', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'teacher-two-schools', role: 'teacher', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'teacher', isActive: true },
+      { id: 2, userId: 2, schoolId: 2, role: 'teacher', isActive: null },
+    ];
+    mockState.teachers = [{ id: 20, userId: 2, schoolId: 1 }];
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('blocks deletion when the school contains both Parent and Teacher profiles', async () => {
+    mockState.schools = [{ id: 1, name: 'École multi-fonctions' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'parent-and-teacher', role: 'parent', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'parent', isActive: true },
+      { id: 2, userId: 2, schoolId: 1, role: 'teacher', isActive: true },
+      { id: 3, userId: 2, schoolId: 2, role: 'parent', isActive: true },
+    ];
+    mockState.parents = [{ id: 20, userId: 2, schoolId: 1 }];
+    mockState.teachers = [{ id: 21, userId: 2, schoolId: 1 }];
+
+    await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' }).expect(409);
+
+    expect(mockState.schools).toHaveLength(1);
+    expect(mockState.parents).toEqual([{ id: 20, userId: 2, schoolId: 1 }]);
+    expect(mockState.teachers).toEqual([{ id: 21, userId: 2, schoolId: 1 }]);
+    expect(mockState.userSchools).toHaveLength(3);
+  });
+
+  it('rolls back account and membership changes when school deletion fails mid-transaction', async () => {
+    mockState.schools = [{ id: 1, name: 'École en suppression' }, { id: 2, name: 'École conservée' }];
+    setSuperAdminPassword();
+    mockState.users.push({ id: 2, uid: 'teacher-rollback', role: 'teacher', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'teacher', isActive: true },
+      { id: 2, userId: 2, schoolId: 2, role: 'teacher', isActive: true },
+    ];
+    mockState.failOnDeleteTable = classes;
+    const before = snapshotSchoolDeletionState();
+
+    await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' }).expect(500);
+
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+    expect(mockState.schools).toHaveLength(2);
+    expect(mockState.users.find((user) => user.id === 2)?.schoolId).toBe(1);
+    expect(mockState.userSchools).toHaveLength(2);
+    expect(mockState.teachers).toEqual([]);
+    expect(mockState.parents).toEqual([]);
+  });
+
+  it('refuses to delete a globally shared class associated with another school without changing any data', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    mockState.academicYears = [{ id: 11, name: '2024-2025', isActive: true, schoolId: 1 }];
+    mockState.classes = [{ id: 101, name: 'Classe globale', schoolId: null, academicYearId: 11 }];
+    mockState.schoolClasses = [
+      { id: 1, schoolId: 1, classId: 101, status: 'approved' },
+      { id: 2, schoolId: 2, classId: 101, status: 'approved' },
+    ];
+    setSuperAdminPassword();
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_SHARED_CLASS_DEPENDENCY');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('refuses to delete a subject associated with another school without changing any data', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    mockState.subjects = [{ id: 201, name: 'Mathématiques', schoolId: 1 }];
+    mockState.schoolSubjects = [
+      { id: 1, schoolId: 1, subjectId: 201, status: 'approved' },
+      { id: 2, schoolId: 2, subjectId: 201, status: 'approved' },
+    ];
+    setSuperAdminPassword();
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_SHARED_SUBJECT_DEPENDENCY');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('refuses to delete an evaluation containing another school’s student history without changing any data', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    mockState.academicYears = [{ id: 11, name: '2024-2025', isActive: true, schoolId: 1 }];
+    mockState.classes = [{ id: 101, name: 'Classe cible', schoolId: 1, academicYearId: 11 }];
+    mockState.students = [{ id: 301, schoolId: 2, classId: null }];
+    mockState.evaluations = [{ id: 401, schoolId: 1, classId: 101, subjectId: null, termId: null }];
+    mockState.grades = [{ id: 501, evaluationId: 401, studentId: 301 }];
+    setSuperAdminPassword();
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_SHARED_EVALUATION_DEPENDENCY');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('refuses to delete a financial tariff referenced by another school without changing any data', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    mockState.accountingTariffs = [{ id: 701, schoolId: 1, academicYearId: 1, classId: null }];
+    mockState.financialObligations = [{
+      id: 801,
+      schoolId: 2,
+      studentId: 901,
+      academicYearId: 902,
+      classId: 903,
+      categoryId: 904,
+      tariffId: 701,
+      feeDefinitionId: null,
+    }];
+    setSuperAdminPassword();
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_SHARED_FINANCIAL_DEPENDENCY');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it.each([true, false, null])(
+    'blocks school deletion instead of transferring a Teacher profile with isActive=%s',
+    async (isActive) => {
+      mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+      mockState.users.push({ id: 2, uid: `teacher-active-${String(isActive)}`, role: 'teacher', schoolId: 1 });
+      mockState.userSchools = [
+        { id: 1, userId: 2, schoolId: 1, role: 'teacher', isActive: true },
+        { id: 2, userId: 2, schoolId: 2, role: 'teacher', isActive },
+      ];
+      mockState.teachers = [{ id: 20, userId: 2, schoolId: 1 }];
+      setSuperAdminPassword();
+
+      const before = snapshotSchoolDeletionState();
+      const response = await request(app).delete('/api/schools/1')
+        .send({ password: 'unit-test-password' }).expect(409);
+
+      expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+      expect(snapshotSchoolDeletionState()).toEqual(before);
+    },
+  );
+
+  it.each([
+    { remainingSchools: [] },
+    { remainingSchools: [2, 3] },
+  ])('blocks school deletion when a Teacher profile remains, regardless of other memberships', async ({ remainingSchools }) => {
+    mockState.schools = [
+      { id: 1, name: 'École supprimée' },
+      ...remainingSchools.map((schoolId) => ({ id: schoolId, name: `École ${schoolId}` })),
+    ];
+    mockState.users.push({ id: 2, uid: 'teacher-invalid-destination', role: 'teacher', schoolId: 1 });
+    mockState.userSchools = [
+      { id: 1, userId: 2, schoolId: 1, role: 'teacher', isActive: true },
+      ...remainingSchools.map((schoolId, index) => ({
+        id: index + 2, userId: 2, schoolId, role: 'teacher', isActive: index === 0 ? false : null,
+      })),
+    ];
+    mockState.teachers = [{ id: 20, userId: 2, schoolId: 1 }];
+    setSuperAdminPassword();
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('SCHOOL_HAS_LOCAL_PROFILES');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
   });
 
   it('suspends and reopens a school idempotently without changing retained data', async () => {

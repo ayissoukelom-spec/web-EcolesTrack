@@ -26,6 +26,7 @@ export type BulletinCalculationType = Exclude<BulletinEvaluationType, 'evaluatio
 export interface BulletinEvaluationLike {
   id: number;
   classId: number;
+  schoolId?: number | null;
   teacherId?: number | null;
   termId?: number | null;
   subjectId?: number | null;

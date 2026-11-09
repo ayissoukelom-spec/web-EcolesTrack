@@ -46,7 +46,7 @@ export const registerClassSubjectPivotRoute = (
   const {
     resolveActor,
     verifyMiddleware = verifyToken as any,
-    accessMiddleware = requireRole(['admin']) as any,
+    accessMiddleware = requireRole(['school_admin', 'super_admin']) as any,
   } = options;
 
   app.get('/api/results/class-subject-pivot', verifyMiddleware, accessMiddleware, async (req: any, res) => {

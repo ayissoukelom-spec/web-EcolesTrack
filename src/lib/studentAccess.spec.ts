@@ -67,6 +67,7 @@ vi.mock('./teacherAuthorization.ts', () => ({
       teachingClassIds: new Set(teachingClassIds),
       homeroomClassIds: new Set<number>(),
       subjectIds: new Set<number>(),
+      teachingAssignmentKeys: new Set<string>(),
     };
   }),
 }));

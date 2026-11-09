@@ -25,7 +25,7 @@ type TestUser = {
 };
 
 const USERS: Record<string, TestUser> = {
-  adminToken: { id: 1, uid: 'admin-uid', appRole: 'admin', role: 'school_admin', schoolId: 1 },
+  adminToken: { id: 1, uid: 'admin-uid', appRole: 'school_admin', role: 'school_admin', schoolId: 1 },
   teacherToken: { id: 2, uid: 'teacher-uid', appRole: 'teacher', role: 'teacher', schoolId: 1 },
   parentOwnToken: { id: 10, uid: 'parent-own-uid', appRole: 'parent', role: 'parent', schoolId: 1 },
   parentOtherToken: { id: 11, uid: 'parent-other-uid', appRole: 'parent', role: 'parent', schoolId: 1 },
@@ -285,8 +285,8 @@ const createIntegrationApp = () => {
   let pdfDataCalls = 0;
 
   const verifyMiddleware = createAuthMiddleware();
-  const listAccessMiddleware = requireRole(['admin', 'teacher']);
-  const detailAccessMiddleware = requireOwnership(ownershipResolver, { bypassRoles: ['admin', 'teacher'] });
+  const listAccessMiddleware = requireRole(['school_admin', 'super_admin', 'teacher']);
+  const detailAccessMiddleware = requireOwnership(ownershipResolver, { bypassRoles: ['school_admin', 'super_admin', 'teacher'] });
 
   const readService: BulletinReadService = {
     list: async () => {
@@ -323,7 +323,7 @@ const createIntegrationApp = () => {
     pdfGenerator: async (data) => new TextEncoder().encode(`%PDF-1.4\nSNAPSHOT_ONLY:${data.id}:${data.mention ?? ''}`),
   });
 
-  app.post('/api/bulletins/generate', verifyMiddleware, requireRole(['admin']), async (_req, res) => {
+  app.post('/api/bulletins/generate', verifyMiddleware, requireRole(['school_admin', 'super_admin']), async (_req, res) => {
     generateCalls += 1;
     return res.status(201).json({ id: 9001, source: 'snapshot' });
   });
@@ -443,7 +443,7 @@ describe('Phase 6.5 bulletin security integration', () => {
     registerBulletinPdfRoute(app, {
       resolveActor: localResolveActor,
       verifyMiddleware,
-      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['admin', 'teacher'] }),
+      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['school_admin', 'super_admin', 'teacher'] }),
       dataProvider,
       pdfGenerator: async () => {
         const pdfDoc = await PDFDocument.create();
@@ -483,7 +483,7 @@ describe('Phase 6.5 bulletin security integration', () => {
     registerBulletinPdfRoute(app, {
       resolveActor: localResolveActor,
       verifyMiddleware,
-      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['admin', 'teacher'] }),
+      detailAccessMiddleware: requireOwnership(ownershipResolver, { bypassRoles: ['school_admin', 'super_admin', 'teacher'] }),
       dataProvider,
       pdfGenerator: async (data) => {
         const pdfDoc = await PDFDocument.create();

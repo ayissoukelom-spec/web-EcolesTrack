@@ -1,33 +1,33 @@
 import { Request, Response } from 'express';
-import { getJwtSecret, signJwt, type JwtExpiresIn } from './jwt.ts';
 import { db } from '../db/index.ts';
-import { users, localAuths, userLoginEvents, auditEvents } from '../db/schema.ts';
+import { users, localAuths, userLoginEvents } from '../db/schema.ts';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { parents } from '../db/schema.ts';
 import { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
 import { normalizeEmail, normalizedEmailSql } from './emailUniqueness.ts';
+import { isAccessSessionGeneration } from '../server/accessContextValidation.ts';
+import { createAccessSessionService } from '../server/accessSessionRuntime.ts';
 
 export { canonicalizeUserPhone, normalizeParentLoginPhone } from './phoneCanonicalization.ts';
 
-const DEFAULT_JWT_ISSUER = 'ecoletrack';
-const DEFAULT_JWT_AUDIENCE = 'ecoletrack-api';
-const DEFAULT_JWT_EXPIRES_IN = '1h';
-
-function normalizeJwtExpiresIn(rawValue: string | undefined): JwtExpiresIn {
-  const value = rawValue?.trim();
-  if (!value) {
-    return DEFAULT_JWT_EXPIRES_IN;
-  }
-
-  if (/^\d+$/.test(value)) {
-    return Number(value);
-  }
-
-  if (/^(?:\d+(?:\.\d+)?)(ms|s|m|h|d|w|y)$/.test(value)) {
-    return value as JwtExpiresIn;
-  }
-
-  return DEFAULT_JWT_EXPIRES_IN;
+function toLocalLoginUserDto(user: typeof users.$inferSelect) {
+  return {
+    id: user.id,
+    uid: user.uid,
+    email: user.email,
+    name: user.name,
+    lastName: user.lastName,
+    firstNames: user.firstNames,
+    role: user.role,
+    schoolId: user.schoolId,
+    academicYearId: user.academicYearId,
+    phone: user.phone,
+    gender: user.gender,
+    isDeleted: user.isDeleted,
+    lastLoginAt: user.lastLoginAt,
+    lastMobileVisitAt: user.lastMobileVisitAt,
+    createdAt: user.createdAt,
+  };
 }
 
 export async function handleLocalLogin(req: Request, res: Response) {
@@ -54,7 +54,6 @@ export async function handleLocalLogin(req: Request, res: Response) {
           .from(users)
           .innerJoin(parents, eq(parents.userId, users.id))
           .where(and(
-            eq(users.role, 'parent'),
             or(
               sql`regexp_replace(coalesce(${parents.phone}, ''), '[^0-9]', '', 'g') = ${phoneValues[0]}`,
               sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') = ${phoneValues[0]}`,
@@ -98,31 +97,22 @@ export async function handleLocalLogin(req: Request, res: Response) {
       return res.status(401).json({ error: 'Email ou mot de passe invalide' });
     }
 
-    const secret = getJwtSecret({ isProduction: process.env.NODE_ENV === 'production' });
-    if (!secret) {
-      return res.status(500).json({ error: 'Server configuration error' });
-    }
-
     const authentication = await db.transaction(async (tx) => {
       const [lockedUser] = await tx.select().from(users).for('update').where(eq(users.id, userRecord.id));
       if (!lockedUser) return { status: 'missing' as const };
       if (lockedUser.isDeleted) return { status: 'disabled' as const };
       if (lockedUser.role === 'student') return { status: 'invalid' as const };
 
-      const revocationEvents = await tx.select({ id: auditEvents.id })
-        .from(auditEvents)
-        .where(and(
-          eq(auditEvents.resourceType, 'user'),
-          eq(auditEvents.resourceId, lockedUser.id),
-          or(
-            eq(auditEvents.action, 'delete'),
-            eq(auditEvents.action, 'session_revoked'),
-          ),
-        ));
-      const authRevocationEventId = (revocationEvents ?? []).reduce(
-        (latest, event) => Math.max(latest, Number(event.id) || 0),
-        0,
-      );
+      const currentGeneration = typeof lockedUser.accessSessionGeneration === 'bigint'
+        ? lockedUser.accessSessionGeneration.toString()
+        : typeof lockedUser.accessSessionGeneration === 'number'
+          && Number.isSafeInteger(lockedUser.accessSessionGeneration)
+          && lockedUser.accessSessionGeneration >= 0
+          ? String(lockedUser.accessSessionGeneration)
+          : null;
+      if (!isAccessSessionGeneration(currentGeneration)) {
+        throw new Error('Authenticated user has an invalid access-session generation.');
+      }
 
       if (lockedUser.role === 'parent' || lockedUser.role === 'teacher') {
         const [updatedUser] = await tx.update(users)
@@ -134,24 +124,11 @@ export async function handleLocalLogin(req: Request, res: Response) {
         }
       }
 
-      const token = signJwt({
-        uid: lockedUser.uid,
-        email: lockedUser.email,
-        name: lockedUser.name,
-        role: lockedUser.role,
-        schoolId: lockedUser.schoolId ?? null,
-        type: 'access',
-        authIssuedAtMs: Date.now(),
-        authRevocationEventId,
-      }, secret, {
-        expiresIn: normalizeJwtExpiresIn(process.env.JWT_EXPIRES_IN),
-        issuer: process.env.JWT_ISSUER ?? DEFAULT_JWT_ISSUER,
-        audience: process.env.JWT_AUDIENCE ?? DEFAULT_JWT_AUDIENCE,
-        subject: String(lockedUser.id),
-        jwtid: crypto.randomUUID(),
-      });
-
-      return { status: 'authenticated' as const, user: lockedUser, token };
+      return {
+        status: 'authenticated' as const,
+        user: lockedUser,
+        expectedGeneration: currentGeneration,
+      };
     });
 
     if (authentication.status === 'disabled') {
@@ -162,6 +139,41 @@ export async function handleLocalLogin(req: Request, res: Response) {
     }
     if (authentication.status !== 'authenticated') {
       return res.status(401).json({ error: 'Email ou mot de passe invalide' });
+    }
+
+    let sessionResult;
+    try {
+      sessionResult = await createAccessSessionService().createForAuthenticatedUser({
+        userId: authentication.user.id,
+        expectedGeneration: authentication.expectedGeneration,
+      });
+    } catch (sessionError) {
+      console.error('Failed to create Web access session:', sessionError);
+      return res.status(503).json({
+        error: 'Unable to create an authenticated session.',
+        code: 'ACCESS_SESSION_CREATION_FAILED',
+      });
+    }
+    if (!sessionResult.ok) {
+      console.error('Web access session creation failed:', sessionResult.error);
+      if (sessionResult.error.reason === 'session_creation_failed'
+        && sessionResult.error.cause === 'generation_changed') {
+        return res.status(401).json({
+          error: 'The account security state changed. Please sign in again.',
+          code: 'ACCESS_SESSION_GENERATION_CHANGED',
+        });
+      }
+      if (sessionResult.error.reason === 'session_creation_failed'
+        && sessionResult.error.cause === 'account_not_admissible') {
+        return res.status(403).json({
+          error: 'Ce compte est désactivé. Contactez votre administrateur.',
+          code: 'ACCOUNT_DISABLED',
+        });
+      }
+      return res.status(503).json({
+        error: 'Unable to create an authenticated session.',
+        code: 'ACCESS_SESSION_CREATION_FAILED',
+      });
     }
 
     try {
@@ -176,9 +188,9 @@ export async function handleLocalLogin(req: Request, res: Response) {
     }
 
     const response = {
-      ...authentication.user,
+      ...toLocalLoginUserDto(authentication.user),
       mustReset: !!localMustReset,
-      token: authentication.token,
+      token: sessionResult.accessToken,
       tokenType: 'access',
     } as any;
 

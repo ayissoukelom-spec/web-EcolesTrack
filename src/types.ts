@@ -91,6 +91,7 @@ export interface User {
   lastName?: string | null;
   firstNames?: string | null;
   role: UserRole;
+  functions?: Array<{ role: Exclude<UserRole, 'super_admin'>; schoolId: number }>;
   schoolId?: number;
   schoolIds?: number[];
   academicYearId?: number;
@@ -119,8 +120,12 @@ export interface Teacher {
   schoolId: number;
   schoolIds?: number[];
   classIds?: number[];
+  teachingClassIds?: number[];
+  administrativeClassIds?: number[];
+  homeroomClassIds?: number[];
+  homeroomAssignments?: Array<{ classId: number; schoolId: number }>;
   subjectIds?: number[];
-  teachingAssignments?: Array<{ id: number; classId: number; subjectId: number; isActive: boolean }>;
+  teachingAssignments?: Array<{ id: number; classId: number; subjectId: number; schoolId?: number; isActive: boolean }>;
   gender?: string;
 }
 

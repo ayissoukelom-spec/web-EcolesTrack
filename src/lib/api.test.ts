@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiFetchBlob, getSimulationHeaders, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
+import { apiFetch, apiFetchBlob, findTeacherProfileFromSimulatedUser, getSimulationHeaders, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -53,6 +53,36 @@ describe('getSimulationHeaders', () => {
     const headers = getSimulationHeaders();
 
     expect(headers['x-simulated-school-id']).toBe('1');
+  });
+});
+
+describe('findTeacherProfileFromSimulatedUser', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: new MemoryStorage(),
+    });
+  });
+
+  it('resolves the teacher profile only in the active school', () => {
+    const schoolAProfile = { id: 1, userId: 7, uid: 'teacher-user', schoolId: 10 };
+    const schoolBProfile = { id: 2, userId: 7, uid: 'teacher-user', schoolId: 20 };
+    setActiveSchoolId(20);
+
+    expect(findTeacherProfileFromSimulatedUser('teacher', { uid: 'teacher-user' }, [schoolAProfile, schoolBProfile]))
+      .toBe(schoolBProfile);
+  });
+
+  it('does not fall back to another school or to an unscoped profile', () => {
+    const profiles = [
+      { id: 1, userId: 7, uid: 'teacher-user', schoolId: 10 },
+      { id: 2, userId: 7, uid: 'teacher-user', schoolId: null },
+    ];
+    setActiveSchoolId(20);
+
+    expect(findTeacherProfileFromSimulatedUser('teacher', { uid: 'teacher-user' }, profiles)).toBeUndefined();
+    setActiveSchoolId(null);
+    expect(findTeacherProfileFromSimulatedUser('teacher', { uid: 'teacher-user' }, profiles)).toBeUndefined();
   });
 });
 

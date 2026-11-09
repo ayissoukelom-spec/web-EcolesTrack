@@ -1,20 +1,137 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { schools, teacherClassSubjects, teachers, userSchools } from '../../db/schema.ts';
+
+const mockState = vi.hoisted(() => ({
+  membership: { userId: 10, schoolId: 8, role: 'teacher', isActive: true } as {
+    userId: number;
+    schoolId: number;
+    role: string;
+    isActive: boolean | null;
+  } | undefined,
+  school: { id: 8, name: 'École A', isSuspended: false } as {
+    id: number;
+    name: string;
+    isSuspended: boolean;
+  } | undefined,
+  teacher: { id: 20, userId: 10, schoolId: 8 } as {
+    id: number;
+    userId: number;
+    schoolId: number;
+  } | undefined,
+  assignment: {
+    id: 30,
+    teacherId: 20,
+    schoolId: 8,
+    classId: 40,
+    subjectId: 50,
+    isActive: true,
+  } as {
+    id: number;
+    teacherId: number;
+    schoolId: number;
+    classId: number;
+    subjectId: number;
+    isActive: boolean;
+  } | undefined,
+}));
+
+const mockDb = vi.hoisted(() => ({
+  select: vi.fn(() => {
+    const builder: any = {
+      table: null as any,
+      rows: [] as any[],
+      from(table: any) {
+        builder.table = table;
+        builder.rows = table === userSchools
+          ? mockState.membership ? [mockState.membership] : []
+          : table === schools
+            ? mockState.school ? [mockState.school] : []
+            : table === teachers
+              ? mockState.teacher ? [mockState.teacher] : []
+              : table === teacherClassSubjects
+                ? mockState.assignment ? [mockState.assignment] : []
+                : [];
+        return builder;
+      },
+      where(condition: any) {
+        const params = new PgDialect().sqlToQuery(condition).params;
+        if (builder.table === userSchools) {
+          builder.rows = builder.rows.filter((row: any) => row.userId === params[0]
+            && row.schoolId === params[1]
+            && row.role === params[2]);
+        } else if (builder.table === schools) {
+          builder.rows = builder.rows.filter((row: any) => row.id === params[0]);
+        } else if (builder.table === teachers) {
+          builder.rows = builder.rows.filter((row: any) => row.userId === params[0]
+            && row.schoolId === params[1]);
+        } else if (builder.table === teacherClassSubjects) {
+          builder.rows = builder.rows.filter((row: any) => row.teacherId === params[0]
+            && row.schoolId === params[1]
+            && row.classId === params[2]
+            && row.subjectId === params[3]
+            && row.isActive === true);
+        }
+        return builder;
+      },
+      limit() { return builder; },
+      then(resolve: (rows: any[]) => unknown) {
+        return Promise.resolve(builder.rows).then(resolve);
+      },
+    };
+    return builder;
+  }),
+}));
+
+vi.mock('../../db/index.ts', () => ({ db: mockDb }));
+
 import {
   authorizeTeacherControlSchool,
+  findActiveTeacherControlAssignment,
   isExactActiveTeacherControlAssignment,
 } from './authorization.ts';
 
 const activeSchool = { id: 8, name: 'École A', isSuspended: false };
 
 describe('teacher control authorization', () => {
-  it('requires an exact supported business role and an active membership in the active school', () => {
+  it('resolves a teacher profile only in the exact active school', async () => {
+    mockState.membership = { userId: 10, schoolId: 8, role: 'teacher', isActive: true };
+    mockState.school = activeSchool;
+    mockState.teacher = { id: 20, userId: 10, schoolId: 8 };
+    mockState.assignment = { id: 30, teacherId: 20, schoolId: 8, classId: 40, subjectId: 50, isActive: true };
+
+    await expect(findActiveTeacherControlAssignment({
+      actor: { id: 10, role: 'teacher', schoolId: 8 },
+      schoolId: 8,
+      classId: 40,
+      subjectId: 50,
+    })).resolves.toMatchObject({ teacherId: 20, schoolId: 8 });
+
+    mockState.teacher = { id: 21, userId: 10, schoolId: 9 };
+    await expect(findActiveTeacherControlAssignment({
+      actor: { id: 10, role: 'teacher', schoolId: 8 },
+      schoolId: 8,
+      classId: 40,
+      subjectId: 50,
+    })).resolves.toBeNull();
+  });
+
+  it('requires an exact supported business role and allows active or legacy-null memberships', () => {
+    for (const isActive of [true, null]) {
+      expect(authorizeTeacherControlSchool(
+        { id: 10, role: 'teacher', schoolId: 8 },
+        8,
+        { role: 'teacher', isActive },
+        activeSchool,
+      )).toMatchObject({ allowed: true, role: 'teacher', schoolId: 8 });
+    }
+
     expect(authorizeTeacherControlSchool(
       { id: 10, role: 'teacher', schoolId: 8 },
       8,
-      { role: 'teacher', isActive: true },
+      { role: 'teacher', isActive: false },
       activeSchool,
-    )).toMatchObject({ allowed: true, role: 'teacher', schoolId: 8 });
-
+    )).toMatchObject({ allowed: false, reason: 'inactive_membership' });
     expect(authorizeTeacherControlSchool(
       { id: 10, role: 'teacher', schoolId: 9 },
       8,
@@ -24,7 +141,7 @@ describe('teacher control authorization', () => {
     expect(authorizeTeacherControlSchool(
       { id: 10, role: 'teacher', schoolId: 8 },
       8,
-      { role: 'teacher', isActive: false },
+      null,
       activeSchool,
     )).toMatchObject({ allowed: false, reason: 'inactive_membership' });
   });

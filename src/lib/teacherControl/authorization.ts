@@ -12,7 +12,7 @@ export interface TeacherControlActor {
 
 export interface TeacherControlMembership {
   role: string;
-  isActive: boolean;
+  isActive?: boolean | null;
 }
 
 export interface TeacherControlSchool {
@@ -42,7 +42,7 @@ export function authorizeTeacherControlSchool(
 
   if (actor.role !== 'super_admin') {
     if (actor.schoolId !== schoolId) return { allowed: false, reason: 'wrong_school' };
-    if (!membership || !membership.isActive || membership.role !== actor.role) {
+    if (!membership || membership.role !== actor.role || membership.isActive === false) {
       return { allowed: false, reason: 'inactive_membership' };
     }
     if (school.isSuspended) return { allowed: false, reason: 'school_suspended' };
@@ -67,15 +67,15 @@ export async function resolveTeacherControlSchoolAccess(
   const schoolId = actor.role === 'super_admin' ? selectedSchoolId ?? null : actor.schoolId;
   let membership: TeacherControlMembership | null = null;
   if (actor.id != null && schoolId != null && actor.role !== 'super_admin') {
-    const [activeMembership] = await db.select({
+    const [matchedMembership] = await db.select({
       role: userSchools.role,
       isActive: userSchools.isActive,
     }).from(userSchools).where(and(
       eq(userSchools.userId, actor.id),
       eq(userSchools.schoolId, schoolId),
-      eq(userSchools.isActive, true),
+      eq(userSchools.role, actor.role),
     )).limit(1);
-    membership = activeMembership ?? null;
+    membership = matchedMembership ?? null;
   }
 
   const [schoolRow] = schoolId == null
@@ -129,7 +129,10 @@ export async function findActiveTeacherControlAssignment(input: {
 
   const [teacher] = await db.select({ id: teachers.id })
     .from(teachers)
-    .where(eq(teachers.userId, input.actor.id))
+    .where(and(
+      eq(teachers.userId, input.actor.id),
+      eq(teachers.schoolId, input.schoolId),
+    ))
     .limit(1);
   if (!teacher) return null;
 

@@ -33,12 +33,15 @@ export function canTeacherAccessAbsence(
   assignments: readonly TeacherTeachingAssignment[],
 ): boolean {
   const assignmentId = absence.teachingAssignmentId;
-  return assignmentId != null && assignments.some((assignment) =>
+  return assignmentId != null
+    && absence.classId != null
+    && absence.subjectId != null
+    && assignments.some((assignment) =>
     assignment.id === assignmentId
       && assignment.teacherId === teacherId
       && assignment.isActive
-      && (absence.classId == null || absence.classId === assignment.classId)
-      && (absence.subjectId == null || absence.subjectId === assignment.subjectId),
+      && absence.classId === assignment.classId
+      && absence.subjectId === assignment.subjectId,
   );
 }
 

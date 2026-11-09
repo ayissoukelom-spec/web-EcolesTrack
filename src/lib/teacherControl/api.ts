@@ -3,7 +3,6 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import { and, asc, desc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, notExists, or, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import {
-  classTeachers,
   classes,
   schoolClasses,
   schoolSubjects,
@@ -17,7 +16,6 @@ import {
   teacherControlRegularizationDecisions,
   teacherControlRegularizationRequests,
   teacherControlSessions,
-  teacherSubjects,
   teachers,
   users,
 } from '../../db/schema.ts';
@@ -50,10 +48,9 @@ function selectTeacherPedagogicalPairs(
   selectedPair?: { classId: number; subjectId: number },
 ) {
   const conditions = [
-    eq(classTeachers.teacherId, teacherId),
-    eq(classTeachers.schoolId, schoolId),
-    eq(teacherSubjects.teacherId, teacherId),
-    eq(teacherSubjects.schoolId, schoolId),
+    eq(teacherClassSubjects.teacherId, teacherId),
+    eq(teacherClassSubjects.schoolId, schoolId),
+    eq(teacherClassSubjects.isActive, true),
     or(
       eq(classes.schoolId, schoolId),
       isNotNull(schoolClasses.id),
@@ -65,31 +62,26 @@ function selectTeacherPedagogicalPairs(
   ];
   if (selectedPair) {
     conditions.push(
-      eq(classTeachers.classId, selectedPair.classId),
-      eq(teacherSubjects.subjectId, selectedPair.subjectId),
+      eq(teacherClassSubjects.classId, selectedPair.classId),
+      eq(teacherClassSubjects.subjectId, selectedPair.subjectId),
     );
   }
   return executor.select({
-    classTeacherAssociationId: classTeachers.id,
-    teacherSubjectAssociationId: teacherSubjects.id,
+    teachingAssignmentId: teacherClassSubjects.id,
     classId: classes.id,
     className: classes.name,
     subjectId: subjects.id,
     subjectName: subjects.name,
-  }).from(classTeachers)
-    .innerJoin(classes, eq(classes.id, classTeachers.classId))
-    .innerJoin(teacherSubjects, and(
-      eq(teacherSubjects.teacherId, teacherId),
-      eq(teacherSubjects.schoolId, schoolId),
-    ))
-    .innerJoin(subjects, eq(subjects.id, teacherSubjects.subjectId))
+  }).from(teacherClassSubjects)
+    .innerJoin(classes, eq(classes.id, teacherClassSubjects.classId))
+    .innerJoin(subjects, eq(subjects.id, teacherClassSubjects.subjectId))
     .leftJoin(schoolClasses, and(
-      eq(schoolClasses.classId, classes.id),
+      eq(schoolClasses.classId, teacherClassSubjects.classId),
       eq(schoolClasses.schoolId, schoolId),
       eq(schoolClasses.status, 'approved'),
     ))
     .leftJoin(schoolSubjects, and(
-      eq(schoolSubjects.subjectId, subjects.id),
+      eq(schoolSubjects.subjectId, teacherClassSubjects.subjectId),
       eq(schoolSubjects.schoolId, schoolId),
       eq(schoolSubjects.status, 'approved'),
     ))
@@ -325,22 +317,7 @@ async function getActiveTeacherPair(
   ).limit(1);
   if (!pair) throw new TeacherControlApiError(403, 'The selected class and subject are not assigned to this teacher');
 
-  const [canonical] = await executor.select({
-    id: teacherClassSubjects.id,
-    isActive: teacherClassSubjects.isActive,
-  }).from(teacherClassSubjects).where(and(
-    eq(teacherClassSubjects.teacherId, teacherId),
-    eq(teacherClassSubjects.schoolId, schoolId),
-    eq(teacherClassSubjects.classId, classId),
-    eq(teacherClassSubjects.subjectId, subjectId),
-  )).limit(1);
-  if (canonical && !canonical.isActive) {
-    throw new TeacherControlApiError(403, 'The selected class and subject assignment is inactive');
-  }
-  return {
-    ...pair,
-    teachingAssignmentId: canonical?.id ?? null,
-  };
+  return pair;
 }
 
 async function assertNoTeacherControlOverlap(
@@ -867,29 +844,18 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     if (actor.role !== 'teacher') throw new TeacherControlApiError(403, 'Forbidden');
     const access = await requireSchoolAccess(actor, null, ['teacher']);
     const teacherId = await getTeacherId(actor, access.schoolId);
-    const [pedagogicalPairs, canonicalAssignments] = await Promise.all([
-      selectTeacherPedagogicalPairs(db, teacherId, access.schoolId),
-      db.select({
-        id: teacherClassSubjects.id,
-        classId: teacherClassSubjects.classId,
-        subjectId: teacherClassSubjects.subjectId,
-        isActive: teacherClassSubjects.isActive,
-      }).from(teacherClassSubjects).where(and(
-        eq(teacherClassSubjects.teacherId, teacherId),
-        eq(teacherClassSubjects.schoolId, access.schoolId),
-      )),
-    ]);
-    const canonicalByPair = new Map(canonicalAssignments.map((assignment) => [
-      `${assignment.classId}:${assignment.subjectId}`,
-      assignment,
-    ]));
+    const pedagogicalPairs = await selectTeacherPedagogicalPairs(db, teacherId, access.schoolId);
     const seenPairs = new Set<string>();
-    return pedagogicalPairs.flatMap((pair) => {
+    return pedagogicalPairs.flatMap((pair: {
+      teachingAssignmentId: number;
+      classId: number;
+      className: string;
+      subjectId: number;
+      subjectName: string;
+    }) => {
       const pairKey = `${pair.classId}:${pair.subjectId}`;
       if (seenPairs.has(pairKey)) return [];
       seenPairs.add(pairKey);
-      const canonical = canonicalByPair.get(pairKey);
-      if (canonical && !canonical.isActive) return [];
       return [{
         classId: pair.classId,
         className: pair.className,
@@ -983,19 +949,6 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         throw new TeacherControlApiError(403, 'Teacher is not assigned to this class and subject combination');
       }
 
-      const [assignment] = await tx.select({
-        id: teacherClassSubjects.id,
-        isActive: teacherClassSubjects.isActive,
-      }).from(teacherClassSubjects).where(and(
-        eq(teacherClassSubjects.teacherId, teacherId),
-        eq(teacherClassSubjects.schoolId, access.schoolId),
-        eq(teacherClassSubjects.classId, classId),
-        eq(teacherClassSubjects.subjectId, subjectId),
-      )).limit(1);
-      if (assignment && !assignment.isActive) {
-        throw new TeacherControlApiError(403, 'This class and subject combination is inactive');
-      }
-
       const [school] = await tx.select({ id: schools.id, name: schools.name, isSuspended: schools.isSuspended })
         .from(schools).where(eq(schools.id, access.schoolId)).limit(1);
       if (!school || school.isSuspended) throw new TeacherControlApiError(423, 'School is suspended or unavailable');
@@ -1018,9 +971,9 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         teacherId,
         teacherUserId: actor.id as number,
         teacherNameSnapshot: actorAuditName(actor),
-        teachingAssignmentId: assignment?.isActive ? assignment.id : null,
-        classTeacherAssociationId: assignment ? null : pedagogicalPair.classTeacherAssociationId,
-        teacherSubjectAssociationId: assignment ? null : pedagogicalPair.teacherSubjectAssociationId,
+        teachingAssignmentId: pedagogicalPair.teachingAssignmentId,
+        classTeacherAssociationId: null,
+        teacherSubjectAssociationId: null,
         classId,
         classNameSnapshot: pedagogicalPair.className,
         subjectId,
@@ -1601,8 +1554,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           teacherUserId: teacherForRegularization.userId,
           teacherNameSnapshot: requestRow.teacherNameSnapshot,
           teachingAssignmentId: pair.teachingAssignmentId,
-          classTeacherAssociationId: pair.teachingAssignmentId == null ? pair.classTeacherAssociationId : null,
-          teacherSubjectAssociationId: pair.teachingAssignmentId == null ? pair.teacherSubjectAssociationId : null,
+          classTeacherAssociationId: null,
+          teacherSubjectAssociationId: null,
           classId: pair.classId,
           classNameSnapshot: pair.className,
           subjectId: pair.subjectId,

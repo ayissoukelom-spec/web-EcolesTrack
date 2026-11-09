@@ -1,7 +1,7 @@
 import type express from 'express';
-import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { students, users } from '../db/schema.ts';
+import { students, userSchools, users } from '../db/schema.ts';
 import { requireRole, verifyToken } from '../middleware/auth.ts';
 import { canonicalizeUserPhone } from './phoneCanonicalization.ts';
 import { getParentChildStudentIds } from './parentStudentAccess.ts';
@@ -9,6 +9,7 @@ import { getParentChildStudentIds } from './parentStudentAccess.ts';
 interface ParentSchoolAdminWhatsAppActor {
   id?: number | null;
   role: string;
+  schoolId?: number | null;
 }
 
 interface RegisterParentSchoolAdminWhatsAppRouteOptions {
@@ -37,14 +38,14 @@ export const registerParentSchoolAdminWhatsAppRoute = (
   app.get('/api/parent/whatsapp-contact', verifyMiddleware, accessMiddleware, async (req: any, res) => {
     try {
       const actor = await resolveActor(req);
-      if (!actor || actor.role !== 'parent' || actor.id == null) {
+      if (!actor || actor.role !== 'parent' || actor.id == null || actor.schoolId == null) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
       const childId = parsePositiveInteger(req.query?.studentId);
       if (childId == null) return res.status(400).json({ error: 'Valid studentId is required' });
 
-      const childIds = await getParentChildStudentIds(actor.id);
+      const childIds = await getParentChildStudentIds(actor.id, actor.schoolId);
       if (!childIds.includes(childId)) return res.status(404).json({ error: 'Student not found' });
 
       const [child] = await db.select({ schoolId: students.schoolId })
@@ -53,10 +54,12 @@ export const registerParentSchoolAdminWhatsAppRoute = (
       if (!child || child.schoolId == null) return res.json({ whatsappUrl: null });
 
       const administrators = await db.select({ phone: users.phone })
-        .from(users)
+        .from(userSchools)
+        .innerJoin(users, eq(users.id, userSchools.userId))
         .where(and(
-          eq(users.role, 'school_admin'),
-          eq(users.schoolId, child.schoolId),
+          eq(userSchools.role, 'school_admin'),
+          eq(userSchools.schoolId, child.schoolId),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
           eq(users.isDeleted, false),
           isNotNull(users.phone),
         ))

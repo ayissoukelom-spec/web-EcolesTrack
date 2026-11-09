@@ -7,8 +7,19 @@ import { AuthProvider } from './contexts/AuthContext.tsx';
 const mockApiFetch = vi.hoisted(() => vi.fn());
 const mockCountOverdueEvaluations = vi.hoisted(() => vi.fn());
 const mockGetSimulatedRole = vi.hoisted(() => vi.fn(() => 'school_admin'));
-const mockGetSimulatedUser = vi.hoisted(() => vi.fn(() => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 })));
+const mockGetSimulatedUser = vi.hoisted(() => vi.fn((): {
+  uid: string;
+  email: string;
+  name: string;
+  schoolId: number | null;
+  role: string;
+  id: number;
+  phone?: string;
+} => ({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 })));
 const mockGetActiveSchoolId = vi.hoisted(() => vi.fn(() => 1));
+const mockSetSimulatedRole = vi.hoisted(() => vi.fn());
+const mockSetActiveSchoolId = vi.hoisted(() => vi.fn());
+const mockSetSimulatedUser = vi.hoisted(() => vi.fn());
 
 const localStorageMock = (() => {
   const store: Record<string, string> = {};
@@ -32,13 +43,14 @@ vi.mock('./lib/api.ts', () => ({
   apiFetch: mockApiFetch,
   getSimulatedRole: () => mockGetSimulatedRole(),
   getUiErrorMessage: (message: string | null) => message,
-  setSimulatedRole: vi.fn(),
+  setSimulatedRole: mockSetSimulatedRole,
   clearSimulatedRole: vi.fn(),
   clearSimulatedUser: vi.fn(),
   getSimulatedSchoolId: () => 1,
   getActiveSchoolId: () => mockGetActiveSchoolId(),
   getSimulatedUser: () => mockGetSimulatedUser(),
-  setSimulatedUser: vi.fn(),
+  setActiveSchoolId: mockSetActiveSchoolId,
+  setSimulatedUser: mockSetSimulatedUser,
   findTeacherProfileFromSimulatedUser: () => null,
 }));
 
@@ -155,6 +167,9 @@ describe('App navigation', () => {
 
     mockApiFetch.mockReset();
     mockCountOverdueEvaluations.mockReset();
+    mockSetSimulatedRole.mockReset();
+    mockSetActiveSchoolId.mockReset();
+    mockSetSimulatedUser.mockReset();
     mockCountOverdueEvaluations.mockReturnValue(0);
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
@@ -168,6 +183,83 @@ describe('App navigation', () => {
       if (url === '/api/simulation/users') return Promise.resolve([]);
       return Promise.resolve([]);
     });
+  });
+
+  it('switches from a suspended school to an authorized active function without reusing the old context', async () => {
+    mockGetSimulatedRole.mockReturnValue('teacher');
+    mockGetActiveSchoolId.mockReturnValue(10);
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'teacher-multi-school',
+      email: 'teacher@example.test',
+      name: 'Teacher',
+      schoolId: 10,
+      role: 'teacher',
+      id: 41,
+    });
+    localStorageMock.setItem('ecoletrack_jwt_access', 'old-school-token');
+    localStorageMock.setItem('ecoletrack_active_school_id', '10');
+    const tokenAtRequest: Array<{ url: string; token: string | null }> = [];
+    mockApiFetch.mockImplementation((url: string, options?: RequestInit) => {
+      tokenAtRequest.push({ url, token: localStorageMock.getItem('ecoletrack_jwt_access') });
+      if (url === '/api/auth/schools') {
+        return Promise.resolve({
+          schools: [
+            { id: 10, name: 'École suspendue', isSuspended: true },
+            { id: 20, name: 'École active', isSuspended: false },
+          ],
+          memberships: [
+            { membershipId: 101, schoolId: 10, role: 'teacher', isActive: true },
+            { membershipId: 201, schoolId: 20, role: 'parent', isActive: true },
+            { membershipId: 202, schoolId: 20, role: 'school_admin', isActive: true },
+            { membershipId: 203, schoolId: 20, role: 'surveillant', isActive: false },
+          ],
+        });
+      }
+      if (url === '/api/auth/context/active') {
+        expect(JSON.parse(String(options?.body))).toEqual({
+          kind: 'local',
+          schoolId: 20,
+          role: 'parent',
+        });
+        return Promise.resolve({ token: 'new-school-parent-token', schoolId: 20, role: 'parent' });
+      }
+      if (url === '/api/teacher-control/statistics') return Promise.resolve({ pendingRegularizations: 0 });
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: 10 } }));
+    });
+
+    const schoolSelect = await screen.findByLabelText('École autorisée');
+    fireEvent.change(schoolSelect, { target: { value: '20' } });
+    const roleSelect = await screen.findByLabelText('Fonction');
+    expect(within(roleSelect).queryByRole('option', { name: 'surveillant' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Accéder à cette école' })).toBeDisabled();
+    fireEvent.change(roleSelect, { target: { value: 'parent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Accéder à cette école' }));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/auth/context/active', expect.any(Object));
+      expect(localStorageMock.getItem('ecoletrack_jwt_access')).toBe('new-school-parent-token');
+      expect(mockSetActiveSchoolId).toHaveBeenCalledWith(20);
+      expect(mockSetSimulatedRole).toHaveBeenCalledWith('parent');
+      expect(mockSetSimulatedUser).toHaveBeenCalledWith(expect.objectContaining({
+        id: 41,
+        role: 'parent',
+        schoolId: 20,
+      }));
+      expect(screen.queryByText('École suspendue')).toBeNull();
+    });
+
+    const contextIndex = tokenAtRequest.findIndex(({ url }) => url === '/api/auth/context/active');
+    const postTransitionSync = tokenAtRequest.find(({ url }, index) => (
+      index > contextIndex && url === '/api/auth/register-or-login'
+    ));
+    expect(contextIndex).toBeGreaterThanOrEqual(0);
+    expect(postTransitionSync?.token).toBe('new-school-parent-token');
+    expect(tokenAtRequest.slice(contextIndex + 1).every(({ token }) => token !== 'old-school-token')).toBe(true);
   });
 
   it('keeps the parent WhatsApp contact available while navigating between parent pages', async () => {
@@ -266,6 +358,7 @@ describe('App navigation', () => {
       uid: 'sim-super-admin',
       email: 'superadmin@example.com',
       name: 'Super Admin',
+      schoolId: null,
       role: 'super_admin',
       id: 1,
     });

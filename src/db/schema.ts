@@ -1,7 +1,8 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { bigint, boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { emailTrimCharactersSql } from '../lib/emailUniqueness.ts';
+import type { VerifiedAccessContext } from '../server/verifiedAccessContext.ts';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -125,6 +126,8 @@ export const users = pgTable('users', {
   phone: text('phone').notNull().unique('users_phone_unique'),
   gender: text('gender'),
   isDeleted: boolean('is_deleted').default(false).notNull(),
+  deactivationGenerationAware: boolean('deactivation_generation_aware').$defaultFn(() => false),
+  accessSessionGeneration: bigint('access_session_generation', { mode: 'bigint' }).default(1n).notNull(),
   lastLoginAt: timestamp('last_login_at'),
   lastMobileVisitAt: timestamp('last_mobile_visit_at'),
   createdAt: timestamp('created_at').defaultNow(),
@@ -144,6 +147,10 @@ export const users = pgTable('users', {
     'users_phone_canonical_check',
     sql`left(${table.phone}, 1) = '+' AND length(${table.phone}) BETWEEN 3 AND 16 AND substring(${table.phone} from 2 for 1) BETWEEN '1' AND '9' AND substring(${table.phone} from 2) !~ '[^0-9]'`,
   ),
+  accessSessionGenerationCheck: check(
+    'users_access_session_generation_nonnegative_check',
+    sql`${table.accessSessionGeneration} >= 0`,
+  ),
 }));
 
 export const userSchools = pgTable('user_schools', {
@@ -151,10 +158,11 @@ export const userSchools = pgTable('user_schools', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
   role: text('role').notNull(),
-  isActive: boolean('is_active').default(true).notNull(),
+  isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => ({
-  userSchoolUniqueIdx: uniqueIndex('user_schools_user_id_school_id_idx').on(table.userId, table.schoolId),
+  userSchoolRoleUniqueIdx: uniqueIndex('user_schools_user_id_school_id_role_idx')
+    .on(table.userId, table.schoolId, table.role),
 }));
 
 export const userLoginEvents = pgTable('user_login_events', {
@@ -204,14 +212,40 @@ export const tokenSessions = pgTable('token_sessions', {
   revokedAt: timestamp('revoked_at'),
 });
 
+export const accessSessions = pgTable('access_sessions', {
+  id: text('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  observedGeneration: bigint('observed_generation', { mode: 'bigint' }).notNull(),
+  status: text('status').default('active').notNull(),
+  contextVersion: integer('context_version').default(0).notNull(),
+  context: jsonb('context').$type<VerifiedAccessContext | null>(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  revokedAt: timestamp('revoked_at'),
+}, (table) => ({
+  userStatusIdx: index('access_sessions_user_status_idx').on(table.userId, table.status),
+  expiresAtIdx: index('access_sessions_expires_at_idx').on(table.expiresAt),
+  statusCheck: check(
+    'access_sessions_status_check',
+    sql`${table.status} IN ('active', 'revoked', 'expired')`,
+  ),
+  observedGenerationCheck: check(
+    'access_sessions_observed_generation_nonnegative_check',
+    sql`${table.observedGeneration} >= 0`,
+  ),
+}));
+
 // 4. Teachers
 export const teachers = pgTable('teachers', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
   phone: text('phone'),
   specialization: text('specialization'),
-});
+}, (table) => ({
+  userSchoolUniqueIdx: uniqueIndex('teachers_user_id_school_id_idx').on(table.userId, table.schoolId),
+}));
 
 export const teacherSubjects = pgTable('teacher_subjects', {
   id: serial('id').primaryKey(),
@@ -226,13 +260,17 @@ export const teacherSubjects = pgTable('teacher_subjects', {
 // 5. Parents
 export const parents = pgTable('parents', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   phone: text('phone'),
   address: text('address'),
   profession: text('profession'),
   studentId: integer('student_id'),
-  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
-});
+  schoolId: integer('school_id'),
+}, (table) => ({
+  userSchoolUniqueIdx: uniqueIndex('parents_user_id_school_id_idx')
+    .on(table.userId, table.schoolId)
+    .where(sql`${table.schoolId} IS NOT NULL`),
+}));
 
 // 6. Classes
 export const classes = pgTable('classes', {
@@ -1266,14 +1304,8 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     fields: [users.schoolId],
     references: [schools.id],
   }),
-  teacherProfile: one(teachers, {
-    fields: [users.id],
-    references: [teachers.userId],
-  }),
-  parentProfile: one(parents, {
-    fields: [users.id],
-    references: [parents.userId],
-  }),
+  teacherProfiles: many(teachers),
+  parentProfiles: many(parents),
   notifications: many(notifications),
 }));
 

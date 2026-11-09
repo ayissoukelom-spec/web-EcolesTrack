@@ -272,6 +272,7 @@ export function findTeacherProfileFromSimulatedUser(
   simulatedUser: any,
   teachersList: any[],
   usersList: any[] = [],
+  activeSchoolId?: number | null,
 ) {
   if (currentRole !== 'teacher' || !simulatedUser || !teachersList?.length) {
     return undefined;
@@ -281,14 +282,13 @@ export function findTeacherProfileFromSimulatedUser(
     ? simulatedUser.email.toLowerCase()
     : null;
   const simUid = simulatedUser.uid ? String(simulatedUser.uid) : null;
-  const currentSchoolId = getActiveSchoolId() ?? (simulatedUser?.schoolId != null ? Number(simulatedUser.schoolId) : null);
-  const sameSchoolTeachers = currentSchoolId == null
-    ? teachersList
-    : teachersList.filter((teacher) => {
-        const teacherSchoolId = teacher?.schoolId != null ? Number(teacher.schoolId) : null;
-        return teacherSchoolId == null || teacherSchoolId === currentSchoolId;
-      });
-  const candidates = sameSchoolTeachers.length > 0 ? sameSchoolTeachers : teachersList;
+  const currentSchoolId = activeSchoolId
+    ?? getActiveSchoolId()
+    ?? (simulatedUser?.schoolId != null ? Number(simulatedUser.schoolId) : null);
+  if (currentSchoolId == null || !Number.isSafeInteger(currentSchoolId) || currentSchoolId <= 0) {
+    return undefined;
+  }
+  const candidates = teachersList.filter((teacher) => Number(teacher?.schoolId) === currentSchoolId);
 
   if (simUid) {
     const byUid = candidates.find((teacher) => teacher.uid && String(teacher.uid) === simUid);

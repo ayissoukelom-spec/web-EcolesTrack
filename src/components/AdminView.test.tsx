@@ -50,6 +50,99 @@ describe('AdminView school term cycle availability', () => {
       },
       configurable: true,
     });
+
+    describe('AdminView teacher class representation', () => {
+      afterEach(() => {
+        cleanup();
+      });
+
+      it('shows teaching, homeroom, and administrative class links as distinct categories', () => {
+        renderWithAuth(
+          <AdminView
+            userRole="super_admin"
+            schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+            yearsList={[]}
+            classesList={[
+              { id: 11, schoolId: 1, name: 'Classe enseignée' },
+              { id: 12, schoolId: 1, name: 'Classe titulaire' },
+              { id: 13, schoolId: 1, name: 'Rattachement général' },
+            ] as any}
+            teachersList={[{
+              id: 1,
+              userId: 2,
+              name: 'Ada Lovelace',
+              email: 'ada@example.test',
+              schoolId: 1,
+              classIds: [11],
+              teachingClassIds: [11],
+              homeroomClassIds: [12],
+              administrativeClassIds: [13],
+              teachingAssignments: [{ id: 1, classId: 11, subjectId: 5, schoolId: 1, isActive: true }],
+            }]}
+            studentsList={[]}
+            parentsList={[]}
+            usersList={[]}
+            onAddSchool={async () => ({})}
+            onAddYear={() => undefined}
+            onAddClass={async () => undefined}
+            onAddTeacher={async () => ({})}
+            onAddParent={async () => ({})}
+            onAddStudent={() => undefined}
+            onDeleteClass={() => undefined}
+            onDeleteSchool={() => undefined}
+          />,
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Voir' }));
+
+        const dialog = screen.getByRole('dialog', { name: "Détails de l'enseignant" });
+        expect(within(dialog).getByText(/Classes d’enseignement:/)).toHaveTextContent('Classe enseignée');
+        expect(within(dialog).getByText(/Classes de titulariat:/)).toHaveTextContent('Classe titulaire');
+        expect(within(dialog).getByText(/Rattachements administratifs:/)).toHaveTextContent('Rattachement général');
+      });
+
+      it('does not fall back to legacy classIds for the teaching class display', () => {
+        renderWithAuth(
+          <AdminView
+            userRole="super_admin"
+            schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+            yearsList={[]}
+            classesList={[{ id: 11, schoolId: 1, name: 'Ancienne association' }] as any}
+            teachersList={[{
+              id: 1,
+              userId: 2,
+              name: 'Ada Lovelace',
+              email: 'ada@example.test',
+              schoolId: 1,
+              classIds: [11],
+              teachingClassIds: [],
+              homeroomClassIds: [],
+              administrativeClassIds: [11],
+              teachingAssignments: [],
+            }]}
+            studentsList={[]}
+            parentsList={[]}
+            usersList={[]}
+            onAddSchool={async () => ({})}
+            onAddYear={() => undefined}
+            onAddClass={async () => undefined}
+            onAddTeacher={async () => ({})}
+            onAddParent={async () => ({})}
+            onAddStudent={() => undefined}
+            onDeleteClass={() => undefined}
+            onDeleteSchool={() => undefined}
+          />,
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Voir' }));
+
+        const dialog = screen.getByRole('dialog', { name: "Détails de l'enseignant" });
+        expect(within(dialog).getByText(/Classes d’enseignement:/)).toHaveTextContent('Aucune');
+        expect(within(dialog).getByText(/Rattachements administratifs:/)).toHaveTextContent('Ancienne association');
+      });
+    });
   });
 
   describe('student birth date editing', () => {
@@ -428,6 +521,68 @@ describe('AdminView create-user teacher form', () => {
     afterEach(() => {
       cleanup();
       vi.restoreAllMocks();
+    });
+
+    it('shows local function state and uses the exact membership routes to deactivate or reactivate', async () => {
+      const targetUser: User = {
+        id: 42,
+        uid: 'target-parent',
+        email: 'parent@example.test',
+        name: 'Parent Forty-Two',
+        role: 'parent',
+        schoolId: 7,
+        isDeleted: false,
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        if (String(input).endsWith('/api/admin/users/42/functions')) {
+          return new Response(JSON.stringify([
+            { id: 901, schoolId: 7, role: 'parent', isActive: true },
+            { id: 902, schoolId: 7, role: 'teacher', isActive: false },
+          ]), { status: 200 });
+        }
+        return new Response('[]', { status: 200 });
+      });
+
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 7, name: 'École de Test', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[targetUser]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comptes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Gérer les fonctions' }));
+
+      expect(await screen.findByText('Fonction active')).toBeTruthy();
+      expect(screen.getByText('Fonction désactivée')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Désactiver la fonction' }));
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/users/42/functions/901'),
+        expect.objectContaining({ method: 'DELETE' }),
+      ));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Réactiver la fonction' }));
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/users/42/functions'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ schoolId: 7, role: 'teacher' }),
+        }),
+      ));
     });
 
     it.each(['teacher', 'parent'] as const)('moves the same %s account between active and disabled views', async (role) => {
@@ -2624,6 +2779,55 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.queryByRole('button', { name: /Créer un compte/i })).toBeNull();
   });
 
+  it('displays and filters accounts by active local functions instead of the legacy role', () => {
+    const schools: School[] = [
+      { id: 1, name: 'École du Lac', address: '', phone: '' },
+      { id: 2, name: 'École du Nord', address: '', phone: '' },
+    ];
+    const users: User[] = [{
+      id: 32,
+      uid: 'multi-role',
+      email: 'multi@example.com',
+      name: 'Compte Multifonction',
+      role: 'teacher',
+      schoolId: 2,
+      functions: [
+        { role: 'parent', schoolId: 1 },
+        { role: 'teacher', schoolId: 2 },
+      ],
+    }];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={schools}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+        onCreateUser={async () => ({})}
+        onUpdateUser={async () => ({})}
+        onSetPassword={async () => ({})}
+        onDeleteUser={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Comptes/i }));
+    fireEvent.change(screen.getByLabelText('Filtrer par rôle'), { target: { value: 'parent' } });
+
+    expect(screen.getByText('parent — École du Lac, teacher — École du Nord')).toBeTruthy();
+  });
+
   it('shows the creation date column and filters accounts by creation date', () => {
     const currentYear = new Date().getFullYear();
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];
@@ -2758,8 +2962,8 @@ describe('AdminView create-user teacher form', () => {
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
     const classes: Class[] = [{ id: 10, name: 'CM1', schoolId: 1, academicYearId: 1 }, { id: 20, name: 'CM2', schoolId: 1, academicYearId: 1 }];
     const teachers: Teacher[] = [
-      { id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10] },
-      { id: 2, userId: 3, name: 'Bob Durand', email: 'bob@example.com', schoolId: 1, classIds: [20] },
+      { id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10], teachingClassIds: [10] },
+      { id: 2, userId: 3, name: 'Bob Durand', email: 'bob@example.com', schoolId: 1, classIds: [20], teachingClassIds: [20] },
     ];
     const students: Student[] = [];
     const parents: Parent[] = [];
@@ -2814,7 +3018,7 @@ describe('AdminView create-user teacher form', () => {
       { id: 20, name: 'CM2', schoolId: 1, academicYearId: 1 },
       { id: 30, name: '6ème', schoolId: 1, academicYearId: 1 },
     ];
-    const teachers: Teacher[] = [{ id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10, 20] }];
+    const teachers: Teacher[] = [{ id: 1, userId: 2, name: 'Alice Martin', email: 'alice@example.com', schoolId: 1, classIds: [10, 20], teachingClassIds: [10, 20] }];
     const students: Student[] = [
       { id: 101, firstName: 'Alice', lastName: 'CM1', schoolId: 1, classId: 10, className: 'CM1', parentId: 1 } as Student,
       { id: 102, firstName: 'Bob', lastName: 'CM2', schoolId: 1, classId: 20, className: 'CM2', parentId: 2 } as Student,

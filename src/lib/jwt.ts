@@ -9,6 +9,8 @@ export interface JwtPayload {
   [key: string]: unknown;
 }
 
+export type JwtSignPayload = JwtPayload | Record<string, unknown>;
+
 export type JwtExpiresIn = number | `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`;
 export type JwtSignAudience = string | string[];
 export type JwtVerifyAudience = string | RegExp | [string | RegExp, ...(string | RegExp)[]];
@@ -47,7 +49,7 @@ export function getJwtSecret(options: { isProduction?: boolean } = {}): string |
   return isProduction ? undefined : 'dev-jwt-secret';
 }
 
-export function signJwt(payload: JwtPayload, secret: string, options: JwtSignOptions = {}): string {
+export function signJwt(payload: JwtSignPayload, secret: string, options: JwtSignOptions = {}): string {
   if (!secret) {
     throw new Error('JWT secret is required to sign tokens');
   }

@@ -63,6 +63,165 @@ describe('LoginView', () => {
     expect(JSON.parse((window.fetch as any).mock.calls[0][1].body)).toEqual({ identifier: 'test@example.com', password: '123456' });
   });
 
+  it('activates the single active school function directly after login', async () => {
+    window.fetch = createFetchMock([
+      { id: 3, uid: 'user_3', email: 'parent@example.com', name: 'Parent', role: 'parent', token: 'initial-jwt', mustReset: false },
+      {
+        schools: [{ id: 5, name: 'École A', isSuspended: false }],
+        memberships: [
+          { membershipId: 31, schoolId: 5, role: 'parent', isActive: true },
+          { membershipId: 32, schoolId: 5, role: 'teacher', isActive: false },
+        ],
+      },
+      { token: 'parent-context-jwt', role: 'parent', schoolId: 5 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'parent@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => {
+      expect(mockOnLogin).toHaveBeenCalledWith('parent');
+      expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('parent-context-jwt');
+    });
+    expect(screen.queryByText('Choisir votre espace')).toBeNull();
+    const contextRequest = (window.fetch as any).mock.calls.find(
+      (call: any[]) => call[1]?.body && JSON.parse(call[1].body).kind === 'local',
+    );
+    expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'local', schoolId: 5, role: 'parent' });
+  });
+
+  it('lets a multi-role account choose an assigned function and activates that context', async () => {
+    window.fetch = createFetchMock([
+      { id: 8, uid: 'user_8', email: 'multi@example.com', name: 'Multi Role', role: 'parent', token: 'initial-jwt', mustReset: false },
+      {
+        schools: [{ id: 5, name: 'École A', isSuspended: false }],
+        memberships: [
+          { membershipId: 31, schoolId: 5, role: 'parent' },
+          { membershipId: 32, schoolId: 5, role: 'teacher' },
+        ],
+      },
+      { token: 'teacher-context-jwt', role: 'teacher', schoolId: 5 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'multi@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    const roleSelect = await screen.findByLabelText(/Fonction/i) as HTMLSelectElement;
+    fireEvent.change(roleSelect, { target: { value: 'teacher' } });
+    fireEvent.click(screen.getByRole('button', { name: /Continuer/i }));
+
+    await waitFor(() => {
+      expect(mockOnLogin).toHaveBeenCalledWith('teacher');
+      expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('teacher-context-jwt');
+    });
+    const contextRequest = (window.fetch as any).mock.calls.find(
+      (call: any[]) => call[1]?.body && JSON.parse(call[1].body).kind === 'local',
+    );
+    expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'local', schoolId: 5, role: 'teacher' });
+  });
+
+  it('lets a single-function multi-school account choose only its school', async () => {
+    window.fetch = createFetchMock([
+      { id: 11, uid: 'user_11', email: 'multi-school@example.com', name: 'Multi School', role: 'parent', token: 'initial-jwt', mustReset: false },
+      {
+        schools: [
+          { id: 5, name: 'École A', isSuspended: false },
+          { id: 9, name: 'École B', isSuspended: false },
+        ],
+        memberships: [
+          { membershipId: 51, schoolId: 5, role: 'parent', isActive: true },
+          { membershipId: 91, schoolId: 9, role: 'parent', isActive: true },
+        ],
+      },
+      { token: 'school-b-context-jwt', role: 'parent', schoolId: 9 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'multi-school@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    const schoolSelect = await screen.findByLabelText(/École/i) as HTMLSelectElement;
+    expect(screen.queryByLabelText(/Fonction/i)).toBeNull();
+    fireEvent.change(schoolSelect, { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: /Continuer/i }));
+
+    await waitFor(() => {
+      expect(mockOnLogin).toHaveBeenCalledWith('parent');
+      expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('school-b-context-jwt');
+    });
+    const contextRequest = (window.fetch as any).mock.calls.find(
+      (call: any[]) => call[1]?.body && JSON.parse(call[1].body).kind === 'local',
+    );
+    expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'local', schoolId: 9, role: 'parent' });
+  });
+
+  it('requires school selection before function selection across schools', async () => {
+    window.fetch = createFetchMock([
+      { id: 9, uid: 'user_9', email: 'schools@example.com', name: 'Multi School', role: 'parent', token: 'initial-jwt', mustReset: false },
+      {
+        schools: [
+          { id: 5, name: 'École A', isSuspended: false },
+          { id: 9, name: 'École B', isSuspended: false },
+        ],
+        memberships: [
+          { membershipId: 51, schoolId: 5, role: 'parent' },
+          { membershipId: 91, schoolId: 9, role: 'teacher' },
+          { membershipId: 92, schoolId: 9, role: 'surveillant' },
+        ],
+      },
+      { token: 'surveillant-context-jwt', role: 'surveillant', schoolId: 9 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'schools@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    const schoolSelect = await screen.findByLabelText(/École/i) as HTMLSelectElement;
+    expect(screen.queryByLabelText(/Fonction/i)).toBeNull();
+    fireEvent.change(schoolSelect, { target: { value: '9' } });
+    const roleSelect = await screen.findByLabelText(/Fonction/i) as HTMLSelectElement;
+    fireEvent.change(roleSelect, { target: { value: 'surveillant' } });
+    fireEvent.click(screen.getByRole('button', { name: /Continuer/i }));
+
+    await waitFor(() => expect(mockOnLogin).toHaveBeenCalledWith('surveillant'));
+    const contextRequest = (window.fetch as any).mock.calls.find(
+      (call: any[]) => call[1]?.body && JSON.parse(call[1].body).kind === 'local',
+    );
+    expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'local', schoolId: 9, role: 'surveillant' });
+  });
+
+  it('selects the global context for a super administrator without changing account identity', async () => {
+    window.fetch = createFetchMock([
+      { id: 10, uid: 'super_10', email: 'super@example.com', name: 'Super Admin', role: 'super_admin', token: 'initial-jwt', mustReset: false },
+      { token: 'global-context-jwt', role: 'super_admin', schoolId: null },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'super@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => {
+      expect(mockOnLogin).toHaveBeenCalledWith('super_admin');
+      expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('global-context-jwt');
+    });
+    const contextRequest = (window.fetch as any).mock.calls.find(
+      (call: any[]) => call[1]?.body && JSON.parse(call[1].body).kind === 'global',
+    );
+    expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'global' });
+  });
+
   it('submits a phone number in the shared identifier field without email-only browser validation', async () => {
     window.fetch = createFetchMock([
       { id: 2, uid: 'parent_2', email: 'parent@example.com', name: 'Parent Example', role: 'parent', token: 'parent-jwt', mustReset: false },

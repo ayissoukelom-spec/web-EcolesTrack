@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Request, Response } from 'express';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { verifyJwt } from './jwt.ts';
 
 const mockWhere = vi.fn();
 const mockInnerJoin = vi.fn(() => ({
@@ -15,6 +14,7 @@ const mockInnerJoin = vi.fn(() => ({
 const usersTable = {};
 const localAuthsTable = {};
 let lastSelectedUser: any;
+var mockCreateAccessSession: ReturnType<typeof vi.fn>;
 const mockFrom = vi.fn((table: any) => {
   let lockRequested = false;
   const query: any = {
@@ -23,7 +23,16 @@ const mockFrom = vi.fn((table: any) => {
         const selectedUser = rows?.[0]?.user ?? rows?.[0];
         if (selectedUser?.role) lastSelectedUser = selectedUser;
         if (lockRequested && (!rows || rows.length === 0) && lastSelectedUser) {
-          return [lastSelectedUser];
+          return [{
+            ...lastSelectedUser,
+            accessSessionGeneration: lastSelectedUser.accessSessionGeneration ?? 1n,
+          }];
+        }
+        if (lockRequested && rows?.length) {
+          return rows.map((row: any) => ({
+            ...row,
+            accessSessionGeneration: (row.user ?? row).accessSessionGeneration ?? 1n,
+          }));
         }
       }
       return rows;
@@ -68,6 +77,12 @@ vi.mock('../db/schema.ts', () => ({
   auditEvents: {},
 }));
 
+vi.mock('../server/accessSessionRuntime.ts', () => ({
+  createAccessSessionService: () => ({
+    createForAuthenticatedUser: (input: unknown) => mockCreateAccessSession(input),
+  }),
+}));
+
 const createMockRes = () => {
   const res: any = {};
   res.status = vi.fn().mockReturnValue(res);
@@ -82,6 +97,12 @@ beforeEach(() => {
   mockUpdateWhereAndReturning.mockReturnValue({ returning: mockReturning });
   mockReturning.mockResolvedValue([{ id: 1 }]);
   mockInsertValues.mockResolvedValue(undefined);
+  mockCreateAccessSession = vi.fn(async () => ({
+    ok: true,
+    accessToken: 'strict-session-token',
+    sessionId: 'web-session-test',
+    expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600,
+  }));
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.JWT_ISSUER = 'test-issuer';
@@ -155,6 +176,44 @@ describe('handleLocalLogin', () => {
     expect(mockReturning).not.toHaveBeenCalled();
   });
 
+  it('allows a teacher account with a parent profile to log in by phone', async () => {
+    const password = 'MultiRolePhoneSecret123!';
+    const salt = 'multi-role-phone-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 702,
+      uid: 'teacher-parent-phone',
+      email: 'teacher-parent@example.com',
+      phone: '+22890000002',
+      name: 'Teacher Parent',
+      role: 'teacher',
+      schoolId: 42,
+      isDeleted: false,
+    };
+
+    mockWhere.mockResolvedValueOnce([{ user: userRecord }]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+    mockWhere.mockResolvedValueOnce([userRecord]);
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({
+      body: { identifier: userRecord.phone, phoneCountryCode: '+228', password },
+    } as Request, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      id: userRecord.id,
+      role: 'teacher',
+      token: 'strict-session-token',
+    }));
+    expect(mockCreateAccessSession).toHaveBeenCalledWith({
+      userId: userRecord.id,
+      expectedGeneration: '1',
+    });
+  });
+
   it('returns a JWT token on successful login with expected claims', async () => {
     const password = 'SuperSecret123!';
     const salt = 'test-salt';
@@ -166,8 +225,12 @@ describe('handleLocalLogin', () => {
       uid: 'user_123',
       email: 'user@example.com',
       name: 'User Example',
+      lastName: 'Example',
+      firstNames: 'User',
       role: 'teacher',
       schoolId: 42,
+      accessSessionGeneration: 1n,
+      deactivationGenerationAware: false,
     };
 
     const authRow = {
@@ -194,12 +257,18 @@ describe('handleLocalLogin', () => {
       uid: userRecord.uid,
       email: userRecord.email,
       name: userRecord.name,
+      lastName: userRecord.lastName,
+      firstNames: userRecord.firstNames,
       role: userRecord.role,
       schoolId: userRecord.schoolId,
       mustReset: false,
       tokenType: 'access',
     });
+    expect(response).not.toHaveProperty('accessSessionGeneration');
+    expect(response).not.toHaveProperty('deactivationGenerationAware');
+    expect(() => JSON.stringify(response)).not.toThrow();
     expect(typeof response.token).toBe('string');
+    expect(response.token).toBe('strict-session-token');
     expect(mockInsertValues).toHaveBeenCalledWith({
       userId: userRecord.id,
       role: userRecord.role,
@@ -207,19 +276,43 @@ describe('handleLocalLogin', () => {
       clientType: 'web',
     });
 
-    const decoded = verifyJwt(response.token, 'test-jwt-secret');
-    expect(decoded.uid).toBe(userRecord.uid);
-    expect(decoded.email).toBe(userRecord.email);
-    expect(decoded.name).toBe(userRecord.name);
-    expect(decoded.role).toBe(userRecord.role);
-    expect(decoded.schoolId).toBe(userRecord.schoolId);
-    expect(decoded.iss).toBe('test-issuer');
-    expect(decoded.aud).toBe('test-audience');
-    expect(decoded.sub).toBe(String(userRecord.id));
-    expect(decoded.authRevocationEventId).toBe(0);
-    expect(typeof decoded.iat).toBe('number');
-    expect(typeof decoded.exp).toBe('number');
+    expect(mockCreateAccessSession).toHaveBeenCalledWith({
+      userId: userRecord.id,
+      expectedGeneration: '1',
+    });
     expect(mockInnerJoin).not.toHaveBeenCalled();
+  });
+
+  it('does not return a token when generation-aware session creation fails', async () => {
+    const password = 'SessionCreationSecret123!';
+    const salt = 'session-creation-salt';
+    const crypto = await import('node:crypto');
+    const passwordHash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
+    const userRecord = {
+      id: 125,
+      uid: 'session-creation-user',
+      email: 'session-creation@example.com',
+      name: 'Session Creation',
+      role: 'teacher',
+      schoolId: 42,
+      isDeleted: false,
+    };
+    mockWhere.mockResolvedValueOnce([userRecord]);
+    mockWhere.mockResolvedValueOnce([{ passwordHash, salt, mustReset: false }]);
+    mockCreateAccessSession.mockResolvedValueOnce({
+      ok: false,
+      error: { reason: 'session_creation_failed', cause: 'generation_changed' },
+    });
+
+    const { handleLocalLogin } = await import('./localLogin.ts');
+    const res = createMockRes() as Response;
+    await handleLocalLogin({ body: { email: userRecord.email, password } } as Request, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'ACCESS_SESSION_GENERATION_CHANGED',
+    }));
+    expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
   it('rechecks the locked account status after password verification before issuing a token', async () => {
@@ -583,11 +676,9 @@ describe('handleLocalLogin', () => {
     mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([authRow]);
     mockWhere.mockResolvedValueOnce([userRecord]);
-    mockWhere.mockResolvedValueOnce([]);
     mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([authRow]);
     mockWhere.mockResolvedValueOnce([userRecord]);
-    mockWhere.mockResolvedValueOnce([]);
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const req = { body: { email: userRecord.email, password } } as Request;
@@ -665,7 +756,7 @@ describe('handleLocalLogin', () => {
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
-  it('returns 500 when JWT secret is missing in production', async () => {
+  it('does not return a token when JWT signing fails in production', async () => {
     delete process.env.JWT_SECRET;
     process.env.NODE_ENV = 'production';
 
@@ -691,6 +782,13 @@ describe('handleLocalLogin', () => {
 
     mockWhere.mockResolvedValueOnce([userRecord]);
     mockWhere.mockResolvedValueOnce([authRow]);
+    mockCreateAccessSession.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        reason: 'jwt_issuance_failed',
+        compensation: { revoked: true },
+      },
+    });
 
     const { handleLocalLogin } = await import('./localLogin.ts');
     const req = { body: { email: userRecord.email, password } } as Request;
@@ -698,8 +796,12 @@ describe('handleLocalLogin', () => {
 
     await handleLocalLogin(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Server configuration error' });
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Unable to create an authenticated session.',
+      code: 'ACCESS_SESSION_CREATION_FAILED',
+    });
+    expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
   it('returns 400 when email or password is missing', async () => {

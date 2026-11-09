@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
-import { teachers, users, classTeachers, userSchools } from '../src/db/schema.ts';
+import { teachers, users, classTeachers, classHomeroomAssignments, userSchools } from '../src/db/schema.ts';
 
 const mockState: any = {
   actorRole: 'super_admin',
@@ -10,6 +10,19 @@ const mockState: any = {
   newTeachers: [] as any[],
   schoolAdminMemberships: [] as Array<{ schoolId: number; role: string; isActive: boolean }>,
   classAssignments: [] as Array<{ teacherId: number; classId: number }> ,
+  homeroomAssignments: [] as Array<{ teacherId: number; classId: number; schoolId: number }>,
+  teachingAssignments: [] as Array<{
+    id: number;
+    teacherId: number;
+    classId: number;
+    subjectId: number;
+    schoolId: number;
+    isActive: boolean;
+    classSchoolId: number | null;
+    subjectSchoolId: number | null;
+    approvedClassSchoolIds?: number[];
+    approvedSubjectSchoolIds?: number[];
+  }>,
   users: [] as any[],
   teacherProjection: null as any,
   filterSchoolId: null as number | null,
@@ -41,6 +54,7 @@ const createBuilder = (selectArgs: any[] = []) => {
       return builder;
     },
     leftJoin() { return builder; },
+    limit() { return builder; },
     where() { return builder; },
     then(resolve: (value: any) => void) {
       // Decide return rows based on table and join context so the mock matches the route's real query shape.
@@ -65,6 +79,21 @@ const createBuilder = (selectArgs: any[] = []) => {
         }
       } else if (tableName === 'class_teachers' || tableName === 'classTeachers') {
         out = mockState.classAssignments || [];
+      } else if (tableName === 'class_homeroom_assignments' || tableName === 'classHomeroomAssignments') {
+        out = mockState.homeroomAssignments || [];
+      } else if (tableName === 'teacher_class_subjects' || tableName === 'teacherClassSubjects') {
+        out = (mockState.teachingAssignments || []).filter((assignment: any) => (
+          assignment.isActive === true
+          && (mockState.filterSchoolId == null || assignment.schoolId === mockState.filterSchoolId)
+          && (
+            assignment.classSchoolId === assignment.schoolId
+            || assignment.approvedClassSchoolIds?.includes(assignment.schoolId)
+          )
+          && (
+            assignment.subjectSchoolId === assignment.schoolId
+            || assignment.approvedSubjectSchoolIds?.includes(assignment.schoolId)
+          )
+        ));
       } else if (tableName === 'user_schools' || tableName === 'userSchools') {
         out = (mockState.schoolAdminMemberships || []).filter((membership) => (
           membership.role === 'school_admin' && membership.isActive
@@ -174,6 +203,8 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     mockState.newTeachers = [];
     mockState.schoolAdminMemberships = [];
     mockState.classAssignments = [];
+    mockState.homeroomAssignments = [];
+    mockState.teachingAssignments = [];
     mockState.users = [];
     mockState.teacherProjection = null;
     mockState.filterSchoolId = null;
@@ -200,7 +231,7 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     expect(res.body[0]).toMatchObject({ lastLoginAt: lastLoginAt.toISOString() });
   });
 
-  it('super_admin: retrieves all teachers and their classIds', async () => {
+  it('separates administrative class links from canonical teaching classIds', async () => {
     mockState.oldTeachers = [{ id: 1, userId: 11, uid: 'u1', name: 'T1', email: 't1@example.com', gender: null, phone: null, specialization: null, schoolId: 10 }];
     mockState.newTeachers = [{ id: 2, userId: 12, uid: 'u2', name: 'T2', email: 't2@example.com', gender: null, phone: null, specialization: null, schoolId: 20 }];
     mockState.classAssignments = [{ teacherId: 1, classId: 100 }, { teacherId: 1, classId: 101 }, { teacherId: 2, classId: 200 }];
@@ -215,7 +246,70 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     console.log('DEBUG teachers response', JSON.stringify(res.body));
     expect(res.body.map((t: any) => t.id).sort()).toEqual([1,2]);
     const t1 = res.body.find((t: any) => t.id === 1);
-    expect(t1.classIds.sort()).toEqual([100,101]);
+    expect(t1.classIds).toEqual([]);
+    expect(t1.teachingClassIds).toEqual([]);
+    expect(t1.administrativeClassIds.sort()).toEqual([100, 101]);
+  });
+
+  it('returns teaching and homeroom classes separately from general class associations', async () => {
+    mockState.oldTeachers = [{ id: 1, userId: 11, uid: 'u1', name: 'T1', email: 't1@example.com', schoolId: 10 }];
+    mockState.classAssignments = [{ teacherId: 1, classId: 100 }];
+    mockState.homeroomAssignments = [{ teacherId: 1, classId: 102, schoolId: 10 }];
+    mockState.teachingAssignments = [{
+      id: 201,
+      teacherId: 1,
+      classId: 101,
+      subjectId: 301,
+      schoolId: 10,
+      isActive: true,
+      classSchoolId: 10,
+      subjectSchoolId: 10,
+    }];
+
+    const response = await request(app)
+      .get('/api/teachers?schoolId=10')
+      .set('x-simulated-role', 'super_admin')
+      .expect(200);
+
+    expect(response.body[0]).toMatchObject({
+      classIds: [101],
+      teachingClassIds: [101],
+      homeroomClassIds: [102],
+      homeroomAssignments: [{ classId: 102, schoolId: 10 }],
+      administrativeClassIds: [100],
+    });
+  });
+
+  it('returns only active exact teaching pairs valid in the requested school', async () => {
+    mockState.oldTeachers = [{
+      id: 1,
+      userId: 11,
+      uid: 'u1',
+      name: 'Teacher One',
+      email: 'teacher@example.test',
+      schoolId: 8,
+    }];
+    mockState.teachingAssignments = [
+      { id: 101, teacherId: 1, classId: 20, subjectId: 30, schoolId: 8, isActive: true, classSchoolId: 8, subjectSchoolId: 8 },
+      { id: 102, teacherId: 1, classId: 20, subjectId: 31, schoolId: 8, isActive: false, classSchoolId: 8, subjectSchoolId: 8 },
+      { id: 103, teacherId: 2, classId: 20, subjectId: 30, schoolId: 8, isActive: true, classSchoolId: 8, subjectSchoolId: 8 },
+      { id: 104, teacherId: 1, classId: 20, subjectId: 30, schoolId: 9, isActive: true, classSchoolId: 9, subjectSchoolId: 9 },
+      { id: 105, teacherId: 1, classId: 21, subjectId: 30, schoolId: 8, isActive: true, classSchoolId: 9, subjectSchoolId: 8 },
+      { id: 106, teacherId: 1, classId: 20, subjectId: 32, schoolId: 8, isActive: true, classSchoolId: 8, subjectSchoolId: 9 },
+    ];
+
+    const response = await request(app)
+      .get('/api/teachers?schoolId=8')
+      .set('x-simulated-role', 'super_admin')
+      .expect(200);
+
+    expect(response.body[0].teachingAssignments).toEqual([{
+      id: 101,
+      classId: 20,
+      subjectId: 30,
+      schoolId: 8,
+      isActive: true,
+    }]);
   });
 
   it('super_admin: can filter by ?schoolId=', async () => {
@@ -267,7 +361,7 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     expect(res.body).toHaveProperty('error');
   });
 
-  it('school_admin: can query another active school_admin membership but not an unlinked school', async () => {
+  it('school_admin: cannot query another school_admin membership without switching active context', async () => {
     mockState.schoolAdminMemberships = [
       { schoolId: 10, role: 'school_admin', isActive: true },
       { schoolId: 20, role: 'school_admin', isActive: true },
@@ -282,14 +376,14 @@ describe('GET /api/teachers (RBAC & merging)', () => {
       .get('/api/teachers?schoolId=20')
       .set('x-simulated-role', 'school_admin')
       .set('x-simulated-school-id', '10')
-      .expect(200);
+      .expect(403);
 
-    mockState.schoolAdminMemberships = [{ schoolId: 10, role: 'school_admin', isActive: true }];
-    await request(app)
-      .get('/api/teachers?schoolId=20')
+    const activeSchoolResponse = await request(app)
+      .get('/api/teachers')
       .set('x-simulated-role', 'school_admin')
       .set('x-simulated-school-id', '10')
-      .expect(403);
+      .expect(200);
+    expect(activeSchoolResponse.body.map((teacher: any) => teacher.id)).toEqual([3]);
   });
 
   it('does not project WEB last-login data to non-administrator roles', async () => {
@@ -312,13 +406,20 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     expect(mockState.teacherProjection).not.toHaveProperty('lastLoginAt');
   });
 
-  it('school_admin without an active school_admin membership returns [] even if a school id is supplied', async () => {
+  it('school_admin without an active school context is rejected', async () => {
     const res = await request(app)
       .get('/api/teachers')
       .set('x-simulated-role', 'school_admin')
+      .expect(403);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('school_admin cannot query shared classes through another school context', async () => {
+    await request(app)
+      .get('/api/classes?schoolId=20')
+      .set('x-simulated-role', 'school_admin')
       .set('x-simulated-school-id', '10')
-      .expect(200);
-    expect(res.body).toEqual([]);
+      .expect(403);
   });
 
   it('teacher: with schoolId sees teachers for their school', async () => {
@@ -373,6 +474,7 @@ describe('GET /api/teachers (RBAC & merging)', () => {
     expect(res.body).toHaveLength(1);
     const t = res.body[0];
     expect(t.schoolIds.sort()).toEqual([50,51]);
-    expect(t.classIds).toEqual([700]);
+    expect(t.classIds).toEqual([]);
+    expect(t.administrativeClassIds).toEqual([700]);
   });
 });

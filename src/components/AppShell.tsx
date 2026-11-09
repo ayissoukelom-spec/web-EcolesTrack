@@ -61,14 +61,19 @@ export default function AppShell() {
   const { lateArrivals: lateArrivalsList, refresh: refreshLateArrivals, addLateArrival: addLateArrivalApi } = useLateArrivals();
 
   const simulatedUser = user;
-  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, simulatedUser, teachersList, usersList);
+  const currentTeacherProfile = findTeacherProfileFromSimulatedUser(
+    currentRole,
+    simulatedUser,
+    teachersList,
+    usersList,
+    currentSchoolId,
+  );
 
-  const currentTeacherClassIds = currentTeacherProfile?.classIds || [];
-  const currentTeacherSpecializations = currentTeacherProfile?.specialization
-    ? Array.isArray(currentTeacherProfile.specialization)
-      ? currentTeacherProfile.specialization
-      : String(currentTeacherProfile.specialization).split(',').map((item) => item.trim()).filter(Boolean)
-    : [];
+  const currentTeacherTeachingAssignments = (currentTeacherProfile?.teachingAssignments || [])
+    .filter((assignment) => assignment.isActive === true && assignment.schoolId === currentSchoolId);
+  const currentTeacherHomeroomClassIds = (currentTeacherProfile?.homeroomAssignments || [])
+    .filter((assignment) => assignment.schoolId === currentSchoolId)
+    .map((assignment) => assignment.classId);
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
   const fetchAuditEvents = async () => {
@@ -170,7 +175,9 @@ export default function AppShell() {
     const existingSimUser = user;
     if (!existingSimUser) {
       if (newRole === 'teacher') {
-        const preferred = teachersList.find((teacher) => teacher.schoolId === currentSchoolId) || teachersList[0];
+        const preferred = currentSchoolId == null
+          ? undefined
+          : teachersList.find((teacher) => teacher.schoolId === currentSchoolId);
         if (preferred) {
           setSimulatedUser({ uid: `teacher_${preferred.userId || preferred.id}`, email: preferred.email || '', name: preferred.name || 'Enseignant', schoolId: preferred.schoolId });
         } else {
@@ -470,6 +477,8 @@ export default function AppShell() {
         schoolsList={schoolsList}
         teachersList={teachersList}
         teacherSubjectIds={currentRole === 'teacher' ? currentTeacherProfile?.subjectIds || [] : []}
+        teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherProfile?.teachingAssignments || [] : []}
+        teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
         approvedSubjectsList={approvedSubjectsList}
         onAddAbsence={handleAddAbsence}
         onAddLateArrival={handleAddLateArrival}
@@ -489,9 +498,8 @@ export default function AppShell() {
           schoolsList={schoolsList}
           schoolFilterId={superAdminSchoolFilterId}
           onSchoolFilterChange={setSuperAdminSchoolFilterId}
-          teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
-          teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
-          teacherSubjectIds={currentRole === 'teacher' ? (currentTeacherProfile?.subjectIds || []) : []}
+          teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
+          approvedSubjectsList={approvedSubjectsList}
           teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
           onAddEvaluation={handleAddEvaluation}
           onAddGrade={handleAddGrade}
@@ -510,7 +518,7 @@ export default function AppShell() {
           schoolsList={schoolsList}
           schoolFilterId={superAdminSchoolFilterId}
           onSchoolFilterChange={setSuperAdminSchoolFilterId}
-          teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
+          teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
           teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
         />
       );

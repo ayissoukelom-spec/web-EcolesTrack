@@ -28,6 +28,7 @@ const FIXTURES = {
     { classId: 100, teacherId: 77, schoolId: 10 },
     { classId: 300, teacherId: 77, schoolId: 10 },
   ],
+  classHomeroomAssignments: [] as Array<{ id: number; classId: number; teacherId: number; schoolId: number }>,
   schoolClasses: [
     { id: 500, classId: 300, schoolId: 10, status: 'approved' },
   ],
@@ -56,6 +57,7 @@ const FIXTURES = {
     { id: 2, subjectId: 2, schoolId: 10, status: 'approved' },
   ],
   evaluations: [] as any[],
+  grades: [] as any[],
   userSchools: [
     { id: 1, userId: 2, schoolId: 10, role: 'school_admin', isActive: true },
     { id: 2, userId: 3, schoolId: 10, role: 'teacher', isActive: true },
@@ -240,9 +242,11 @@ function resolveTableName(table: any) {
     if (normalizedName === 'teacherclasssubjects') return 'teacherClassSubjects';
     if (normalizedName === 'teachers') return 'teachers';
     if (normalizedName === 'classteachers') return 'classTeachers';
+    if (normalizedName === 'classhomeroomassignments') return 'classHomeroomAssignments';
     if (normalizedName === 'schoolterms') return 'schoolTerms';
     if (normalizedName === 'schoolsubjects') return 'schoolSubjects';
     if (normalizedName === 'evaluations') return 'evaluations';
+    if (normalizedName === 'grades') return 'grades';
     if (normalizedName === 'userschools') return 'userSchools';
     if (normalizedName === 'absences') return 'absences';
     if (normalizedName === 'latearrivals') return 'lateArrivals';
@@ -264,10 +268,12 @@ function resolveTableName(table: any) {
     if (normalized.includes('teacherclasssubjects')) return 'teacherClassSubjects';
     if (normalized.includes('teachers')) return 'teachers';
     if (normalized.includes('classteachers')) return 'classTeachers';
+    if (normalized.includes('classhomeroomassignments')) return 'classHomeroomAssignments';
     if (normalized.includes('schoolterms')) return 'schoolTerms';
     if (normalized.includes('schoolsubjects')) return 'schoolSubjects';
     if (normalized.includes('subjects')) return 'subjects';
     if (normalized.includes('evaluations')) return 'evaluations';
+    if (normalized.includes('grades')) return 'grades';
     if (normalized.includes('latearrivals')) return 'lateArrivals';
     if (normalized.includes('absences')) return 'absences';
     if (normalized.includes('userschools')) return 'userSchools';
@@ -340,6 +346,7 @@ function createMockDb() {
             : this._table === 'teacherSubjects' ? FIXTURES.teacherSubjects
             : this._table === 'teacherClassSubjects' ? FIXTURES.teacherClassSubjects
             : this._table === 'classTeachers' ? FIXTURES.classTeachers
+            : this._table === 'classHomeroomAssignments' ? FIXTURES.classHomeroomAssignments
             : this._table === 'schoolClasses' ? FIXTURES.schoolClasses
             : this._table === 'schoolTerms' ? FIXTURES.schoolTerms
             : this._table === 'levels' ? FIXTURES.levels
@@ -349,6 +356,17 @@ function createMockDb() {
             : this._table === 'subjects' ? FIXTURES.subjects
             : this._table === 'schoolSubjects' ? FIXTURES.schoolSubjects
             : this._table === 'evaluations' ? FIXTURES.evaluations
+            : this._table === 'grades' ? FIXTURES.grades.map((grade: any) => {
+              const evaluation = FIXTURES.evaluations.find((item: any) => item.id === grade.evaluationId);
+              const student = FIXTURES.students.find((item: any) => item.id === grade.studentId);
+              return {
+                ...grade,
+                classId: evaluation?.classId,
+                schoolId: student?.schoolId,
+                evaluationSchoolId: evaluation?.schoolId,
+                subjectId: evaluation?.subjectId,
+              };
+            })
             : this._table === 'userSchools' ? FIXTURES.userSchools
             : this._table === 'absences' ? FIXTURES.absences
             : this._table === 'lateArrivals' ? FIXTURES.lateArrivals
@@ -375,6 +393,7 @@ function createMockDb() {
             : joinedTable === 'teacherSubjects' ? FIXTURES.teacherSubjects
             : joinedTable === 'teacherClassSubjects' ? FIXTURES.teacherClassSubjects
             : joinedTable === 'classTeachers' ? FIXTURES.classTeachers
+            : joinedTable === 'classHomeroomAssignments' ? FIXTURES.classHomeroomAssignments
             : joinedTable === 'schoolClasses' ? FIXTURES.schoolClasses
             : joinedTable === 'schoolTerms' ? FIXTURES.schoolTerms
             : joinedTable === 'levels' ? FIXTURES.levels
@@ -384,6 +403,7 @@ function createMockDb() {
             : joinedTable === 'subjects' ? FIXTURES.subjects
             : joinedTable === 'schoolSubjects' ? FIXTURES.schoolSubjects
             : joinedTable === 'evaluations' ? FIXTURES.evaluations
+            : joinedTable === 'grades' ? FIXTURES.grades
             : joinedTable === 'userSchools' ? FIXTURES.userSchools
             : joinedTable === 'absences' ? FIXTURES.absences
             : joinedTable === 'lateArrivals' ? FIXTURES.lateArrivals
@@ -437,6 +457,35 @@ function createMockDb() {
         orderBy() { return this; },
         limit(n: number) { this._rows = this._rows.slice(0, n); return this; },
         then(resolve: (value: any) => any) {
+          if (this._table === 'grades') {
+            const rows = this._rows.map((grade: any) => {
+              const evaluation = FIXTURES.evaluations.find((item: any) => item.id === grade.evaluationId);
+              const student = FIXTURES.students.find((item: any) => item.id === grade.studentId);
+              const subject = FIXTURES.subjects.find((item: any) => item.id === evaluation?.subjectId);
+              const values: Record<string, unknown> = {
+                id: grade.id,
+                evaluationId: grade.evaluationId,
+                classId: evaluation?.classId,
+                evaluationSchoolId: evaluation?.schoolId,
+                evaluationTitle: evaluation?.title,
+                evaluationDate: evaluation?.date,
+                subjectId: evaluation?.subjectId,
+                subject: subject?.name ?? evaluation?.subject,
+                studentId: grade.studentId,
+                studentName: `${student?.lastName ?? ''} ${student?.firstName ?? ''}`.trim(),
+                score: grade.score,
+                remarks: grade.remarks,
+                editCount: grade.editCount,
+                createdAt: grade.createdAt,
+                updatedAt: grade.updatedAt,
+                parentId: student?.parentId,
+                schoolId: student?.schoolId,
+              };
+              return Object.fromEntries(Object.keys(this._selection).map((key) => [key, values[key]]));
+            });
+            return Promise.resolve(rows).then(resolve);
+          }
+
           if (this._table === 'classes' && Object.keys(this._selection).some((key) => key === 'cycleCode')) {
             const rows = this._rows.map((row: any) => {
               const classLevel = FIXTURES.levels.find((level) => level.id === row.levelId) ?? null;
@@ -562,6 +611,8 @@ beforeAll(async () => {
 
 describe('POST /api/evaluations security', () => {
   it('rejects school_admin without schoolId', async () => {
+    FIXTURES.users.push({ id: 20, uid: 'school-sim', email: 'school-sim@x.test', name: 'School Admin Without School', role: 'school_admin', schoolId: null, isDeleted: false });
+
     const res = await request(app)
       .post('/api/evaluations')
       .set('x-simulated-role', 'school_admin')
@@ -587,9 +638,11 @@ describe('POST /api/evaluations security', () => {
 
   it('allows teacher with schoolId and assigned class', async () => {
     FIXTURES.users.push({ id: 4, uid: 'teacher-sim', email: 'teacher-sim@x.test', name: 'Teacher Sim', role: 'teacher', schoolId: 10, isDeleted: false });
+    FIXTURES.userSchools.push({ id: 3, userId: 4, schoolId: 10, role: 'teacher', isActive: true });
     FIXTURES.teachers.push({ id: 78, userId: 4, schoolId: 10, phone: '', specialization: 'Science' });
     FIXTURES.classTeachers.push({ classId: 100, teacherId: 78, schoolId: 10 });
     FIXTURES.teacherSubjects.push({ id: 2, teacherId: 78, schoolId: 10, subjectId: 2 });
+    FIXTURES.teacherClassSubjects.push({ id: 302, teacherId: 78, schoolId: 10, classId: 100, subjectId: 2, isActive: true });
 
     const res = await request(app)
       .post('/api/evaluations')
@@ -605,6 +658,8 @@ describe('POST /api/evaluations security', () => {
   });
 
   it('creates a monthly evaluation and generates its French display title', async () => {
+    FIXTURES.teacherClassSubjects.push({ id: 303, teacherId: 77, schoolId: 10, classId: 100, subjectId: 2, isActive: true });
+
     const res = await request(app)
       .post('/api/evaluations')
       .set('x-simulated-role', 'teacher')
@@ -683,7 +738,7 @@ describe('POST /api/evaluations security', () => {
       .send({ classId: '100', subjectId: 6, subject: 'History', title: 'Unauthorized subject', type: 'devoir', date: '2026-09-03', coefficient: 1, maxScore: 20 });
 
     expect(res.status).toBe(403);
-    expect(String(res.body.error)).toContain('assignée');
+    expect(String(res.body.error)).toContain('affectée');
   });
 
   it('rejects teacher with a class that is not assigned', async () => {
@@ -703,6 +758,7 @@ describe('POST /api/evaluations security', () => {
     FIXTURES.subjects.push({ id: 5, name: 'Sciences Physique', schoolId: 10 });
     FIXTURES.schoolSubjects.push({ id: 3, subjectId: 5, schoolId: 10, status: 'approved' });
     FIXTURES.teacherSubjects.push({ id: 3, teacherId: 78, schoolId: 10, subjectId: 5 });
+    FIXTURES.teacherClassSubjects.push({ id: 304, teacherId: 78, schoolId: 10, classId: 100, subjectId: 5, isActive: true });
 
     const res = await request(app)
       .post('/api/evaluations')
@@ -724,6 +780,8 @@ describe('POST /api/evaluations security', () => {
   });
 
   it('does not notify parent of other-school student with same classId for teacher evaluation', async () => {
+    FIXTURES.teacherClassSubjects.push({ id: 305, teacherId: 78, schoolId: 10, classId: 100, subjectId: 2, isActive: true });
+
     // Add authorized parent/student (same school as teacher and class)
     FIXTURES.users.push({ id: 9, uid: 'authorized-parent-uid', email: 'authparent@x.test', name: 'Authorized Parent', role: 'parent', schoolId: 10, isDeleted: false });
     FIXTURES.parents.push({ id: 3, userId: 9, studentId: 11, schoolId: 10 });
@@ -823,8 +881,8 @@ describe('GET tenant-scoped teacher lists', () => {
       { id: 88, userId: 6, schoolId: 20, phone: '', specialization: 'Math' },
     );
     FIXTURES.evaluations.push(
-      { id: 901, classId: 300, schoolId: 10, teacherId: 79, subjectId: 2, subject: 'Science', title: 'Same School Devoir', type: 'devoir', schoolId: 10, date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
-      { id: 902, classId: 300, schoolId: 20, teacherId: 88, subjectId: 2, subject: 'Science', title: 'Other School Devoir', type: 'devoir', schoolId: 20, date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
+      { id: 901, classId: 300, schoolId: 10, teacherId: 79, subjectId: 2, subject: 'Science', title: 'Same School Devoir', type: 'devoir', date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
+      { id: 902, classId: 300, schoolId: 20, teacherId: 88, subjectId: 2, subject: 'Science', title: 'Other School Devoir', type: 'devoir', date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
     );
 
     FIXTURES.ignoreEvaluationQueryConditions = true;
@@ -833,6 +891,39 @@ describe('GET tenant-scoped teacher lists', () => {
     const returnedIds = response.body.map((evaluation: any) => evaluation.id);
     expect(returnedIds).toContain(901);
     expect(returnedIds).not.toContain(902);
+  });
+
+  it('does not expose a homeroom class evaluation or grade without an exact teaching pair', async () => {
+    FIXTURES.classHomeroomAssignments.push({ id: 700, classId: 100, teacherId: 77, schoolId: 10 });
+    FIXTURES.students.push(
+      { id: 951, schoolId: 10, classId: 100, firstName: 'Titular', lastName: 'Eleve', parentId: null, isActive: true },
+      { id: 952, schoolId: 10, classId: 300, firstName: 'Intervenant', lastName: 'Eleve', parentId: null, isActive: true },
+    );
+    FIXTURES.evaluations.push(
+      { id: 951, classId: 100, schoolId: 10, teacherId: 79, subjectId: 999, subject: 'Science', title: 'Titular sans paire', type: 'devoir', date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
+      { id: 952, classId: 300, schoolId: 10, teacherId: 79, subjectId: 2, subject: 'Science', title: 'Paire active', type: 'devoir', date: '2026-09-20', coefficient: 1, maxScore: 20, countInBulletin: true },
+    );
+    FIXTURES.grades.push(
+      { id: 951, evaluationId: 951, studentId: 951, score: '12', remarks: '', editCount: 0 },
+      { id: 952, evaluationId: 952, studentId: 952, score: '15', remarks: '', editCount: 0 },
+    );
+
+    try {
+      FIXTURES.ignoreEvaluationQueryConditions = true;
+      const evaluationsResponse = await request(app).get('/api/evaluations').set(teacherHeaders).expect(200);
+      expect(evaluationsResponse.body.map((evaluation: any) => evaluation.id)).not.toContain(951);
+      expect(evaluationsResponse.body.map((evaluation: any) => evaluation.id)).toContain(952);
+
+      const gradesResponse = await request(app).get('/api/grades').set(teacherHeaders).expect(200);
+      expect(gradesResponse.body.map((grade: any) => grade.id)).not.toContain(951);
+      expect(gradesResponse.body.map((grade: any) => grade.id)).toContain(952);
+    } finally {
+      FIXTURES.ignoreEvaluationQueryConditions = false;
+      FIXTURES.classHomeroomAssignments = FIXTURES.classHomeroomAssignments.filter((row) => row.id !== 700);
+      FIXTURES.students = FIXTURES.students.filter((student: any) => student.id !== 951 && student.id !== 952);
+      FIXTURES.evaluations = FIXTURES.evaluations.filter((evaluation: any) => evaluation.id !== 951 && evaluation.id !== 952);
+      FIXTURES.grades = FIXTURES.grades.filter((grade: any) => grade.id !== 951 && grade.id !== 952);
+    }
   });
 
   it('keeps school-admin access to evaluations owned by their school teachers', async () => {

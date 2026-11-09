@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/index.ts';
 import { registerParentSchoolAdminWhatsAppRoute } from './parentSchoolAdminWhatsAppApi';
 
+vi.mock('../db/index.ts', () => ({ db: { select: vi.fn() } }));
+
 vi.mock('../middleware/auth.ts', () => ({
   verifyToken: (_req: any, _res: any, next: any) => next(),
   requireRole: () => (_req: any, _res: any, next: any) => next(),
@@ -33,7 +35,7 @@ describe('GET /api/parent/whatsapp-contact', () => {
   const listen = async (role = 'parent') => {
     const app = express();
     registerParentSchoolAdminWhatsAppRoute(app, {
-      resolveActor: async () => ({ id: 10, role }),
+      resolveActor: async () => ({ id: 10, role, schoolId: 9 }),
       verifyMiddleware: ((_req: any, _res: any, next: any) => next()) as any,
       accessMiddleware: ((_req: any, _res: any, next: any) => next()) as any,
     });
@@ -46,9 +48,14 @@ describe('GET /api/parent/whatsapp-contact', () => {
 
   const mockQueries = (results: unknown[][]) => {
     const whereConditions: any[] = [];
+    const joinConditions: any[] = [];
     const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => {
       const query: any = {
         from: () => query,
+        innerJoin: (_table: unknown, condition: unknown) => {
+          joinConditions.push(condition);
+          return query;
+        },
         where: (condition: unknown) => {
           whereConditions.push(condition);
           return query;
@@ -60,11 +67,11 @@ describe('GET /api/parent/whatsapp-contact', () => {
       };
       return query;
     });
-    return { selectSpy, whereConditions };
+    return { selectSpy, whereConditions, joinConditions };
   };
 
   it('selects the first usable school admin phone and creates a standard WhatsApp link', async () => {
-    const { selectSpy, whereConditions } = mockQueries([
+    const { selectSpy, whereConditions, joinConditions } = mockQueries([
       [{ schoolId: 9 }],
       [
         { phone: 'not-a-phone' },
@@ -81,11 +88,14 @@ describe('GET /api/parent/whatsapp-contact', () => {
       expect(body.whatsappUrl).toBe(
         'https://wa.me/22890000001?text=Bonjour%2C%20je%20souhaite%20contacter%20l%E2%80%99administration%20de%20l%E2%80%99%C3%A9cole.',
       );
-      expect(getParentChildStudentIdsMock).toHaveBeenCalledWith(10);
+      expect(getParentChildStudentIdsMock).toHaveBeenCalledWith(10, 9);
       const adminScope = new PgDialect().sqlToQuery(whereConditions[1]);
       expect(adminScope.sql).toContain('school_id');
+      expect(adminScope.sql).toContain('"user_schools"."is_active" IS DISTINCT FROM FALSE');
       expect(adminScope.params).toContain(9);
       expect(adminScope.params).toContain('school_admin');
+      const membershipJoin = new PgDialect().sqlToQuery(joinConditions[0]);
+      expect(membershipJoin.sql).toContain('user_id');
     } finally {
       selectSpy.mockRestore();
     }

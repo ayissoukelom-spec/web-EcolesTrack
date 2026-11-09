@@ -32,14 +32,18 @@ import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClasse
 import { requireAuth, AuthRequest, assertSimulatedAuthConfiguration } from './src/middleware/auth.ts';
 import { buildContentSecurityPolicy } from './src/lib/securityPolicy.ts';
 import { shouldInitializeDatabaseAtStartup } from './src/lib/startupDatabasePolicy.ts';
+import { resolveActiveSchoolSelection } from './src/lib/activeSchool.ts';
 import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts';
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
-import { getJwtSecret, verifyJwt } from './src/lib/jwt.ts';
+import { createAccessSessionService, revokeAccessSessionToken } from './src/server/accessSessionRuntime.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { isEmailRequiredForRole, isUsersEmailUniqueViolation, normalizeEmail, normalizedEmailConflictCondition } from './src/lib/emailUniqueness.ts';
+import { canGrantUserFunction, isLocalSchoolRole } from './src/lib/localSchoolRoles.ts';
 import { generateTemporaryLocalPassword, hashLocalPassword, verifyLocalPassword } from './src/lib/localPassword.ts';
+import { updateLocalAuthCredentials, LocalAuthCredentialUpdateError } from './src/server/localAuthCredentialTransaction.ts';
+import { DrizzleGenerationAwareAccessSessionStore } from './src/server/drizzleGenerationAwareAccessSessionStore.ts';
 import { registerBulletinGenerateRoute } from './src/lib/bulletinSnapshotService.ts';
 import { registerBulletinReadRoutes } from './src/lib/bulletinReadApi.ts';
 import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
@@ -54,7 +58,6 @@ import {
   users,
   userSchools,
   localAuths,
-  tokenBlacklist,
   teachers,
   teacherSubjects,
   classHomeroomAssignments,
@@ -74,6 +77,7 @@ import {
   classExamConfigurations,
   examResults,
   bulletins,
+  bulletinGenerations,
   bulletinLines,
   evaluations,
   grades,
@@ -99,7 +103,7 @@ import {
   evaluationParticipations,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -107,6 +111,7 @@ import { resolveClassCreationSchoolId } from './src/lib/classSchoolValidation.ts
 import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts';
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 import { resolveTeacherControlSchoolAccess } from './src/lib/teacherControl/authorization.ts';
+import { buildSimProfileDebugDto } from './src/server/debugSimProfileDto.ts';
 import {
   TEACHER_CONTROL_APP_PERMISSIONS_POLICY,
   TEACHER_CONTROL_DEFAULT_PERMISSIONS_POLICY,
@@ -129,6 +134,14 @@ import { buildClassAgeStats } from './src/lib/studentAgeStats.ts';
 import { SCHOOL_SUSPENDED_MESSAGE } from './src/lib/schoolSuspensionMessage.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
 import { buildStudentDuplicateIdentity, getStudentParentIdentity, isDuplicateStudent } from './src/lib/studentDuplicate.ts';
+
+class SchoolDeletionConflictError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
+
+class SchoolDeletionNotFoundError extends Error {}
 
 const parsePositiveInteger = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -227,6 +240,26 @@ function toUserDto(user: any) {
     academicYearId: user.academicYearId,
     phone: user.phone,
     gender: user.gender,
+  };
+}
+
+function toPublicUserResponseDto(user: typeof users.$inferSelect) {
+  return {
+    id: user.id,
+    uid: user.uid,
+    email: user.email,
+    name: user.name,
+    lastName: user.lastName,
+    firstNames: user.firstNames,
+    role: user.role,
+    schoolId: user.schoolId,
+    academicYearId: user.academicYearId,
+    phone: user.phone,
+    gender: user.gender,
+    isDeleted: user.isDeleted,
+    lastLoginAt: user.lastLoginAt,
+    lastMobileVisitAt: user.lastMobileVisitAt,
+    createdAt: user.createdAt,
   };
 }
 
@@ -366,12 +399,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
 
   const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
   if (dbUser) {
-    const resolvedSchoolId = await getActiveUserSchoolId(dbUser.id);
-    const effectiveSchoolId = resolvedSchoolId ?? (role === 'teacher' ? dbUser.schoolId ?? null : null);
-    if (role === 'school_admin' && effectiveSchoolId == null) {
-      return null;
-    }
-    return { ...dbUser, role, schoolId: effectiveSchoolId } as ResolvedActor;
+    return { ...dbUser, role, schoolId: req.user.schoolId ?? null } as ResolvedActor;
   }
 
   return null;
@@ -381,54 +409,105 @@ async function getUserSchoolMemberships(userId: number | null | undefined) {
   if (!userId) return [];
 
   const rows = await db.select({
+    membershipId: userSchools.id,
     schoolId: userSchools.schoolId,
+    role: userSchools.role,
     isActive: userSchools.isActive,
   }).from(userSchools).where(eq(userSchools.userId, userId));
 
-  return rows;
+  const membershipsByRole = new Map<string, {
+    membershipId: number;
+    schoolId: number;
+    role: string;
+    isActive: boolean | null;
+  }>();
+  for (const row of rows) {
+    if (row.schoolId == null || row.isActive === false || !isLocalSchoolRole(row.role)) continue;
+    const key = `${row.schoolId}:${row.role}`;
+    const existing = membershipsByRole.get(key);
+    if (!existing) {
+      membershipsByRole.set(key, {
+        membershipId: row.membershipId,
+        schoolId: row.schoolId,
+        role: row.role,
+        isActive: row.isActive ?? null,
+      });
+    } else if (row.isActive === true) {
+      existing.isActive = row.isActive;
+    }
+  }
+  return [...membershipsByRole.values()].sort((left, right) => (
+    left.schoolId - right.schoolId || left.role.localeCompare(right.role)
+  ));
 }
 
-async function getActiveUserSchoolId(userId: number | null | undefined) {
-  if (!userId) return null;
+const localMembershipRoles = ['parent', 'teacher', 'school_admin', 'surveillant'] as const;
+type LocalMembershipRole = typeof localMembershipRoles[number];
 
-  const [row] = await db.select({ schoolId: userSchools.schoolId })
-    .from(userSchools)
-    .where(and(eq(userSchools.userId, userId), eq(userSchools.isActive, true)))
-    .limit(1);
-
-  return row?.schoolId ?? null;
+function isLocalMembershipRole(role: unknown): role is LocalMembershipRole {
+  return typeof role === 'string' && localMembershipRoles.includes(role as LocalMembershipRole);
 }
 
-async function ensureUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, requiredRole?: string | null) {
+async function ensureUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, requiredRole: string) {
+  if (!isLocalMembershipRole(requiredRole)) {
+    throw new Error('A valid membership role is required');
+  }
   if (!userId || schoolId == null) return null;
 
-  const whereClause = requiredRole
-    ? and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId), eq(userSchools.role, requiredRole))
-    : and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId));
-
-  const existing = await db.select().from(userSchools).where(whereClause);
+  const existing = await db.select().from(userSchools).where(and(
+    eq(userSchools.userId, userId),
+    eq(userSchools.schoolId, schoolId),
+    eq(userSchools.role, requiredRole),
+  ));
   return existing[0] ?? null;
 }
 
+async function getActiveUserSchoolMembership(
+  userId: number | null | undefined,
+  schoolId: number | null | undefined,
+  requiredRole: string,
+) {
+  if (!isLocalMembershipRole(requiredRole) || !userId || schoolId == null) return null;
+  const [membership] = await db.select({
+    membershipId: userSchools.id,
+    userId: userSchools.userId,
+    schoolId: userSchools.schoolId,
+    role: userSchools.role,
+    isActive: userSchools.isActive,
+  }).from(userSchools)
+    .innerJoin(users, eq(users.id, userSchools.userId))
+    .where(and(
+      eq(userSchools.userId, userId),
+      eq(userSchools.schoolId, schoolId),
+      eq(userSchools.role, requiredRole),
+      sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+      eq(users.isDeleted, false),
+    ))
+    .limit(1);
+  return membership ?? null;
+}
+
+async function getActiveSchoolAdminUserIds(schoolId: number) {
+  const admins = await db.selectDistinct({ id: users.id })
+    .from(userSchools)
+    .innerJoin(users, eq(users.id, userSchools.userId))
+    .where(and(
+      eq(userSchools.schoolId, schoolId),
+      eq(userSchools.role, 'school_admin'),
+      sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+      eq(users.isDeleted, false),
+    ));
+  return admins.map((admin) => admin.id);
+}
+
 async function upsertUserSchoolMembership(userId: number | null | undefined, schoolId: number | null | undefined, role: string, isActive = true) {
+  if (!isLocalMembershipRole(role)) {
+    throw new Error('A valid membership role is required');
+  }
   if (!userId || schoolId == null) return null;
 
-  const existing = await ensureUserSchoolMembership(userId, schoolId);
-  if (existing) {
-    const updates: Record<string, any> = {};
-    if (existing.role !== role) updates.role = role;
-    if (existing.isActive !== isActive) updates.isActive = isActive;
-
-    if (Object.keys(updates).length > 0) {
-      const [updated] = await db.update(userSchools)
-        .set(updates)
-        .where(and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId)))
-        .returning();
-      return updated ?? existing;
-    }
-
-    return existing;
-  }
+  const existing = await ensureUserSchoolMembership(userId, schoolId, role);
+  if (existing) return existing;
 
   const [inserted] = await db.insert(userSchools).values({
     userId,
@@ -440,29 +519,21 @@ async function upsertUserSchoolMembership(userId: number | null | undefined, sch
   return inserted ?? null;
 }
 
-async function repairMissingSchoolAdminMemberships() {
-  const schoolAdmins = await db.select({
-    id: users.id,
-    schoolId: users.schoolId,
-  }).from(users).where(and(eq(users.role, 'school_admin'), sql`${users.schoolId} IS NOT NULL`));
-
-  for (const schoolAdmin of schoolAdmins) {
-    if (schoolAdmin.schoolId == null) continue;
-    const existing = await ensureUserSchoolMembership(schoolAdmin.id, schoolAdmin.schoolId);
-    if (!existing) {
-      await upsertUserSchoolMembership(schoolAdmin.id, schoolAdmin.schoolId, 'school_admin', true);
-    }
-  }
-}
-
-async function setActiveUserSchool(userId: number | null | undefined, schoolId: number | null | undefined) {
+async function setActiveUserSchool(userId: number | null | undefined, schoolId: number | null | undefined, role: string) {
   if (!userId || schoolId == null) return null;
 
-  const membership = await ensureUserSchoolMembership(userId, schoolId);
+  const membership = await ensureUserSchoolMembership(userId, schoolId, role);
   if (!membership) return null;
 
-  await db.update(userSchools).set({ isActive: false }).where(eq(userSchools.userId, userId));
-  const updated = await db.update(userSchools).set({ isActive: true }).where(and(eq(userSchools.userId, userId), eq(userSchools.schoolId, schoolId))).returning();
+  await db.update(userSchools).set({ isActive: false }).where(and(
+    eq(userSchools.userId, userId),
+    eq(userSchools.role, role),
+  ));
+  const updated = await db.update(userSchools).set({ isActive: true }).where(and(
+    eq(userSchools.userId, userId),
+    eq(userSchools.schoolId, schoolId),
+    eq(userSchools.role, role),
+  )).returning();
   return updated[0] ?? null;
 }
 
@@ -532,7 +603,12 @@ async function getTeacherTeachingAssignmentContext(actor: ResolvedActor) {
     eq(teacherClassSubjects.schoolId, scope.schoolId),
     eq(teacherClassSubjects.isActive, true),
   ));
-  return { ...scope, assignments };
+  return {
+    ...scope,
+    assignments: assignments.filter((assignment) =>
+      scope.teachingAssignmentKeys.has(`${assignment.classId}:${assignment.subjectId}`),
+    ),
+  };
 }
 
 async function ensureTeacherTeachingAssignment(
@@ -542,50 +618,13 @@ async function ensureTeacherTeachingAssignment(
   requestedAssignmentId?: number | null,
 ) {
   const context = await getTeacherTeachingAssignmentContext(actor);
-  if (!context || !context.teachingClassIds.has(classId) || !context.subjectIds.has(subjectId)) return null;
-
-  const existingActive = context.assignments.find((assignment) =>
-    assignment.classId === classId && assignment.subjectId === subjectId,
-  );
-  if (existingActive) {
-    return requestedAssignmentId == null || existingActive.id === requestedAssignmentId ? existingActive : null;
-  }
-
-  const [existing] = await db.select().from(teacherClassSubjects).where(and(
-    eq(teacherClassSubjects.teacherId, context.teacherId),
-    eq(teacherClassSubjects.schoolId, context.schoolId),
-    eq(teacherClassSubjects.classId, classId),
-    eq(teacherClassSubjects.subjectId, subjectId),
-  ));
-  if (existing) return null;
-
-  if (requestedAssignmentId != null) return null;
-
-  await db.insert(teacherClassSubjects).values({
-    teacherId: context.teacherId,
-    schoolId: context.schoolId,
-    classId,
-    subjectId,
-    isActive: true,
-  }).onConflictDoNothing({
-    target: [
-      teacherClassSubjects.teacherId,
-      teacherClassSubjects.schoolId,
-      teacherClassSubjects.classId,
-      teacherClassSubjects.subjectId,
-    ],
-  });
-
-  const [createdOrExisting] = await db.select().from(teacherClassSubjects).where(and(
-    eq(teacherClassSubjects.teacherId, context.teacherId),
-    eq(teacherClassSubjects.schoolId, context.schoolId),
-    eq(teacherClassSubjects.classId, classId),
-    eq(teacherClassSubjects.subjectId, subjectId),
-  ));
-  if (!createdOrExisting?.isActive) return null;
-  return requestedAssignmentId == null || createdOrExisting.id === requestedAssignmentId
-    ? createdOrExisting
-    : null;
+  if (!context) return null;
+  return context.assignments.find((assignment) =>
+    assignment.classId === classId
+      && assignment.subjectId === subjectId
+      && assignment.isActive === true
+      && (requestedAssignmentId == null || assignment.id === requestedAssignmentId),
+  ) ?? null;
 }
 
 async function isApprovedClassForSchool(classId: number, targetSchoolId: number | null) {
@@ -1385,6 +1424,7 @@ export async function createApp() {
     '/api/auth/change-password',
     '/api/auth/schools',
     '/api/auth/schools/active',
+    '/api/auth/context/active',
     '/api/students/template',
     '/api/parents/template',
   ]);
@@ -1411,10 +1451,7 @@ export async function createApp() {
         if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
         if (actor.role === 'super_admin') return next();
 
-        const memberships = actor.id == null ? [] : await getUserSchoolMemberships(actor.id);
-        const schoolId = memberships.find((membership) => membership.isActive)?.schoolId
-          ?? actor.schoolId
-          ?? null;
+        const schoolId = actor.schoolId ?? null;
         if (schoolId == null) return next();
 
         const [school] = await db.select({ isSuspended: schools.isSuspended })
@@ -1486,27 +1523,121 @@ export async function createApp() {
       if (!targetUser) return res.status(404).json({ error: 'USER_NOT_FOUND' });
 
       if (!['teacher', 'parent'].includes(targetUser.role)) {
-        return res.status(400).json({ error: 'Cannot add a school membership for school_admin or student accounts' });
+        return res.status(400).json({ error: 'Cannot add a school membership for this account role' });
       }
 
       const membershipRole = role ?? targetUser.role;
-      if (membershipRole !== targetUser.role) {
-        return res.status(400).json({ error: 'Membership role must match the user role for teacher and parent accounts' });
-      }
-      if (!['teacher', 'parent'].includes(membershipRole)) {
-        return res.status(400).json({ error: 'Membership role must be teacher or parent' });
+      if (!isLocalSchoolRole(membershipRole)) {
+        return res.status(400).json({
+          error: 'Invalid membership role',
+          code: 'INVALID_LOCAL_SCHOOL_ROLE',
+        });
       }
 
       const [targetSchool] = await db.select().from(schools).where(eq(schools.id, parsedSchoolId)).limit(1);
       if (!targetSchool) return res.status(404).json({ error: 'SCHOOL_NOT_FOUND' });
 
-      const existing = await db.select().from(userSchools).where(and(eq(userSchools.userId, userIdParam), eq(userSchools.schoolId, parsedSchoolId)));
-      if (existing.length > 0) {
-        return res.status(200).json({ message: 'Membership already exists', membership: existing[0] });
+      const membershipCondition = and(
+        eq(userSchools.userId, userIdParam),
+        eq(userSchools.schoolId, parsedSchoolId),
+        eq(userSchools.role, membershipRole),
+      );
+      let assignmentResult: {
+        membership: typeof userSchools.$inferSelect | null;
+        alreadyExists: boolean;
+      };
+      try {
+        assignmentResult = await db.transaction(async (tx) => {
+          const [existing] = await tx.select().from(userSchools)
+            .where(membershipCondition).limit(1);
+          if (existing) {
+            if (existing.isActive === false) {
+              const [reactivated] = await tx.update(userSchools)
+                .set({ isActive: true })
+                .where(and(membershipCondition, eq(userSchools.isActive, false)))
+                .returning();
+              return { membership: reactivated ?? existing, alreadyExists: true };
+            }
+            return { membership: existing, alreadyExists: true };
+          }
+
+          const [inserted] = await tx.insert(userSchools).values({
+            userId: userIdParam,
+            schoolId: parsedSchoolId,
+            role: membershipRole,
+          }).returning();
+          return { membership: inserted ?? null, alreadyExists: false };
+        });
+      } catch (insertError: any) {
+        const postgresError = [insertError, insertError?.cause]
+          .find((error) => error?.code === '23505');
+        if (!postgresError) throw insertError;
+
+        const constraint = typeof postgresError.constraint === 'string'
+          ? postgresError.constraint.toLowerCase()
+          : '';
+        const detail = typeof postgresError.detail === 'string'
+          ? postgresError.detail.toLowerCase()
+          : '';
+        const isMembershipUniqueViolation = constraint.includes('user_schools')
+          || (detail.includes('user_id') && detail.includes('school_id'));
+        if (!isMembershipUniqueViolation) throw insertError;
+
+        const [concurrentExactMembership] = await db.select().from(userSchools)
+          .where(membershipCondition).limit(1);
+        if (concurrentExactMembership) {
+          if (concurrentExactMembership.isActive === false) {
+            const reactivated = await db.transaction(async (tx) => {
+              const [currentMembership] = await tx.select().from(userSchools)
+                .where(membershipCondition).limit(1);
+              if (!currentMembership || currentMembership.isActive !== false) return currentMembership ?? null;
+              const [updatedMembership] = await tx.update(userSchools)
+                .set({ isActive: true })
+                .where(and(membershipCondition, eq(userSchools.isActive, false)))
+                .returning();
+              return updatedMembership ?? currentMembership;
+            });
+            return res.status(200).json({
+              message: 'Membership already exists',
+              membership: reactivated ?? concurrentExactMembership,
+            });
+          }
+          return res.status(200).json({
+            message: 'Membership already exists',
+            membership: concurrentExactMembership,
+          });
+        }
+
+        const isLegacyPairConstraint = (
+          constraint.includes('user_schools')
+          && constraint.includes('user_id')
+          && constraint.includes('school_id')
+          && !constraint.includes('role')
+        ) || (
+          detail.includes('user_id')
+          && detail.includes('school_id')
+          && !detail.includes('role')
+        );
+        if (isLegacyPairConstraint) {
+          return res.status(409).json({
+            error: 'This database still enforces one membership per user and school; multiple local roles require the updated membership uniqueness constraint.',
+            code: 'MULTI_ROLE_MEMBERSHIP_UNSUPPORTED_BY_DATABASE',
+          });
+        }
+
+        return res.status(409).json({
+          error: 'The membership conflicts with an existing database constraint.',
+          code: 'USER_SCHOOL_MEMBERSHIP_CONFLICT',
+        });
       }
 
-      const inserted = await db.insert(userSchools).values({ userId: userIdParam, schoolId: parsedSchoolId, role: membershipRole }).returning();
-      res.status(201).json(inserted[0] ?? null);
+      if (assignmentResult.alreadyExists) {
+        return res.status(200).json({
+          message: 'Membership already exists',
+          membership: assignmentResult.membership,
+        });
+      }
+      return res.status(201).json(assignmentResult.membership);
     } catch (err: any) {
       console.error('Error associating user with school:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -1519,21 +1650,121 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
 
+      if (actor.role === 'school_admin') {
+        const schoolId = actor.schoolId;
+        if (!Number.isSafeInteger(schoolId) || schoolId == null || schoolId <= 0) {
+          return res.status(403).json({ error: 'Forbidden: missing school context' });
+        }
+
+        const schoolMemberships = await db.select({
+          userId: userSchools.userId,
+          schoolId: userSchools.schoolId,
+          role: userSchools.role,
+          isActive: userSchools.isActive,
+        }).from(userSchools).where(eq(userSchools.schoolId, schoolId));
+        const userIds = [...new Set(schoolMemberships
+          .filter((membership) => membership.isActive !== false && isLocalSchoolRole(membership.role))
+          .map((membership) => membership.userId))];
+        if (userIds.length === 0) return res.json([]);
+        const functionsByUserId = new Map<number, Array<{ role: LocalMembershipRole; schoolId: number }>>();
+        for (const membership of schoolMemberships) {
+          if (membership.schoolId !== schoolId || membership.isActive === false || !isLocalMembershipRole(membership.role)) continue;
+          const functions = functionsByUserId.get(membership.userId) ?? [];
+          functions.push({ role: membership.role, schoolId });
+          functionsByUserId.set(membership.userId, functions);
+        }
+
+        const selectedUsers = await db.select({
+          id: users.id,
+          uid: users.uid,
+          email: users.email,
+          name: users.name,
+          role: users.role,
+          academicYearId: users.academicYearId,
+          lastName: users.lastName,
+          firstNames: users.firstNames,
+          isDeleted: users.isDeleted,
+          createdAt: users.createdAt,
+          userPhone: users.phone,
+        }).from(users).where(and(
+          inArray(users.id, userIds),
+          eq(users.isDeleted, false),
+        ));
+        const localUsers = selectedUsers.filter((user) => user.role !== 'super_admin');
+        if (localUsers.length === 0) return res.json([]);
+
+        const localUserIds = new Set(localUsers.map((user) => user.id));
+        const localTeachers = await db.select().from(teachers)
+          .where(eq(teachers.schoolId, schoolId));
+        const teachersByUserId = new Map(localTeachers
+          .filter((teacher) => localUserIds.has(teacher.userId))
+          .map((teacher) => [teacher.userId, teacher]));
+        const localParents = await db.select().from(parents)
+          .where(eq(parents.schoolId, schoolId));
+        const parentsByUserId = new Map(localParents
+          .filter((parent) => localUserIds.has(parent.userId))
+          .map((parent) => [parent.userId, parent]));
+
+        const schoolAcademicYears = await db.select({ id: academicYears.id })
+          .from(academicYears).where(eq(academicYears.schoolId, schoolId));
+        const localAcademicYearIds = new Set(schoolAcademicYears.map((year) => year.id));
+        const localTeacherIds = new Set([...teachersByUserId.values()].map((teacher) => teacher.id));
+        const localAssignments = localTeacherIds.size > 0
+          ? await db.select({
+            teacherId: classTeachers.teacherId,
+            classId: classTeachers.classId,
+          }).from(classTeachers).where(eq(classTeachers.schoolId, schoolId))
+          : [];
+        const assignmentsByTeacherId = new Map<number, Set<number>>();
+        for (const assignment of localAssignments) {
+          if (!localTeacherIds.has(assignment.teacherId)) continue;
+          const assignedClassIds = assignmentsByTeacherId.get(assignment.teacherId) ?? new Set<number>();
+          assignedClassIds.add(assignment.classId);
+          assignmentsByTeacherId.set(assignment.teacherId, assignedClassIds);
+        }
+
+        const approvedClassIdsByTeacherId = new Map<number, number[]>();
+        for (const [teacherId, assignedClassIds] of assignmentsByTeacherId) {
+          const approvedClassIds: number[] = [];
+          for (const classId of assignedClassIds) {
+            if (await isApprovedClassForSchool(classId, schoolId)) approvedClassIds.push(classId);
+          }
+          approvedClassIdsByTeacherId.set(teacherId, approvedClassIds);
+        }
+
+        return res.json(localUsers.map((user) => {
+          const teacher = teachersByUserId.get(user.id);
+          const parent = parentsByUserId.get(user.id);
+          return {
+            id: user.id,
+            uid: user.uid,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            functions: functionsByUserId.get(user.id) ?? [],
+            schoolId,
+            schoolIds: [schoolId],
+            academicYearId: user.academicYearId != null && localAcademicYearIds.has(user.academicYearId)
+              ? user.academicYearId
+              : null,
+            lastName: user.lastName,
+            firstNames: user.firstNames,
+            isDeleted: user.isDeleted,
+            createdAt: user.createdAt,
+            phone: user.userPhone || teacher?.phone || parent?.phone || null,
+            specialization: teacher?.specialization || null,
+            classIds: teacher ? [...(approvedClassIdsByTeacherId.get(teacher.id) ?? [])] : [],
+          };
+        }));
+      }
+
       // Build filter conditions
       const includeDeleted = actor.role === 'super_admin'
         && req.query.includeDeleted === 'true';
       let filterConditions: any = includeDeleted ? undefined : eq(users.isDeleted, false);
 
       // Apply role-based filtering
-      if (actor.role === 'school_admin' && actor.schoolId) {
-        // School admin sees only users linked to their school via membership.
-        // Include same-school admins so the student creation form can assign a school admin account.
-        filterConditions = and(
-          filterConditions,
-          or(eq(userSchools.schoolId, actor.schoolId), eq(users.schoolId, actor.schoolId)),
-          notInArray(users.role, ['super_admin'])
-        );
-      } else if (actor.role === 'super_admin') {
+      if (actor.role === 'super_admin') {
         // Disabled accounts are exposed only through the explicit super-admin query.
       } else if (actor.role === 'parent') {
         // Parents may query their own public profile if needed.
@@ -1556,7 +1787,6 @@ export async function createApp() {
           email: users.email,
           name: users.name,
           role: users.role,
-          schoolId: users.schoolId,
           academicYearId: users.academicYearId,
           lastName: users.lastName,
           firstNames: users.firstNames,
@@ -1565,10 +1795,11 @@ export async function createApp() {
           userPhone: users.phone,
           teacherId: teachers.id,
           teacherPhone: teachers.phone,
-          teacherSchoolId: teachers.schoolId,
           teacherSpecialization: teachers.specialization,
           parentPhone: parents.phone,
           userSchoolId: userSchools.schoolId,
+          userSchoolRole: userSchools.role,
+          userSchoolIsActive: userSchools.isActive,
         })
         .from(users)
         .leftJoin(teachers, eq(teachers.userId, users.id))
@@ -1585,8 +1816,8 @@ export async function createApp() {
             email: user.email,
             name: user.name,
             role: user.role,
-            schoolId: user.schoolId,
-            schoolIds: user.schoolId != null ? [user.schoolId] : [],
+            schoolId: null,
+            schoolIds: [],
             academicYearId: user.academicYearId,
             lastName: user.lastName,
             firstNames: user.firstNames,
@@ -1595,25 +1826,33 @@ export async function createApp() {
             phone: user.userPhone || user.teacherPhone || user.parentPhone || null,
             specialization: user.teacherSpecialization || null,
             classIds: [],
+            functions: [],
             _teacherId: user.teacherId,
           };
         }
-        if (user.teacherSchoolId != null) {
-          const existingSchoolIds = acc[user.id].schoolIds || [];
-          if (!existingSchoolIds.includes(user.teacherSchoolId)) {
-            existingSchoolIds.push(user.teacherSchoolId);
-            acc[user.id].schoolIds = existingSchoolIds;
-          }
-        }
-        if (user.userSchoolId != null) {
+        if (
+          user.userSchoolId != null
+          && user.userSchoolIsActive !== false
+          && isLocalMembershipRole(user.userSchoolRole)
+        ) {
           const existingSchoolIds = acc[user.id].schoolIds || [];
           if (!existingSchoolIds.includes(user.userSchoolId)) {
             existingSchoolIds.push(user.userSchoolId);
             acc[user.id].schoolIds = existingSchoolIds;
           }
+          const existingFunctions = acc[user.id].functions as Array<{ role: LocalMembershipRole; schoolId: number }>;
+          if (!existingFunctions.some((membership) => (
+            membership.schoolId === user.userSchoolId && membership.role === user.userSchoolRole
+          ))) {
+            existingFunctions.push({ role: user.userSchoolRole, schoolId: user.userSchoolId });
+          }
         }
         return acc;
       }, {});
+
+      Object.values(normalizedById).forEach((user: any) => {
+        user.schoolId = user.schoolIds.length === 1 ? user.schoolIds[0] : null;
+      });
 
       const teacherIds = Object.values(normalizedById)
         .map((user: any) => user._teacherId)
@@ -1690,7 +1929,14 @@ export async function createApp() {
         }
       }
 
-      res.json({ simHeaders, resolvedActor: resolved, dbUser, teacherRow, classCount: classRows.length, classes: classRows, studentCount: studentRows.length, students: studentRows });
+      res.json(buildSimProfileDebugDto({
+        simHeaders,
+        resolvedActor: resolved,
+        dbUser,
+        teacherRow,
+        classes: classRows,
+        students: studentRows,
+      }));
     } catch (err: any) {
       console.error('Debug sim-profile failed:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -1764,7 +2010,30 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden: cannot create users for other schools' });
       }
 
-      const resolvedSchoolId = schoolId != null ? schoolId : actor.role === 'school_admin' ? actor.schoolId : null;
+      let resolvedSchoolId = schoolId != null ? schoolId : actor.role === 'school_admin' ? actor.schoolId : null;
+      if (role === 'parent') {
+        const hasRequestedSchoolId = rawSchoolId != null && String(rawSchoolId).trim() !== '';
+        const requestedParentSchoolId = hasRequestedSchoolId ? parsePositiveInteger(rawSchoolId) : null;
+        if (hasRequestedSchoolId && requestedParentSchoolId == null) {
+          return res.status(400).json({ error: 'Invalid schoolId' });
+        }
+        if (actor.role === 'super_admin' && requestedParentSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required for parent role' });
+        }
+        if (actor.role === 'school_admin' && actor.schoolId == null) {
+          return res.status(400).json({ error: 'School admin must be attached to a school' });
+        }
+        if (actor.role === 'school_admin' && requestedParentSchoolId != null && requestedParentSchoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Forbidden: cannot create users for other schools' });
+        }
+        resolvedSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedParentSchoolId;
+        if (resolvedSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required for parent role' });
+        }
+        const [parentSchool] = await db.select({ id: schools.id }).from(schools)
+          .where(eq(schools.id, resolvedSchoolId)).limit(1);
+        if (!parentSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+      }
       if (role === 'teacher' && resolvedSchoolId == null) {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
       }
@@ -1839,9 +2108,7 @@ export async function createApp() {
         }
       }
 
-      const parentSchoolId = role === 'parent'
-        ? resolvedSchoolId ?? requestedParentStudent?.schoolId ?? null
-        : null;
+      const parentSchoolId = role === 'parent' ? resolvedSchoolId : null;
       if (role === 'parent' && actor.role !== 'super_admin' && parentSchoolId != null && parentSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Forbidden: cannot create parent for another school' });
       }
@@ -1910,6 +2177,9 @@ export async function createApp() {
       }
       if (role === 'surveillant' && resolvedSchoolId != null) {
         await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'surveillant', true);
+      }
+      if (role === 'teacher' && resolvedSchoolId != null) {
+        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'teacher', true);
       }
 
       // Create linked profile for teacher/parent
@@ -1995,7 +2265,7 @@ export async function createApp() {
 
       // Build response with classIds for teachers
       const responseBody: any = {
-        ...createdUser,
+        ...toPublicUserResponseDto(createdUser),
         temporaryPassword: temporaryCredential.temporaryPassword,
         specialization: role === 'teacher' ? (teacherProfile?.specialization || null) : null,
         phone: role === 'teacher' ? (teacherProfile?.phone || phone || '') : role === 'parent' ? canonicalPhone : createdUser.phone ?? null,
@@ -2030,12 +2300,23 @@ export async function createApp() {
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const id = parseInt(req.params.id);
-      const { email, name, lastName, firstNames, role, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
+      const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
+      if (role === 'parent' && incomingSchoolId != null && incomingSchoolId !== ''
+        && parsePositiveInteger(incomingSchoolId) == null) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (role === 'teacher' && incomingSchoolId != null && incomingSchoolId !== ''
+        && parsePositiveInteger(incomingSchoolId) == null) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
       const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+      if (additionalRole != null && (!isLocalMembershipRole(additionalRole) || additionalRole === role)) {
+        return res.status(400).json({ error: 'Invalid additionalRole' });
+      }
       const teacherIdentityProvided = role === 'teacher' && (lastName !== undefined || firstNames !== undefined);
       const normalizedTeacherLastName = teacherIdentityProvided ? String(lastName ?? '').trim().toUpperCase() : '';
       const normalizedTeacherFirstNames = teacherIdentityProvided ? String(firstNames ?? '').trim() : '';
@@ -2055,6 +2336,19 @@ export async function createApp() {
       // Check if school_admin is modifying a user outside their school
       const [targetUser] = await db.select().from(users).where(eq(users.id, id));
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      const isAddingFunction = additionalRole != null;
+      if (isAddingFunction) {
+        if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Only a super_admin can add a user function' });
+        if (role !== targetUser.role || !isLocalMembershipRole(targetUser.role)) {
+          return res.status(400).json({ error: 'The primary role must remain unchanged when adding a function' });
+        }
+        if (additionalRole === 'school_admin') {
+          return res.status(409).json({ error: 'An additional school_admin function requires a role-scoped academic year' });
+        }
+        if ((parsedSchoolId ?? targetUser.schoolId) == null) {
+          return res.status(400).json({ error: 'A school is required to add a user function' });
+        }
+      }
       const emailWasProvided = Object.prototype.hasOwnProperty.call(req.body, 'email');
       let effectiveEmail = emailWasProvided ? normalizeEmail(email) : targetUser.email ?? null;
       // Legacy whitespace-only parent emails violate the candidate CHECK, so normalize them on update.
@@ -2065,9 +2359,45 @@ export async function createApp() {
       if (isEmailRequiredForRole(role) && !normalizedEffectiveEmail) {
         return res.status(400).json({ error: 'Missing required field: email' });
       }
+      const teacherProfileRows = role === 'teacher'
+        ? await db.select().from(teachers).where(eq(teachers.userId, id))
+        : [];
+      if (actor.role === 'school_admin' && targetUser.role === 'teacher'
+        && teacherProfileRows.length > 0
+        && !teacherProfileRows.some((profile) => profile.schoolId === actor.schoolId)) {
+        return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+      }
+      const requestedTeacherSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
+      const existingTeacherForUpdate = requestedTeacherSchoolId != null
+        ? teacherProfileRows.find((profile) => profile.schoolId === requestedTeacherSchoolId)
+        : teacherProfileRows.length === 1 ? teacherProfileRows[0] : undefined;
+      if (role === 'teacher' && teacherProfileRows.length > 1 && requestedTeacherSchoolId == null) {
+        return res.status(400).json({ error: 'schoolId is required to select a teacher profile' });
+      }
+      const teacherProfileSchoolId = actor.role === 'school_admin'
+        ? actor.schoolId
+        : parsedSchoolId ?? existingTeacherForUpdate?.schoolId ?? null;
+      if (role === 'teacher' && !isAddingFunction && !existingTeacherForUpdate) {
+        if (teacherProfileSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required to create a teacher profile' });
+        }
+        const [teacherSchool] = await db.select({ id: schools.id }).from(schools)
+          .where(eq(schools.id, teacherProfileSchoolId)).limit(1);
+        if (!teacherSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+        const [teacherMembership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
+          eq(userSchools.userId, id),
+          eq(userSchools.schoolId, teacherProfileSchoolId),
+          eq(userSchools.role, 'teacher'),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+        )).limit(1);
+        const membershipWillBeGranted = role !== targetUser.role;
+        if (!teacherMembership && !membershipWillBeGranted) {
+          return res.status(403).json({ error: 'An active teacher membership is required to create this profile' });
+        }
+      }
       const teachingAssignmentSchoolId = actor.role === 'school_admin'
         ? actor.schoolId
-        : parsedSchoolId ?? targetUser.schoolId;
+        : teacherProfileSchoolId ?? targetUser.schoolId;
       const normalizedTeachingAssignments = role === 'teacher' && Array.isArray(teachingAssignments) && teachingAssignmentSchoolId != null
         ? await validateTeacherClassSubjectAssignments(teachingAssignmentSchoolId, teachingAssignments)
         : null;
@@ -2081,31 +2411,93 @@ export async function createApp() {
       const effectiveSubjectIds = normalizedTeachingAssignments
         ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.subjectId)))
         : subjectIds;
-      const [existingParentForUpdate] = targetUser.role === 'parent'
-        ? await db.select({ id: parents.id, studentId: parents.studentId, schoolId: parents.schoolId }).from(parents).where(eq(parents.userId, id))
-        : [undefined];
+      const parentProfileRows = await db.select({
+        id: parents.id,
+        studentId: parents.studentId,
+        schoolId: parents.schoolId,
+        phone: parents.phone,
+        address: parents.address,
+      })
+        .from(parents)
+        .where(eq(parents.userId, id));
+      const requestedParentSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
+      if (actor.role === 'school_admin' && targetUser.role === 'parent'
+        && parentProfileRows.length > 0
+        && !parentProfileRows.some((profile) => profile.schoolId === actor.schoolId)) {
+        return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
+      }
+      const exactParentProfileForUpdate = requestedParentSchoolId != null
+        ? parentProfileRows.find((profile) => profile.schoolId === requestedParentSchoolId)
+        : parentProfileRows.length === 1 ? parentProfileRows[0] : undefined;
+      const historicalSchoollessParent = actor.role === 'super_admin'
+        && parentProfileRows.length === 1
+        && parentProfileRows[0].schoolId == null
+        ? parentProfileRows[0]
+        : undefined;
+      const existingParentForUpdate = exactParentProfileForUpdate ?? historicalSchoollessParent;
+      if (role === 'parent' && parentProfileRows.length > 1 && requestedParentSchoolId == null) {
+        return res.status(400).json({ error: 'schoolId is required to select a parent profile' });
+      }
       if ((targetUser.role === 'teacher' || targetUser.role === 'surveillant') && role !== targetUser.role) {
         return res.status(403).json({ error: 'Forbidden: cannot change role for teacher accounts' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId !== targetUser.schoolId) {
-        // Teachers and parents may belong to multiple schools through userSchools.
+      if (actor.role === 'school_admin') {
         if (['teacher', 'parent'].includes(targetUser.role)) {
-          const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
-            eq(userSchools.userId, targetUser.id),
-            eq(userSchools.schoolId, actor.schoolId!),
-            eq(userSchools.role, targetUser.role),
-            eq(userSchools.isActive, true),
-          ));
-          if (!membership) {
+          const [membership] = actor.schoolId == null ? [] : await db.select({ id: userSchools.id })
+            .from(userSchools)
+            .where(and(
+              eq(userSchools.userId, targetUser.id),
+              eq(userSchools.schoolId, actor.schoolId),
+              eq(userSchools.role, targetUser.role),
+              sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+            ))
+            .limit(1);
+          const targetProfileSchoolId = targetUser.role === 'teacher'
+            ? existingTeacherForUpdate?.schoolId
+            : existingParentForUpdate?.schoolId;
+          const profileSchoolIsInScope = targetProfileSchoolId != null
+            ? targetProfileSchoolId === actor.schoolId
+            : targetUser.schoolId === actor.schoolId;
+          if (!membership || !profileSchoolIsInScope) {
             return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
           }
-        } else {
+        } else if (actor.schoolId !== targetUser.schoolId) {
           return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
         }
       }
 
       if (actor.role === 'school_admin' && parsedSchoolId !== undefined && parsedSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Forbidden: cannot move user to another school' });
+      }
+
+      const createsParentProfile = !existingParentForUpdate
+        && (isAddingFunction ? additionalRole === 'parent' : role === 'parent');
+      let parentProfileSchoolId: number | null = null;
+      if (createsParentProfile) {
+        const hasRequestedSchoolId = incomingSchoolId != null && String(incomingSchoolId).trim() !== '';
+        const requestedParentSchoolId = hasRequestedSchoolId ? parsePositiveInteger(incomingSchoolId) : null;
+        if (hasRequestedSchoolId && requestedParentSchoolId == null) {
+          return res.status(400).json({ error: 'Invalid schoolId' });
+        }
+        if (actor.role === 'super_admin' && requestedParentSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+        }
+        if (actor.role === 'school_admin' && actor.schoolId == null) {
+          return res.status(400).json({ error: 'School admin must be attached to a school' });
+        }
+        if (actor.role === 'school_admin' && requestedParentSchoolId != null && requestedParentSchoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Forbidden: cannot create a parent profile for another school' });
+        }
+        parentProfileSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedParentSchoolId;
+        if (parentProfileSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+        }
+        const [parentSchool] = await db.select({ id: schools.id }).from(schools)
+          .where(eq(schools.id, parentProfileSchoolId)).limit(1);
+        if (!parentSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+        if (!isAddingFunction && !await getActiveUserSchoolMembership(id, parentProfileSchoolId, 'parent')) {
+          return res.status(403).json({ error: 'An active parent membership is required to create this profile' });
+        }
       }
 
       const parentStudentIdProvided = Object.prototype.hasOwnProperty.call(req.body, 'studentId');
@@ -2124,10 +2516,20 @@ export async function createApp() {
         if (student.parentId != null && student.parentId !== existingParentForUpdate?.id) {
           return res.status(409).json({ error: 'Student is already linked to another parent' });
         }
-        const parentSchoolId = parsedSchoolId ?? existingParentForUpdate?.schoolId ?? targetUser.schoolId;
+        const parentSchoolId = existingParentForUpdate
+          ? existingParentForUpdate.schoolId
+          : parentProfileSchoolId;
         if (parentSchoolId == null || student.schoolId !== parentSchoolId) {
           return res.status(400).json({ error: 'Student does not belong to the selected parent school' });
         }
+      }
+      if (role === 'parent' && existingParentForUpdate?.schoolId == null
+        && (phone !== undefined || req.body.address !== undefined
+          || Object.prototype.hasOwnProperty.call(req.body, 'studentId'))) {
+        return res.status(409).json({
+          error: 'A historical schoolless parent profile cannot be modified until its school is resolved',
+          code: 'PARENT_PROFILE_SCHOOL_REQUIRED',
+        });
       }
 
       // Enforce hierarchy: school_admin cannot modify to super_admin or school_admin
@@ -2156,14 +2558,14 @@ export async function createApp() {
       }
       if (role !== targetUser.role && !canonicalPhoneForUpdate) return sendInvalidPhoneResponse(res);
 
-      const updatedValues: any = { email: effectiveEmail, name: teacherDisplayName, role, gender: gender ?? null };
+      const updatedValues: any = { email: effectiveEmail, name: teacherDisplayName, role: isAddingFunction ? targetUser.role : role, gender: gender ?? null };
       if (teacherIdentityProvided) {
         updatedValues.lastName = normalizedTeacherLastName;
         updatedValues.firstNames = normalizedTeacherFirstNames;
       }
-      if (parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
+      if (!isAddingFunction && parsedSchoolId !== undefined) updatedValues.schoolId = parsedSchoolId;
       if (phone !== undefined) updatedValues.phone = canonicalPhoneForUpdate;
-      if (role === 'school_admin') {
+      if (role === 'school_admin' && !isAddingFunction) {
         if (academicYearId == null) {
           return res.status(400).json({ error: 'Missing required field: academicYearId is required for school_admin role' });
         }
@@ -2173,14 +2575,104 @@ export async function createApp() {
           return res.status(400).json({ error: 'Invalid academicYearId for selected school' });
         }
         updatedValues.academicYearId = academicYearId;
-      } else {
+      } else if (!isAddingFunction) {
         updatedValues.academicYearId = null;
       }
 
-      const updatedUsers = await db.update(users)
-        .set(updatedValues)
-        .where(eq(users.id, id))
-        .returning();
+      const membershipRoleToAdd = isAddingFunction
+        ? additionalRole as LocalMembershipRole
+        : role !== targetUser.role && isLocalMembershipRole(role)
+          ? role
+          : null;
+      const membershipSchoolId = role === 'parent' && !isAddingFunction
+        ? existingParentForUpdate?.schoolId ?? parentProfileSchoolId
+        : isAddingFunction && additionalRole === 'parent' && parentProfileSchoolId != null
+          ? parentProfileSchoolId
+          : parsedSchoolId ?? targetUser.schoolId;
+      if (membershipRoleToAdd != null) {
+        if (membershipSchoolId == null) {
+          return res.status(400).json({ error: 'A school is required to add a user function' });
+        }
+        try {
+          await db.transaction(async (tx) => {
+            const [existingMembership] = await tx.select().from(userSchools).where(and(
+              eq(userSchools.userId, id),
+              eq(userSchools.schoolId, membershipSchoolId),
+              eq(userSchools.role, membershipRoleToAdd),
+            ));
+            if (existingMembership?.isActive === false) {
+              await tx.update(userSchools).set({ isActive: true }).where(and(
+                eq(userSchools.userId, id),
+                eq(userSchools.schoolId, membershipSchoolId),
+                eq(userSchools.role, membershipRoleToAdd),
+                eq(userSchools.isActive, false),
+              ));
+            } else if (!existingMembership) {
+              await tx.insert(userSchools).values({
+                userId: id,
+                schoolId: membershipSchoolId,
+                role: membershipRoleToAdd,
+                isActive: true,
+              });
+            }
+
+            if (isAddingFunction && membershipRoleToAdd === 'teacher') {
+              const [existingTeacher] = await tx.select().from(teachers).where(and(
+                eq(teachers.userId, id),
+                eq(teachers.schoolId, membershipSchoolId),
+              ));
+              if (!existingTeacher) {
+                await tx.insert(teachers).values({
+                  userId: id,
+                  schoolId: membershipSchoolId,
+                  phone: canonicalPhoneForUpdate ?? '',
+                  specialization: null,
+                });
+              }
+            } else if (isAddingFunction && membershipRoleToAdd === 'parent') {
+              const [existingParent] = await tx.select().from(parents).where(and(
+                eq(parents.userId, id),
+                eq(parents.schoolId, membershipSchoolId),
+              ));
+              if (!existingParent) {
+                await tx.insert(parents).values({
+                  userId: id,
+                  phone: canonicalPhoneForUpdate ?? '',
+                  address: '',
+                  schoolId: membershipSchoolId,
+                });
+              }
+            }
+          });
+        } catch (error: any) {
+          if (error?.code === '23505') {
+            return res.status(409).json({
+              error: 'This additional school function is blocked by the current user-school uniqueness constraint',
+            });
+          }
+          throw error;
+        }
+      } else if (
+        role === targetUser.role
+        && isLocalMembershipRole(role)
+        && membershipSchoolId != null
+      ) {
+        await db.transaction(async (tx) => {
+          await tx.update(userSchools).set({ isActive: true }).where(and(
+            eq(userSchools.userId, id),
+            eq(userSchools.schoolId, membershipSchoolId),
+            eq(userSchools.role, role),
+            eq(userSchools.isActive, false),
+          ));
+        });
+      }
+
+      const updatedUsers = isAddingFunction
+        ? [targetUser]
+        : await db.update(users)
+          .set(updatedValues)
+          .where(eq(users.id, id))
+          .returning();
 
       if (updatedUsers.length === 0) {
         return res.status(404).json({ error: 'User not found' });
@@ -2189,47 +2681,38 @@ export async function createApp() {
       const effectiveSchoolIdForMembership = role === 'school_admin'
         ? (parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId)
         : null;
-      if (role === 'school_admin' && effectiveSchoolIdForMembership != null) {
+      if (!isAddingFunction && role === 'school_admin' && effectiveSchoolIdForMembership != null) {
         await upsertUserSchoolMembership(id, effectiveSchoolIdForMembership, 'school_admin', true);
       }
 
-      if (role === 'teacher') {
-        await db.delete(parents).where(eq(parents.userId, id));
-        const existingTeacher = await db.select().from(teachers).where(eq(teachers.userId, id));
+      if (!isAddingFunction && role === 'teacher') {
         let teacherProfileId: number | null = null;
         const teacherPhone = phone !== undefined
           ? canonicalPhoneForUpdate ?? ''
-          : existingTeacher[0]?.phone || canonicalPhoneForUpdate || '';
-        if (existingTeacher.length > 0) {
-          teacherProfileId = existingTeacher[0].id;
-          // Update teachers.school_id only if a new schoolId was provided in the request
-          if (parsedSchoolId !== undefined) {
-            await db.update(teachers).set({ schoolId: parsedSchoolId, phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
-            // Keep users.school_id in sync
-            try {
-              await db.update(users).set({ schoolId: parsedSchoolId ?? null }).where(eq(users.id, id));
-            } catch (e: any) {
-              console.warn('DIAG: failed to sync users.schoolId during admin update', { userId: id, parsedSchoolId, err: e?.message || e });
-            }
-          } else {
-            await db.update(teachers).set({ phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null }).where(eq(teachers.userId, id));
-          }
+          : existingTeacherForUpdate?.phone || canonicalPhoneForUpdate || '';
+        if (existingTeacherForUpdate) {
+          teacherProfileId = existingTeacherForUpdate.id;
+          await db.update(teachers).set({
+            phone: teacherPhone,
+            specialization: normalizeSpecialization(specialization) || null,
+          }).where(and(
+            eq(teachers.id, existingTeacherForUpdate.id),
+            eq(teachers.schoolId, existingTeacherForUpdate.schoolId),
+          ));
         } else {
-          const [inserted] = await db.insert(teachers).values({ userId: id, schoolId: parsedSchoolId !== undefined ? parsedSchoolId : undefined, phone: teacherPhone, specialization: normalizeSpecialization(specialization) || null } as any).returning();
-          teacherProfileId = inserted?.id ?? null;
-          // Also ensure users.school_id is set when creating teacher profile
-          if (parsedSchoolId !== undefined) {
-            try {
-              await db.update(users).set({ schoolId: parsedSchoolId ?? null }).where(eq(users.id, id));
-            } catch (e: any) {
-              console.warn('DIAG: failed to sync users.schoolId when inserting teacher profile', { userId: id, parsedSchoolId, err: e?.message || e });
-            }
+          if (teacherProfileSchoolId == null) {
+            return res.status(400).json({ error: 'schoolId is required to create a teacher profile' });
           }
+          const [inserted] = await db.insert(teachers).values({
+            userId: id,
+            schoolId: teacherProfileSchoolId,
+            phone: teacherPhone,
+            specialization: normalizeSpecialization(specialization) || null,
+          }).returning();
+          teacherProfileId = inserted?.id ?? null;
         }
 
-        const assignmentSchoolId = actor.role === 'school_admin'
-          ? actor.schoolId
-          : parsedSchoolId ?? targetUser.schoolId;
+        const assignmentSchoolId = teacherProfileSchoolId;
         if (teacherProfileId != null && assignmentSchoolId != null && normalizedTeachingAssignments) {
           await syncTeacherClassSubjectAssignments(teacherProfileId, assignmentSchoolId, normalizedTeachingAssignments);
         }
@@ -2279,29 +2762,29 @@ export async function createApp() {
             }
           }
         }
-      } else if (role === 'parent') {
-        const existingTeacher = await db.select().from(teachers).where(eq(teachers.userId, id));
-        if (existingTeacher.length > 0) {
-          await db.delete(classTeachers).where(eq(classTeachers.teacherId, existingTeacher[0].id));
-        }
-        await db.delete(teachers).where(eq(teachers.userId, id));
-        const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
+      } else if (!isAddingFunction && role === 'parent') {
         const parentValues: any = {
-          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent[0]?.phone || canonicalPhoneForUpdate || '',
-          address: typeof req.body.address === 'string' ? req.body.address : existingParent[0]?.address || '',
-          schoolId: parsedSchoolId ?? existingParent[0]?.schoolId ?? targetUser.schoolId ?? null,
+          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParentForUpdate?.phone || canonicalPhoneForUpdate || '',
+          address: typeof req.body.address === 'string' ? req.body.address : existingParentForUpdate?.address || '',
+          schoolId: existingParentForUpdate
+            ? existingParentForUpdate.schoolId
+            : parentProfileSchoolId ?? parsedSchoolId ?? targetUser.schoolId ?? null,
         };
         if (parentStudentIdProvided) parentValues.studentId = requestedParentStudentId;
-        let parentProfileId = existingParent[0]?.id ?? null;
-        if (existingParent.length > 0) {
-          const [updatedParent] = await db.update(parents).set(parentValues).where(eq(parents.userId, id)).returning();
+        let parentProfileId = existingParentForUpdate?.id ?? null;
+        if (existingParentForUpdate?.schoolId != null) {
+          const [updatedParent] = await db.update(parents).set(parentValues)
+            .where(and(
+              eq(parents.id, existingParentForUpdate.id),
+              eq(parents.schoolId, existingParentForUpdate.schoolId),
+            )).returning();
           parentProfileId = updatedParent?.id ?? parentProfileId;
-        } else {
+        } else if (!existingParentForUpdate) {
           const [createdParent] = await db.insert(parents).values({ userId: id, ...parentValues }).returning();
           parentProfileId = createdParent?.id ?? null;
         }
         if (parentStudentLinkChanged && parentProfileId != null) {
-          const previousStudentId = existingParent[0]?.studentId;
+          const previousStudentId = existingParentForUpdate?.studentId;
           if (previousStudentId != null && previousStudentId !== requestedParentStudentId) {
             await db.update(students).set({ parentId: null }).where(and(
               eq(students.id, previousStudentId),
@@ -2316,38 +2799,30 @@ export async function createApp() {
             ));
           }
         }
-      } else {
-        const existingTeacher = await db.select().from(teachers).where(eq(teachers.userId, id));
-        if (existingTeacher.length > 0) {
-          await db.delete(classTeachers).where(eq(classTeachers.teacherId, existingTeacher[0].id));
-        }
-        await db.delete(teachers).where(eq(teachers.userId, id));
-        await db.delete(parents).where(eq(parents.userId, id));
       }
 
       const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
-      const diffDescription = formatUserUpdateDiff(targetUser, { email: effectiveEmail, name, role, schoolId: incomingSchoolId, phone, specialization });
+      const diffDescription = isAddingFunction
+        ? `Added ${additionalRole} function in school ${parsedSchoolId ?? targetUser.schoolId}.`
+        : formatUserUpdateDiff(targetUser, { email: effectiveEmail, name, role, schoolId: incomingSchoolId, phone, specialization });
       await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} updated account ${updatedUser.email}. ${diffDescription}`);
       
       // If teacher role, include classIds in response
       if (role === 'teacher') {
-        const existingTeacher = await db.select().from(teachers).where(eq(teachers.userId, id));
         let classIds: number[] = [];
         let teacherId: number | null = null;
         let phoneValue = phone || '';
         let specializationValue: string | string[] | null = normalizeSpecialization(specialization) || null;
-        if (existingTeacher.length > 0) {
-          teacherId = existingTeacher[0].id;
-          phoneValue = existingTeacher[0].phone || phoneValue;
-          specializationValue = existingTeacher[0].specialization || specializationValue;
+        if (existingTeacherForUpdate) {
+          teacherId = existingTeacherForUpdate.id;
+          phoneValue = existingTeacherForUpdate.phone || phoneValue;
+          specializationValue = existingTeacherForUpdate.specialization || specializationValue;
           const assignments = await db
             .select({ classId: classTeachers.classId })
             .from(classTeachers)
             .where(and(
-              eq(classTeachers.teacherId, existingTeacher[0].id),
-              actor.role === 'super_admin'
-                ? eq(classTeachers.schoolId, existingTeacher[0].schoolId)
-                : eq(classTeachers.schoolId, actor.schoolId!),
+              eq(classTeachers.teacherId, existingTeacherForUpdate.id),
+              eq(classTeachers.schoolId, existingTeacherForUpdate.schoolId),
             ));
           classIds = assignments.map((a) => a.classId);
         }
@@ -2356,7 +2831,7 @@ export async function createApp() {
         } catch (e) {
           /* ignore */
         }
-        res.json({ ...updatedUser, teacherId, classIds, phone: phoneValue, specialization: specializationValue });
+        res.json({ ...toPublicUserResponseDto(updatedUser), teacherId, classIds, phone: phoneValue, specialization: specializationValue });
       } else {
         res.json(toUserDto(updatedUser));
       }
@@ -2382,43 +2857,55 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid user id' });
       }
 
-      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => lockedDb.transaction(async (tx) => {
-        const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
-        if (!targetUser) return { status: 404 as const };
-        if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
-        if (targetUser.isDeleted) return { status: 200 as const, alreadyDeactivated: true };
+      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => (
+        new DrizzleGenerationAwareAccessSessionStore(lockedDb).transitionAccountLifecycle({
+          userId: id,
+          operation: 'deactivate',
+          allowedRoles: ['teacher', 'school_admin', 'parent'],
+          protectLastSchoolAdmin: true,
+          mutation: async (tx, targetUser) => {
+            if (targetUser.role === 'parent') {
+              await tx.execute(sql`
+                UPDATE mobile_parent_sessions
+                SET is_active = false, revoked_at = now()
+                WHERE parent_id = ${String(id)} AND is_active = true
+              `);
+            }
+            await tx.insert(auditEvents).values({
+              actorUserId: actor.id ?? null,
+              actorRole: actor.role,
+              actorEmail: actor.email ?? null,
+              actorName: actor.name,
+              action: 'delete',
+              resourceType: 'user',
+              resourceId: id,
+              schoolId: null,
+              description: `Super admin ${actor.name} deactivated user account ${targetUser.name} (${targetUser.email})`,
+            });
+          },
+        })
+      ));
 
-        const [updatedUser] = await tx.update(users)
-          .set({ isDeleted: true })
-          .where(and(eq(users.id, id), eq(users.isDeleted, false)))
-          .returning({ id: users.id });
-        if (!updatedUser) throw new Error('User account changed before deactivation');
-        if (targetUser.role === 'parent') {
-          await tx.execute(sql`
-            UPDATE mobile_parent_sessions
-            SET is_active = false, revoked_at = now()
-            WHERE parent_id = ${String(id)} AND is_active = true
-          `);
-        }
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id ?? null,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name,
-          action: 'delete',
-          resourceType: 'user',
-          resourceId: id,
-          schoolId: null,
-          description: `Super admin ${actor.name} deactivated user account ${targetUser.name} (${targetUser.email})`,
-        });
-        return { status: 200 as const, alreadyDeactivated: false };
-      }));
-
-      if (result.status === 404) return res.status(404).json({ error: 'User not found' });
-      if (result.status === 400) {
+      if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+      if (result.status === 'account_not_eligible') {
         return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be deactivated here' });
       }
-      res.json({ success: true, id, alreadyDeactivated: result.alreadyDeactivated });
+      if (result.status === 'last_school_admin') {
+        return res.status(409).json({
+          error: 'The last active school administrator cannot be deactivated.',
+          code: 'LAST_SCHOOL_ADMIN',
+        });
+      }
+      if (result.status === 'invalid_state'
+        || result.status === 'invalid_generation'
+        || result.status === 'generation_exhausted') {
+        return res.status(409).json({ error: 'Unable to deactivate this account in its current state' });
+      }
+      res.json({
+        success: true,
+        id,
+        alreadyDeactivated: result.status === 'already_deactivated',
+      });
     } catch (err: any) {
       console.error('Error deleting user:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -2438,46 +2925,46 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid user id' });
       }
 
-      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => lockedDb.transaction(async (tx) => {
-        const [targetUser] = await tx.select().from(users).for('update').where(eq(users.id, id));
-        if (!targetUser) return { status: 404 as const };
-        if (!['teacher', 'school_admin', 'parent'].includes(targetUser.role)) return { status: 400 as const };
-        if (!targetUser.isDeleted) return { status: 200 as const, alreadyActive: true };
+      const result = await withNotificationRecipientAccountLock(id, (lockedDb) => (
+        new DrizzleGenerationAwareAccessSessionStore(lockedDb).transitionAccountLifecycle({
+          userId: id,
+          operation: 'reactivate',
+          allowedRoles: ['teacher', 'school_admin', 'parent'],
+          mutation: async (tx, targetUser) => {
+            await tx.insert(auditEvents).values({
+              actorUserId: actor.id ?? null,
+              actorRole: actor.role,
+              actorEmail: actor.email ?? null,
+              actorName: actor.name,
+              action: 'session_revoked',
+              resourceType: 'user',
+              resourceId: id,
+              schoolId: null,
+              description: `Revocation boundary for sessions issued before reactivation of ${targetUser.name} (${targetUser.email})`,
+            });
+            await tx.insert(auditEvents).values({
+              actorUserId: actor.id ?? null,
+              actorRole: actor.role,
+              actorEmail: actor.email ?? null,
+              actorName: actor.name,
+              action: 'reactivate',
+              resourceType: 'user',
+              resourceId: id,
+              schoolId: null,
+              description: `Super admin ${actor.name} reactivated user account ${targetUser.name} (${targetUser.email})`,
+            });
+          },
+        })
+      ));
 
-        const [updatedUser] = await tx.update(users)
-          .set({ isDeleted: false })
-          .where(and(eq(users.id, id), eq(users.isDeleted, true)))
-          .returning({ id: users.id });
-        if (!updatedUser) throw new Error('User account changed before reactivation');
-
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id ?? null,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name,
-          action: 'session_revoked',
-          resourceType: 'user',
-          resourceId: id,
-          schoolId: null,
-          description: `Revocation boundary for sessions issued before reactivation of ${targetUser.name} (${targetUser.email})`,
-        });
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id ?? null,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name,
-          action: 'reactivate',
-          resourceType: 'user',
-          resourceId: id,
-          schoolId: null,
-          description: `Super admin ${actor.name} reactivated user account ${targetUser.name} (${targetUser.email})`,
-        });
-        return { status: 200 as const, alreadyActive: false };
-      }));
-
-      if (result.status === 404) return res.status(404).json({ error: 'User not found' });
-      if (result.status === 400) return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be reactivated here' });
-      return res.json({ success: true, id, alreadyActive: result.alreadyActive });
+      if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+      if (result.status === 'account_not_eligible') return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be reactivated here' });
+      if (result.status === 'invalid_state'
+        || result.status === 'invalid_generation'
+        || result.status === 'generation_exhausted') {
+        return res.status(409).json({ error: 'Unable to reactivate this account in its current state' });
+      }
+      return res.json({ success: true, id, alreadyActive: result.status === 'already_active' });
     } catch (err: any) {
       console.error('Error reactivating user:', err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -2513,11 +3000,15 @@ export async function createApp() {
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
       if (targetUser.role === 'student') return res.status(403).json({ error: 'Cannot set password for student profile' });
       if (actor.role === 'school_admin') {
-        if (targetUser.schoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Forbidden: cannot set password for users outside your school' });
-        }
         if (['super_admin', 'school_admin'].includes(targetUser.role)) {
           return res.status(403).json({ error: 'Forbidden: cannot set password for admin accounts' });
+        }
+        if (actor.schoolId == null || !isLocalMembershipRole(targetUser.role)) {
+          return res.status(403).json({ error: 'Forbidden: cannot set password for users outside your school' });
+        }
+        const targetMembership = await getActiveUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+        if (!targetMembership) {
+          return res.status(403).json({ error: 'Forbidden: cannot set password for users outside your school' });
         }
       }
 
@@ -2527,15 +3018,43 @@ export async function createApp() {
       }
 
       const temporaryCredential = generateTemporaryLocalPassword();
-      await db.update(localAuths).set({
-        passwordHash: temporaryCredential.passwordHash,
-        salt: temporaryCredential.salt,
-        mustReset: true,
-      }).where(eq(localAuths.userId, userId));
+      const sessionStore = new DrizzleGenerationAwareAccessSessionStore(db);
+      const revocation = await sessionStore.revokeAllForUser({
+        userId,
+        allowDisabledForAdministrativePasswordReset: true,
+        mutation: async (_newGeneration, transaction) => {
+          await updateLocalAuthCredentials(transaction, {
+            userId,
+            values: {
+              passwordHash: temporaryCredential.passwordHash,
+              salt: temporaryCredential.salt,
+              mustReset: true,
+            },
+          });
+          await transaction.insert(auditEvents).values({
+            actorUserId: actor.id ?? null,
+            actorRole: actor.role,
+            actorEmail: actor.email ?? null,
+            actorName: actor.name,
+            action: 'session_revoked',
+            resourceType: 'user',
+            resourceId: userId,
+            schoolId: null,
+            description: 'All prior authentication sessions were revoked after an administrative password reset.',
+          });
+        },
+      });
+      if (revocation.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+      if (revocation.status === 'account_not_admissible') {
+        return res.status(409).json({ error: 'Unable to reset credentials for this account' });
+      }
+      if (revocation.status === 'generation_exhausted' || revocation.status === 'invalid_generation') {
+        return res.status(409).json({ error: 'Unable to revoke this account sessions' });
+      }
 
       res.json({ success: true, userId, temporaryPassword: temporaryCredential.temporaryPassword, mustReset: true });
-    } catch (err: any) {
-      console.error('Error resetting local password:', err?.message || err);
+    } catch {
+      console.error('Error resetting local password: transactional update failed');
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -2564,7 +3083,7 @@ export async function createApp() {
         }
 
         if (actor.schoolId !== targetUser.schoolId) {
-          const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
+          const membership = await getActiveUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
           if (!membership) {
             return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
           }
@@ -2594,6 +3113,56 @@ export async function createApp() {
         updatedFields.phone = canonicalPhoneForUpdate;
       }
 
+      const existingParentRows = targetUser.role === 'parent'
+        ? await db.select().from(parents).where(eq(parents.userId, id))
+        : [];
+      const hasRequestedParentSchool = req.body?.schoolId != null && String(req.body.schoolId).trim() !== '';
+      const requestedParentSchoolId = hasRequestedParentSchool ? parsePositiveInteger(req.body.schoolId) : null;
+      if (targetUser.role === 'parent' && hasRequestedParentSchool && requestedParentSchoolId == null) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      const parentProfileSchoolId = actor.role === 'super_admin'
+        ? requestedParentSchoolId
+        : actor.schoolId;
+      const existingParent = parentProfileSchoolId != null
+        ? existingParentRows.find((profile) => profile.schoolId === parentProfileSchoolId)
+        : actor.role === 'super_admin' && !hasRequestedParentSchool && existingParentRows.length === 1
+          ? existingParentRows[0]
+          : undefined;
+      if (targetUser.role === 'parent' && actorIsOwner && address !== undefined && !existingParent) {
+        return res.status(403).json({ error: 'A parent profile in the active school is required to update its address' });
+      }
+      if (targetUser.role === 'parent' && address !== undefined
+        && existingParentRows.length > 1 && parentProfileSchoolId == null) {
+        return res.status(400).json({ error: 'schoolId is required to select a parent profile' });
+      }
+      let parentCreationSchoolId: number | null = null;
+      if (targetUser.role === 'parent' && !existingParent) {
+        if (!actorIsOwner && ['super_admin', 'school_admin'].includes(actor.role)) {
+          if (actor.role === 'super_admin' && requestedParentSchoolId == null) {
+            return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+          }
+          if (actor.role === 'school_admin' && actor.schoolId == null) {
+            return res.status(403).json({ error: 'Forbidden: missing school context' });
+          }
+          parentCreationSchoolId = actor.role === 'super_admin'
+            ? requestedParentSchoolId
+            : actor.schoolId;
+          if (parentCreationSchoolId == null) {
+            return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+          }
+          if (actor.role !== 'super_admin' && hasRequestedParentSchool && requestedParentSchoolId !== parentCreationSchoolId) {
+            return res.status(403).json({ error: 'Forbidden: cannot create a parent profile for another school' });
+          }
+          const [parentSchool] = await db.select({ id: schools.id }).from(schools)
+            .where(eq(schools.id, parentCreationSchoolId)).limit(1);
+          if (!parentSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+          if (!await getActiveUserSchoolMembership(id, parentCreationSchoolId, 'parent')) {
+            return res.status(403).json({ error: 'An active parent membership is required to create this profile' });
+          }
+        }
+      }
+
       if (Object.keys(updatedFields).length > 0) {
         await db.update(users).set(updatedFields).where(eq(users.id, id));
       }
@@ -2601,15 +3170,19 @@ export async function createApp() {
       // If the user is a parent, persist phone/address in parents table
       const [updatedUserCandidate] = await db.select().from(users).where(eq(users.id, id));
       if (updatedUserCandidate && updatedUserCandidate.role === 'parent') {
-        const existingParent = await db.select().from(parents).where(eq(parents.userId, id));
         const parentValues: any = {
-          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent[0]?.phone || canonicalizeUserPhone(updatedUserCandidate.phone) || '',
-          address: typeof address === 'string' ? address : existingParent[0]?.address || '',
+          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent?.phone || canonicalizeUserPhone(updatedUserCandidate.phone) || '',
+          address: typeof address === 'string' ? address : existingParent?.address || '',
         };
-        if (existingParent.length > 0) {
-          await db.update(parents).set(parentValues).where(eq(parents.userId, id));
-        } else {
-          await db.insert(parents).values({ userId: id, ...parentValues });
+        if (existingParent) {
+          await db.update(parents).set(parentValues).where(and(
+            eq(parents.id, existingParent.id),
+            existingParent.schoolId == null
+              ? sql`${parents.schoolId} IS NULL`
+              : eq(parents.schoolId, existingParent.schoolId),
+          ));
+        } else if (parentCreationSchoolId != null) {
+          await db.insert(parents).values({ userId: id, schoolId: parentCreationSchoolId, ...parentValues });
         }
       }
 
@@ -2635,7 +3208,7 @@ export async function createApp() {
   });
   app.post('/api/auth/local-login', loginLimiter, handleLocalLogin);
 
-  // Local logout now revokes the current JWT access token server-side
+  // Web logout revokes the current server-side access session.
   app.post('/api/auth/logout', async (req, res) => {
     try {
       const authHeader = req.headers.authorization;
@@ -2644,41 +3217,18 @@ export async function createApp() {
       }
 
       const token = authHeader.split('Bearer ')[1];
-      const secret = getJwtSecret({ isProduction: process.env.NODE_ENV === 'production' });
-      if (!secret) {
-        return res.status(500).json({ error: 'Server configuration error' });
-      }
-
-      const decoded = verifyJwt(token, secret);
-      const uid = decoded?.uid;
-      const tokenType = decoded?.type;
-      const jti = decoded?.jti;
-      const exp = decoded?.exp;
-
-      if (!uid || tokenType !== 'access' || !jti || !exp) {
+      const result = await revokeAccessSessionToken(token);
+      if (!result.ok) {
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
-      }
-
-      const [dbUser] = await db.select().from(users).where(eq(users.uid, uid));
-      const expiresAt = new Date(exp * 1000);
-
-      try {
-        await db.insert(tokenBlacklist).values({
-          token,
-          tokenJti: jti,
-          userId: dbUser?.id ?? undefined,
-          expiresAt,
-        });
-      } catch (err: any) {
-        if (!String(err?.message || '').toLowerCase().includes('duplicate')) {
-          throw err;
-        }
       }
 
       res.json({ success: true });
     } catch (err: any) {
       console.error('Logout error:', err);
-      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+      return res.status(503).json({
+        error: 'Unable to revoke the access session.',
+        code: 'ACCESS_SESSION_REVOCATION_UNAVAILABLE',
+      });
     }
   });
 
@@ -2716,60 +3266,162 @@ export async function createApp() {
       const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
       if (passwordPolicyError) return res.status(400).json({ error: passwordPolicyError });
 
-      // Hash new password and clear mustReset
+      // Prepare credentials before entering the transaction; persist them with revocation.
       const newSalt = crypto.randomBytes(16).toString('hex');
       const newHash = hashLocalPassword(newPassword, newSalt);
+      const sessionStore = new DrizzleGenerationAwareAccessSessionStore(db);
+      const revocation = await sessionStore.revokeAllForUser({
+        userId: userRecord.id,
+        mutation: async (_newGeneration, transaction) => {
+          await updateLocalAuthCredentials(transaction, {
+            userId: userRecord.id,
+            values: { passwordHash: newHash, salt: newSalt, mustReset: false },
+            expected: { passwordHash, salt, mustReset: Boolean(mustReset) },
+          });
+          await transaction.insert(auditEvents).values({
+            actorUserId: userRecord.id,
+            actorRole: userRecord.role,
+            actorEmail: userRecord.email ?? null,
+            actorName: userRecord.name,
+            action: 'session_revoked',
+            resourceType: 'user',
+            resourceId: userRecord.id,
+            schoolId: null,
+            description: 'All prior authentication sessions were revoked after a password change.',
+          });
+        },
+      });
+      if (revocation.status === 'user_not_found') {
+        return res.status(404).json({ error: 'Utilisateur non trouvé' });
+      }
+      if (revocation.status === 'account_not_admissible') {
+        return res.status(403).json({ error: 'Compte indisponible' });
+      }
+      if (revocation.status === 'generation_exhausted' || revocation.status === 'invalid_generation') {
+        return res.status(409).json({ error: 'Impossible de révoquer les sessions de ce compte' });
+      }
 
-      await db.update(localAuths).set({ passwordHash: newHash, salt: newSalt, mustReset: false }).where(eq(localAuths.userId, userRecord.id));
-
-      res.json({ success: true });
-    } catch (err: any) {
-      console.error('change-password error:', err);
+      res.json({ success: true, reauthenticationRequired: true });
+    } catch (err: unknown) {
+      if (err instanceof LocalAuthCredentialUpdateError) {
+        if (err.code === 'user_not_found') return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        if (err.code === 'local_auth_not_found') {
+          return res.status(400).json({ error: 'Aucun mot de passe enregistré pour cet utilisateur' });
+        }
+        if (err.code === 'concurrent_change') {
+          return res.status(409).json({ error: 'Les identifiants ont changé. Veuillez réessayer.' });
+        }
+      }
+      console.error('change-password error: transactional update failed');
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
+  const transitionAccessContext = async (
+    req: AuthRequest,
+    res: express.Response,
+    selection: { kind: 'local'; schoolId: number; role: string } | { kind: 'global' },
+  ) => {
+    const userId = req.user?.id;
+    const claims = req.user?.accessClaims;
+    if (!userId || !claims || claims.sub !== String(userId)) {
+      return res.status(401).json({ error: 'Authenticated session identity is unavailable' });
+    }
+
+    let target: { kind: 'global' } | { kind: 'local'; schoolId: number; role: LocalMembershipRole; membershipId: number };
+    if (selection.kind === 'global') {
+      const [account] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+      if (account?.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super_admin can select the global context' });
+      }
+      target = { kind: 'global' };
+    } else {
+      if (!Number.isSafeInteger(selection.schoolId) || selection.schoolId <= 0 || !isLocalSchoolRole(selection.role)) {
+        return res.status(400).json({ error: 'A valid school and local role are required' });
+      }
+      const [membership] = await db.select({
+        membershipId: userSchools.id,
+        schoolId: userSchools.schoolId,
+        role: userSchools.role,
+        isActive: userSchools.isActive,
+      }).from(userSchools).where(and(
+        eq(userSchools.userId, userId),
+        eq(userSchools.schoolId, selection.schoolId),
+        eq(userSchools.role, selection.role),
+      )).limit(1);
+      if (!membership || !isLocalSchoolRole(membership.role)) {
+        return res.status(403).json({
+          error: 'The requested function is not assigned in this school.',
+          code: 'ACCESS_MEMBERSHIP_NOT_FOUND',
+        });
+      }
+      if (membership.isActive === false) {
+        return res.status(403).json({
+          error: 'The requested school membership is inactive.',
+          code: 'ACCESS_MEMBERSHIP_INACTIVE',
+        });
+      }
+      const [school] = await db.select({
+        id: schools.id,
+        isSuspended: schools.isSuspended,
+      }).from(schools).where(eq(schools.id, selection.schoolId)).limit(1);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      if (school.isSuspended) {
+        return res.status(423).json({
+          error: schoolSuspendedMessage,
+          code: 'SCHOOL_SUSPENDED',
+          schoolId: selection.schoolId,
+        });
+      }
+      target = {
+        kind: 'local',
+        schoolId: membership.schoolId,
+        role: membership.role,
+        membershipId: membership.membershipId,
+      };
+    }
+
+    const result = await createAccessSessionService().transitionContext({ claims, target });
+    if (result.ok === false) {
+      const reason = result.error.reason === 'context_transition_failed'
+        ? result.error.cause
+        : result.error.reason;
+      const status = reason === 'version_conflict' ? 409
+        : reason === 'missing_membership' || reason === 'inactive_membership' || reason === 'role_mismatch' || reason === 'unauthorized_context' ? 403
+          : reason === 'session_not_found' || reason === 'generation_changed' ? 401
+            : 503;
+      return res.status(status).json({
+        error: 'Unable to change the active access context.',
+        code: `ACCESS_CONTEXT_${String(reason).toUpperCase()}`,
+      });
+    }
+    return res.json({
+      token: result.accessToken,
+      contextVersion: result.contextVersion,
+      role: selection.kind === 'global' ? 'super_admin' : selection.role,
+      schoolId: selection.kind === 'global' ? null : selection.schoolId,
+      changed: result.changed,
+    });
+  };
+
   app.get('/api/auth/schools', requireAuth, async (req: AuthRequest, res) => {
     try {
-      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
-
-      let memberships = await getUserSchoolMemberships(actor.id ?? null);
+      if (!req.user?.id) return res.status(401).json({ error: 'Unauthenticated' });
+      const [account] = await db.select({ role: users.role }).from(users).where(eq(users.id, req.user.id)).limit(1);
+      if (!account) return res.status(404).json({ error: 'User not found' });
+      const memberships = await getUserSchoolMemberships(req.user.id);
       let schoolsList = [] as any[];
 
-      if (actor.role === 'super_admin') {
+      if (account.role === 'super_admin') {
         schoolsList = await db.select().from(schools);
       } else {
-        const schoolIds = memberships.map((membership) => membership.schoolId).filter((id): id is number => id != null);
+        const schoolIds = [...new Set(memberships.map((membership) => membership.schoolId))];
         if (schoolIds.length > 0) {
           schoolsList = await db.select().from(schools).where(inArray(schools.id, schoolIds));
-        } else {
-          const fallbackIds = getFallbackSchoolIdsForActor(actor, {
-            teacherSchoolId: actor.role === 'teacher' ? (actor as any).teacherSchoolId ?? null : null,
-            parentSchoolIds: actor.role === 'parent' ? [] : [],
-          });
-
-          if (fallbackIds.length > 0) {
-            for (const fallbackSchoolId of fallbackIds) {
-              const hasMembership = await ensureUserSchoolMembership(actor.id ?? null, fallbackSchoolId, actor.role === 'school_admin' ? 'school_admin' : undefined);
-              if (!hasMembership) {
-                await upsertUserSchoolMembership(actor.id ?? null, fallbackSchoolId, actor.role === 'school_admin' ? 'school_admin' : (actor.role || 'teacher'), true);
-              }
-            }
-            memberships = await getUserSchoolMemberships(actor.id ?? null);
-            const refreshedSchoolIds = memberships.map((membership) => membership.schoolId).filter((id): id is number => id != null);
-            if (refreshedSchoolIds.length > 0) {
-              schoolsList = await db.select().from(schools).where(inArray(schools.id, refreshedSchoolIds));
-            }
-          }
         }
       }
 
-      const activeSchoolId = actor.role === 'super_admin'
-        ? null
-        : memberships.find((membership) => membership.isActive)?.schoolId
-          ?? null;
+      const activeContext = req.user.accessContext;
 
       res.json({
         schools: schoolsList.map((school) => ({
@@ -2777,9 +3429,10 @@ export async function createApp() {
           name: school.name,
           isSuspended: Boolean(school.isSuspended),
         })),
-        activeSchoolId: schoolsList.find((school) => school.id === activeSchoolId)?.isSuspended
-          ? null
-          : activeSchoolId,
+        memberships,
+        activeSchoolId: activeContext?.kind === 'local' ? activeContext.active.schoolId : null,
+        activeRole: activeContext?.kind === 'local' ? activeContext.active.role : null,
+        isSuperAdmin: account.role === 'super_admin',
       });
     } catch (err: any) {
       console.error('Error fetching user schools:', err);
@@ -2787,116 +3440,300 @@ export async function createApp() {
     }
   });
 
+  app.post('/api/auth/context/active', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const body = req.body ?? {};
+      if (body.kind === 'global') {
+        return await transitionAccessContext(req, res, { kind: 'global' });
+      }
+      const schoolId = parsePositiveInteger(body.schoolId);
+      if (!schoolId || !isLocalSchoolRole(body.role)) {
+        return res.status(400).json({ error: 'A valid schoolId and local role are required' });
+      }
+      return await transitionAccessContext(req, res, {
+        kind: 'local',
+        schoolId,
+        role: body.role,
+      });
+    } catch (err: any) {
+      console.error('Error changing active access context:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   app.post('/api/auth/schools/active', requireAuth, async (req: AuthRequest, res) => {
+    const schoolId = parsePositiveInteger(req.body?.schoolId);
+    if (!schoolId || !req.user?.id) return res.status(400).json({ error: 'A valid schoolId is required' });
+    const memberships = await getUserSchoolMemberships(req.user.id);
+    const roles = [...new Set(memberships
+      .filter((membership) => membership.schoolId === schoolId)
+      .map((membership) => membership.role))];
+    if (roles.length !== 1) {
+      return res.status(409).json({
+        error: roles.length === 0 ? 'No function is assigned in this school.' : 'Choose a function for this school.',
+        code: roles.length === 0 ? 'ACCESS_MEMBERSHIP_NOT_FOUND' : 'ACCESS_ROLE_SELECTION_REQUIRED',
+        roles,
+      });
+    }
+    return transitionAccessContext(req, res, { kind: 'local', schoolId, role: roles[0] });
+  });
+
+  app.get('/api/admin/users/:id/functions', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
-      if (!actor) return res.status(404).json({ error: 'User not found' });
-      
-      const { schoolId } = req.body ?? {};
-      const parsedSchoolId = typeof schoolId === 'number' ? schoolId : parseInt(String(schoolId), 10);
-      if (!Number.isFinite(parsedSchoolId)) return res.status(400).json({ error: 'Invalid schoolId' });
-
-      // Super admins can select any school
-      if (actor.role === 'super_admin') {
-        res.json({ schoolId: parsedSchoolId });
-        return;
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
       }
 
-      // For other roles: check if membership exists or can be auto-created from fallback sources
-      let membership = actor.role === 'school_admin'
-        ? await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId, 'school_admin')
-        : await ensureUserSchoolMembership(actor.id ?? null, parsedSchoolId);
+      const userId = parsePositiveInteger(req.params.id);
+      if (!userId) return res.status(400).json({ error: 'A valid user is required' });
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'Forbidden: missing school context' });
+      }
 
-      if (!membership && actor.id) {
-        try {
-          const fallbackIds = getFallbackSchoolIdsForActor(actor, {
-            teacherSchoolId: actor.role === 'teacher' ? (actor as any).teacherSchoolId ?? null : null,
-            parentSchoolIds: actor.role === 'parent' ? [] : [],
+      const conditions = [
+        eq(userSchools.userId, userId),
+        ...(actor.role === 'school_admin' ? [eq(userSchools.schoolId, actor.schoolId!)] : []),
+      ];
+      const memberships = await db.select({
+        id: userSchools.id,
+        schoolId: userSchools.schoolId,
+        role: userSchools.role,
+        isActive: userSchools.isActive,
+      }).from(userSchools).where(and(...conditions));
+
+      return res.json(memberships.filter((membership) => isLocalSchoolRole(membership.role)));
+    } catch (error) {
+      console.error('Error fetching user functions:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.delete('/api/admin/users/:id/functions/:membershipId', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (!actor.id) return res.status(401).json({ error: 'Authenticated account identity is unavailable' });
+
+      const targetUserId = parsePositiveInteger(req.params.id);
+      const membershipId = parsePositiveInteger(req.params.membershipId);
+      if (!targetUserId || !membershipId) {
+        return res.status(400).json({ error: 'A valid user and function are required' });
+      }
+
+      const [membership] = await db.select({
+        id: userSchools.id,
+        userId: userSchools.userId,
+        schoolId: userSchools.schoolId,
+        role: userSchools.role,
+      }).from(userSchools).where(and(
+        eq(userSchools.id, membershipId),
+        eq(userSchools.userId, targetUserId),
+      )).limit(1);
+      if (!membership || !isLocalSchoolRole(membership.role)) {
+        return res.status(404).json({ error: 'Function not found' });
+      }
+      if (!canGrantUserFunction({
+        actorId: actor.id,
+        actorRole: actor.role,
+        actorSchoolId: actor.schoolId,
+        targetUserId,
+        targetSchoolId: membership.schoolId,
+        role: membership.role,
+      })) {
+        return res.status(403).json({ error: 'The active function cannot manage this role in the requested scope' });
+      }
+
+      const result = await new DrizzleGenerationAwareAccessSessionStore(db).deactivateMembership({
+        userId: targetUserId,
+        membershipId,
+        schoolId: membership.schoolId,
+        role: membership.role,
+        nowEpochMs: Date.now(),
+        mutation: async (tx) => {
+          await tx.insert(auditEvents).values({
+            actorUserId: actor.id,
+            actorRole: actor.role,
+            actorEmail: actor.email ?? null,
+            actorName: actor.name,
+            action: 'membership_deactivated',
+            resourceType: 'user',
+            resourceId: targetUserId,
+            schoolId: membership.schoolId,
+            description: `${actor.role} ${actor.email || actor.uid} deactivated ${membership.role} membership ${membershipId}`,
           });
+        },
+      });
 
-          if (fallbackIds.includes(parsedSchoolId)) {
-            await upsertUserSchoolMembership(actor.id, parsedSchoolId, actor.role === 'school_admin' ? 'school_admin' : (actor.role || 'teacher'), true);
-            membership = await ensureUserSchoolMembership(actor.id, parsedSchoolId);
-            console.log('Auto-created user_schools membership from fallback school context', { userId: actor.id, schoolId: parsedSchoolId, role: actor.role });
-          }
-        } catch (e: any) {
-          console.warn('Failed to auto-create fallback membership:', e?.message || e);
+      if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+      if (result.status === 'school_not_found' || result.status === 'membership_not_found') {
+        return res.status(404).json({ error: 'Function not found' });
+      }
+      if (result.status === 'account_not_admissible') {
+        return res.status(409).json({ error: 'A globally disabled account cannot have a function changed' });
+      }
+      if (result.status === 'last_school_admin') {
+        return res.status(409).json({
+          error: 'The last active school administrator cannot be deactivated.',
+          code: 'LAST_SCHOOL_ADMIN',
+        });
+      }
+      if (result.status === 'deactivated' || result.status === 'already_inactive') {
+        return res.json({
+          success: true,
+          alreadyInactive: result.status === 'already_inactive',
+          revokedSessionCount: result.revokedSessionCount,
+        });
+      }
+      return res.status(500).json({ error: 'Unexpected function deactivation result' });
+    } catch (error) {
+      console.error('Error deactivating user function:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/admin/users/:id/functions', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (!actor.id) return res.status(401).json({ error: 'Authenticated account identity is unavailable' });
+
+      const targetId = parsePositiveInteger(req.params.id);
+      const schoolId = parsePositiveInteger(req.body?.schoolId);
+      const role = req.body?.role;
+      if (!targetId) {
+        return res.status(400).json({ error: 'A valid user is required' });
+      }
+      if (req.body?.schoolId != null && !schoolId) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (
+        role !== 'super_admin'
+        && (!schoolId || !isLocalSchoolRole(role))
+      ) {
+        return res.status(400).json({ error: 'A valid school and local role are required' });
+      }
+      if (!canGrantUserFunction({
+        actorId: actor.id,
+        actorRole: actor.role,
+        actorSchoolId: actor.schoolId,
+        targetUserId: targetId,
+        targetSchoolId: schoolId,
+        role,
+      })) {
+        return res.status(403).json({ error: 'The active function cannot grant this role in the requested scope' });
+      }
+
+      const [targetUser] = await db.select({
+        id: users.id,
+        role: users.role,
+        isDeleted: users.isDeleted,
+        phone: users.phone,
+      }).from(users).where(eq(users.id, targetId)).limit(1);
+      if (!targetUser || targetUser.isDeleted) return res.status(404).json({ error: 'User not found' });
+      if (role === 'super_admin') {
+        if (targetUser.role === 'super_admin') {
+          return res.status(200).json({ userId: targetId, role, alreadyAssigned: true });
         }
+        const [updatedUser] = await db.update(users).set({ role: 'super_admin' })
+          .where(eq(users.id, targetId)).returning({ id: users.id });
+        if (!updatedUser) return res.status(404).json({ error: 'User not found' });
+        return res.status(201).json({ userId: targetId, role, alreadyAssigned: false });
       }
 
-      // If membership not found, try to auto-create it for parent from fallback sources
-      if (!membership && actor.role === 'parent' && actor.id) {
-        try {
-          const parentRows = await db.select({ id: parents.id, schoolId: parents.schoolId })
-            .from(parents)
-            .where(eq(parents.userId, actor.id));
+      if (!schoolId || !isLocalSchoolRole(role)) {
+        return res.status(400).json({ error: 'A valid school and local role are required' });
+      }
+      const [school] = await db.select({ id: schools.id, isSuspended: schools.isSuspended })
+        .from(schools).where(eq(schools.id, schoolId)).limit(1);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      if (school.isSuspended) {
+        return res.status(423).json({ error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED' });
+      }
 
-          let canCreate = parentRows.some((row) => row.schoolId === parsedSchoolId);
-          if (!canCreate && parentRows.length > 0) {
-            const linkedStudents = await db.select({ id: students.id })
-              .from(students)
-              .innerJoin(parents, and(
-                eq(students.parentId, parents.id),
-                eq(students.schoolId, parents.schoolId),
-              ))
-              .where(and(
-                eq(parents.userId, actor.id),
-                eq(parents.schoolId, parsedSchoolId),
-                eq(students.schoolId, parsedSchoolId),
-              ));
-            canCreate = linkedStudents.length > 0;
-          }
-
-          if (canCreate) {
-            await upsertUserSchoolMembership(actor.id, parsedSchoolId, 'parent', true);
-            membership = await ensureUserSchoolMembership(actor.id, parsedSchoolId);
-            console.log('Auto-created user_schools membership for parent', { userId: actor.id, schoolId: parsedSchoolId });
-          }
-        } catch (e: any) {
-          console.warn('Failed to auto-create parent membership:', e?.message || e);
+      const result = await db.transaction(async (tx) => {
+        const [existing] = await tx.select({
+          id: userSchools.id,
+          isActive: userSchools.isActive,
+        })
+          .from(userSchools).where(and(
+            eq(userSchools.userId, targetId),
+            eq(userSchools.schoolId, schoolId),
+            eq(userSchools.role, role),
+          )).limit(1);
+        let membershipId = existing?.id ?? null;
+        if (existing?.isActive === false) {
+          await tx.update(userSchools).set({ isActive: true }).where(and(
+            eq(userSchools.userId, targetId),
+            eq(userSchools.schoolId, schoolId),
+            eq(userSchools.role, role),
+            eq(userSchools.isActive, false),
+          ));
+        } else if (!existing) {
+          const [inserted] = await tx.insert(userSchools).values({
+            userId: targetId,
+            schoolId,
+            role,
+            isActive: true,
+          }).returning({ id: userSchools.id });
+          membershipId = inserted?.id ?? null;
         }
-      }
 
-      // If membership not found and actor has no ID, reject early
-      if (!membership && !actor.id) {
-        console.warn('School selection rejected: actor has no ID', {
-          schoolId: parsedSchoolId,
-          userRole: actor.role,
-          actorHasId: !!actor.id
-        });
-        return res.status(403).json({ error: 'User identity cannot be verified' });
-      }
+        if (role === 'parent') {
+          const [profile] = await tx.select({ id: parents.id }).from(parents)
+            .where(and(
+              eq(parents.userId, targetId),
+              eq(parents.schoolId, schoolId),
+            )).limit(1);
+          if (!profile) {
+            await tx.insert(parents).values({
+              userId: targetId,
+              schoolId,
+              phone: targetUser.phone ?? '',
+              address: '',
+            });
+          }
+        } else if (role === 'teacher') {
+          const [profile] = await tx.select({ id: teachers.id }).from(teachers)
+            .where(and(
+              eq(teachers.userId, targetId),
+              eq(teachers.schoolId, schoolId),
+            )).limit(1);
+          if (!profile) {
+            await tx.insert(teachers).values({
+              userId: targetId,
+              schoolId,
+              phone: targetUser.phone ?? '',
+              specialization: null,
+            });
+          }
+        }
+        return { membershipId, alreadyAssigned: Boolean(existing) };
+      });
 
-      if (!membership) {
-        console.warn('School selection denied: user has no membership for school', { 
-          userId: actor.id, 
-          schoolId: parsedSchoolId,
-          userRole: actor.role 
-        });
-        return res.status(403).json({ error: 'School membership not found for this user' });
-      }
-
-      const [selectedSchool] = await db.select({
-        id: schools.id,
-        isSuspended: schools.isSuspended,
-      }).from(schools).where(eq(schools.id, parsedSchoolId)).limit(1);
-      if (!selectedSchool) return res.status(404).json({ error: 'School not found' });
-      if (selectedSchool.isSuspended) {
-        return res.status(423).json({
-          error: schoolSuspendedMessage,
-          code: 'SCHOOL_SUSPENDED',
-          schoolId: parsedSchoolId,
+      return res.status(result.alreadyAssigned ? 200 : 201).json({
+        userId: targetId,
+        schoolId,
+        role,
+        membershipId: result.membershipId,
+        alreadyAssigned: result.alreadyAssigned,
+      });
+    } catch (error: any) {
+      if (error?.code === '23505' || error?.cause?.code === '23505') {
+        return res.status(409).json({
+          error: 'The database still enforces a conflicting user-school uniqueness constraint.',
+          code: 'MULTI_ROLE_MEMBERSHIP_UNSUPPORTED_BY_DATABASE',
         });
       }
-      
-      // Membership exists, set it as active
-      await setActiveUserSchool(actor.id ?? null, parsedSchoolId);
-      console.log('School activated successfully', { userId: actor.id, schoolId: parsedSchoolId });
-      res.json({ schoolId: parsedSchoolId });
-    } catch (err: any) {
-      console.error('Error setting active school:', err);
-      res.status(500).json({ error: 'Internal server error' });
+      console.error('Failed to assign local user function:', error);
+      return res.status(500).json({ error: 'Failed to assign local user function' });
     }
   });
 
@@ -2983,23 +3820,13 @@ export async function createApp() {
       const existingUser = await db.select().from(users).where(eq(users.uid, uid));
 
       if (existingUser.length > 0) {
-        const existing = existingUser[0];
-        if (schoolId && existing.schoolId !== schoolId) {
-          await db.update(users).set({ schoolId }).where(eq(users.uid, uid));
-          existing.schoolId = schoolId;
-        }
-        return res.json(existing);
+        return res.json(toUserDto(existingUser[0]));
       }
 
       if (normalizedEmail) {
         const existingByEmail = await findExistingUsersByEmail(normalizedEmail);
         if (existingByEmail.length > 0) {
-          const existing = existingByEmail[0];
-          if (schoolId && existing.schoolId !== schoolId) {
-            await db.update(users).set({ schoolId }).where(eq(users.id, existing.id));
-            existing.schoolId = schoolId;
-          }
-          return res.json(existing);
+          return res.json(toUserDto(existingByEmail[0]));
         }
       }
 
@@ -3012,11 +3839,14 @@ export async function createApp() {
       }
 
       let resolvedSchoolId = schoolId ?? null;
-      if (actor.simulated && !resolvedSchoolId && finalRole !== 'super_admin') {
-        const defaultSchool = await db.select().from(schools).limit(1);
-        if (defaultSchool.length > 0) {
-          resolvedSchoolId = defaultSchool[0].id;
+      if (finalRole !== 'super_admin') {
+        resolvedSchoolId = parsePositiveInteger(resolvedSchoolId);
+        if (resolvedSchoolId == null) {
+          return res.status(400).json({ error: 'A valid school context is required to create a local profile' });
         }
+        const [profileSchool] = await db.select({ id: schools.id }).from(schools)
+          .where(eq(schools.id, resolvedSchoolId)).limit(1);
+        if (!profileSchool) return res.status(400).json({ error: 'Invalid school context' });
       }
 
       const canonicalPhone = canonicalizeUserPhone(req.body?.phone ?? (req.user as any).phone);
@@ -3039,15 +3869,27 @@ export async function createApp() {
             userId: newUser.id,
             phone: canonicalPhone,
             address: '',
+            schoolId: resolvedSchoolId,
           });
-          if (resolvedSchoolId != null) {
-            await tx.insert(userSchools).values({
-              userId: newUser.id,
-              schoolId: resolvedSchoolId,
-              role: 'parent',
-              isActive: true,
-            });
-          }
+          await tx.insert(userSchools).values({
+            userId: newUser.id,
+            schoolId: resolvedSchoolId!,
+            role: 'parent',
+            isActive: true,
+          });
+        } else if (finalRole === 'teacher') {
+          await tx.insert(teachers).values({
+            userId: newUser.id,
+            schoolId: resolvedSchoolId!,
+            phone: '',
+            specialization: 'Général',
+          });
+          await tx.insert(userSchools).values({
+            userId: newUser.id,
+            schoolId: resolvedSchoolId!,
+            role: 'teacher',
+            isActive: true,
+          });
         }
 
         return newUser;
@@ -3063,34 +3905,16 @@ export async function createApp() {
           }
         }
       } else if (finalRole === 'teacher') {
-        // Find default school if exists
-        const defaultSchool = await db.select().from(schools).limit(1);
-        if (defaultSchool.length > 0) {
-          await db.insert(teachers).values({
-            userId: createdUser.id,
-            schoolId: defaultSchool[0].id,
-            phone: '',
-            specialization: 'Général',
-          });
-          try {
-            await db.insert(userSchools).values({
-              userId: createdUser.id,
-              schoolId: defaultSchool[0].id,
-              role: 'teacher',
-              isActive: true,
-            });
-          } catch (e: any) {
-            console.warn('Failed to insert user_schools for register-or-login teacher', e?.message || e);
+        try {
+          const createdTeacherRow = await db.select({ id: teachers.id }).from(teachers).where(and(
+            eq(teachers.userId, createdUser.id),
+            eq(teachers.schoolId, resolvedSchoolId!),
+          ));
+          if (createdTeacherRow.length > 0) {
+            await logIfTeacherUserMismatch(createdUser.id, createdTeacherRow[0].id);
           }
-          // If a teacher profile was created in register-or-login flow, attempt to find it and log inconsistencies
-          try {
-            const createdTeacherRow = await db.select().from(teachers).where(eq(teachers.userId, createdUser.id));
-            if (createdTeacherRow.length > 0) {
-              await logIfTeacherUserMismatch(createdUser.id, createdTeacherRow[0].id);
-            }
-          } catch (e) {
-            /* ignore */
-          }
+        } catch (e) {
+          /* ignore */
         }
       } else if (finalRole === 'surveillant') {
         if (resolvedSchoolId != null) {
@@ -3987,7 +4811,7 @@ export async function createApp() {
         const candidates = contactParentRows.filter((parent: any) => parentEmailById.get(Number(parent.id)) === email);
         const authorizedCandidates: { parent: any }[] = [];
         for (const parent of candidates) {
-          if (parent.schoolId === schoolId || await ensureUserSchoolMembership(parent.userId, schoolId, 'parent')) {
+          if (await getActiveUserSchoolMembership(parent.userId, schoolId, 'parent')) {
             authorizedCandidates.push({ parent });
           }
         }
@@ -4006,7 +4830,7 @@ export async function createApp() {
         const candidates = contactParentRows.filter((parent: any) => parentPhoneById.get(Number(parent.id)) === phone);
         const authorizedCandidates: { parent: any }[] = [];
         for (const parent of candidates) {
-          if (parent.schoolId === schoolId || await ensureUserSchoolMembership(parent.userId, schoolId, 'parent')) {
+          if (await getActiveUserSchoolMembership(parent.userId, schoolId, 'parent')) {
             authorizedCandidates.push({ parent });
           }
         }
@@ -4170,12 +4994,10 @@ export async function createApp() {
           errors.push({ row: importRowNumber, reason: `Parent not found: ${parentId}`, data: s });
           continue;
         }
-        if (resolvedParentRow.schoolId !== schoolId) {
-          const membership = await ensureUserSchoolMembership(resolvedParentRow.userId, schoolId, 'parent');
-          if (!membership) {
-            errors.push({ row: importRowNumber, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
-            continue;
-          }
+        const parentMembership = await getActiveUserSchoolMembership(resolvedParentRow.userId, schoolId, 'parent');
+        if (!parentMembership) {
+          errors.push({ row: importRowNumber, reason: `Parent ${parentId} does not belong to school ${schoolId}`, data: s });
+          continue;
         }
         if (normalizedParentEmail && parentEmailById.get(Number(resolvedParentRow.id)) !== normalizedParentEmail) {
           errors.push({ row: importRowNumber, reason: 'Le parentId fourni ne correspond pas au parentEmail fourni', data: s });
@@ -4190,28 +5012,16 @@ export async function createApp() {
 
             const explicitAdminId = s.schoolAdminId ? parseInt(s.schoolAdminId) : undefined;
             if (explicitAdminId) {
-              const [assignedAdmin] = await db
-                .select()
-                .from(users)
-                .where(
-                  and(
-                    eq(users.id, explicitAdminId),
-                    eq(users.role, 'school_admin'),
-                    eq(users.schoolId, schoolId)
-                  )
-                );
+              const assignedAdmin = await getActiveUserSchoolMembership(explicitAdminId, schoolId, 'school_admin');
 
               if (!assignedAdmin) {
                 throw new Error('Invalid schoolAdminId for this school');
               }
 
-              return assignedAdmin.id;
+              return assignedAdmin.userId;
             }
 
-            const admins = await db
-              .select({ id: users.id })
-              .from(users)
-              .where(and(eq(users.role, 'school_admin'), eq(users.schoolId, schoolId)));
+            const admins = (await getActiveSchoolAdminUserIds(schoolId)).map((id) => ({ id }));
 
             if (admins.length === 1) {
               return admins[0].id;
@@ -4319,33 +5129,722 @@ export async function createApp() {
         return res.status(401).json({ error: 'Mot de passe incorrect.' });
       }
 
-      const [school] = await db.select().from(schools).where(eq(schools.id, id));
-      if (!school) {
-        return res.status(404).json({ error: 'École introuvable.' });
-      }
-
-      const [financialHistory] = await db.select({ id: financialObligations.id })
-        .from(financialObligations)
-        .where(eq(financialObligations.schoolId, id))
-        .limit(1);
-      const [paymentHistory] = await db.select({ id: financialPayments.id })
-        .from(financialPayments)
-        .where(eq(financialPayments.schoolId, id))
-        .limit(1);
-      if (financialHistory || paymentHistory) {
-        return res.status(409).json({
-          error: 'Cette école possède un historique comptable et ne peut pas être supprimée.',
-        });
-      }
-
       await db.transaction(async (tx) => {
-        const schoolUserIds = (await tx.select({ id: users.id }).from(users).where(eq(users.schoolId, id))).map((u) => u.id);
-        const classIds = (await tx.select({ id: classes.id }).from(classes).where(eq(classes.schoolId, id))).map((c) => c.id);
-        const studentIds = (await tx.select({ id: students.id }).from(students).where(eq(students.schoolId, id))).map((s) => s.id);
-        const academicYearIds = (await tx.select({ id: academicYears.id }).from(academicYears).where(eq(academicYears.schoolId, id))).map((a) => a.id);
-        const evaluationIds = classIds.length > 0
-          ? (await tx.select({ id: evaluations.id }).from(evaluations).where(sql`${evaluations.classId} IN ${classIds}`)).map((e) => e.id)
+        await tx.execute(sql`LOCK TABLE user_schools IN SHARE ROW EXCLUSIVE MODE`);
+        const [school] = await tx.select({ id: schools.id })
+          .from(schools)
+          .where(eq(schools.id, id))
+          .for('update');
+        if (!school) throw new SchoolDeletionNotFoundError('École introuvable.');
+
+        const [financialHistory] = await tx.select({ id: financialObligations.id })
+          .from(financialObligations)
+          .where(eq(financialObligations.schoolId, id))
+          .for('update')
+          .limit(1);
+        const [paymentHistory] = await tx.select({ id: financialPayments.id })
+          .from(financialPayments)
+          .where(eq(financialPayments.schoolId, id))
+          .for('update')
+          .limit(1);
+        if (financialHistory || paymentHistory) {
+          throw new SchoolDeletionConflictError(
+            'SCHOOL_ACCOUNTING_HISTORY',
+            'Cette école possède un historique comptable et ne peut pas être supprimée.',
+          );
+        }
+
+        const academicYearRows = await tx.select({ id: academicYears.id })
+          .from(academicYears)
+          .where(eq(academicYears.schoolId, id))
+          .for('update');
+        const academicYearIds = academicYearRows.map((year) => year.id);
+        const schoolClassRows = await tx.select({
+          id: classes.id,
+          schoolId: classes.schoolId,
+          academicYearId: classes.academicYearId,
+        }).from(classes).where(eq(classes.schoolId, id));
+        const yearClassRows = academicYearIds.length > 0
+          ? await tx.select({
+            id: classes.id,
+            schoolId: classes.schoolId,
+            academicYearId: classes.academicYearId,
+          }).from(classes).where(inArray(classes.academicYearId, academicYearIds))
           : [];
+        const classesToDelete = [...new Map(
+          [...schoolClassRows, ...yearClassRows].map((row) => [row.id, row]),
+        ).values()];
+        const classIds = classesToDelete.map((row) => row.id);
+        if (classIds.length > 0) {
+          await tx.select({ id: classes.id }).from(classes).where(inArray(classes.id, classIds)).for('update');
+        }
+
+        const subjectRows = await tx.select({ id: subjects.id })
+          .from(subjects)
+          .where(eq(subjects.schoolId, id))
+          .for('update');
+        const subjectIds = subjectRows.map((subject) => subject.id);
+        const schoolStudentRows = await tx.select({
+          id: students.id,
+          schoolId: students.schoolId,
+          classId: students.classId,
+        }).from(students).where(eq(students.schoolId, id));
+        const classStudentRows = classIds.length > 0
+          ? await tx.select({
+            id: students.id,
+            schoolId: students.schoolId,
+            classId: students.classId,
+          }).from(students).where(inArray(students.classId, classIds))
+          : [];
+        const studentsToDelete = [...new Map(
+          [...schoolStudentRows, ...classStudentRows].map((row) => [row.id, row]),
+        ).values()];
+        const studentIds = studentsToDelete.map((row) => row.id);
+        if (studentIds.length > 0) {
+          await tx.select({ id: students.id }).from(students).where(inArray(students.id, studentIds)).for('update');
+        }
+
+        const schoolEvaluationRows = await tx.select({
+          id: evaluations.id,
+          schoolId: evaluations.schoolId,
+          classId: evaluations.classId,
+          subjectId: evaluations.subjectId,
+          termId: evaluations.termId,
+        }).from(evaluations).where(eq(evaluations.schoolId, id));
+        const classEvaluationRows = classIds.length > 0
+          ? await tx.select({
+            id: evaluations.id,
+            schoolId: evaluations.schoolId,
+            classId: evaluations.classId,
+            subjectId: evaluations.subjectId,
+            termId: evaluations.termId,
+          }).from(evaluations).where(inArray(evaluations.classId, classIds))
+          : [];
+        const subjectEvaluationRows = subjectIds.length > 0
+          ? await tx.select({
+            id: evaluations.id,
+            schoolId: evaluations.schoolId,
+            classId: evaluations.classId,
+            subjectId: evaluations.subjectId,
+            termId: evaluations.termId,
+          }).from(evaluations).where(inArray(evaluations.subjectId, subjectIds))
+          : [];
+        const evaluationRows = [...new Map(
+          [...schoolEvaluationRows, ...classEvaluationRows, ...subjectEvaluationRows].map((row) => [row.id, row]),
+        ).values()];
+        const evaluationIds = evaluationRows.map((row) => row.id);
+        if (evaluationIds.length > 0) {
+          await tx.select({ id: evaluations.id }).from(evaluations).where(inArray(evaluations.id, evaluationIds)).for('update');
+        }
+
+        const schoolTermRows = await tx.select({
+          id: schoolTerms.id,
+          schoolId: schoolTerms.schoolId,
+          academicYearId: schoolTerms.academicYearId,
+        }).from(schoolTerms).where(eq(schoolTerms.schoolId, id));
+        const yearTermRows = academicYearIds.length > 0
+          ? await tx.select({
+            id: schoolTerms.id,
+            schoolId: schoolTerms.schoolId,
+            academicYearId: schoolTerms.academicYearId,
+          }).from(schoolTerms).where(inArray(schoolTerms.academicYearId, academicYearIds))
+          : [];
+        const termsToDelete = [...new Map(
+          [...schoolTermRows, ...yearTermRows].map((row) => [row.id, row]),
+        ).values()];
+        const termIds = termsToDelete.map((row) => row.id);
+        if (termIds.length > 0) {
+          await tx.select({ id: schoolTerms.id }).from(schoolTerms).where(inArray(schoolTerms.id, termIds)).for('update');
+        }
+
+        const assertNoForeignScope = (rows: Array<{ schoolId: number | null }>, code: string, message: string) => {
+          if (rows.some((row) => row.schoolId !== id)) {
+            throw new SchoolDeletionConflictError(code, message);
+          }
+        };
+        const sharedClassMessage = 'La suppression affecterait une classe ou une donnée pédagogique associée à un autre établissement.';
+
+        const generationConditions = [
+          ...(academicYearIds.length > 0 ? [inArray(bulletinGenerations.schoolYearId, academicYearIds)] : []),
+          ...(classIds.length > 0 ? [inArray(bulletinGenerations.classId, classIds)] : []),
+          ...(termIds.length > 0 ? [inArray(bulletinGenerations.termId, termIds)] : []),
+        ];
+        const generationsToDelete = generationConditions.length > 0
+          ? await tx.select({
+            id: bulletinGenerations.id,
+            classId: bulletinGenerations.classId,
+            schoolYearId: bulletinGenerations.schoolYearId,
+            termId: bulletinGenerations.termId,
+          }).from(bulletinGenerations).where(or(...generationConditions))
+          : [];
+        if (generationsToDelete.some((row) => (
+          !classIds.includes(row.classId)
+          || !academicYearIds.includes(row.schoolYearId)
+          || !termIds.includes(row.termId)
+        ))) {
+          throw new SchoolDeletionConflictError(
+            'SCHOOL_SHARED_BULLETIN_DEPENDENCY',
+            'Une génération de bulletin ciblée dépend d’une classe, année ou période hors de l’établissement.',
+          );
+        }
+        const generationIds = generationsToDelete.map((row) => row.id);
+        if (generationIds.length > 0) {
+          const generatedBulletins = await tx.select({
+            studentId: bulletins.studentId,
+            classId: bulletins.classId,
+            schoolYearId: bulletins.schoolYearId,
+          }).from(bulletins).where(inArray(bulletins.generationId, generationIds));
+          if (generatedBulletins.some((row) => (
+            !studentIds.includes(row.studentId)
+            || !classIds.includes(row.classId)
+            || !academicYearIds.includes(row.schoolYearId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_BULLETIN_DEPENDENCY',
+              'Une génération de bulletin ciblée est référencée par des bulletins hors de l’établissement.',
+            );
+          }
+        }
+
+        if (yearClassRows.some((row) => row.schoolId != null && row.schoolId !== id)) {
+          throw new SchoolDeletionConflictError(
+            'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+            'Une année scolaire ciblée est utilisée par une classe rattachée à un autre établissement.',
+          );
+        }
+
+        if (classIds.length > 0) {
+          const classSchoolAssociations = await tx.select({ schoolId: schoolClasses.schoolId })
+            .from(schoolClasses).where(inArray(schoolClasses.classId, classIds));
+          if (classSchoolAssociations.some((row) => row.schoolId !== id)) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Une classe ciblée est également associée à un autre établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: classTeachers.schoolId }).from(classTeachers).where(inArray(classTeachers.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: classHomeroomAssignments.schoolId }).from(classHomeroomAssignments).where(inArray(classHomeroomAssignments.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: teacherClassSubjects.schoolId }).from(teacherClassSubjects).where(inArray(teacherClassSubjects.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: classSuccessions.schoolId }).from(classSuccessions).where(inArray(classSuccessions.sourceClassId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: classSuccessions.schoolId }).from(classSuccessions).where(inArray(classSuccessions.targetClassId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          const successionRows = await tx.select({
+            sourceClassId: classSuccessions.sourceClassId,
+            targetClassId: classSuccessions.targetClassId,
+            academicYearId: classSuccessions.academicYearId,
+          }).from(classSuccessions).where(or(
+            inArray(classSuccessions.sourceClassId, classIds),
+            inArray(classSuccessions.targetClassId, classIds),
+          ));
+          if (successionRows.some((row) => (
+            !classIds.includes(row.sourceClassId)
+            || !classIds.includes(row.targetClassId)
+            || !academicYearIds.includes(row.academicYearId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Une progression de classe ciblée référence une classe ou une année hors de l’établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: classExamConfigurations.schoolId }).from(classExamConfigurations).where(inArray(classExamConfigurations.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          const classExamRows = await tx.select({
+            academicYearId: classExamConfigurations.academicYearId,
+          }).from(classExamConfigurations).where(inArray(classExamConfigurations.classId, classIds));
+          if (classExamRows.some((row) => !academicYearIds.includes(row.academicYearId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Une configuration d’examen ciblée référence une année scolaire hors de l’établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: absenceControls.schoolId }).from(absenceControls).where(inArray(absenceControls.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: students.schoolId }).from(students).where(inArray(students.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: evaluations.schoolId }).from(evaluations).where(inArray(evaluations.classId, classIds)),
+            'SCHOOL_SHARED_CLASS_DEPENDENCY',
+            sharedClassMessage,
+          );
+          const classGenerationRows = await tx.select({
+            schoolYearId: bulletinGenerations.schoolYearId,
+            termId: bulletinGenerations.termId,
+          }).from(bulletinGenerations).where(inArray(bulletinGenerations.classId, classIds));
+          if (classGenerationRows.some((row) => (
+            !academicYearIds.includes(row.schoolYearId) || !termIds.includes(row.termId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Une génération de bulletin ciblée dépend d’une année ou période hors de l’établissement.',
+            );
+          }
+          const classBulletinRows = await tx.select({
+            studentId: bulletins.studentId,
+            schoolYearId: bulletins.schoolYearId,
+          }).from(bulletins).where(inArray(bulletins.classId, classIds));
+          if (classBulletinRows.some((row) => (
+            !academicYearIds.includes(row.schoolYearId) || !studentIds.includes(row.studentId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Une classe ciblée est référencée par des bulletins hors de l’établissement.',
+            );
+          }
+          if (schoolStudentRows.some((row) => row.classId != null && !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_CLASS_DEPENDENCY',
+              'Un élève de l’établissement est rattaché à une classe qui ne peut pas être supprimée avec lui.',
+            );
+          }
+        }
+
+        if (academicYearIds.length > 0) {
+          if (yearTermRows.some((row) => row.schoolId != null && row.schoolId !== id)) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+              'Une année scolaire ciblée est utilisée par une période rattachée à un autre établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: classSuccessions.schoolId }).from(classSuccessions).where(inArray(classSuccessions.academicYearId, academicYearIds)),
+            'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+            'Une année scolaire ciblée possède des historiques de progression associés à un autre établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: classExamConfigurations.schoolId }).from(classExamConfigurations).where(inArray(classExamConfigurations.academicYearId, academicYearIds)),
+            'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+            'Une année scolaire ciblée possède des configurations d’examen associées à un autre établissement.',
+          );
+          const statusRows = await tx.select({
+            studentId: studentAcademicYearStatuses.studentId,
+          }).from(studentAcademicYearStatuses).where(inArray(studentAcademicYearStatuses.academicYearId, academicYearIds));
+          const examResultRows = await tx.select({
+            studentId: examResults.studentId,
+          }).from(examResults).where(inArray(examResults.academicYearId, academicYearIds));
+          const academicStudentIds = [...new Set([
+            ...statusRows.map((row) => row.studentId),
+            ...examResultRows.map((row) => row.studentId),
+          ])];
+          const usersWithAcademicYear = await tx.select({ id: users.id, schoolId: users.schoolId })
+            .from(users).where(inArray(users.academicYearId, academicYearIds));
+          assertNoForeignScope(
+            usersWithAcademicYear,
+            'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+            'Une année scolaire ciblée est sélectionnée par un compte d’un autre établissement.',
+          );
+          const academicYearUserIds = usersWithAcademicYear.map((user) => user.id);
+          if (academicYearUserIds.length > 0) {
+            const externalUserMemberships = await tx.select({ schoolId: userSchools.schoolId })
+              .from(userSchools).where(inArray(userSchools.userId, academicYearUserIds));
+            if (externalUserMemberships.some((membership) => membership.schoolId !== id)) {
+              throw new SchoolDeletionConflictError(
+                'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+                'Une année scolaire ciblée est sélectionnée par un compte encore rattaché à un autre établissement.',
+              );
+            }
+          }
+          if (academicStudentIds.length > 0) {
+            const academicStudents = await tx.select({ schoolId: students.schoolId })
+              .from(students).where(inArray(students.id, academicStudentIds));
+            assertNoForeignScope(
+              academicStudents,
+              'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+              'Une année scolaire ciblée est liée à des données d’élèves d’un autre établissement.',
+            );
+          }
+          const generationRows = await tx.select({
+            classId: bulletinGenerations.classId,
+            termId: bulletinGenerations.termId,
+          }).from(bulletinGenerations).where(inArray(bulletinGenerations.schoolYearId, academicYearIds));
+          if (generationRows.some((row) => !classIds.includes(row.classId) || !termIds.includes(row.termId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+              'Une année scolaire ciblée possède des générations de bulletins liées à des données hors de l’établissement.',
+            );
+          }
+          const yearBulletins = await tx.select({
+            studentId: bulletins.studentId,
+            classId: bulletins.classId,
+          }).from(bulletins).where(inArray(bulletins.schoolYearId, academicYearIds));
+          if (yearBulletins.some((row) => !studentIds.includes(row.studentId) || !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_ACADEMIC_YEAR_DEPENDENCY',
+              'Une année scolaire ciblée possède des bulletins liés à des données hors de l’établissement.',
+            );
+          }
+        }
+
+        if (evaluationIds.length > 0) {
+          const evaluationGradeRows = await tx.select({ studentId: grades.studentId })
+            .from(grades).where(inArray(grades.evaluationId, evaluationIds));
+          const evaluationParticipationRows = await tx.select({ studentId: evaluationParticipations.studentId })
+            .from(evaluationParticipations).where(inArray(evaluationParticipations.evaluationId, evaluationIds));
+          const evaluationStudentIds = [...new Set([
+            ...evaluationGradeRows.map((row) => row.studentId),
+            ...evaluationParticipationRows.map((row) => row.studentId),
+          ])];
+          if (evaluationStudentIds.length > 0) {
+            const evaluationStudents = await tx.select({ schoolId: students.schoolId })
+              .from(students).where(inArray(students.id, evaluationStudentIds));
+            assertNoForeignScope(
+              evaluationStudents,
+              'SCHOOL_SHARED_EVALUATION_DEPENDENCY',
+              'Une évaluation ciblée contient des notes ou participations d’élèves d’un autre établissement.',
+            );
+          }
+          if (evaluationRows.some((row) => !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_EVALUATION_DEPENDENCY',
+              'Une évaluation ciblée dépend d’une classe hors du périmètre de suppression.',
+            );
+          }
+        }
+
+        if (studentIds.length > 0) {
+          const studentYearStatuses = await tx.select({
+            academicYearId: studentAcademicYearStatuses.academicYearId,
+          }).from(studentAcademicYearStatuses).where(inArray(studentAcademicYearStatuses.studentId, studentIds));
+          if (studentYearStatuses.some((row) => !academicYearIds.includes(row.academicYearId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_STUDENT_HISTORY',
+              'Un élève ciblé possède un historique scolaire rattaché à une autre année.',
+            );
+          }
+          const studentExamResults = await tx.select({
+            academicYearId: examResults.academicYearId,
+          }).from(examResults).where(inArray(examResults.studentId, studentIds));
+          if (studentExamResults.some((row) => !academicYearIds.includes(row.academicYearId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_STUDENT_HISTORY',
+              'Un élève ciblé possède des résultats d’examen rattachés à une autre année.',
+            );
+          }
+          const studentBulletins = await tx.select({
+            classId: bulletins.classId,
+            schoolYearId: bulletins.schoolYearId,
+          }).from(bulletins).where(inArray(bulletins.studentId, studentIds));
+          if (studentBulletins.some((row) => !classIds.includes(row.classId) || !academicYearIds.includes(row.schoolYearId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_STUDENT_HISTORY',
+              'Un élève ciblé possède des bulletins liés à des classes ou années hors de l’établissement.',
+            );
+          }
+          const studentAbsences = await tx.select({
+            classId: absences.classId,
+            teachingAssignmentId: absences.teachingAssignmentId,
+          }).from(absences).where(inArray(absences.studentId, studentIds));
+          const classAbsences = classIds.length > 0
+            ? await tx.select({
+              classId: absences.classId,
+              teachingAssignmentId: absences.teachingAssignmentId,
+            }).from(absences).where(inArray(absences.classId, classIds))
+            : [];
+          const studentLateArrivals = await tx.select({
+            classId: lateArrivals.classId,
+            teachingAssignmentId: lateArrivals.teachingAssignmentId,
+          }).from(lateArrivals).where(inArray(lateArrivals.studentId, studentIds));
+          const classLateArrivals = classIds.length > 0
+            ? await tx.select({
+              classId: lateArrivals.classId,
+              teachingAssignmentId: lateArrivals.teachingAssignmentId,
+            }).from(lateArrivals).where(inArray(lateArrivals.classId, classIds))
+            : [];
+          const attendanceRows = [...studentAbsences, ...classAbsences, ...studentLateArrivals, ...classLateArrivals];
+          if (attendanceRows.some((row) => !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_STUDENT_HISTORY',
+              'Un historique d’absence ou de retard ciblé dépend d’une classe hors de l’établissement.',
+            );
+          }
+          const externalTeachingAssignmentIds = [...new Set(attendanceRows
+            .map((row) => row.teachingAssignmentId)
+            .filter((assignmentId): assignmentId is number => assignmentId != null))];
+          if (externalTeachingAssignmentIds.length > 0) {
+            assertNoForeignScope(
+              await tx.select({ schoolId: teacherClassSubjects.schoolId })
+                .from(teacherClassSubjects).where(inArray(teacherClassSubjects.id, externalTeachingAssignmentIds)),
+              'SCHOOL_SHARED_STUDENT_HISTORY',
+              'Un historique d’absence ou de retard ciblé référence une affectation pédagogique d’un autre établissement.',
+            );
+          }
+        }
+
+        if (termIds.length > 0) {
+          assertNoForeignScope(
+            await tx.select({ schoolId: evaluations.schoolId }).from(evaluations).where(inArray(evaluations.termId, termIds)),
+            'SCHOOL_SHARED_TERM_DEPENDENCY',
+            'Une période ciblée est utilisée par des évaluations d’un autre établissement.',
+          );
+          const termGenerations = await tx.select({
+            schoolYearId: bulletinGenerations.schoolYearId,
+            classId: bulletinGenerations.classId,
+          }).from(bulletinGenerations).where(inArray(bulletinGenerations.termId, termIds));
+          if (termGenerations.some((row) => !academicYearIds.includes(row.schoolYearId) || !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_TERM_DEPENDENCY',
+              'Une période ciblée est utilisée par des générations de bulletins hors de l’établissement.',
+            );
+          }
+          const termBulletins = await tx.select({
+            schoolYearId: bulletins.schoolYearId,
+            classId: bulletins.classId,
+            studentId: bulletins.studentId,
+          }).from(bulletins).where(inArray(bulletins.termId, termIds));
+          if (termBulletins.some((row) => (
+            !academicYearIds.includes(row.schoolYearId)
+            || !classIds.includes(row.classId)
+            || !studentIds.includes(row.studentId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_TERM_DEPENDENCY',
+              'Une période ciblée est utilisée par des bulletins hors de l’établissement.',
+            );
+          }
+        }
+
+        if (subjectIds.length > 0) {
+          assertNoForeignScope(
+            await tx.select({ schoolId: schoolSubjects.schoolId }).from(schoolSubjects).where(inArray(schoolSubjects.subjectId, subjectIds)),
+            'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+            'Une matière ciblée est associée à un autre établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: teacherSubjects.schoolId }).from(teacherSubjects).where(inArray(teacherSubjects.subjectId, subjectIds)),
+            'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+            'Une matière ciblée est utilisée par des associations enseignants hors de l’établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: teacherClassSubjects.schoolId }).from(teacherClassSubjects).where(inArray(teacherClassSubjects.subjectId, subjectIds)),
+            'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+            'Une matière ciblée est utilisée par des affectations pédagogiques hors de l’établissement.',
+          );
+          const subjectTeachingAssignments = await tx.select({
+            classId: teacherClassSubjects.classId,
+          }).from(teacherClassSubjects).where(inArray(teacherClassSubjects.subjectId, subjectIds));
+          if (subjectTeachingAssignments.some((row) => !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+              'Une matière ciblée est utilisée par une affectation pédagogique liée à une classe hors de l’établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: evaluations.schoolId }).from(evaluations).where(inArray(evaluations.subjectId, subjectIds)),
+            'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+            'Une matière ciblée est utilisée par des évaluations d’un autre établissement.',
+          );
+          const subjectAbsences = await tx.select({
+            studentId: absences.studentId,
+            classId: absences.classId,
+          }).from(absences).where(inArray(absences.subjectId, subjectIds));
+          if (subjectAbsences.some((row) => !studentIds.includes(row.studentId) || !classIds.includes(row.classId))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+              'Une matière ciblée est référencée par des historiques d’absence hors de l’établissement.',
+            );
+          }
+          assertNoForeignScope(
+            await tx.select({ schoolId: absenceControls.schoolId }).from(absenceControls).where(inArray(absenceControls.subjectId, subjectIds)),
+            'SCHOOL_SHARED_SUBJECT_DEPENDENCY',
+            'Une matière ciblée est référencée par des contrôles d’absence d’un autre établissement.',
+          );
+        }
+
+        const categoryRows = await tx.select({ id: accountingCategories.id })
+          .from(accountingCategories)
+          .where(eq(accountingCategories.schoolId, id));
+        const categoryIds = categoryRows.map((category) => category.id);
+        const schoolTariffs = await tx.select({ id: accountingTariffs.id })
+          .from(accountingTariffs).where(eq(accountingTariffs.schoolId, id));
+        const schoolFeeDefinitions = await tx.select({ id: accountingFeeDefinitions.id })
+          .from(accountingFeeDefinitions).where(eq(accountingFeeDefinitions.schoolId, id));
+        const financialReferenceConditions = [
+          ...(schoolTariffs.length > 0 ? [inArray(financialObligations.tariffId, schoolTariffs.map((row) => row.id))] : []),
+          ...(schoolFeeDefinitions.length > 0 ? [inArray(financialObligations.feeDefinitionId, schoolFeeDefinitions.map((row) => row.id))] : []),
+        ];
+        if (financialReferenceConditions.length > 0) {
+          const obligationsReferencingSchoolConfiguration = await tx.select({
+            schoolId: financialObligations.schoolId,
+          }).from(financialObligations).where(or(...financialReferenceConditions));
+          if (obligationsReferencingSchoolConfiguration.some((row) => row.schoolId !== id)) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+              'Une obligation financière d’un autre établissement référence une configuration financière ciblée.',
+            );
+          }
+        }
+        if (categoryIds.length > 0) {
+          assertNoForeignScope(
+            await tx.select({ schoolId: accountingTariffs.schoolId }).from(accountingTariffs).where(inArray(accountingTariffs.categoryId, categoryIds)),
+            'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+            'Une catégorie financière ciblée est utilisée par un autre établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: accountingScheduleTemplates.schoolId }).from(accountingScheduleTemplates).where(inArray(accountingScheduleTemplates.categoryId, categoryIds)),
+            'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+            'Une catégorie financière ciblée est utilisée par un autre établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: accountingFeeDefinitions.schoolId }).from(accountingFeeDefinitions).where(inArray(accountingFeeDefinitions.categoryId, categoryIds)),
+            'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+            'Une catégorie financière ciblée est utilisée par un autre établissement.',
+          );
+          assertNoForeignScope(
+            await tx.select({ schoolId: financialObligations.schoolId }).from(financialObligations).where(inArray(financialObligations.categoryId, categoryIds)),
+            'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+            'Une catégorie financière ciblée est utilisée par un autre établissement.',
+          );
+        }
+
+        if (classIds.length > 0 || academicYearIds.length > 0 || studentIds.length > 0) {
+          const tariffConditions = [
+            ...(academicYearIds.length > 0 ? [inArray(accountingTariffs.academicYearId, academicYearIds)] : []),
+            ...(classIds.length > 0 ? [
+              inArray(accountingTariffs.classId, classIds),
+              inArray(accountingTariffs.classFromId, classIds),
+              inArray(accountingTariffs.classToId, classIds),
+            ] : []),
+          ];
+          const scheduleConditions = [
+            ...(academicYearIds.length > 0 ? [inArray(accountingScheduleTemplates.academicYearId, academicYearIds)] : []),
+            ...(classIds.length > 0 ? [inArray(accountingScheduleTemplates.classId, classIds)] : []),
+          ];
+          const feeDefinitionConditions = [
+            ...(academicYearIds.length > 0 ? [inArray(accountingFeeDefinitions.academicYearId, academicYearIds)] : []),
+            ...(studentIds.length > 0 ? [inArray(accountingFeeDefinitions.studentId, studentIds)] : []),
+            ...(classIds.length > 0 ? [inArray(accountingFeeDefinitions.classId, classIds)] : []),
+          ];
+          const obligationConditions = [
+            ...(academicYearIds.length > 0 ? [inArray(financialObligations.academicYearId, academicYearIds)] : []),
+            ...(studentIds.length > 0 ? [inArray(financialObligations.studentId, studentIds)] : []),
+            ...(classIds.length > 0 ? [inArray(financialObligations.classId, classIds)] : []),
+          ];
+          const paymentConditions = [
+            ...(academicYearIds.length > 0 ? [inArray(financialPayments.academicYearId, academicYearIds)] : []),
+            ...(studentIds.length > 0 ? [inArray(financialPayments.studentId, studentIds)] : []),
+          ];
+          const tariffRows = tariffConditions.length > 0
+            ? await tx.select({
+              schoolId: accountingTariffs.schoolId,
+              academicYearId: accountingTariffs.academicYearId,
+              classId: accountingTariffs.classId,
+              classFromId: accountingTariffs.classFromId,
+              classToId: accountingTariffs.classToId,
+            }).from(accountingTariffs).where(or(...tariffConditions))
+            : [];
+          const scheduleRows = scheduleConditions.length > 0
+            ? await tx.select({
+              schoolId: accountingScheduleTemplates.schoolId,
+              academicYearId: accountingScheduleTemplates.academicYearId,
+              classId: accountingScheduleTemplates.classId,
+            }).from(accountingScheduleTemplates).where(or(...scheduleConditions))
+            : [];
+          const feeDefinitionRows = feeDefinitionConditions.length > 0
+            ? await tx.select({
+            schoolId: accountingFeeDefinitions.schoolId,
+            academicYearId: accountingFeeDefinitions.academicYearId,
+            studentId: accountingFeeDefinitions.studentId,
+            classId: accountingFeeDefinitions.classId,
+          }).from(accountingFeeDefinitions).where(or(...feeDefinitionConditions))
+            : [];
+          const foreignTariffs = tariffRows.filter((row) => row.schoolId !== id && (
+            academicYearIds.includes(row.academicYearId)
+            || [row.classId, row.classFromId, row.classToId].some((classId) => classId != null && classIds.includes(classId))
+          ));
+          const foreignSchedules = scheduleRows.filter((row) => row.schoolId !== id && (
+            academicYearIds.includes(row.academicYearId) || classIds.includes(row.classId)
+          ));
+          if (foreignTariffs.length > 0 || foreignSchedules.length > 0) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+              'Une donnée financière d’un autre établissement dépend d’une classe ou année ciblée.',
+            );
+          }
+          if (feeDefinitionRows.some((row) => row.schoolId !== id && (
+            (row.studentId != null && studentIds.includes(row.studentId))
+            || (row.classId != null && classIds.includes(row.classId))
+            || academicYearIds.includes(row.academicYearId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+              'Une donnée financière ciblée dépend d’un élève, d’une classe ou d’une année scolaire qui serait supprimée.',
+            );
+          }
+          const foreignObligations = obligationConditions.length > 0
+            ? await tx.select({
+            schoolId: financialObligations.schoolId,
+            studentId: financialObligations.studentId,
+            academicYearId: financialObligations.academicYearId,
+            classId: financialObligations.classId,
+          }).from(financialObligations).where(or(...obligationConditions))
+            : [];
+          if (foreignObligations.some((row) => row.schoolId !== id && (
+            studentIds.includes(row.studentId)
+            || academicYearIds.includes(row.academicYearId)
+            || classIds.includes(row.classId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+              'Une obligation financière d’un autre établissement dépend de données ciblées.',
+            );
+          }
+          const foreignPayments = paymentConditions.length > 0
+            ? await tx.select({
+            schoolId: financialPayments.schoolId,
+            studentId: financialPayments.studentId,
+            academicYearId: financialPayments.academicYearId,
+          }).from(financialPayments).where(or(...paymentConditions))
+            : [];
+          if (foreignPayments.some((row) => row.schoolId !== id && (
+            studentIds.includes(row.studentId) || academicYearIds.includes(row.academicYearId)
+          ))) {
+            throw new SchoolDeletionConflictError(
+              'SCHOOL_SHARED_FINANCIAL_DEPENDENCY',
+              'Un paiement d’un autre établissement dépend d’un élève ou d’une année scolaire ciblée.',
+            );
+          }
+        }
+
+        const schoolTeacherProfiles = await tx.select({
+          id: teachers.id,
+          userId: teachers.userId,
+        }).from(teachers).where(eq(teachers.schoolId, id)).for('update');
+        const schoolParentProfiles = await tx.select({ id: parents.id })
+          .from(parents).where(eq(parents.schoolId, id)).for('update');
+        if (schoolTeacherProfiles.length > 0 || schoolParentProfiles.length > 0) {
+          throw new SchoolDeletionConflictError(
+            'SCHOOL_HAS_LOCAL_PROFILES',
+            'Impossible de supprimer cette école : ses profils Parent ou Enseignant doivent être résolus explicitement avant suppression.',
+          );
+        }
+        await tx.update(users).set({ schoolId: null }).where(eq(users.schoolId, id));
 
         console.log('School deletion transaction started');
 
@@ -4353,11 +5852,6 @@ export async function createApp() {
         await tx.delete(accountingTariffs).where(eq(accountingTariffs.schoolId, id));
         await tx.delete(accountingFeeDefinitions).where(eq(accountingFeeDefinitions.schoolId, id));
         await tx.delete(accountingCategories).where(eq(accountingCategories.schoolId, id));
-
-        if (schoolUserIds.length > 0) {
-          console.log('Deleting school notifications');
-          await tx.delete(notifications).where(sql`${notifications.userId} IN ${schoolUserIds}`);
-        }
 
         if (studentIds.length > 0) {
           console.log('Deleting school student absences');
@@ -4387,32 +5881,15 @@ export async function createApp() {
           await tx.delete(students).where(sql`${students.id} IN ${studentIds}`);
         }
 
-        if (schoolUserIds.length > 0) {
-          console.log('Deleting school parent profiles');
-          await tx.delete(parents).where(sql`${parents.userId} IN ${schoolUserIds}`);
-        }
-
         if (classIds.length > 0) {
           console.log('Clearing school class teacher assignments');
           await tx.update(classes).set({ teacherId: null }).where(sql`${classes.id} IN ${classIds}`);
-        }
-
-        if (schoolUserIds.length > 0) {
-          console.log('Removing school administrator associations and user audit events');
-          await tx.update(students).set({ schoolAdminId: null }).where(sql`${students.schoolAdminId} IN ${schoolUserIds}`);
-          await tx.delete(auditEvents).where(sql`${auditEvents.actorUserId} IN ${schoolUserIds}`);
-        }
-
-        if (schoolUserIds.length > 0) {
-          console.log('Deleting school local authentication records');
-          await tx.delete(localAuths).where(sql`${localAuths.userId} IN ${schoolUserIds}`);
         }
 
         console.log('Step 12/12: delete audit events linked directly to school');
         await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
         console.log('Deleting remaining school records');
-        await tx.delete(teachers).where(eq(teachers.schoolId, id));
 
         if (classIds.length > 0) {
           await tx.delete(classes).where(sql`${classes.id} IN ${classIds}`);
@@ -4422,23 +5899,29 @@ export async function createApp() {
           await tx.delete(academicYears).where(sql`${academicYears.id} IN ${academicYearIds}`);
         }
 
-        if (schoolUserIds.length > 0) {
-          await tx.delete(users).where(sql`${users.id} IN ${schoolUserIds}`);
-        }
-
         console.log('Final cleanup pass: delete any remaining school-linked entities by schoolId');
         await tx.delete(students).where(eq(students.schoolId, id));
         await tx.delete(classes).where(eq(classes.schoolId, id));
-        await tx.delete(teachers).where(eq(teachers.schoolId, id));
         await tx.delete(academicYears).where(eq(academicYears.schoolId, id));
-        await tx.delete(users).where(eq(users.schoolId, id));
         await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
         await tx.delete(schools).where(eq(schools.id, id));
-      });
+      }, { isolationLevel: 'serializable' });
 
       res.json({ message: 'School deleted successfully' });
     } catch (err: any) {
+      if (err instanceof SchoolDeletionConflictError) {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      if (err instanceof SchoolDeletionNotFoundError) {
+        return res.status(404).json({ error: err.message });
+      }
+      if (err?.code === '40001' || err?.code === '40P01') {
+        return res.status(409).json({
+          error: 'La suppression est entrée en conflit avec une modification concurrente; réessayez.',
+          code: 'SCHOOL_DELETION_CONCURRENT_MODIFICATION',
+        });
+      }
       console.error('Error deleting school:', err);
       // Log the underlying error server-side for diagnostics, but do not expose details to clients.
       const errorMessage = err?.message && (err.message.includes('constraint') || err.message.includes('foreign key'))
@@ -5399,7 +6882,11 @@ export async function createApp() {
         .innerJoin(users, eq(users.id, teachers.userId))
         .leftJoin(subjects, eq(subjects.id, evaluations.subjectId))
         .leftJoin(schoolTerms, eq(schoolTerms.id, evaluations.termId))
-        .where(and(eq(evaluations.classId, classId), eq(teachers.schoolId, schoolId)))
+        .where(and(
+          eq(evaluations.classId, classId),
+          eq(evaluations.schoolId, schoolId),
+          eq(teachers.schoolId, schoolId),
+        ))
         .orderBy(desc(evaluations.date));
       const evaluationIds = classEvaluations.map((evaluation) => evaluation.id);
       const classGrades = evaluationIds.length > 0
@@ -5422,6 +6909,7 @@ export async function createApp() {
           .leftJoin(subjects, eq(subjects.id, evaluations.subjectId))
           .where(and(
             inArray(grades.evaluationId, evaluationIds),
+            eq(evaluations.schoolId, schoolId),
             eq(teachers.schoolId, schoolId),
             eq(students.schoolId, schoolId),
           ))
@@ -5600,6 +7088,14 @@ export async function createApp() {
           : actor.role === 'parent'
             ? actor.schoolId ?? null
             : schoolIdParam;
+      if (
+        actor.role !== 'super_admin'
+        && schoolIdParam != null
+        && schoolIdParam !== targetSchoolId
+      ) {
+        return res.status(403).json({ error: 'Cannot request classes for another school' });
+      }
+      const schoolClassesSchoolId = actor.role === 'super_admin' ? schoolIdParam : targetSchoolId;
 
       const baseSelect = {
         id: classes.id,
@@ -5726,10 +7222,10 @@ export async function createApp() {
         .from(classes)
         .leftJoin(
           schoolClasses,
-          schoolIdParam != null
+          schoolClassesSchoolId != null
             ? and(
               eq(schoolClasses.classId, classes.id),
-              eq(schoolClasses.schoolId, schoolIdParam),
+              eq(schoolClasses.schoolId, schoolClassesSchoolId),
               eq(schoolClasses.status, 'approved'),
             )
             : sql`false`,
@@ -5740,7 +7236,7 @@ export async function createApp() {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -6164,7 +7660,6 @@ export async function createApp() {
               eq(userSchools.userId, teacher.userId),
               eq(userSchools.role, 'teacher'),
               eq(userSchools.schoolId, classToUpdate.schoolId),
-              eq(userSchools.isActive, true),
             ),
           );
           teacherMatchesSchool = Boolean(membership);
@@ -6249,9 +7744,8 @@ export async function createApp() {
             eq(userSchools.userId, teacherProfile.userId),
             eq(userSchools.schoolId, schoolId),
             eq(userSchools.role, 'teacher'),
-            eq(userSchools.isActive, true),
           ));
-          if (!membership) return res.status(403).json({ error: 'Teacher is not active in this school' });
+          if (!membership) return res.status(403).json({ error: 'Teacher is not associated with this school' });
         }
       }
 
@@ -6310,20 +7804,13 @@ export async function createApp() {
 
       let querySchoolIds: number[] | null = filterSchoolId == null ? null : [filterSchoolId];
       if (actor.role === 'school_admin') {
-        if (!actor.id) return res.json([]);
-        const memberships = await db.select({ schoolId: userSchools.schoolId })
-          .from(userSchools)
-          .where(and(
-            eq(userSchools.userId, actor.id),
-            eq(userSchools.role, 'school_admin'),
-            eq(userSchools.isActive, true),
-          ));
-        const authorizedSchoolIds = Array.from(new Set(memberships.map((membership) => membership.schoolId)));
-        if (filterSchoolId != null && !authorizedSchoolIds.includes(filterSchoolId)) {
+        if (actor.schoolId == null) {
+          return res.status(403).json({ error: 'School context is required' });
+        }
+        if (filterSchoolId != null && filterSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot request teachers for another school' });
         }
-        querySchoolIds = filterSchoolId == null ? authorizedSchoolIds : [filterSchoolId];
-        if (querySchoolIds.length === 0) return res.json([]);
+        querySchoolIds = [actor.schoolId];
       } else if (actor.role !== 'super_admin') {
         if (filterSchoolId != null && actor.schoolId != null && filterSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot request teachers for another school' });
@@ -6365,13 +7852,18 @@ export async function createApp() {
         .innerJoin(userSchools, and(
           eq(userSchools.userId, users.id),
           eq(userSchools.role, 'teacher'),
-          eq(userSchools.isActive, true),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
         ));
 
       let oldModelQuery = baseOldModel;
       let newModelQuery = baseNewModel;
 
-      const oldModelConditions = [];
+      const oldModelConditions = [exists(db.select({ id: userSchools.id }).from(userSchools).where(and(
+        eq(userSchools.userId, teachers.userId),
+        eq(userSchools.schoolId, teachers.schoolId),
+        eq(userSchools.role, 'teacher'),
+        sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+      )))];
       const newModelConditions = [];
       if (querySchoolIds) {
         oldModelConditions.push(inArray(teachers.schoolId, querySchoolIds));
@@ -6450,16 +7942,42 @@ export async function createApp() {
             : and(inArray(classTeachers.teacherId, teacherIds), inArray(classTeachers.schoolId, querySchoolIds!)));
       }
 
-      console.log('GET /api/teachers - assignments count:', assignments.length);
-      const assignmentMap = new Map<number, number[]>();
+      const administrativeClassMap = new Map<number, number[]>();
       assignments.forEach((item) => {
-        const existing = assignmentMap.get(item.teacherId) || [];
+        const existing = administrativeClassMap.get(item.teacherId) || [];
         existing.push(item.classId);
-        assignmentMap.set(item.teacherId, existing);
+        administrativeClassMap.set(item.teacherId, existing);
+      });
+      const homeroomConditions = [inArray(classHomeroomAssignments.teacherId, teacherIds)];
+      if (actor.role !== 'super_admin') {
+        homeroomConditions.push(inArray(classHomeroomAssignments.schoolId, querySchoolIds!));
+      } else if (filterSchoolId != null) {
+        homeroomConditions.push(eq(classHomeroomAssignments.schoolId, filterSchoolId));
+      }
+      const homeroomAssignments = teacherIds.length > 0
+        ? await db.select({
+            teacherId: classHomeroomAssignments.teacherId,
+            classId: classHomeroomAssignments.classId,
+            schoolId: classHomeroomAssignments.schoolId,
+          }).from(classHomeroomAssignments).where(and(...homeroomConditions))
+        : [];
+      const homeroomAssignmentMap = new Map<number, Array<{ classId: number; schoolId: number }>>();
+      homeroomAssignments.forEach((assignment) => {
+        const existing = homeroomAssignmentMap.get(assignment.teacherId) ?? [];
+        existing.push({ classId: assignment.classId, schoolId: assignment.schoolId });
+        homeroomAssignmentMap.set(assignment.teacherId, existing);
       });
       const teachingAssignmentConditions = [
         inArray(teacherClassSubjects.teacherId, teacherIds),
         eq(teacherClassSubjects.isActive, true),
+        or(
+          eq(classes.schoolId, teacherClassSubjects.schoolId),
+          isNotNull(schoolClasses.id),
+        ),
+        or(
+          eq(subjects.schoolId, teacherClassSubjects.schoolId),
+          isNotNull(schoolSubjects.id),
+        ),
       ];
       if (actor.role !== 'super_admin') {
         teachingAssignmentConditions.push(inArray(teacherClassSubjects.schoolId, querySchoolIds!));
@@ -6472,13 +7990,33 @@ export async function createApp() {
             teacherId: teacherClassSubjects.teacherId,
             classId: teacherClassSubjects.classId,
             subjectId: teacherClassSubjects.subjectId,
+            schoolId: teacherClassSubjects.schoolId,
             isActive: teacherClassSubjects.isActive,
-          }).from(teacherClassSubjects).where(and(...teachingAssignmentConditions))
+          }).from(teacherClassSubjects)
+            .innerJoin(classes, eq(classes.id, teacherClassSubjects.classId))
+            .innerJoin(subjects, eq(subjects.id, teacherClassSubjects.subjectId))
+            .leftJoin(schoolClasses, and(
+              eq(schoolClasses.classId, teacherClassSubjects.classId),
+              eq(schoolClasses.schoolId, teacherClassSubjects.schoolId),
+              eq(schoolClasses.status, 'approved'),
+            ))
+            .leftJoin(schoolSubjects, and(
+              eq(schoolSubjects.subjectId, teacherClassSubjects.subjectId),
+              eq(schoolSubjects.schoolId, teacherClassSubjects.schoolId),
+              eq(schoolSubjects.status, 'approved'),
+            ))
+            .where(and(...teachingAssignmentConditions))
         : [];
-      const teachingAssignmentMap = new Map<number, Array<{ id: number; classId: number; subjectId: number; isActive: boolean }>>();
+      const teachingAssignmentMap = new Map<number, Array<{ id: number; classId: number; subjectId: number; schoolId: number; isActive: boolean }>>();
       teachingAssignmentRows.forEach((assignment) => {
         const existing = teachingAssignmentMap.get(assignment.teacherId) ?? [];
-        existing.push({ id: assignment.id, classId: assignment.classId, subjectId: assignment.subjectId, isActive: assignment.isActive });
+        existing.push({
+          id: assignment.id,
+          classId: assignment.classId,
+          subjectId: assignment.subjectId,
+          schoolId: assignment.schoolId,
+          isActive: assignment.isActive,
+        });
         teachingAssignmentMap.set(assignment.teacherId, existing);
       });
       const list = teachersList.map((teacher) => ({
@@ -6489,7 +8027,11 @@ export async function createApp() {
         ...(subjectAssignmentMap.has(teacher.id)
           ? { specialization: (subjectAssignmentMap.get(teacher.id) ?? []).map((subject) => subject.name).join(', ') }
           : {}),
-        classIds: assignmentMap.get(teacher.id) || [],
+        classIds: Array.from(new Set((teachingAssignmentMap.get(teacher.id) ?? []).map((assignment) => assignment.classId))),
+        teachingClassIds: Array.from(new Set((teachingAssignmentMap.get(teacher.id) ?? []).map((assignment) => assignment.classId))),
+        homeroomAssignments: homeroomAssignmentMap.get(teacher.id) ?? [],
+        homeroomClassIds: Array.from(new Set((homeroomAssignmentMap.get(teacher.id) ?? []).map((assignment) => assignment.classId))),
+        administrativeClassIds: Array.from(new Set(administrativeClassMap.get(teacher.id) ?? [])),
         teachingAssignments: teachingAssignmentMap.get(teacher.id) || [],
       }));
       if (actor.role === 'teacher') {
@@ -6672,8 +8214,8 @@ export async function createApp() {
         classIdsForResponse = assignments.map((a) => a.classId);
       }
 
-      res.status(201).json({ 
-        ...createdUser, 
+      res.status(201).json({
+        ...toPublicUserResponseDto(createdUser),
         teacherId: createdTeacher.id, 
         phone, 
         specialization: normalizeSpecialization(specialization) || null,
@@ -6726,11 +8268,13 @@ export async function createApp() {
 
       if (actor.role === 'parent') {
         if (actor.id == null) return res.json([]);
+        if (actor.schoolId == null) return res.json([]);
         if (filterSchoolId != null && actor.schoolId != null && filterSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot request parent data for another school' });
         }
 
-        const childStudentIds = await getParentChildStudentIds(actor.id);
+        if (actor.schoolId == null) return res.json([]);
+        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
         const childClassRows = childStudentIds.length > 0
           ? await db.selectDistinct({ classId: students.classId }).from(students)
             .where(inArray(students.id, childStudentIds))
@@ -6738,7 +8282,10 @@ export async function createApp() {
         const childClassIds = childClassRows.map((row) => row.classId).filter((id): id is number => id != null);
         if (filterClassId != null && !childClassIds.includes(filterClassId)) return res.json([]);
 
-        const ownParentConditions = [eq(parents.userId, actor.id)];
+        const ownParentConditions = [
+          eq(parents.userId, actor.id),
+          eq(parents.schoolId, actor.schoolId!),
+        ];
         if (filterClassId != null) ownParentConditions.push(eq(students.classId, filterClassId));
         if (searchQuery) {
           const searchPattern = `%${searchQuery}%`;
@@ -6785,7 +8332,16 @@ export async function createApp() {
         .select(parentProjection)
         .from(parents)
         .innerJoin(users, eq(parents.userId, users.id))
-        .leftJoin(students, eq(students.parentId, parents.id))
+        .innerJoin(userSchools, and(
+          eq(userSchools.userId, parents.userId),
+          eq(userSchools.schoolId, parents.schoolId),
+          eq(userSchools.role, 'parent'),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+        ))
+        .leftJoin(students, and(
+          eq(students.parentId, parents.id),
+          eq(students.schoolId, parents.schoolId),
+        ))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(parents.schoolId, schools.id));
 
@@ -6796,8 +8352,16 @@ export async function createApp() {
         })
         .from(parents)
         .innerJoin(users, eq(parents.userId, users.id))
-        .innerJoin(userSchools, and(eq(userSchools.userId, users.id), eq(userSchools.role, 'parent')))
-        .leftJoin(students, eq(students.parentId, parents.id))
+        .innerJoin(userSchools, and(
+          eq(userSchools.userId, users.id),
+          eq(userSchools.role, 'parent'),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+          or(isNull(parents.schoolId), eq(parents.schoolId, userSchools.schoolId)),
+        ))
+        .leftJoin(students, and(
+          eq(students.parentId, parents.id),
+          eq(students.schoolId, userSchools.schoolId),
+        ))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(userSchools.schoolId, schools.id));
 
@@ -6809,7 +8373,10 @@ export async function createApp() {
         if (!actor.id) return res.json([]);
         if (actor.schoolId == null) return res.json([]);
 
-        const teacherRow = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, actor.id));
+        const teacherRow = await db.select({ id: teachers.id }).from(teachers).where(and(
+          eq(teachers.userId, actor.id),
+          eq(teachers.schoolId, actor.schoolId),
+        ));
         const teacherId = teacherRow[0]?.id ?? null;
         if (teacherId == null) return res.json([]);
 
@@ -6933,9 +8500,29 @@ export async function createApp() {
             return res.status(403).json({ error: 'Forbidden: missing school context' });
           }
 
-          const parsedStudentId = studentId != null && studentId !== '' ? parseInt(String(studentId), 10) : undefined;
-          let resolvedSchoolId = schoolId != null && schoolId !== '' ? parseInt(String(schoolId), 10) : null;
-          if (Number.isNaN(resolvedSchoolId as number)) resolvedSchoolId = null;
+          const hasRequestedSchoolId = schoolId != null && String(schoolId).trim() !== '';
+          const requestedSchoolId = hasRequestedSchoolId ? parsePositiveInteger(schoolId) : null;
+          if (hasRequestedSchoolId && requestedSchoolId == null) {
+            return res.status(400).json({ error: 'Invalid schoolId' });
+          }
+          if (actor.role === 'super_admin' && requestedSchoolId == null) {
+            return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+          }
+          if (actor.role === 'school_admin' && requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
+            return res.status(403).json({ error: 'Cannot create parent in another school' });
+          }
+          const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+          if (effectiveSchoolId == null) {
+            return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
+          }
+          const [parentSchool] = await db.select({ id: schools.id }).from(schools)
+            .where(eq(schools.id, effectiveSchoolId)).limit(1);
+          if (!parentSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+
+          const parsedStudentId = studentId != null && studentId !== '' ? parsePositiveInteger(studentId) ?? undefined : undefined;
+          if (studentId != null && studentId !== '' && parsedStudentId == null) {
+            return res.status(400).json({ error: 'Invalid studentId' });
+          }
 
           if (parsedStudentId) {
             const [studentRow] = await db
@@ -6955,19 +8542,9 @@ export async function createApp() {
               return res.status(400).json({ error: 'Student is already linked to another parent' });
             }
 
-            const expectedStudentSchoolId = resolvedSchoolId ?? actor.schoolId;
-            if (expectedStudentSchoolId != null && studentRow.schoolId !== expectedStudentSchoolId) {
+            if (studentRow.schoolId !== effectiveSchoolId) {
               return res.status(403).json({ error: 'Student does not belong to the selected parent school' });
             }
-
-            if (resolvedSchoolId == null && studentRow.schoolId != null) {
-              resolvedSchoolId = studentRow.schoolId;
-            }
-          }
-
-          const effectiveSchoolId = resolvedSchoolId ?? (actor.role !== 'super_admin' ? actor.schoolId : null);
-          if (actor.role !== 'super_admin' && effectiveSchoolId != null && actor.schoolId != null && effectiveSchoolId !== actor.schoolId) {
-            return res.status(403).json({ error: 'Cannot create parent in another school' });
           }
 
           const existingParentEmail = await findExistingUsersByEmail(normalizedEmail);
@@ -7032,7 +8609,7 @@ export async function createApp() {
           });
 
           res.status(201).json({
-            ...createdUser,
+            ...toPublicUserResponseDto(createdUser),
             parentId: createdParent.id,
             phone: canonicalPhone,
             address,
@@ -7095,6 +8672,21 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
 
+      if (actor.role === 'parent' && (actor.id == null || actor.schoolId == null)) {
+        return res.status(403).json({ error: 'School context is required' });
+      }
+
+      const parentConditions = [eq(parents.id, id)];
+      if (actor.role === 'parent') {
+        parentConditions.push(
+          eq(parents.userId, actor.id!),
+          eq(parents.schoolId, actor.schoolId!),
+        );
+      } else if (actor.role === 'school_admin') {
+        if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
+        parentConditions.push(eq(parents.schoolId, actor.schoolId));
+      }
+
       const rows = await db
         .select({
           id: parents.id,
@@ -7115,7 +8707,7 @@ export async function createApp() {
         .leftJoin(students, and(eq(students.parentId, parents.id), eq(students.schoolId, parents.schoolId)))
         .leftJoin(classes, eq(students.classId, classes.id))
         .leftJoin(schools, eq(parents.schoolId, schools.id))
-        .where(eq(parents.id, id));
+        .where(and(...parentConditions));
 
       if (!rows || rows.length === 0) return res.status(404).json({ error: 'Parent not found' });
       const parent = rows[0];
@@ -7126,7 +8718,7 @@ export async function createApp() {
 
       if (actor.role === 'parent') {
         if (actor.id === parent.userId) {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           return res.json({
             ...parent,
             studentId: parent.studentId != null && childStudentIds.includes(parent.studentId) ? parent.studentId : null,
@@ -7136,13 +8728,8 @@ export async function createApp() {
       }
 
       if (actor.role === 'school_admin') {
-        if (actor.schoolId === parent.schoolId) {
-          return res.json(parent);
-        }
-        const membership = await ensureUserSchoolMembership(parent.userId, actor.schoolId, 'parent');
-        if (membership) {
-          return res.json(parent);
-        }
+        const membership = await getActiveUserSchoolMembership(parent.userId, actor.schoolId, 'parent');
+        if (actor.schoolId === parent.schoolId && membership) return res.json(parent);
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -7169,7 +8756,8 @@ export async function createApp() {
 
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i] || {};
-        const requestedSchoolId = r.schoolId != null && r.schoolId !== '' ? parseInt(String(r.schoolId), 10) : null;
+        const hasRequestedSchoolId = r.schoolId != null && String(r.schoolId).trim() !== '';
+        const requestedSchoolId = hasRequestedSchoolId ? parsePositiveInteger(r.schoolId) : null;
         const rawName = typeof r.name === 'string' ? r.name.trim() : '';
         const hasSeparateNames = r.Nom != null && r['Prénoms'] != null;
 
@@ -7184,7 +8772,7 @@ export async function createApp() {
           }
         }
 
-        let schoolId = null;
+        let schoolId: number | null = null;
         if (actor.role === 'school_admin') {
           if (actor.schoolId == null) {
             const rowName = (typeof r.name === 'string' ? r.name : '').trim();
@@ -7217,6 +8805,16 @@ export async function createApp() {
 
         if (validation.errors.length > 0) {
           addRowError(validation.errors.join('; '));
+          continue;
+        }
+        if (schoolId == null) {
+          addRowError('schoolId is required to create a parent profile');
+          continue;
+        }
+        const [parentSchool] = await db.select({ id: schools.id }).from(schools)
+          .where(eq(schools.id, schoolId)).limit(1);
+        if (!parentSchool) {
+          addRowError('Invalid schoolId: school not found');
           continue;
         }
 
@@ -7303,7 +8901,7 @@ export async function createApp() {
               phone: canonicalPhone,
               address: address || null,
               studentId: linkedStudentId,
-              schoolId: schoolId || null,
+              schoolId,
             }).returning();
             if (linkedStudentId != null) {
               const linkConditions = [
@@ -7413,7 +9011,7 @@ export async function createApp() {
         }
       } else if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -7526,8 +9124,8 @@ export async function createApp() {
         if (!parentRecord) {
           return res.status(404).json({ error: 'Parent not found' });
         }
-        if (actor.role !== 'super_admin' && parentRecord.schoolId !== targetSchoolId) {
-          const membership = await ensureUserSchoolMembership(parentRecord.userId, targetSchoolId, 'parent');
+        if (actor.role !== 'super_admin') {
+          const membership = await getActiveUserSchoolMembership(parentRecord.userId, targetSchoolId, 'parent');
           if (!membership) {
             return res.status(403).json({ error: 'Parent does not belong to the selected school' });
           }
@@ -7548,28 +9146,16 @@ export async function createApp() {
         const targetSchoolId = parseInt(schoolId);
 
         if (explicitAdminId) {
-          const [assignedAdmin] = await db
-            .select()
-            .from(users)
-            .where(
-              and(
-                eq(users.id, explicitAdminId),
-                eq(users.role, 'school_admin'),
-                eq(users.schoolId, targetSchoolId)
-              )
-            );
+          const assignedAdmin = await getActiveUserSchoolMembership(explicitAdminId, targetSchoolId, 'school_admin');
 
           if (!assignedAdmin) {
             throw new Error('Invalid schoolAdminId: the selected admin is not a school admin for this school.');
           }
 
-          return assignedAdmin.id;
+          return assignedAdmin.userId;
         }
 
-        const admins = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.role, 'school_admin'), eq(users.schoolId, targetSchoolId)));
+        const admins = (await getActiveSchoolAdminUserIds(targetSchoolId)).map((id) => ({ id }));
 
         if (admins.length === 1) {
           return admins[0].id;
@@ -7656,6 +9242,9 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (!['super_admin', 'school_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Only super_admin or school_admin can update students' });
+      }
+      if (actor.role === 'school_admin' && actor.schoolId == null) {
+        return res.status(403).json({ error: 'School context is required' });
       }
 
       const [existingStudent] = await db.select().from(students).where(eq(students.id, studentId));
@@ -7777,22 +9366,21 @@ export async function createApp() {
         .where(eq(parents.id, parsedParentId));
       if (!parentRecord) return res.status(404).json({ error: 'Parent not found' });
 
-      if (actor.role !== 'super_admin' && resolvedSchoolId != null && parentRecord.schoolId !== resolvedSchoolId) {
-        const membership = await ensureUserSchoolMembership(parentRecord.userId, resolvedSchoolId, 'parent');
+      if (actor.role !== 'super_admin' && resolvedSchoolId != null) {
+        const membership = await getActiveUserSchoolMembership(parentRecord.userId, resolvedSchoolId, 'parent');
         if (!membership) {
           return res.status(403).json({ error: 'Parent does not belong to the selected school' });
         }
       }
 
       if (parsedSchoolAdminId != null) {
-        const [assignedAdmin] = await db
-          .select()
-          .from(users)
-          .where(and(eq(users.id, parsedSchoolAdminId), eq(users.role, 'school_admin')));
+        const assignedAdmin = resolvedSchoolId == null
+          ? null
+          : await getActiveUserSchoolMembership(parsedSchoolAdminId, resolvedSchoolId, 'school_admin');
         if (!assignedAdmin) {
           return res.status(400).json({ error: 'Invalid schoolAdminId' });
         }
-        if (resolvedSchoolId != null && assignedAdmin.schoolId !== resolvedSchoolId) {
+        if (assignedAdmin.schoolId !== resolvedSchoolId) {
           return res.status(400).json({ error: 'schoolAdminId does not belong to the selected school' });
         }
       }
@@ -7822,14 +9410,13 @@ export async function createApp() {
         parentId: parsedParentId,
         schoolAdminId: parsedSchoolAdminId,
       };
-      const updateStudent = async (executor: typeof db) => executor
-        .update(students)
-        .set(studentValues)
-        .where(eq(students.id, studentId))
-        .returning();
       const result = statusWasProvided
         ? await db.transaction(async (tx) => {
-          const updated = await updateStudent(tx);
+          const updated = await tx
+            .update(students)
+            .set(studentValues)
+            .where(eq(students.id, studentId))
+            .returning();
           await tx.insert(studentAcademicYearStatuses).values({
             studentId,
             academicYearId: selectedAcademicYearId,
@@ -7840,7 +9427,11 @@ export async function createApp() {
           });
           return updated;
         })
-        : await updateStudent(db);
+        : await db
+          .update(students)
+          .set(studentValues)
+          .where(eq(students.id, studentId))
+          .returning();
 
       await logAuditEvent(
         actor,
@@ -7898,12 +9489,16 @@ export async function createApp() {
 
   const runParentDeclarationAction = async (
     parentUserId: number,
+    schoolId: number,
     action: string,
     input: any,
   ): Promise<{ status: number; body: any }> => {
-    const [parentRecord] = await db.select({ id: parents.id }).from(parents).where(eq(parents.userId, parentUserId));
+    const [parentRecord] = await db.select({ id: parents.id }).from(parents).where(and(
+      eq(parents.userId, parentUserId),
+      eq(parents.schoolId, schoolId),
+    ));
     if (!parentRecord) return { status: 404, body: { error: 'Parent profile not found' } };
-    const childStudentIds = await getParentChildStudentIds(parentUserId);
+    const childStudentIds = await getParentChildStudentIds(parentUserId, schoolId);
 
     if (action === 'list') {
       if (childStudentIds.length === 0) return { status: 200, body: [] };
@@ -8065,7 +9660,8 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'parent') {
         if (!actor.id) return res.json([]);
-        const result: any = await runParentDeclarationAction(actor.id, 'list', {});
+        if (actor.schoolId == null) return res.json([]);
+        const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'list', {});
         return res.status(result.status).json(result.body);
       }
       if (!['super_admin', 'school_admin', 'surveillant', 'teacher'].includes(actor.role)) {
@@ -8121,7 +9717,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may declare future absences' });
-      const result: any = await runParentDeclarationAction(actor.id, 'create', req.body);
+      if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
+      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'create', req.body);
       if (result.status === 201) {
         await notifyAbsenceDeclarationParent(actor.id, 'Déclaration d’absence reçue', 'Votre déclaration d’absence a été transmise à l’établissement.', {
           declarationId: result.body.id,
@@ -8141,7 +9738,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may change their declarations' });
-      const result: any = await runParentDeclarationAction(actor.id, 'update', { ...req.body, id: req.params.id });
+      if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
+      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'update', { ...req.body, id: req.params.id });
       return res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('Failed to update absence declaration:', error?.message || error);
@@ -8154,7 +9752,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may cancel their declarations' });
-      const result: any = await runParentDeclarationAction(actor.id, 'cancel', { id: req.params.id });
+      if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
+      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'cancel', { id: req.params.id });
       return res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('Failed to cancel absence declaration:', error?.message || error);
@@ -8183,10 +9782,12 @@ export async function createApp() {
     try {
       const parentUserId = Number(req.body?.parentUserId);
       if (!Number.isInteger(parentUserId) || parentUserId <= 0) return res.status(400).json({ error: 'Invalid parent identity' });
-      const [parentUser] = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, parentUserId));
-      if (!parentUser || parentUser.role !== 'parent') return res.status(403).json({ error: 'Parent account required' });
+      const schoolId = Number(req.body?.schoolId);
+      if (!Number.isInteger(schoolId) || schoolId <= 0) return res.status(400).json({ error: 'Valid schoolId is required' });
+      const parentMembership = await getActiveUserSchoolMembership(parentUserId, schoolId, 'parent');
+      if (!parentMembership) return res.status(403).json({ error: 'Active parent membership required' });
       const action = String(req.body?.action || '');
-      const result: any = await runParentDeclarationAction(parentUserId, action, req.body?.input || {});
+      const result: any = await runParentDeclarationAction(parentUserId, schoolId, action, req.body?.input || {});
       if (action === 'create' && result.status === 201) {
         await notifyAbsenceDeclarationParent(parentUserId, 'Déclaration d’absence reçue', 'Votre déclaration d’absence a été transmise à l’établissement.', {
           declarationId: result.body.id,
@@ -8386,7 +9987,10 @@ export async function createApp() {
           })()
           : null;
 
-      const [teacherRow] = await db.select({ id: teachers.id, schoolId: teachers.schoolId }).from(teachers).where(eq(teachers.userId, actor.id));
+      const [teacherRow] = await db.select({ id: teachers.id, schoolId: teachers.schoolId }).from(teachers).where(and(
+        eq(teachers.userId, actor.id),
+        eq(teachers.schoolId, actor.schoolId),
+      ));
       if (!teacherRow) {
         return res.status(403).json({ error: 'Teacher profile not found for the authenticated user' });
       }
@@ -8395,8 +9999,9 @@ export async function createApp() {
       if (!scope || !scope.teachingClassIds.has(normalClassId)) {
         return res.status(403).json({ error: 'Teacher is not authorized for this class in this school' });
       }
-      if (normalizedSubjectId != null && !scope.subjectIds.has(normalizedSubjectId)) {
-        return res.status(403).json({ error: 'Teacher is not assigned to this subject' });
+      if (normalizedSubjectId != null
+        && !scope.teachingAssignmentKeys.has(`${normalClassId}:${normalizedSubjectId}`)) {
+        return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
       }
 
       const [classRecord] = await db.select({ id: classes.id, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, normalClassId));
@@ -8487,8 +10092,11 @@ export async function createApp() {
     if (actor.schoolId == null || student.schoolId !== actor.schoolId || !classBelongsToSchool) return false;
     if (actor.role !== 'teacher') return true;
 
-    const teacherClassIds = await getTeacherTeachingClassIds(actor);
-    return teacherClassIds.includes(classId) && student.schoolId === actor.schoolId;
+    const scope = await getTeacherAuthorizationScope(actor);
+    return !!scope && (
+      scope.teachingClassIds.has(classId)
+      || scope.homeroomClassIds.has(classId)
+    );
   };
 
   const getTeacherLateArrivalAssignment = async (actor: ResolvedActor, lateArrival: {
@@ -8536,17 +10144,24 @@ export async function createApp() {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) return res.json([]);
           query = query.where(inArray(lateArrivals.studentId, childStudentIds)) as any;
         } else if (actor.role === 'teacher') {
           if (actor.schoolId == null) return res.json([]);
           const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
           const teacherAssignmentIds = assignmentContext?.assignments.map((assignment) => assignment.id) ?? [];
-          if (teacherAssignmentIds.length === 0) return res.json([]);
+          const homeroomClassIds = assignmentContext ? Array.from(assignmentContext.homeroomClassIds) : [];
+          if (teacherAssignmentIds.length === 0 && homeroomClassIds.length === 0) return res.json([]);
           query = query.where(and(
             eq(students.schoolId, actor.schoolId),
-            inArray(lateArrivals.teachingAssignmentId, teacherAssignmentIds),
+            or(
+              ...(teacherAssignmentIds.length > 0 ? [inArray(lateArrivals.teachingAssignmentId, teacherAssignmentIds)] : []),
+              ...(homeroomClassIds.length > 0 ? [and(
+                inArray(lateArrivals.classId, homeroomClassIds),
+                isNull(lateArrivals.teachingAssignmentId),
+              )] : []),
+            ),
           )) as any;
         } else {
           if (actor.schoolId) {
@@ -8575,6 +10190,7 @@ export async function createApp() {
       const parsedStudentId = Number(studentId);
       const parsedClassId = Number(classId);
       const parsedSubjectId = subjectId != null && subjectId !== '' ? Number(subjectId) : undefined;
+      const hasSubjectInput = subjectId != null && subjectId !== '';
       const parsedDate = typeof date === 'string' ? date.trim() : '';
       const normalizedExpectedStartTime = typeof expectedStartTime === 'string' ? expectedStartTime.trim() : '';
       const normalizedArrivalTime = typeof arrivalTime === 'string' ? arrivalTime.trim() : '';
@@ -8591,8 +10207,8 @@ export async function createApp() {
       if (!['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to record late arrivals' });
       }
-      if (actor.role === 'teacher' && (!Number.isInteger(parsedSubjectId) || parsedSubjectId! <= 0)) {
-        return res.status(400).json({ error: 'A valid subject is required to record a teacher late arrival' });
+      if (actor.role === 'teacher' && hasSubjectInput && (!Number.isInteger(parsedSubjectId) || parsedSubjectId! <= 0)) {
+        return res.status(400).json({ error: 'A valid subject is required when a teacher records a subject-specific late arrival' });
       }
 
       const [student] = await db.select().from(students).where(eq(students.id, parsedStudentId));
@@ -8608,12 +10224,17 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot record a late arrival outside the actor school scope' });
       }
 
-      const canonicalTeachingAssignment = actor.role === 'teacher'
-        ? await ensureTeacherTeachingAssignment(actor, parsedClassId, parsedSubjectId!)
+      const teacherScope = actor.role === 'teacher' ? await getTeacherAuthorizationScope(actor) : null;
+      const canonicalTeachingAssignment = actor.role === 'teacher' && parsedSubjectId != null
+        ? await ensureTeacherTeachingAssignment(actor, parsedClassId, parsedSubjectId)
         : null;
-      if (actor.role === 'teacher' && (!canonicalTeachingAssignment
+      if (actor.role === 'teacher' && parsedSubjectId != null && (!canonicalTeachingAssignment
         || canonicalTeachingAssignment.schoolId !== student.schoolId)) {
         return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
+      }
+      if (actor.role === 'teacher' && parsedSubjectId == null
+        && !teacherScope?.homeroomClassIds.has(parsedClassId)) {
+        return res.status(403).json({ error: 'Only the homeroom teacher can record a class-level late arrival without a subject' });
       }
 
       const existingDuplicate = await db.select().from(lateArrivals).where(and(
@@ -8739,7 +10360,10 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot update a late arrival outside the actor scope' });
       }
       if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, existing)) {
-        return res.status(403).json({ error: 'Cannot update a late arrival outside your active teaching assignment' });
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (existing.teachingAssignmentId != null || !scope?.homeroomClassIds.has(existing.classId)) {
+          return res.status(403).json({ error: 'Cannot update a late arrival outside your active teaching assignment or homeroom class' });
+        }
       }
 
       const { expectedStartTime, arrivalTime, reason } = req.body ?? {};
@@ -8785,7 +10409,10 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot delete a late arrival outside the actor scope' });
       }
       if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, existing)) {
-        return res.status(403).json({ error: 'Cannot delete a late arrival outside your active teaching assignment' });
+        const scope = await getTeacherAuthorizationScope(actor);
+        if (existing.teachingAssignmentId != null || !scope?.homeroomClassIds.has(existing.classId)) {
+          return res.status(403).json({ error: 'Cannot delete a late arrival outside your active teaching assignment or homeroom class' });
+        }
       }
 
       await db.delete(lateArrivals).where(eq(lateArrivals.id, id));
@@ -8848,7 +10475,7 @@ export async function createApp() {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
 
           if (childStudentIds.length === 0) {
             return res.json([]);
@@ -8858,18 +10485,10 @@ export async function createApp() {
         } else if (actor.role === 'teacher') {
           if (actor.schoolId == null) return res.json([]);
           const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
-          const assignmentIds = assignmentContext?.assignments.map((assignment) => assignment.id) ?? [];
-          const teacherClassIds = assignmentContext
-            ? (await db.select({ classId: classTeachers.classId }).from(classTeachers).where(and(
-              eq(classTeachers.teacherId, assignmentContext.teacherId),
-              eq(classTeachers.schoolId, actor.schoolId),
-            )))
-              .map((row: any) => Number(row.classId))
-              .filter((id) => Number.isInteger(id))
-            : [];
+          const homeroomClassIds = assignmentContext ? Array.from(assignmentContext.homeroomClassIds) : [];
           const permittedAbsenceClassIds = Array.from(new Set([
-            ...teacherClassIds,
             ...(assignmentContext?.assignments ?? []).map((assignment) => assignment.classId).filter((id): id is number => Number.isInteger(id)),
+            ...homeroomClassIds,
           ]));
           if (permittedAbsenceClassIds.length === 0) return res.json([]);
           query = query.where(and(
@@ -8901,11 +10520,13 @@ export async function createApp() {
       if (actor.role === 'teacher') {
         const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
         if (!assignmentContext) return res.json([]);
-        list = list.filter((absence) => canTeacherAccessAbsence(
-          absence,
-          assignmentContext.teacherId,
-          assignmentContext.assignments,
-        ));
+        list = list.filter((absence) => {
+          if (absence.schoolId !== assignmentContext.schoolId) return false;
+          if (canTeacherAccessAbsence(absence, assignmentContext.teacherId, assignmentContext.assignments)) return true;
+          return absence.teachingAssignmentId == null
+            && absence.subjectId == null
+            && assignmentContext.homeroomClassIds.has(absence.classId);
+        });
       }
       const studentIds = list.map((student: any) => student.id).filter((id: any): id is number => Number.isInteger(id));
       const statusRows = studentIds.length > 0
@@ -8948,12 +10569,18 @@ export async function createApp() {
         return startHour >= 12 ? 'afternoon' : 'morning';
       })();
 
-      if (!studentId || !classId || !date || !normalizedStartTime || !normalizedEndTime || normalizedSubjectIds.length === 0) {
+      if (!studentId || !classId || !date || !normalizedStartTime || !normalizedEndTime) {
         return res.status(400).json({ error: 'Missing mandatory absence parameters' });
       }
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'teacher' && normalizedSubjectIds.length === 0) {
+        return res.status(400).json({ error: 'Missing mandatory absence parameters' });
+      }
+      if (actor.role === 'teacher' && subjectId != null && (!Number.isInteger(normalizedSubjectId) || normalizedSubjectId! <= 0)) {
+        return res.status(400).json({ error: 'A valid subject is required when a teacher records a subject-specific absence' });
+      }
       let canonicalTeachingAssignment: any = null;
 
       // Load the student and class to check school
@@ -8990,6 +10617,7 @@ export async function createApp() {
       }
 
       if (actor.role === 'teacher') {
+        const teacherScope = await getTeacherAuthorizationScope(actor);
         const assignmentId = parsePositiveInteger(teachingAssignmentId);
         const requestedClassId = parsePositiveInteger(classId);
         const requestedSubjectId = normalizedSubjectIds.length === 1
@@ -9005,12 +10633,18 @@ export async function createApp() {
               teachingAssignmentId == null ? null : assignmentId,
             )
           : null;
-        if (!canonicalTeachingAssignment
+        if (requestedSubjectId != null && (!canonicalTeachingAssignment
           || canonicalTeachingAssignment.classId !== student.classId
           || canonicalTeachingAssignment.subjectId !== requestedSubjectId
           || canonicalTeachingAssignment.schoolId !== student.schoolId
-          || canonicalTeachingAssignment.classId !== requestedClassId) {
+          || canonicalTeachingAssignment.classId !== requestedClassId)) {
           return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
+        }
+        if (requestedSubjectId == null && (
+          teachingAssignmentId != null
+          || !teacherScope?.homeroomClassIds.has(requestedClassId!)
+        )) {
+          return res.status(403).json({ error: 'Only the homeroom teacher can record a class-level absence without a subject' });
         }
       } else if (actor.role !== 'super_admin') {
         if (actor.schoolId && (student.schoolId !== actor.schoolId || !classBelongsToSchool)) {
@@ -9034,7 +10668,7 @@ export async function createApp() {
         teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
         date,
         period: derivedPeriod,
-        subjectId: canonicalTeachingAssignment?.subjectId ?? normalizedSubjectIds[0],
+        subjectId: canonicalTeachingAssignment?.subjectId ?? normalizedSubjectIds[0] ?? null,
         startTime: normalizedStartTime,
         endTime: normalizedEndTime,
         isJustified: isJustified || false,
@@ -9205,7 +10839,7 @@ export async function createApp() {
 
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
 
-      const childStudentIds = await getParentChildStudentIds(actor.id);
+      const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
       if (!childStudentIds.includes(absenceStudent.id)) {
         return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
@@ -9430,7 +11064,7 @@ export async function createApp() {
         });
       }
 
-      const childStudentIds = await getParentChildStudentIds(parentId);
+      const childStudentIds = await getParentChildStudentIds(parentId, absenceStudent.schoolId);
       if (!childStudentIds.includes(absenceStudent.id)) {
         return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
@@ -9566,7 +11200,7 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot justify absence for student outside your assigned classes' });
         }
       } else if (actor.role === 'parent') {
-        const childStudentIds = await getParentChildStudentIds(actor.id);
+        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
         if (!childStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
         }
@@ -9676,9 +11310,24 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot access absence justification for student outside your assigned classes' });
         }
       } else if (actor.role === 'parent') {
-        const childStudentIds = await getParentChildStudentIds(actor.id);
+        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
         if (!childStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot access absence justification for student you do not represent' });
+        }
+      } else if (actor.role === 'school_admin') {
+        if (actor.id == null || actor.schoolId == null) {
+          return res.status(403).json({ error: 'School context is required' });
+        }
+        const [activeMembership] = await db.select({ userId: userSchools.userId })
+          .from(userSchools)
+          .where(and(
+            eq(userSchools.userId, actor.id),
+            eq(userSchools.schoolId, actor.schoolId),
+            eq(userSchools.role, 'school_admin'),
+            eq(userSchools.isActive, true),
+          ));
+        if (!activeMembership || absenceStudent.schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Cannot access absence justification in another school' });
         }
       } else if (actor.role !== 'super_admin' && actor.schoolId && absenceStudent.schoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot access absence justification in another school' });
@@ -10423,7 +12072,7 @@ export async function createApp() {
         // Also allow global classes (classes.schoolId IS NULL) that have been
         // explicitly approved for this school via `school_classes`.
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id);
+          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -10610,9 +12259,8 @@ export async function createApp() {
             eq(userSchools.userId, evaluationTeacher.userId),
             eq(userSchools.schoolId, actor.schoolId!),
             eq(userSchools.role, 'teacher'),
-            eq(userSchools.isActive, true),
           ));
-          if (!membership) return res.status(403).json({ error: 'Evaluation teacher is not active in this school' });
+          if (!membership) return res.status(403).json({ error: 'Evaluation teacher is not associated with this school' });
         }
       }
 
@@ -10755,8 +12403,8 @@ export async function createApp() {
       const resolvedSubjectName = approvedSubject.subjectName;
 
       if (actor.role === 'teacher' && teacherProfileId != null) {
-        if (!teacherScope || !teacherScope.subjectIds.has(resolvedSubjectId)) {
-          return res.status(403).json({ error: 'Cette matière n’est pas assignée à cet enseignant' });
+        if (!teacherScope || !teacherScope.teachingAssignmentKeys.has(`${parseInt(classId)}:${resolvedSubjectId}`)) {
+          return res.status(403).json({ error: 'Cette matière n’est pas affectée à cette classe pour cet enseignant' });
         }
       }
 
@@ -11022,7 +12670,7 @@ if (uniqueParentIds.length > 0) {
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          childStudentIds = await getParentChildStudentIds(actor.id);
+          childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
@@ -11031,7 +12679,7 @@ if (uniqueParentIds.length > 0) {
         } else if (actor.role === 'teacher') {
           const scope = await getTeacherAuthorizationScope(actor);
           if (!scope) return res.json([]);
-          const readableClassIds = Array.from(new Set([...scope.teachingClassIds, ...scope.homeroomClassIds]));
+          const readableClassIds = Array.from(scope.teachingClassIds);
           if (readableClassIds.length === 0) return res.json([]);
           query = query.where(and(
             eq(students.schoolId, scope.schoolId),
@@ -11071,7 +12719,10 @@ if (uniqueParentIds.length > 0) {
         })
         .from(grades)
         .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
-        .where(inArray(grades.evaluationId, evaluationIds));
+        .where(and(
+      inArray(grades.evaluationId, evaluationIds),
+      inArray(grades.studentId, childStudentIds),
+        ));
       const scoreBounds = calculateEvaluationScoreBounds(evaluationScoreRows);
 
       return res.json(list.map((grade) => ({
@@ -11480,7 +13131,7 @@ if (uniqueParentIds.length > 0) {
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
       if (actor.role === 'parent') {
-        parentChildIds = await getParentChildStudentIds(actor.id);
+        parentChildIds = await getParentChildStudentIds(actor.id, actor.schoolId);
       }
 
       const normalizeGenderValue = (value: unknown): 'male' | 'female' | 'unknown' => {
@@ -12003,6 +13654,16 @@ if (uniqueParentIds.length > 0) {
             eq(students.parentId, parents.id),
             eq(students.schoolId, parents.schoolId),
           ))
+          .innerJoin(userSchools, and(
+            eq(userSchools.userId, parents.userId),
+            eq(userSchools.schoolId, students.schoolId),
+            eq(userSchools.role, 'parent'),
+            sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+          ))
+          .innerJoin(users, and(
+            eq(users.id, parents.userId),
+            eq(users.isDeleted, false),
+          ))
           .where(and(...conditions));
         return Array.from(new Set(activeParents.map((parent) => parent.userId)));
       };
@@ -12013,18 +13674,27 @@ if (uniqueParentIds.length > 0) {
         // Sending to specific user - validate school permission if school_admin
         const [targetUser] = await db.select().from(users).where(eq(users.id, parseInt(userId)));
         if (!targetUser) return rejectAfterUpload(404, 'Target user not found');
-        
+        const targetMemberships = targetUser.isDeleted === true
+          ? []
+          : await getUserSchoolMemberships(targetUser.id);
+
         if (actor.role === 'school_admin') {
-          if (targetUser.schoolId !== actor.schoolId) {
-            const membership = await ensureUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
-            if (!membership) {
-              return rejectAfterUpload(403, 'Cannot send notification to user in another school');
-            }
+          const hasMembershipInActorSchool = targetMemberships.some((membership) => (
+            membership.schoolId === actor.schoolId
+          ));
+          if (!hasMembershipInActorSchool) {
+            return rejectAfterUpload(403, 'Cannot send notification to user in another school');
           }
         }
 
-        if (targetUser.role === 'parent') {
-          const activeParentUserIds = await resolveActiveParentUserIds(actor.role === 'school_admin' ? { schoolId: actor.schoolId! } : undefined);
+        const hasActiveParentFunction = targetMemberships.some((membership) => (
+          membership.role === 'parent'
+          && (actor.role !== 'school_admin' || membership.schoolId === actor.schoolId)
+        ));
+        if (hasActiveParentFunction) {
+          const activeParentUserIds = await resolveActiveParentUserIds(
+            actor.role === 'school_admin' ? { schoolId: actor.schoolId! } : undefined,
+          );
           if (!activeParentUserIds.includes(targetUser.id)) return rejectAfterUpload(403, 'Parent has no active students in this school');
         }
 
@@ -12228,7 +13898,6 @@ export async function startServer() {
       await ensureClassHomeroomAssignmentsTableExists();
       await ensureUsersTableSchema();
       await ensureUserSchoolsTableExists();
-      await repairMissingSchoolAdminMemberships();
     } catch (error) {
       console.error('Database initialization failed, shutting down application.', error);
       process.exit(1);

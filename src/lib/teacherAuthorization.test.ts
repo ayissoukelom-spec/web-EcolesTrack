@@ -1,19 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { classTeachers, classes, schoolClasses, schoolSubjects, subjects, teacherSubjects, teachers, userSchools } from '../db/schema.ts';
+import { classes, schoolClasses, schoolSubjects, subjects, teacherClassSubjects, teachers, userSchools } from '../db/schema.ts';
 
 const mockState = vi.hoisted(() => ({
   teachers: [] as Array<{ id: number; userId: number; schoolId: number; specialization: string | null }>,
-  classAssignments: [] as Array<{
+  teachingAssignments: [] as Array<{
+    id?: number;
     teacherId: number;
     classId: number;
-    schoolId: number | null;
+    subjectId: number;
+    schoolId: number;
+    isActive: boolean;
     classSchoolId?: number | null;
-    isApprovedForSchool?: boolean;
-    approvedForSchoolIds?: number[];
+    approvedClassForSchoolIds?: number[];
+    subjectSchoolId?: number | null;
+    approvedSubjectForSchoolIds?: number[];
   }>,
-  teacherSubjects: [] as Array<{ teacherId: number; subjectId: number; schoolId: number | null; subjectSchoolId?: number | null; approvedForSchoolIds?: number[] }> ,
-  userSchools: [] as Array<{ userId: number; schoolId: number; role: string; isActive: boolean }>,
+  userSchools: [] as Array<{ userId: number; schoolId: number; role: string; isActive?: boolean | null }>,
   homeroomScopes: [] as Array<{ classId: number; schoolId: number; teacherId: number }>,
 }));
 
@@ -25,8 +28,7 @@ const mockDb = vi.hoisted(() => ({
       from(table: any) {
         builder.table = table;
         if (table === teachers) builder._rows = mockState.teachers;
-        else if (table === classTeachers) builder._rows = mockState.classAssignments;
-        else if (table === teacherSubjects) builder._rows = mockState.teacherSubjects;
+        else if (table === teacherClassSubjects) builder._rows = mockState.teachingAssignments;
         else if (table === classes || table === schoolClasses || table === subjects || table === schoolSubjects) builder._rows = [];
         else if (table === userSchools) builder._rows = mockState.userSchools;
         return builder;
@@ -38,53 +40,33 @@ const mockDb = vi.hoisted(() => ({
 
         if (builder.table === teachers) {
           const userId = params[0];
-          builder._rows = builder._rows.filter((row: any) => row.userId === userId);
-        } else if (builder.table === classTeachers) {
-          const teacherId = params[0];
           const schoolId = params[1];
-          builder._rows = builder._rows.filter((row: any) => row.teacherId === teacherId && row.schoolId === schoolId);
-        } else if (builder.table === teacherSubjects) {
+          builder._rows = builder._rows.filter((row: any) => row.userId === userId && row.schoolId === schoolId);
+        } else if (builder.table === teacherClassSubjects) {
           const teacherId = params[0];
           const schoolId = params[1];
           builder._rows = builder._rows.filter((row: any) => row.teacherId === teacherId
             && row.schoolId === schoolId
-            && (row.subjectSchoolId === schoolId || row.isApprovedForSchool === true));
+            && row.isActive === true
+            && (row.classSchoolId === schoolId
+              || row.classSchoolId == null && row.approvedClassForSchoolIds?.includes(schoolId) === true)
+            && (row.subjectSchoolId === schoolId
+              || row.subjectSchoolId == null && row.approvedSubjectForSchoolIds?.includes(schoolId) === true));
         } else if (builder.table === userSchools) {
           const userId = params[0];
           const schoolId = params[1];
-          builder._rows = builder._rows.filter((row: any) => row.userId === userId && row.schoolId === schoolId && row.role === 'teacher' && row.isActive === true);
+          builder._rows = builder._rows.filter((row: any) => row.userId === userId
+            && row.schoolId === schoolId
+            && row.role === 'teacher'
+            && row.isActive !== false);
         }
 
         return builder;
       },
-      innerJoin(table: any) {
-        if (builder.table === classTeachers && table === classes) {
-          builder._rows = builder._rows.map((row: any) => ({
-            ...row,
-            assignmentSchoolId: row.schoolId,
-            classSchoolId: row.classSchoolId ?? null,
-          }));
-        } else if (builder.table === teacherSubjects && table === subjects) {
-          builder._rows = builder._rows.map((row: any) => ({ ...row, subjectSchoolId: row.subjectSchoolId ?? null }));
-        }
+      innerJoin(_table: any) {
         return builder;
       },
-      leftJoin(table: any, condition: any) {
-        const query = condition ? new PgDialect().sqlToQuery(condition) : { params: [] };
-        const schoolId = (query.params as any[]).find((value) => typeof value === 'number');
-        if (builder.table === classTeachers && table === schoolClasses) {
-          builder._rows = builder._rows.map((row: any) => ({
-            ...row,
-            isApprovedForSchool: row.approvedForSchoolIds
-              ? row.approvedForSchoolIds.includes(schoolId)
-              : row.isApprovedForSchool === true,
-          }));
-        } else if (builder.table === teacherSubjects && table === schoolSubjects) {
-          builder._rows = builder._rows.map((row: any) => ({
-            ...row,
-            isApprovedForSchool: row.approvedForSchoolIds?.includes(schoolId) === true,
-          }));
-        }
+      leftJoin(_table: any, _condition: any) {
         return builder;
       },
       then(resolve: (value: any) => unknown) { return Promise.resolve(builder._rows).then(resolve); },
@@ -112,14 +94,9 @@ describe('teacherAuthorization scope rules', () => {
       { id: 10, userId: 100, schoolId: 1, specialization: 'Physique' },
       { id: 20, userId: 200, schoolId: 2, specialization: 'Histoire' },
     ];
-    mockState.classAssignments = [
-      { teacherId: 10, classId: 101, schoolId: 1, classSchoolId: 1, isApprovedForSchool: true },
-      { teacherId: 10, classId: 102, schoolId: 2, classSchoolId: 2, isApprovedForSchool: true },
-      { teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [1] },
-    ];
-    mockState.teacherSubjects = [
-      { teacherId: 10, subjectId: 501, schoolId: 1, subjectSchoolId: 1 },
-      { teacherId: 10, subjectId: 601, schoolId: 2, subjectSchoolId: 2 },
+    mockState.teachingAssignments = [
+      { teacherId: 10, classId: 101, subjectId: 501, schoolId: 1, isActive: true, classSchoolId: 1, subjectSchoolId: 1 },
+      { teacherId: 10, classId: 999, subjectId: 502, schoolId: 1, isActive: true, classSchoolId: null, approvedClassForSchoolIds: [1], subjectSchoolId: null, approvedSubjectForSchoolIds: [1] },
     ];
     mockState.userSchools = [
       { userId: 100, schoolId: 1, role: 'teacher', isActive: true },
@@ -133,7 +110,8 @@ describe('teacherAuthorization scope rules', () => {
     expect(scope).not.toBeNull();
     expect(scope!.schoolId).toBe(1);
     expect(Array.from(scope!.teachingClassIds)).toEqual([101, 999]);
-    expect(Array.from(scope!.subjectIds)).toEqual([501]);
+    expect(Array.from(scope!.subjectIds)).toEqual([501, 502]);
+    expect(Array.from(scope!.teachingAssignmentKeys)).toEqual(['101:501', '999:502']);
   });
 
   it('2. scopes a teacher with active memberships in A and B to the selected school', async () => {
@@ -143,62 +121,104 @@ describe('teacherAuthorization scope rules', () => {
     expect(scope!.subjectIds.has(601)).toBe(false);
   });
 
+  it('only exposes exact active pairs for the current teacher and school', async () => {
+    mockState.teachingAssignments = [
+      ...mockState.teachingAssignments,
+      { teacherId: 10, classId: 101, subjectId: 601, schoolId: 1, isActive: false, classSchoolId: 1, subjectSchoolId: 1 },
+      { teacherId: 20, classId: 101, subjectId: 601, schoolId: 1, isActive: true, classSchoolId: 1, subjectSchoolId: 1 },
+      { teacherId: 10, classId: 102, subjectId: 601, schoolId: 2, isActive: true, classSchoolId: 2, subjectSchoolId: 2 },
+    ];
+
+    const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
+
+    expect(Array.from(scope!.teachingAssignmentKeys)).toEqual(['101:501', '999:502']);
+    expect(scope!.teachingAssignmentKeys.has('101:601')).toBe(false);
+    expect(scope!.teachingAssignmentKeys.has('102:601')).toBe(false);
+  });
+
+  it.each([true, null])('does not use a teacher profile from another school when membership isActive=%s', async (isActive) => {
+    mockState.teachers[0] = { id: 10, userId: 100, schoolId: 2, specialization: 'Physique' };
+    mockState.userSchools = [{ userId: 100, schoolId: 1, role: 'teacher', isActive }];
+
+    const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
+
+    expect(scope).toBeNull();
+  });
+
+  it('accepts a legacy-null active membership when the profile is in the exact school', async () => {
+    mockState.userSchools = [{ userId: 100, schoolId: 1, role: 'teacher', isActive: null }];
+
+    const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
+
+    expect(scope).not.toBeNull();
+    expect(scope?.teacherId).toBe(10);
+  });
+
+  it('does not resolve a profile when the exact school membership is inactive', async () => {
+    mockState.userSchools = [{ userId: 100, schoolId: 1, role: 'teacher', isActive: false }];
+
+    await expect(getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 })).resolves.toBeNull();
+  });
+
   it('3. rejects a local class owned by school B', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 405, schoolId: 2, assignmentSchoolId: 2, classSchoolId: 2, isApprovedForSchool: true }];
+    mockState.teachingAssignments = [{ teacherId: 10, classId: 405, subjectId: 501, schoolId: 1, isActive: true, classSchoolId: 2, subjectSchoolId: 1 }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(405)).toBe(false);
   });
 
   it('4. rejects a subject owned by school B', async () => {
-    mockState.teacherSubjects = [{ teacherId: 10, subjectId: 601, schoolId: 2, subjectSchoolId: 2 }];
+    mockState.teachingAssignments = [{ teacherId: 10, classId: 101, subjectId: 601, schoolId: 1, isActive: true, classSchoolId: 1, subjectSchoolId: 2 }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.subjectIds.has(601)).toBe(false);
   });
 
   it('4a. rejects a school A subject assignment in a school B teacher context', async () => {
-    mockState.teacherSubjects = [{
+    mockState.teachingAssignments = [{
       teacherId: 10,
+      classId: 102,
       subjectId: 601,
       schoolId: 1,
+      isActive: true,
+      classSchoolId: 2,
       subjectSchoolId: 2,
-      approvedForSchoolIds: [2],
     }];
 
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 2 });
 
-    expect(scope).not.toBeNull();
-    expect(scope!.subjectIds.has(601)).toBe(false);
+    expect(scope).toBeNull();
   });
 
   it('5. rejects a global class that is not approved for the active school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [] }];
+    mockState.teachingAssignments = [{ teacherId: 10, classId: 999, subjectId: 501, schoolId: 1, isActive: true, classSchoolId: null, subjectSchoolId: 1, approvedClassForSchoolIds: [] }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(false);
   });
 
   it('6. accepts a global class when it is approved for the active school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [1] }];
+    mockState.teachingAssignments = [{ teacherId: 10, classId: 999, subjectId: 501, schoolId: 1, isActive: true, classSchoolId: null, subjectSchoolId: 1, approvedClassForSchoolIds: [1] }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(true);
   });
 
   it('6a. rejects a school A assignment to a global class in a school B teacher context', async () => {
-    mockState.classAssignments = [{
+    mockState.teachingAssignments = [{
       teacherId: 10,
       classId: 999,
+      subjectId: 501,
       schoolId: 1,
+      isActive: true,
       classSchoolId: null,
-      approvedForSchoolIds: [2],
+      subjectSchoolId: 1,
+      approvedClassForSchoolIds: [2],
     }];
 
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 2 });
 
-    expect(scope).not.toBeNull();
-    expect(scope!.teachingClassIds.has(999)).toBe(false);
+    expect(scope).toBeNull();
   });
 
   it('7. rejects a global class approved only for another school', async () => {
-    mockState.classAssignments = [{ teacherId: 10, classId: 999, schoolId: 1, classSchoolId: null, approvedForSchoolIds: [] }];
+    mockState.teachingAssignments = [{ teacherId: 10, classId: 999, subjectId: 501, schoolId: 1, isActive: true, classSchoolId: null, subjectSchoolId: 1, approvedClassForSchoolIds: [] }];
     mockState.teachers = [{ id: 10, userId: 100, schoolId: 1, specialization: 'Physique' }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
     expect(scope!.teachingClassIds.has(999)).toBe(false);
@@ -212,6 +232,7 @@ describe('teacherAuthorization scope rules', () => {
       teachingClassIds: new Set([101]),
       homeroomClassIds: new Set<number>(),
       subjectIds: new Set([501]),
+      teachingAssignmentKeys: new Set(['101:501']),
     };
     expect(canTeacherReadEvaluation(scope, { schoolId: 1, classId: 101, subjectId: 501, subject: 'Physique' })).toBe(true);
   });
@@ -224,8 +245,24 @@ describe('teacherAuthorization scope rules', () => {
       teachingClassIds: new Set([101]),
       homeroomClassIds: new Set<number>(),
       subjectIds: new Set([501]),
+      teachingAssignmentKeys: new Set(['101:501']),
     };
     expect(canTeacherReadEvaluation(scope, { schoolId: 1, classId: 101, subjectId: 601, subject: 'Histoire' })).toBe(false);
+  });
+
+  it('does not infer an exact class-subject assignment from separate class and subject membership', () => {
+    const scope = {
+      teacherId: 10,
+      schoolId: 1,
+      specialization: 'Physique',
+      teachingClassIds: new Set([101]),
+      homeroomClassIds: new Set<number>(),
+      subjectIds: new Set([501, 601]),
+      teachingAssignmentKeys: new Set(['101:501']),
+    };
+
+    expect(canTeacherReadEvaluation(scope, { schoolId: 1, classId: 101, subjectId: 601, subject: 'Histoire' })).toBe(false);
+    expect(canTeacherWriteEvaluation(scope, { schoolId: 1, classId: 101, subjectId: 601, subject: 'Histoire' })).toBe(false);
   });
 
   it('10. titular adds only homeroomClassIds to the read scope', async () => {
@@ -241,17 +278,19 @@ describe('teacherAuthorization scope rules', () => {
     expect(scope!.teachingClassIds.has(202)).toBe(false);
   });
 
-  it('11. homeroom access does not extend write permissions', async () => {
+  it('11. homeroom access does not extend evaluation or grade reads or writes', async () => {
     mockState.homeroomScopes = [{ classId: 202, schoolId: 1, teacherId: 10 }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
-    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: null, subject: 'Français' })).toBe(true);
+    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: null, subject: 'Français' })).toBe(false);
+    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: 501, subject: 'Physique' })).toBe(false);
     expect(canTeacherWriteEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: null, subject: 'Français' })).toBe(false);
   });
 
-  it('12. reading can use the homeroom scope', async () => {
+  it('12. a homeroom teacher reads an evaluation only with an exact active pair', async () => {
     mockState.homeroomScopes = [{ classId: 202, schoolId: 1, teacherId: 10 }];
     const scope = await getTeacherAuthorizationScope({ id: 100, role: 'teacher', schoolId: 1 });
-    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: 999, subject: 'Français' })).toBe(true);
+    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 202, subjectId: 501, subject: 'Physique' })).toBe(false);
+    expect(canTeacherReadEvaluation(scope!, { schoolId: 1, classId: 101, subjectId: 501, subject: 'Physique' })).toBe(true);
   });
 
   it('13. writing must use teachingClassIds and not homeroomClassIds', async () => {

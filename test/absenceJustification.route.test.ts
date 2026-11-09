@@ -4,11 +4,18 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { absenceJustifications, absences, classes, notifications, parents, students, users } from '../src/db/schema.ts';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { absenceJustifications, absences, classes, notifications, parents, schools, students, userSchools, users } from '../src/db/schema.ts';
 
 const mockState = {
   users: [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }],
+  schools: [{ id: 1 }],
   parents: [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }],
+  userSchools: [
+    { id: 1, userId: 7, schoolId: 1, role: 'parent', isActive: true },
+    { id: 2, userId: 7, schoolId: 1, role: 'school_admin', isActive: true },
+    { id: 3, userId: 7, schoolId: 1, role: 'teacher', isActive: true },
+  ],
   students: [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', parentId: 2 }],
   classes: [{ id: 10, schoolId: 1 }],
   absence: {
@@ -26,11 +33,13 @@ const mockState = {
 const createSelectBuilder = () => {
   const builder: any = {
     table: null as any,
+    condition: null as any,
     from(table: any) {
       builder.table = table;
       return builder;
     },
-    where() {
+    where(condition: any) {
+      builder.condition = condition;
       return builder;
     },
     innerJoin() {
@@ -48,8 +57,12 @@ const createSelectBuilder = () => {
     then(resolve: (value: any) => void, reject: (reason?: any) => void) {
       const rows = builder.table === users
         ? mockState.users
+        : builder.table === schools
+        ? mockState.schools
         : builder.table === parents
           ? mockState.parents
+          : builder.table === userSchools
+            ? mockState.userSchools
           : builder.table === students
             ? mockState.students
             : builder.table === classes
@@ -57,7 +70,16 @@ const createSelectBuilder = () => {
               : builder.table === absences
                 ? [mockState.absence]
                 : [];
-      return Promise.resolve(rows).then(resolve, reject);
+      const query = builder.condition ? new PgDialect().sqlToQuery(builder.condition) : { sql: '', params: [] };
+      const conditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+        key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+        value: query.params[Number(match[2]) - 1],
+      }));
+      const filteredRows = rows.filter((row: any) => (
+        conditions.every(({ key, value }: any) => !(key in row) || row[key] === value)
+        && (builder.table !== userSchools || row.isActive !== false)
+      ));
+      return Promise.resolve(filteredRows).then(resolve, reject);
     },
     catch(reject: (reason?: any) => void) {
       return Promise.resolve([]).catch(reject);
@@ -153,7 +175,13 @@ describe('absence justification routes', () => {
 
   beforeEach(() => {
     mockState.users = [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }];
+    mockState.schools = [{ id: 1 }];
     mockState.parents = [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }];
+    mockState.userSchools = [
+      { id: 1, userId: 7, schoolId: 1, role: 'parent', isActive: true },
+      { id: 2, userId: 7, schoolId: 1, role: 'school_admin', isActive: true },
+      { id: 3, userId: 7, schoolId: 1, role: 'teacher', isActive: true },
+    ];
     mockState.students = [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', parentId: 2 }];
     mockState.classes = [{ id: 10, schoolId: 1 }];
     mockState.absence = {

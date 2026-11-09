@@ -20,7 +20,7 @@ describe('absence teaching assignment access', () => {
 
   it('keeps an absence private to its exact assignment when teachers share a subject', () => {
     const teacherBMath = { ...teacherAMath, id: 102, teacherId: 2 };
-    const absence = { teachingAssignmentId: teacherAMath.id };
+    const absence = { teachingAssignmentId: teacherAMath.id, classId: teacherAMath.classId, subjectId: teacherAMath.subjectId };
 
     expect(canTeacherAccessAbsence(absence, 1, [teacherAMath, teacherBMath])).toBe(true);
     expect(canTeacherAccessAbsence(absence, 2, [teacherAMath, teacherBMath])).toBe(false);
@@ -34,6 +34,8 @@ describe('absence teaching assignment access', () => {
   it('rejects an assignment reference inconsistent with the absence class or subject', () => {
     expect(canTeacherAccessAbsence({ teachingAssignmentId: 101, classId: 60, subjectId: 13 }, 1, [teacherAMath])).toBe(false);
     expect(canTeacherAccessAbsence({ teachingAssignmentId: 101, classId: 61, subjectId: 12 }, 1, [teacherAMath])).toBe(false);
+    expect(canTeacherAccessAbsence({ teachingAssignmentId: 101, classId: 60, subjectId: null }, 1, [teacherAMath])).toBe(false);
+    expect(canTeacherAccessAbsence({ teachingAssignmentId: 101, classId: null, subjectId: 12 }, 1, [teacherAMath])).toBe(false);
   });
 
   it('does not authorize absence access through an inactive assignment', () => {

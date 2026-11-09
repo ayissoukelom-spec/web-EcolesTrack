@@ -35,6 +35,7 @@ import {
   fitHeaderEmailToBounds,
   resolveSchoolHeaderEmailBounds,
   resolveBulletinClassTeacher,
+  isParentAuthorizedForBulletin,
   type BulletinPdfActor,
   type BulletinPdfData,
   type BulletinPdfDataProvider,
@@ -1237,6 +1238,34 @@ describe('résolution du titulaire de classe pour le PDF', () => {
 
     expect((await renderPdfWithTeacher(teacherA))).toContain('Titulaire Ecole A');
     expect((await renderPdfWithTeacher(teacherB))).toContain('Titulaire Ecole B');
+  });
+
+  describe('autorisation Parent des bulletins PDF', () => {
+    const header = { studentId: 101, studentSchoolId: 1, parentUserId: 10 };
+
+    it('requires the matching active school and an explicitly authorized child', () => {
+      expect(isParentAuthorizedForBulletin(
+        { id: 10, role: 'parent', schoolId: 1 },
+        header,
+        [101],
+      )).toBe(true);
+
+      expect(isParentAuthorizedForBulletin(
+        { id: 10, role: 'parent', schoolId: 2 },
+        header,
+        [101],
+      )).toBe(false);
+      expect(isParentAuthorizedForBulletin(
+        { id: 10, role: 'parent', schoolId: null },
+        header,
+        [101],
+      )).toBe(false);
+      expect(isParentAuthorizedForBulletin(
+        { id: 10, role: 'parent', schoolId: 1 },
+        header,
+        [],
+      )).toBe(false);
+    });
   });
 
   it('uses the existing school-owned class teacher and falls back to Aucun without a global assignment', async () => {

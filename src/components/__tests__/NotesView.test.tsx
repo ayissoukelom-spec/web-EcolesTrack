@@ -106,8 +106,8 @@ import NotesView from '../NotesView';
 
 const baseProps = {
   evaluationsList: [
-    { id: 1, classId: 85, teacherId: 10, subject: 'Math', title: 'Eval 1', date: '2026-07-01', maxScore: 20, coefficient: 1 },
-    { id: 2, classId: 85, teacherId: 10, subject: 'Math', title: 'Eval 2', date: '2026-06-01', maxScore: 20, coefficient: 1 },
+    { id: 1, classId: 85, teacherId: 10, subjectId: 10, subject: 'Math', title: 'Eval 1', date: '2026-07-01', maxScore: 20, coefficient: 1 },
+    { id: 2, classId: 85, teacherId: 10, subjectId: 10, subject: 'Math', title: 'Eval 2', date: '2026-06-01', maxScore: 20, coefficient: 1 },
   ],
   gradesList: [
     { id: 11, evaluationId: 2, studentId: 201, score: '15', remarks: '' },
@@ -124,7 +124,7 @@ const baseProps = {
 };
 
 test('teacher sees only non-completed evaluations and archive contains completed', () => {
-  renderWithAuth(<NotesView {...baseProps} teacherId={10} teacherClassIds={[85]} teacherSpecializations={['Math']} /> as any, 'teacher', 1);
+  renderWithAuth(<NotesView {...baseProps} teacherId={10} teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]} /> as any, 'teacher', 1);
 
   // evaluation select should contain Eval 1 but not Eval 2
   const evalSelect = findEvaluationSelect();
@@ -136,9 +136,26 @@ test('teacher sees only non-completed evaluations and archive contains completed
   screen.getByText(/Eval 2/);
 });
 
+test('a homeroom teacher does not see evaluations or grades without an exact teaching assignment', () => {
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      teacherId={10}
+      teacherHomeroomClassIds={[85]}
+      teacherTeachingAssignments={[]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  expect(screen.queryByText(/Eval 1/)).toBeNull();
+  expect(screen.queryByText(/Eval 2/)).toBeNull();
+  expect(screen.queryByText(/15/)).toBeNull();
+});
+
 test('teacher sees a same-class same-subject evaluation even when teacherId differs', () => {
   const evaluations = [
-    { id: 3, classId: 85, teacherId: 99, subject: 'Math', title: 'Admin-created Math', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 3, classId: 85, teacherId: 99, subjectId: 10, subject: 'Math', title: 'Admin-created Math', date: '2026-07-02', maxScore: 20, coefficient: 1 },
     { id: 4, classId: 85, teacherId: 99, subject: 'Science', title: 'Other subject', date: '2026-07-02', maxScore: 20, coefficient: 1 },
   ];
 
@@ -147,8 +164,7 @@ test('teacher sees a same-class same-subject evaluation even when teacherId diff
       {...baseProps}
       evaluationsList={evaluations}
       teacherId={10}
-      teacherClassIds={[85]}
-      teacherSpecializations={['Math']}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
     /> as any,
     'teacher',
     1,
@@ -170,9 +186,7 @@ test('teacher filters evaluations by subjectId when the stored subject name is s
       {...baseProps}
       evaluationsList={evaluations}
       teacherId={10}
-      teacherClassIds={[85]}
-      teacherSpecializations={['Math']}
-      teacherSubjectIds={[10]}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
     /> as any,
     'teacher',
     1,
@@ -188,9 +202,7 @@ test('teacher subject picker excludes approved subjects that are not assigned by
     <NotesView
       {...baseProps}
       approvedSubjectsList={[{ id: 10, name: 'Math' }, { id: 11, name: 'Science' }]}
-      teacherSpecializations={['Math', 'Science']}
-      teacherSubjectIds={[10]}
-      teacherClassIds={[85]}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
     /> as any,
     'teacher',
     1,
@@ -200,6 +212,29 @@ test('teacher subject picker excludes approved subjects that are not assigned by
 
   expect(screen.getByRole('option', { name: 'Math' })).toBeDefined();
   expect(screen.queryByRole('option', { name: 'Science' })).toBeNull();
+});
+
+test('teacher class picker excludes a class without an exact active teaching pair', () => {
+  renderWithAuth(
+    <NotesView
+      {...baseProps}
+      classesList={[
+        ...baseProps.classesList,
+        { id: 86, schoolId: 1, academicYearId: 2026, name: '6ème B' },
+      ]}
+      approvedSubjectsList={[{ id: 10, name: 'Math' }]}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
+
+  const classSelect = document.querySelector<HTMLSelectElement>('#box-eval-form select');
+  if (!classSelect) throw new Error('Could not locate evaluation class selector');
+  expect(within(classSelect).getByRole('option', { name: '6ème A' })).toBeDefined();
+  expect(within(classSelect).queryByRole('option', { name: '6ème B' })).toBeNull();
 });
 
 test('allows creating an evaluation with the monthly evaluation type', () => {
@@ -242,8 +277,7 @@ test('sorts students in the grade-entry table by family name and first name', ()
         { id: 204, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Paul', lastName: 'Bernard' },
         { id: 205, schoolId: 1, classId: 85, className: '6ème A', firstName: 'Aïcha', lastName: 'Amani' },
       ]}
-      teacherClassIds={[85]}
-      teacherSpecializations={['Math']}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
       initialSelectedEvalId={1}
     /> as any,
     'teacher',
@@ -260,8 +294,8 @@ test('sorts students in the grade-entry table by family name and first name', ()
 
 test('teacher sees an approved global class evaluation but not an unapproved global class evaluation', () => {
   const evaluations = [
-    { id: 5, classId: 85, teacherId: 99, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
-    { id: 6, classId: 86, teacherId: 99, subject: 'Math', title: 'Unapproved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 5, classId: 85, teacherId: 99, subjectId: 10, subject: 'Math', title: 'Approved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
+    { id: 6, classId: 86, teacherId: 99, subjectId: 10, subject: 'Math', title: 'Unapproved global class', date: '2026-07-02', maxScore: 20, coefficient: 1 },
   ];
   const classes = [
     { id: 85, schoolId: null, academicYearId: 2026, name: 'Global approved', status: 'approved' },
@@ -274,8 +308,7 @@ test('teacher sees an approved global class evaluation but not an unapproved glo
       evaluationsList={evaluations}
       classesList={classes}
       teacherId={10}
-      teacherClassIds={[85, 86]}
-      teacherSpecializations={['Math']}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
     /> as any,
     'teacher',
     1,

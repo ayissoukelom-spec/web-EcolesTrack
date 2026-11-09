@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomInt, randomUUID } from 'node:crypto';
 import { inArray } from 'drizzle-orm';
 import { db } from '../../src/db';
-import { auditEvents, localAuths, notifications, users } from '../../src/db/schema';
+import { auditEvents, localAuths, notifications, schools, users } from '../../src/db/schema';
 
 let app: any;
 const testEmails: string[] = [];
@@ -61,11 +61,13 @@ describe('E2E: create → force password change → update profile → re-login'
     const email = uniqueEmail();
     testEmails.push(email);
     const name = 'E2E Parent';
+    const [school] = await db.select({ id: schools.id }).from(schools).limit(1);
+    expect(school).toBeDefined();
     const initialPhone = uniquePhone();
     const updatedPhone = uniquePhone();
 
     // 1) Create parent via admin create (simulate super_admin)
-    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: initialPhone }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
+    const create = await post('/api/admin/users', { email, name, role: 'parent', schoolId: school.id, phone: initialPhone }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
     expect(create.status).toBe(201);
     const created = create.json;
     expect(created).toHaveProperty('id');
@@ -158,8 +160,10 @@ describe('E2E: create → force password change → update profile → re-login'
     const email = uniqueEmail();
     testEmails.push(email);
     const name = 'E2E Logout Test';
+    const [school] = await db.select({ id: schools.id }).from(schools).limit(1);
+    expect(school).toBeDefined();
 
-    const create = await post('/api/admin/users', { email, name, role: 'parent', phone: uniquePhone() }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
+    const create = await post('/api/admin/users', { email, name, role: 'parent', schoolId: school.id, phone: uniquePhone() }, { 'x-simulated-role': 'super_admin', 'x-simulated-email': 'sa@test.local' });
     expect(create.status).toBe(201);
 
     const temporaryPassword = create.json.temporaryPassword as string;

@@ -242,7 +242,8 @@ vi.mock('../../db/index.ts', async () => {
         if (builder.table === schema.userSchools) {
           rows = rows.filter((row) => builder.params.includes(row.userId)
             && builder.params.includes(row.schoolId)
-            && row.isActive === true);
+            && (!builder.whereSql.includes('"user_schools"."role" =')
+              || builder.params.includes(row.role)));
         } else if (builder.table === schema.schools) {
           if (builder.hasWhere) rows = rows.filter((row) => builder.params.includes(row.id));
           if (builder.selection?.schoolName) {
@@ -257,6 +258,47 @@ vi.mock('../../db/index.ts', async () => {
           rows = rows.filter((row) => builder.params.includes(row.userId)
             && builder.params.includes(row.schoolId)
             || builder.params.includes(row.id) && builder.params.includes(row.schoolId));
+        } else if (builder.table === schema.teacherClassSubjects
+          && builder.joinedTables.has(schema.classes)
+          && builder.joinedTables.has(schema.subjects)) {
+          rows = rows.flatMap((assignment) => {
+            const classAssociation = mockDatabaseState.classTeacherAssociations.find((row) =>
+              row.classId === assignment.classId
+                && row.schoolId === assignment.schoolId
+                && row.teacherId === assignment.teacherId,
+            );
+            const subjectAssociation = mockDatabaseState.teacherSubjectAssociations.find((row) =>
+              row.subjectId === assignment.subjectId
+                && row.schoolId === assignment.schoolId
+                && row.teacherId === assignment.teacherId,
+            );
+            const classSchoolId = assignment.classSchoolId ?? classAssociation?.classSchoolId;
+            const subjectSchoolId = assignment.subjectSchoolId ?? subjectAssociation?.subjectSchoolId;
+            const classApproved = assignment.classApproved ?? classAssociation?.classApproved;
+            const subjectApproved = assignment.subjectApproved ?? subjectAssociation?.subjectApproved;
+            const schoolId = Number(assignment.schoolId);
+            const classEligible = classSchoolId === schoolId
+              || classSchoolId == null && classApproved === true;
+            const subjectEligible = subjectSchoolId === schoolId
+              || subjectSchoolId == null && subjectApproved === true;
+            if (!builder.params.includes(assignment.teacherId)
+              || !builder.params.includes(assignment.schoolId)
+              || assignment.isActive !== true
+              || !classEligible
+              || !subjectEligible
+              || (builder.whereSql.includes('"teacher_class_subjects"."class_id" =')
+                && !builder.params.includes(assignment.classId))
+              || (builder.whereSql.includes('"teacher_class_subjects"."subject_id" =')
+                && !builder.params.includes(assignment.subjectId))) {
+              return [];
+            }
+            return [{
+              ...assignment,
+              teachingAssignmentId: assignment.id,
+              className: assignment.className ?? classAssociation?.className,
+              subjectName: assignment.subjectName ?? subjectAssociation?.subjectName,
+            }];
+          });
         } else if (builder.table === schema.teacherClassSubjects) {
           rows = rows.filter((row) => builder.params.includes(row.teacherId)
             && builder.params.includes(row.schoolId)
@@ -264,39 +306,6 @@ vi.mock('../../db/index.ts', async () => {
               || builder.params.includes(row.classId))
             && (!builder.whereSql.includes('"teacher_class_subjects"."subject_id" =')
               || builder.params.includes(row.subjectId)));
-        } else if (builder.table === schema.classTeachers
-          && builder.joinedTables.has(schema.teacherSubjects)) {
-          rows = [];
-          for (const classAssociation of mockDatabaseState.classTeacherAssociations) {
-            for (const subjectAssociation of mockDatabaseState.teacherSubjectAssociations) {
-              const classId = Number(classAssociation.classId);
-              const subjectId = Number(subjectAssociation.subjectId);
-              const schoolId = Number(classAssociation.schoolId);
-              const teacherId = Number(classAssociation.teacherId);
-              const classEligible = classAssociation.classSchoolId === schoolId
-                || classAssociation.classSchoolId == null && classAssociation.classApproved === true;
-              const subjectEligible = subjectAssociation.subjectSchoolId === schoolId
-                || subjectAssociation.subjectSchoolId == null && subjectAssociation.subjectApproved === true;
-              if (teacherId !== Number(subjectAssociation.teacherId)
-                || schoolId !== Number(subjectAssociation.schoolId)
-                || !classEligible
-                || !subjectEligible
-                || !builder.params.includes(teacherId)
-                || !builder.params.includes(schoolId)
-                || (builder.whereSql.includes('"class_teachers"."class_id" =') && !builder.params.includes(classId))
-                || (builder.whereSql.includes('"teacher_subjects"."subject_id" =') && !builder.params.includes(subjectId))) {
-                continue;
-              }
-              rows.push({
-                classTeacherAssociationId: classAssociation.id,
-                teacherSubjectAssociationId: subjectAssociation.id,
-                classId,
-                className: classAssociation.className,
-                subjectId,
-                subjectName: subjectAssociation.subjectName,
-              });
-            }
-          }
         } else if (builder.table === schema.classes) {
           rows = rows.filter((row) => builder.params.includes(row.id)
             && builder.params.includes(row.schoolId));
@@ -650,6 +659,73 @@ describe('teacher control API authorization and input validation', () => {
       .post('/api/teacher-control/gps-challenges')
       .send({ action: 'start_session' });
     expect(challengeResponse.status).toBe(403);
+  });
+
+  it('resolves the teacher membership when the user is also a parent in the same school', async () => {
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'parent', isActive: true },
+      { userId: 501, schoolId: 8, role: 'teacher', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(200);
+  });
+
+  it('resolves the teacher membership when the user is also a school administrator', async () => {
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'school_admin', isActive: true },
+      { userId: 501, schoolId: 8, role: 'teacher', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects teacher access when the user has only a parent membership', async () => {
+    mockActor.role = 'parent';
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'parent', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(403);
+  });
+
+  it('does not treat a surveillant membership as a teacher membership', async () => {
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'surveillant', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(403);
+  });
+
+  it('selects the exact teacher membership among multiple same-school memberships', async () => {
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'parent', isActive: true },
+      { userId: 501, schoolId: 8, role: 'school_admin', isActive: true },
+      { userId: 501, schoolId: 8, role: 'surveillant', isActive: true },
+      { userId: 501, schoolId: 8, role: 'teacher', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects access when the verified actor context has no matching teacher membership', async () => {
+    mockActor.role = 'teacher';
+    mockDatabaseState.memberships = [
+      { userId: 501, schoolId: 8, role: 'parent', isActive: true },
+    ];
+
+    const response = await request(createTestApp()).get('/api/teacher-control/gps-settings');
+
+    expect(response.status).toBe(403);
   });
 
   it('requires a super admin to select an explicit school for configuration access', async () => {
@@ -2378,6 +2454,11 @@ describe('teacher control API authorization and input validation', () => {
       { id: 402, teacherId: 22, schoolId: 8, subjectId: 42, subjectName: 'Histoire', subjectSchoolId: 8 },
       { id: 403, teacherId: 23, schoolId: 9, subjectId: 43, subjectName: 'Sciences', subjectSchoolId: 9 },
     ];
+    mockDatabaseState.assignments = [
+      { id: 501, teacherId: 21, schoolId: 8, classId: 31, subjectId: 41, isActive: true },
+      { id: 502, teacherId: 22, schoolId: 8, classId: 32, subjectId: 42, isActive: true },
+      { id: 503, teacherId: 23, schoolId: 9, classId: 33, subjectId: 43, isActive: true },
+    ];
     mockDatabaseState.classes = [
       { id: 31, schoolId: 8, name: '6e A' },
       { id: 32, schoolId: 8, name: '5e B' },
@@ -2455,6 +2536,13 @@ describe('teacher control API authorization and input validation', () => {
       { id: 403, teacherId: 22, schoolId: 8, subjectId: 43, subjectName: 'Physique', subjectSchoolId: 8 },
       { id: 404, teacherId: 21, schoolId: 8, subjectId: 44, subjectName: 'Sciences', subjectSchoolId: null, subjectApproved: true },
     ];
+    mockDatabaseState.assignments = [
+      { id: 501, teacherId: 21, schoolId: 8, classId: 31, subjectId: 41, isActive: true },
+      { id: 502, teacherId: 21, schoolId: 8, classId: 31, subjectId: 42, isActive: false },
+      { id: 503, teacherId: 21, schoolId: 9, classId: 31, subjectId: 41, isActive: true },
+      { id: 504, teacherId: 22, schoolId: 8, classId: 33, subjectId: 43, isActive: true },
+      { id: 505, teacherId: 21, schoolId: 8, classId: 34, subjectId: 44, isActive: true },
+    ];
     mockDatabaseState.gpsSettings = [{
       id: 4,
       schoolId: 8,
@@ -2470,14 +2558,20 @@ describe('teacher control API authorization and input validation', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual(expect.arrayContaining([
       { classId: 31, className: '6e A', subjectId: 41, subjectName: 'Mathématiques' },
-      { classId: 31, className: '6e A', subjectId: 44, subjectName: 'Sciences' },
-      { classId: 34, className: '3e D', subjectId: 41, subjectName: 'Mathématiques' },
       { classId: 34, className: '3e D', subjectId: 44, subjectName: 'Sciences' },
     ]));
-    expect(response.body).toHaveLength(4);
-    expect(mockDatabaseState.assignments).toHaveLength(0);
+    expect(response.body).toHaveLength(2);
+    expect(response.body).not.toEqual(expect.arrayContaining([
+      { classId: 31, className: '6e A', subjectId: 44, subjectName: 'Sciences' },
+      { classId: 34, className: '3e D', subjectId: 41, subjectName: 'Mathématiques' },
+    ]));
 
-    for (const pair of [{ classId: 33, subjectId: 43 }, { classId: 32, subjectId: 42 }]) {
+    for (const pair of [
+      { classId: 31, subjectId: 44 },
+      { classId: 31, subjectId: 42 },
+      { classId: 33, subjectId: 43 },
+      { classId: 32, subjectId: 42 },
+    ]) {
       const start = await request(createTestApp()).post('/api/teacher-control/sessions/start').send({
         ...pair,
         latitude: 6.1375,
@@ -2489,7 +2583,7 @@ describe('teacher control API authorization and input validation', () => {
     }
   });
 
-  it('starts and closes a session from existing associations without creating an assignment row', async () => {
+  it('starts and closes a session only from an active canonical assignment', async () => {
     mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
     mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
     mockDatabaseState.classTeacherAssociations = [{
@@ -2507,6 +2601,14 @@ describe('teacher control API authorization and input validation', () => {
       subjectId: 41,
       subjectName: 'Mathématiques',
       subjectSchoolId: 8,
+    }];
+    mockDatabaseState.assignments = [{
+      id: 91,
+      teacherId: 21,
+      schoolId: 8,
+      classId: 31,
+      subjectId: 41,
+      isActive: true,
     }];
     mockDatabaseState.gpsSettings = [{
       id: 4,
@@ -2545,15 +2647,15 @@ describe('teacher control API authorization and input validation', () => {
     expect(start.status).toBe(200);
     expect(start.body.startAccuracyMeters).toBe(501);
     expect(start.body).toMatchObject({
-      teachingAssignmentId: null,
-      classTeacherAssociationId: 301,
-      teacherSubjectAssociationId: 401,
+      teachingAssignmentId: 91,
+      classTeacherAssociationId: null,
+      teacherSubjectAssociationId: null,
       classId: 31,
       subjectId: 41,
       classNameSnapshot: '6e A',
       subjectNameSnapshot: 'Mathématiques',
     });
-    expect(mockDatabaseState.assignments).toHaveLength(0);
+    expect(mockDatabaseState.assignments).toHaveLength(1);
 
     const endChallenge = await request(app).post('/api/teacher-control/gps-challenges').send({
       action: 'end_session',
@@ -2635,7 +2737,7 @@ describe('teacher control API authorization and input validation', () => {
       validatedEndedAt: '2000-01-01T00:00:00.000Z',
     });
     expect(end.status).toBe(200);
-    expect(end.body).toMatchObject({ status: 'completed', teachingAssignmentId: null });
+    expect(end.body).toMatchObject({ status: 'completed', teachingAssignmentId: 91 });
     expect(end.body.validatedEndedAt).not.toBe('2000-01-01T00:00:00.000Z');
     expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
     expect(mockDatabaseState.sessions).toHaveLength(1);

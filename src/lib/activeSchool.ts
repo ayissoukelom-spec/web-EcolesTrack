@@ -1,6 +1,34 @@
+import { isLocalSchoolRole } from './localSchoolRoles';
+
 export interface UserSchoolMembership {
   schoolId: number;
+  role?: string | null;
   isActive?: boolean | null;
+}
+
+export function resolveLegacyMembershipSchool(
+  memberships: UserSchoolMembership[],
+  role: string,
+  preferredSchoolId?: number | null,
+): number | null {
+  if (!isLocalSchoolRole(role)) return null;
+
+  const roleMemberships = memberships.filter((membership) => (
+    membership.role === role
+  ));
+  const activeSchoolIds = [...new Set(roleMemberships
+    .filter((membership) => membership.isActive === true)
+    .map((membership) => membership.schoolId))];
+  if (activeSchoolIds.length === 1) return activeSchoolIds[0];
+
+  if (preferredSchoolId != null) {
+    return roleMemberships.some((membership) => membership.schoolId === preferredSchoolId)
+      ? preferredSchoolId
+      : null;
+  }
+
+  const schoolIds = [...new Set(roleMemberships.map((membership) => membership.schoolId))];
+  return schoolIds.length === 1 ? schoolIds[0] : null;
 }
 
 export interface ActiveSchoolSelectionInput {
@@ -25,14 +53,18 @@ export function resolveActiveSchoolSelection(input: ActiveSchoolSelectionInput):
     return requestedSchoolId;
   }
 
-  const activeMembership = memberships.find((membership) => membership.isActive);
-  if (activeMembership?.schoolId != null) {
-    return activeMembership.schoolId;
+  const activeSchoolIds = [...new Set(memberships
+    .filter((membership) => membership.isActive === true)
+    .map((membership) => membership.schoolId)
+    .filter((schoolId): schoolId is number => typeof schoolId === 'number'))];
+  if (activeSchoolIds.length === 1) {
+    return activeSchoolIds[0];
   }
 
   if (userSchoolId != null && available.includes(userSchoolId)) {
     return userSchoolId;
   }
 
-  return available[0] ?? null;
+  const uniqueAvailableSchoolIds = [...new Set(available)];
+  return uniqueAvailableSchoolIds.length === 1 ? uniqueAvailableSchoolIds[0] : null;
 }

@@ -27,7 +27,7 @@ export async function ensureEducationStructureSchema() {
     id SERIAL PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT true,
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT now()
   )`);
   await db.execute(sql`CREATE TABLE IF NOT EXISTS levels (
@@ -36,7 +36,7 @@ export async function ensureEducationStructureSchema() {
     code TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     order_index INTEGER NOT NULL DEFAULT 1,
-    is_active BOOLEAN NOT NULL DEFAULT true,
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT now()
   )`);
   await db.execute(sql`CREATE TABLE IF NOT EXISTS school_cycles (
@@ -249,7 +249,6 @@ export async function ensureClassHomeroomAssignmentsTableExists() {
             WHERE membership.user_id = teacher_row.user_id
               AND membership.school_id = class_row.school_id
               AND membership.role = 'teacher'
-              AND membership.is_active = true
           )
         )
       ON CONFLICT (school_id, class_id) DO NOTHING;
@@ -455,10 +454,10 @@ export async function ensureUserSchoolsTableExists() {
       is_active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMP DEFAULT now()
     );`);
-    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS user_schools_user_id_school_id_idx ON user_schools (user_id, school_id);`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS user_schools_user_id_school_id_role_idx ON user_schools (user_id, school_id, role);`);
     // Ensure columns exist for older DBs that may have been created without them
     await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS role TEXT;`);
-    await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;`);
+    await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`);
     await db.execute(sql`ALTER TABLE user_schools ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();`);
     // Ensure roles are backfilled from business tables before making the column NOT NULL.
     await db.execute(sql`
@@ -485,7 +484,6 @@ export async function ensureUserSchoolsTableExists() {
         AND user_schools.user_id = users.id
         AND users.role IN ('teacher', 'parent', 'school_admin', 'student');
     `);
-    await db.execute(sql`UPDATE user_schools SET is_active = true WHERE is_active IS NULL;`);
     await db.execute(sql`ALTER TABLE user_schools ALTER COLUMN role SET NOT NULL;`);
   } catch (err: any) {
     console.error('Failed to ensure user_schools table exists:', err?.message || err);

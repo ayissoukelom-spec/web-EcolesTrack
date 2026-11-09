@@ -2,13 +2,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import crypto from 'node:crypto';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { absenceDeclarations, absences, classes, notifications, parents, students, users } from '../src/db/schema.ts';
+import { absenceDeclarations, absences, classes, notifications, parents, schools, students, userSchools, users } from '../src/db/schema.ts';
 
 const mockState = {
   users: [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }],
+  schools: [{ id: 1 }],
   parents: [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }],
   students: [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }],
   classes: [{ id: 10, schoolId: 1 }],
+  userSchools: [
+    { userId: 7, schoolId: 1, role: 'parent', isActive: true },
+    { userId: 7, schoolId: 1, role: 'school_admin', isActive: true },
+  ] as Array<{ userId: number; schoolId: number; role: string; isActive: boolean | null }>,
   declarations: [] as any[],
   absences: [] as any[],
 };
@@ -36,9 +41,11 @@ const createSelectBuilder = (selection?: any) => {
     limit() { return builder; },
     then(resolve: (value: any) => void, reject: (reason?: any) => void) {
       const rows = builder.table === users ? mockState.users
+        : builder.table === schools ? mockState.schools
         : builder.table === parents ? mockState.parents
           : builder.table === students ? mockState.students
             : builder.table === classes ? mockState.classes
+              : builder.table === userSchools ? mockState.userSchools
               : builder.table === absenceDeclarations ? mockState.declarations
                 : builder.table === absences ? mockState.absences
                   : [];
@@ -47,7 +54,10 @@ const createSelectBuilder = (selection?: any) => {
         key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
         value: query.params[Number(match[2]) - 1],
       }));
-      const filteredRows = rows.filter((row: any) => equalityConditions.every(({ key, value }: any) => !(key in row) || row[key] === value));
+      const filteredRows = rows.filter((row: any) => (
+        equalityConditions.every(({ key, value }: any) => !(key in row) || row[key] === value)
+        && (builder.table !== userSchools || row.isActive !== false)
+      ));
       return Promise.resolve(filteredRows).then(resolve, reject);
     },
     catch(reject: (reason?: any) => void) { return Promise.resolve([]).catch(reject); },
@@ -162,9 +172,14 @@ describe('parent absence declaration routes', () => {
 
   beforeEach(() => {
     mockState.users = [{ id: 7, uid: 'test-user', email: 'parent@example.com', name: 'Parent Test', role: 'parent', schoolId: 1, isDeleted: false }];
+    mockState.schools = [{ id: 1 }];
     mockState.parents = [{ id: 2, userId: 7, studentId: 20, schoolId: 1 }];
     mockState.students = [{ id: 20, schoolId: 1, classId: 10, firstName: 'Awa', lastName: 'Test', parentId: 2, isActive: true }];
     mockState.classes = [{ id: 10, schoolId: 1 }];
+    mockState.userSchools = [
+      { userId: 7, schoolId: 1, role: 'parent', isActive: true },
+      { userId: 7, schoolId: 1, role: 'school_admin', isActive: true },
+    ];
     mockState.declarations = [];
     mockState.absences = [];
     declarationListWhereConditions.length = 0;
@@ -258,6 +273,7 @@ describe('parent absence declaration routes', () => {
     for (const action of ['create', 'update'] as const) {
       const payload = {
         parentUserId: 7,
+        schoolId: 1,
         action,
         input: {
           id: 18,
@@ -281,6 +297,34 @@ describe('parent absence declaration routes', () => {
         .expect(400);
 
       expect(response.body.error).toMatch(/motif.*obligatoire/i);
+    }
+    expect(mockState.declarations).toHaveLength(0);
+  });
+
+  it('rejects the signed internal relay without an exact active parent membership', async () => {
+    for (const membership of [
+      { userId: 7, schoolId: 1, role: 'teacher', isActive: true },
+      { userId: 7, schoolId: 1, role: 'parent', isActive: false },
+      { userId: 7, schoolId: 2, role: 'parent', isActive: true },
+    ]) {
+      mockState.userSchools = [membership];
+      const payload = {
+        parentUserId: 7,
+        schoolId: 1,
+        action: 'create',
+        input: { ...declarationInput(20), reason: '   ' },
+      };
+      const timestamp = Date.now().toString();
+      const signature = crypto.createHmac('sha256', 'absence-declaration-test-secret')
+        .update(`${JSON.stringify(payload)}${timestamp}`)
+        .digest('hex');
+
+      await request(app)
+        .post('/api/internal/absence-declarations')
+        .set('X-Internal-Timestamp', timestamp)
+        .set('X-Internal-Signature', signature)
+        .send(payload)
+        .expect(403);
     }
     expect(mockState.declarations).toHaveLength(0);
   });
@@ -327,6 +371,8 @@ describe('parent absence declaration routes', () => {
 
   it('denies update and cancellation after the declared child is transferred, and denies cross-parent declaration IDs', async () => {
     mockState.users.push({ id: 8, uid: 'test-user-8', email: 'parent-b@example.com', name: 'Parent B', role: 'parent', schoolId: 2, isDeleted: false });
+    mockState.schools.push({ id: 2 });
+    mockState.userSchools.push({ userId: 8, schoolId: 2, role: 'parent', isActive: true });
     mockState.parents.push({ id: 3, userId: 8, studentId: 21, schoolId: 2 });
     mockState.parents[0].studentId = 21;
     mockState.students = [

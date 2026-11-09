@@ -34,6 +34,7 @@ const evaluations: Evaluation[] = [
     id: 1,
     classId: 10,
     teacherId: 100,
+    subjectId: 11,
     subject: 'Mathématiques',
     title: 'Devoir 1',
     coefficient: 2,
@@ -45,6 +46,7 @@ const evaluations: Evaluation[] = [
     id: 2,
     classId: 10,
     teacherId: 100,
+    subjectId: 12,
     subject: 'Français',
     title: 'Devoir 2',
     coefficient: 1,
@@ -71,7 +73,10 @@ const defaultProps = {
   schoolsList: schools,
   schoolFilterId: null,
   onSchoolFilterChange: () => undefined,
-  teacherClassIds: [10],
+  teacherTeachingAssignments: [
+    { classId: 10, subjectId: 11, isActive: true },
+    { classId: 10, subjectId: 12, isActive: true },
+  ],
   teacherId: 100,
   onAddEvaluation: () => undefined,
   onAddGrade: () => Promise.resolve(),
@@ -151,11 +156,40 @@ describe('Archive UI regression', () => {
         {...defaultProps}
         userRole="teacher"
         teacherId={100}
+        teacherTeachingAssignments={defaultProps.teacherTeachingAssignments}
       />
     );
 
     expect(screen.getAllByRole('button', { name: /Télécharger Excel/i })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /Télécharger PDF/i })).toHaveLength(2);
+  });
+
+  it('montre une évaluation créée par un autre utilisateur si la paire active correspond', () => {
+    render(
+      <ArchiveView
+        {...defaultProps}
+        userRole="teacher"
+        teacherId={100}
+        evaluationsList={[{ ...evaluations[0], teacherId: 999 }]}
+        teacherTeachingAssignments={[{ classId: 10, subjectId: 11, isActive: true }]}
+      />,
+    );
+
+    expect(screen.getByText('Devoir 1')).toBeDefined();
+  });
+
+  it('does not expose archived subject evaluations to a homeroom teacher without an exact pair', () => {
+    render(
+      <ArchiveView
+        {...defaultProps}
+        userRole="teacher"
+        teacherHomeroomClassIds={[10]}
+        teacherTeachingAssignments={[]}
+      />,
+    );
+
+    expect(screen.queryByText('Devoir 1')).toBeNull();
+    expect(screen.queryByText('Devoir 2')).toBeNull();
   });
 
   it('indique la progression d un export et réactive le bouton après son traitement', async () => {

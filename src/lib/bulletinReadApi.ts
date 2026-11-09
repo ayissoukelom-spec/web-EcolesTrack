@@ -136,12 +136,12 @@ const buildConditions = async (actor: BulletinReadActor, filters?: Partial<Bulle
     conditions.push(inArray(bulletins.classId, Array.from(scope.homeroomClassIds)));
     conditions.push(eq(students.schoolId, actor.schoolId));
   } else if (actor.role === 'parent') {
-    if (!actor.id) {
+    if (!actor.id || actor.schoolId == null) {
       conditions.push(sql`1 = 0`);
       return conditions;
     }
 
-    const childIds = await getParentChildStudentIds(actor.id);
+    const childIds = await getParentChildStudentIds(actor.id, actor.schoolId);
 
     if (childIds.length === 0) {
       conditions.push(sql`1 = 0`);

@@ -17,19 +17,21 @@ export interface HomeroomScope {
 
 async function getTeacherId(actor: HomeroomActor): Promise<number | null> {
   if (actor.role !== 'teacher' || actor.id == null || actor.schoolId == null) return null;
-  const [teacher] = await db.select({ id: teachers.id, schoolId: teachers.schoolId })
-    .from(teachers)
-    .where(eq(teachers.userId, actor.id));
-  if (!teacher) return null;
-  if (teacher.schoolId === actor.schoolId) return teacher.id;
-
   const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
     eq(userSchools.userId, actor.id),
     eq(userSchools.schoolId, actor.schoolId),
     eq(userSchools.role, 'teacher'),
-    eq(userSchools.isActive, true),
+    sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
   ));
-  return membership ? teacher.id : null;
+  if (!membership) return null;
+
+  const [teacher] = await db.select({ id: teachers.id, schoolId: teachers.schoolId })
+    .from(teachers)
+    .where(and(
+      eq(teachers.userId, actor.id),
+      eq(teachers.schoolId, actor.schoolId),
+    ));
+  return teacher?.id ?? null;
 }
 
 export async function getTeacherHomeroomScopes(actor: HomeroomActor): Promise<HomeroomScope[]> {

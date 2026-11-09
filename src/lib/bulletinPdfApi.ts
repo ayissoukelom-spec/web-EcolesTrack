@@ -65,6 +65,7 @@ import { resolveExamPromotionDecision, isExamResultStatus, isExamType, type Exam
 import { selectPreferredClassExamConfiguration } from './classExamConfiguration';
 import { readStoredFile } from './fileStorage';
 import { normalizeClassNameForDisplay } from './classDisplay';
+import { getParentChildStudentIds } from './parentStudentAccess.ts';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -89,6 +90,17 @@ export interface BulletinPdfActor {
   role: string;
   schoolId?: number | null;
 }
+
+export const isParentAuthorizedForBulletin = (
+  actor: BulletinPdfActor,
+  header: { studentId: number; studentSchoolId: number | null; parentUserId: number | null },
+  authorizedStudentIds: readonly number[],
+): boolean => actor.role === 'parent'
+  && actor.id != null
+  && actor.schoolId != null
+  && header.studentSchoolId === actor.schoolId
+  && header.parentUserId === actor.id
+  && authorizedStudentIds.includes(header.studentId);
 
 export interface BulletinPdfLine {
   id: number;
@@ -999,7 +1011,9 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
   }
 
   if (actor.role === 'parent') {
-    if (!actor.id || header.parentUserId !== actor.id) return null;
+    if (actor.id == null || actor.schoolId == null) return null;
+    const authorizedStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+    if (!isParentAuthorizedForBulletin(actor, header, authorizedStudentIds)) return null;
     return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
 

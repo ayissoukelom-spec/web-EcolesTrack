@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
-import { users, evaluations as evaluationsTable, students as studentsTable, grades as gradesTable, notifications as notificationsTable, parents as parentsTable } from '../src/db/schema.ts';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { users, evaluations as evaluationsTable, students as studentsTable, grades as gradesTable, notifications as notificationsTable, parents as parentsTable, teachers as teachersTable, teacherClassSubjects as teacherClassSubjectsTable, userSchools } from '../src/db/schema.ts';
 
 const mockDbState: any = {
   evaluations: [] as any[],
@@ -8,6 +9,9 @@ const mockDbState: any = {
   grades: [] as any[],
   notifications: [] as any[],
   users: [] as any[],
+  teachers: [] as any[],
+  teacherClassSubjects: [] as any[],
+  userSchools: [] as any[],
 };
 
 const getRowsForTable = (table: any) => {
@@ -17,6 +21,14 @@ const getRowsForTable = (table: any) => {
   if (table === gradesTable) return mockDbState.grades;
   if (table === notificationsTable) return mockDbState.notifications;
   if (table === parentsTable) return [];
+  if (table === teachersTable) return mockDbState.teachers;
+  if (table === userSchools) return mockDbState.userSchools;
+  if (table === teacherClassSubjectsTable) {
+    return mockDbState.teacherClassSubjects.filter((assignment: any) =>
+      assignment.teacherId === 9 && assignment.schoolId === 1 && assignment.isActive === true,
+    );
+  }
+  if (table?.[Symbol.for('drizzle:Name')] === 'class_homeroom_assignments') return [];
   return [];
 };
 
@@ -26,13 +38,27 @@ const createBuilder = (table: any, rows: any[]) => ({
   from(target: any) {
     return createBuilder(target, getRowsForTable(target));
   },
-  where() {
+  where(condition: any) {
+    if (this._table === userSchools) {
+      const query = new PgDialect().sqlToQuery(condition);
+      const equalityConditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+        key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+        value: query.params[Number(match[2]) - 1],
+      }));
+      this._rows = this._rows.filter((row: any) => (
+        equalityConditions.every(({ key, value }: any) => row[key] === value)
+        && (!query.sql.includes('is_active') || row.isActive !== false)
+      ));
+    }
     return this;
   },
   innerJoin() {
     return this;
   },
   leftJoin() {
+    return this;
+  },
+  limit() {
     return this;
   },
   values(values: any) {
@@ -61,14 +87,14 @@ const createBuilder = (table: any, rows: any[]) => ({
     };
   },
   then(resolve: (value: any) => void) {
-    resolve(rows);
+    resolve(this._rows);
     return this;
   },
   catch(reject: (reason?: any) => void) {
-    return Promise.resolve(rows).catch(reject);
+    return Promise.resolve(this._rows).catch(reject);
   },
   finally(cb: () => void) {
-    return Promise.resolve(rows).finally(cb);
+    return Promise.resolve(this._rows).finally(cb);
   },
 });
 
@@ -142,6 +168,117 @@ describe('POST /api/grades', () => {
     mockDbState.grades = [];
     mockDbState.notifications = [];
     mockDbState.users = [{ id: 1, uid: 'sim-user', schoolId: null, role: 'super_admin' }];
+    mockDbState.teachers = [];
+    mockDbState.teacherClassSubjects = [];
+    mockDbState.userSchools = [];
+  });
+
+  const setTeacherGradeFixtures = (assignment: any, evaluationOverrides: any = {}) => {
+    mockDbState.users = [{ id: 1, uid: 'sim-user', schoolId: 1, role: 'teacher' }];
+    mockDbState.teachers = [{ id: 9, userId: 1, schoolId: 1, specialization: 'Mathématiques' }];
+    mockDbState.teacherClassSubjects = assignment ? [assignment] : [];
+    mockDbState.userSchools = [{ userId: 1, schoolId: 1, role: 'teacher', isActive: true }];
+    mockDbState.evaluations = [{
+      id: 77,
+      classId: 1,
+      teacherId: 9,
+      termId: null,
+      subjectId: 101,
+      subject: 'Mathématiques',
+      title: 'Devoir 1',
+      coefficient: 1,
+      maxScore: 20,
+      countInBulletin: true,
+      date: '2026-01-01',
+      createdAt: null,
+      schoolId: 1,
+      ...evaluationOverrides,
+    }];
+    mockDbState.students = [{
+      id: 11,
+      firstName: 'Jean',
+      lastName: 'Dupont',
+      schoolId: 1,
+      classId: 1,
+      isActive: true,
+      withdrawnAt: null,
+      enrolledAt: null,
+      parentId: null,
+    }];
+  };
+
+  const postTeacherGrade = () => request(app)
+    .post('/api/grades')
+    .set('x-simulated-role', 'teacher')
+    .set('x-simulated-user-id', '1')
+    .set('x-simulated-school-id', '1')
+    .send({ evaluationId: 77, studentId: 11, score: '15', remarks: '' });
+
+  it('allows a teacher to create a grade with an active exact class-subject assignment', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 9, schoolId: 1, classId: 1, subjectId: 101, isActive: true });
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(200);
+    expect(mockDbState.grades).toContainEqual(expect.objectContaining({ evaluationId: 77, studentId: 11, score: '15' }));
+  });
+
+  it('rejects a teacher without an active exact school membership', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 9, schoolId: 1, classId: 1, subjectId: 101, isActive: true });
+    mockDbState.userSchools = [{ userId: 1, schoolId: 2, role: 'teacher', isActive: true }];
+
+    const response = await postTeacherGrade();
+
+    expect(response.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('rejects a teacher grade when the class-subject assignment is inactive', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 9, schoolId: 1, classId: 1, subjectId: 101, isActive: false });
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('rejects a teacher grade when the exact assignment belongs to another teacher', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 10, schoolId: 1, classId: 1, subjectId: 101, isActive: true });
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('rejects a teacher grade when the subject is not assigned to the evaluation class', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 9, schoolId: 1, classId: 1, subjectId: 102, isActive: true });
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('rejects a teacher grade when the exact assignment belongs to another school', async () => {
+    setTeacherGradeFixtures({ id: 301, teacherId: 9, schoolId: 2, classId: 1, subjectId: 101, isActive: true });
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
+  });
+
+  it('rejects grading a legacy evaluation without subjectId when no exact assignment can be proven', async () => {
+    setTeacherGradeFixtures(
+      { id: 301, teacherId: 9, schoolId: 1, classId: 1, subjectId: 101, isActive: true },
+      { subjectId: null },
+    );
+
+    const res = await postTeacherGrade();
+
+    expect(res.status).toBe(403);
+    expect(mockDbState.grades).toHaveLength(0);
   });
 
   it('rejects grade entry before the planned evaluation date', async () => {

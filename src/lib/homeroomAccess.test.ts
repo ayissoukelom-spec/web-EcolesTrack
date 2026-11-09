@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import { classHomeroomAssignments, classTeachers, classes, teachers, userSchools } from '../db/schema.ts';
 
 const mockState = vi.hoisted(() => ({
   teacher: { id: 5, schoolId: 10, userId: 50 } as { id: number; schoolId: number; userId: number } | undefined,
+  memberships: [] as Array<{ userId: number; schoolId: number; role: string; isActive: boolean | null }>,
   homeroomRows: [] as Array<{ classId: number; schoolId: number; teacherId: number; classSchoolId: number | null; schoolClassStatus: string }>,
   teachingRows: [] as Array<{ classId: number; schoolId: number | null; teacherId: number; classSchoolId?: number | null }>,
 }));
@@ -15,6 +17,7 @@ const mockDb = vi.hoisted(() => ({
       from(table: any) {
         builder.table = table;
         if (table === teachers) builder._rows = mockState.teacher ? [mockState.teacher] : [];
+        if (table === userSchools) builder._rows = mockState.memberships;
         if (table === classHomeroomAssignments) builder._rows = mockState.homeroomRows;
         if (table === classTeachers) builder._rows = mockState.teachingRows;
         return builder;
@@ -31,11 +34,19 @@ const mockDb = vi.hoisted(() => ({
       },
       leftJoin() { return builder; },
       where(condition: any) {
-        if (condition && [teachers, classHomeroomAssignments, classTeachers].includes(builder.table)) {
+        if (condition && [teachers, userSchools, classHomeroomAssignments, classTeachers].includes(builder.table)) {
           const query = new PgDialect().sqlToQuery(condition);
           if (builder.table === teachers) {
-            const requestedUserId = query.params.find((value) => typeof value === 'number');
-            builder._rows = builder._rows.filter((teacher: any) => teacher.userId === requestedUserId);
+            const [requestedUserId, requestedSchoolId] = query.params;
+            builder._rows = builder._rows.filter((teacher: any) => (
+              teacher.userId === requestedUserId && teacher.schoolId === requestedSchoolId
+            ));
+          } else if (builder.table === userSchools) {
+            const [userId, schoolId] = query.params;
+            builder._rows = builder._rows.filter((membership: any) => membership.userId === userId
+              && membership.schoolId === schoolId
+              && membership.role === 'teacher'
+              && membership.isActive !== false);
           } else if (builder.table === classHomeroomAssignments) {
             const [teacherId, schoolId] = query.params;
             builder._rows = builder._rows.filter((assignment: any) => assignment.teacherId === teacherId && assignment.schoolId === schoolId);
@@ -54,12 +65,12 @@ const mockDb = vi.hoisted(() => ({
 
 vi.mock('../db/index.ts', () => ({ db: mockDb }));
 
-import { classHomeroomAssignments, classTeachers, classes, teachers } from '../db/schema.ts';
 import { getTeacherHomeroomClassIds, getTeacherReadableClassIds, getTeacherHomeroomScopes } from './homeroomAccess.ts';
 
 describe('homeroom access scope', () => {
   beforeEach(() => {
     mockState.teacher = { id: 5, schoolId: 10, userId: 50 };
+    mockState.memberships = [{ userId: 50, schoolId: 10, role: 'teacher', isActive: true }];
     mockState.homeroomRows = [
       { classId: 21, schoolId: 10, teacherId: 5, classSchoolId: 10, schoolClassStatus: 'approved' },
       { classId: 22, schoolId: 10, teacherId: 5, classSchoolId: null, schoolClassStatus: 'approved' },
@@ -90,5 +101,19 @@ describe('homeroom access scope', () => {
     expect(classIds).toContain(30);
     expect(classIds).not.toContain(31);
     expect(classIds).not.toContain(32);
+  });
+
+  it('rejects homeroom access when the exact teacher membership is inactive', async () => {
+    mockState.memberships = [{ userId: 50, schoolId: 10, role: 'teacher', isActive: false }];
+
+    expect(await getTeacherHomeroomScopes({ id: 50, role: 'teacher', schoolId: 10 })).toEqual([]);
+    expect(await getTeacherReadableClassIds({ id: 50, role: 'teacher', schoolId: 10 })).toEqual([]);
+  });
+
+  it('does not resolve a teacher profile owned by a different school', async () => {
+    mockState.teacher = { id: 5, schoolId: 20, userId: 50 };
+
+    expect(await getTeacherHomeroomScopes({ id: 50, role: 'teacher', schoolId: 10 })).toEqual([]);
+    expect(await getTeacherReadableClassIds({ id: 50, role: 'teacher', schoolId: 10 })).toEqual([]);
   });
 });

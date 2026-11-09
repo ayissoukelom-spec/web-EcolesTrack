@@ -1020,8 +1020,28 @@ export default function AdminView({
   const currentUser = usersList.find((u) => String(u.uid) === String(simulatedUser?.uid)
     || (u.email && simulatedUser?.email && u.email.toLowerCase() === simulatedUser.email.toLowerCase()));
   const currentUserId = currentUser?.id;
-  const currentTeacher = findTeacherProfileFromSimulatedUser(userRole, simulatedUser, teachersList, usersList);
-  const currentTeacherClassIds = currentTeacher ? (currentTeacher.classIds || []) : [];
+  const currentTeacher = findTeacherProfileFromSimulatedUser(
+    userRole,
+    simulatedUser,
+    teachersList,
+    usersList,
+    currentSchoolId,
+  );
+  const getTeacherProfileForUser = (userId: number) => {
+    const profiles = teachersList.filter((teacher) => teacher.userId === userId);
+    const schoolId = userRole === 'super_admin' ? superAdminSchoolFilterId : currentSchoolId;
+    if (schoolId != null) return profiles.find((teacher) => teacher.schoolId === schoolId);
+    return profiles.length === 1 ? profiles[0] : undefined;
+  };
+  const getParentProfileForUser = (userId: number) => {
+    const profiles = parentsList.filter((parent) => parent.userId === userId);
+    const schoolId = userRole === 'super_admin' ? superAdminSchoolFilterId : currentSchoolId;
+    if (schoolId != null) return profiles.find((parent) => parent.schoolId === schoolId);
+    return profiles.length === 1 ? profiles[0] : undefined;
+  };
+  const currentTeacherClassIds = currentTeacher
+    ? Array.from(new Set([...(currentTeacher.teachingClassIds || []), ...(currentTeacher.homeroomClassIds || [])]))
+    : [];
 
   const teacherStudentFilterClasses = classesList
     .filter((cls) => currentTeacherClassIds.includes(cls.id))
@@ -1099,8 +1119,9 @@ export default function AdminView({
 
   const teachersInCurrentScope = teachersList.filter((t) => {
     const matchesSchool = userRole !== 'super_admin' || !superAdminSchoolFilterId || teacherBelongsToSchool(t, superAdminSchoolFilterId);
-    const matchesClassFilter = !teacherClassFilterId || (t.classIds || []).includes(teacherClassFilterId);
-    const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && (t.classIds || []).some((classId) => currentTeacherClassIds.includes(classId)));
+    const teacherClassIds = [...(t.classIds || []), ...(t.homeroomClassIds || [])];
+    const matchesClassFilter = !teacherClassFilterId || teacherClassIds.includes(teacherClassFilterId);
+    const matchesTeacherScope = userRole !== 'teacher' || (currentTeacherClassIds.length > 0 && teacherClassIds.some((classId) => currentTeacherClassIds.includes(classId)));
     return matchesSchool && matchesClassFilter && matchesTeacherScope;
   });
   const filteredTeachersList = sortTeachersAlphabetically(
@@ -1110,9 +1131,10 @@ export default function AdminView({
   const currentParent = (() => {
     if (userRole !== 'parent') return undefined;
     const simEmail = simulatedUser?.email?.toLowerCase?.() ?? null;
-    const byUserId = parentsList.find((p) => currentUserId && p.userId === currentUserId);
+    if (currentSchoolId == null) return undefined;
+    const byUserId = parentsList.find((p) => p.schoolId === currentSchoolId && currentUserId && p.userId === currentUserId);
     if (byUserId) return byUserId;
-    return parentsList.find((p) => p.email && simEmail && p.email.toLowerCase() === simEmail);
+    return parentsList.find((p) => p.schoolId === currentSchoolId && p.email && simEmail && p.email.toLowerCase() === simEmail);
   })();
 
   const studentsInCurrentScope = studentsList.filter((st) =>
@@ -1294,8 +1316,24 @@ export default function AdminView({
     URL.revokeObjectURL(url);
   };
 
+  const hasLocalFunction = (user: User, role: Exclude<UserRole, 'super_admin'>, schoolId?: number) => {
+    if (user.functions) {
+      return user.functions.some((membership) => (
+        membership.role === role && (schoolId == null || membership.schoolId === schoolId)
+      ));
+    }
+    return user.role === role && (schoolId == null || user.schoolId === schoolId
+      || Boolean(user.schoolIds?.includes(schoolId)));
+  };
+  const hasAnyLocalFunction = (user: User) => user.functions
+    ? user.functions.length > 0
+    : user.role !== 'super_admin';
+  const isLocalFunctionRole = (role: string): role is Exclude<UserRole, 'super_admin'> => (
+    role === 'teacher' || role === 'school_admin' || role === 'parent' || role === 'surveillant'
+  );
   const accountBelongsToSchool = (user: User, schoolId: number | null | undefined) => {
     if (!schoolId) return true;
+    if (user.functions) return user.functions.some((membership) => membership.schoolId === schoolId);
     if (user.schoolId === schoolId) return true;
     return Array.isArray(user.schoolIds) && user.schoolIds.includes(schoolId);
   };
@@ -1310,12 +1348,16 @@ export default function AdminView({
     if (!current || event.id > current.id) latestDeactivationByUserId.set(event.resourceId, event);
   });
   const schoolNamesForAccount = (user: User) => {
-    const teacherProfile = teachersList.find((teacher) => teacher.userId === user.id);
-    const schoolIds = [...new Set([
-      user.schoolId,
-      ...(user.schoolIds ?? []),
-      teacherProfile?.schoolId,
-    ].filter((id): id is number => typeof id === 'number'))];
+    const teacherSchoolIds = teachersList
+      .filter((teacher) => teacher.userId === user.id)
+      .map((teacher) => teacher.schoolId);
+    const schoolIds = user.functions
+      ? [...new Set(user.functions.map((membership) => membership.schoolId))]
+      : [...new Set([
+        user.schoolId,
+        ...(user.schoolIds ?? []),
+        ...teacherSchoolIds,
+      ].filter((id): id is number => typeof id === 'number'))];
     return schoolIds
       .map((id) => schoolsList.find((school) => school.id === id)?.name)
       .filter((name): name is string => Boolean(name));
@@ -1324,19 +1366,28 @@ export default function AdminView({
     if (userRole === 'super_admin' && (u.isDeleted === true) !== (accountStatusFilter === 'disabled')) {
       return false;
     }
-    if (userRole === 'school_admin' && ['super_admin', 'school_admin'].includes(u.role)) {
+    if (userRole === 'school_admin' && (
+      u.role === 'super_admin' || hasLocalFunction(u, 'school_admin')
+    )) {
       return false;
     }
     if (userRole === 'super_admin' && superAdminSchoolFilterId && !accountBelongsToSchool(u, superAdminSchoolFilterId)) {
       return false;
     }
-    if (accountRoleFilter && u.role !== accountRoleFilter) {
-      return false;
+    if (accountRoleFilter) {
+      if (accountRoleFilter === 'super_admin') {
+        if (u.role !== 'super_admin') return false;
+      } else if (isLocalFunctionRole(accountRoleFilter) && !hasLocalFunction(u, accountRoleFilter)) {
+        return false;
+      } else if (!isLocalFunctionRole(accountRoleFilter)) {
+        return false;
+      }
     }
     if (!matchesCreationDateFilter(u.createdAt, accountCreationDateFilter)) {
       return false;
     }
-    return filterBySearch(`${u.firstNames ?? ''} ${u.lastName ?? ''} ${u.name} ${u.email} ${u.role} ${schoolNamesForAccount(u).join(' ')}`);
+    const displayedFunctions = u.functions?.map((membership) => membership.role).join(' ') ?? u.role;
+    return filterBySearch(`${u.firstNames ?? ''} ${u.lastName ?? ''} ${u.name} ${u.email} ${displayedFunctions} ${schoolNamesForAccount(u).join(' ')}`);
   });
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId) : undefined;
@@ -1441,7 +1492,7 @@ export default function AdminView({
   }, [adminEducationSchoolId]);
   const sortedClasses = sortClasses(classesList || []);
   const classNamePreview = [classForm.cycle, classForm.stream, classForm.section, classForm.group].filter(Boolean).join(' ');
-  const availableSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedStudentSchoolId || u.schoolId === selectedStudentSchoolId));
+  const availableSchoolAdmins = usersList.filter((u) => hasLocalFunction(u, 'school_admin', selectedStudentSchoolId));
   const activeClassGroups = superAdminSchoolFilterId == null
     ? []
     : getClassGroupsVisibleToSchool(groupPresets, studentFilterClasses || [], superAdminSchoolFilterId);
@@ -2394,6 +2445,15 @@ export default function AdminView({
   const [multiSchoolSelectedSchoolId, setMultiSchoolSelectedSchoolId] = useState<number | ''>('');
   const [multiSchoolRole, setMultiSchoolRole] = useState<string>('teacher');
   const [multiSchoolError, setMultiSchoolError] = useState<string | null>(null);
+  const [managedFunctionsUser, setManagedFunctionsUser] = useState<User | null>(null);
+  const [managedFunctions, setManagedFunctions] = useState<Array<{
+    id: number;
+    schoolId: number;
+    role: string;
+    isActive: boolean | null;
+  }>>([]);
+  const [managedFunctionsError, setManagedFunctionsError] = useState<string | null>(null);
+  const [managedFunctionsLoading, setManagedFunctionsLoading] = useState(false);
   const [userForm, setUserForm] = useState<{
     email: string;
     name: string;
@@ -2654,11 +2714,6 @@ export default function AdminView({
   };
 
   const openTeacherDetail = (teacher: Teacher) => {
-    console.log('DEBUG_TEACHER_DETAIL teacher =', teacher);
-    console.log('DEBUG_TEACHER_DETAIL classIds =', teacher.classIds);
-    console.log('DEBUG_TEACHER_DETAIL classesList =', classesList);
-    const resolvedClasses = (teacher.classIds || []).map((id) => ({ id, className: classesList.find((c) => c.id === id)?.name }));
-    console.log('DEBUG_TEACHER_DETAIL resolvedClasses =', resolvedClasses);
     setTeacherDetail(teacher);
     setTeacherDetailOpen(true);
   };
@@ -2682,7 +2737,7 @@ export default function AdminView({
   }, [editStudentForm.birthDate]);
 
   const selectedEditStudentSchoolId = editStudentForm.schoolId ? parseInt(editStudentForm.schoolId) : undefined;
-  const availableEditSchoolAdmins = usersList.filter((u) => u.role === 'school_admin' && (!selectedEditStudentSchoolId || u.schoolId === selectedEditStudentSchoolId));
+  const availableEditSchoolAdmins = usersList.filter((u) => hasLocalFunction(u, 'school_admin', selectedEditStudentSchoolId));
 
   const filteredParentsList = parentsList.filter((p) =>
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || parentBelongsToSchool(p, superAdminSchoolFilterId)) &&
@@ -3309,7 +3364,7 @@ export default function AdminView({
                       if (!selectedClassId) return <p className="text-xs text-slate-500 italic">Veuillez d'abord sélectionner une classe</p>;
                       const classTeachers = sortTeachersAlphabetically(teachersList.filter((t) =>
                         (!editStudentForm.schoolId || t.schoolId === parseInt(editStudentForm.schoolId)) &&
-                        (t.classIds || []).includes(selectedClassId)
+                        [...(t.classIds || []), ...(t.homeroomClassIds || [])].includes(selectedClassId)
                       ));
                       if (classTeachers.length === 0) return <p className="text-xs text-slate-500 italic">Aucun enseignant assigné à cette classe</p>;
                       return (
@@ -4016,7 +4071,9 @@ export default function AdminView({
                 <div><strong>École:</strong> {schoolsList.find((s) => s.id === teacherDetail.schoolId)?.name || '—'}</div>
                 <div><strong>Spécialité:</strong> {Array.isArray(teacherDetail.specialization) ? teacherDetail.specialization.join(', ') : (teacherDetail.specialization || 'Général')}</div>
                 <div><strong>Téléphone:</strong> {teacherDetail.phone || '—'}</div>
-                <div><strong>Classes assignées:</strong> {(teacherDetail.classIds || []).map((id) => classesList.find((c) => c.id === id)?.name).filter(Boolean).join(', ') || 'Aucune'}</div>
+                <div><strong>Classes d’enseignement:</strong> {(teacherDetail.teachingClassIds || []).map((id) => classesList.find((c) => c.id === id)?.name).filter(Boolean).join(', ') || 'Aucune'}</div>
+                <div><strong>Classes de titulariat:</strong> {(teacherDetail.homeroomClassIds || []).map((id) => classesList.find((c) => c.id === id)?.name).filter(Boolean).join(', ') || 'Aucune'}</div>
+                <div><strong>Rattachements administratifs:</strong> {(teacherDetail.administrativeClassIds || []).map((id) => classesList.find((c) => c.id === id)?.name).filter(Boolean).join(', ') || 'Aucun'}</div>
                 <div><strong>ID enseignant:</strong> {teacherDetail.id}</div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
@@ -6069,7 +6126,7 @@ export default function AdminView({
                               onClick={() => {
                                 const user = usersList.find((u) => u.id === tc.userId);
                                 if (!user) return;
-                                const assignedClassIds = tc.classIds || [];
+                                const assignedClassIds = tc.administrativeClassIds || [];
                                 setUserToEdit(user);
                                 setUserForm({
                                   email: user.email ?? '',
@@ -6729,7 +6786,16 @@ export default function AdminView({
                       {[user.firstNames, user.lastName].filter(Boolean).join(' ') || user.name}
                     </td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500 font-mono text-xs">{user.email}</td>
-                    <td className="px-3 sm:px-6 py-4 text-slate-700 capitalize">{user.role.replace('_', ' ')}</td>
+                    <td className="px-3 sm:px-6 py-4 text-slate-700 capitalize">
+                      {user.role === 'super_admin'
+                        ? 'Super Admin'
+                        : user.functions
+                          ? user.functions.map((membership) => {
+                            const schoolName = schoolsList.find((school) => school.id === membership.schoolId)?.name;
+                            return `${membership.role.replace('_', ' ')}${schoolName ? ` — ${schoolName}` : ''}`;
+                          }).join(', ') || 'Aucune fonction active'
+                          : user.role.replace('_', ' ')}
+                    </td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolNamesForAccount(user).join(', ') || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{(user as any).specialization || '—'}</td>
@@ -6754,10 +6820,10 @@ export default function AdminView({
                     <td className="px-3 sm:px-6 py-4 text-right space-x-2">
                         <button
                           onClick={() => {
-                            const teacherProfile = teachersList.find((t) => t.userId === user.id);
-                            const assignedClassIds = teacherProfile ? (teacherProfile.classIds || []) : [];
+                            const teacherProfile = getTeacherProfileForUser(user.id);
+                            const assignedClassIds = teacherProfile ? (teacherProfile.administrativeClassIds || []) : [];
                             const rawPhone = user.role === 'parent'
-                              ? parentsList.find((parent: any) => parent.userId === user.id)?.phone ?? (user as any).phone
+                              ? getParentProfileForUser(user.id)?.phone ?? (user as any).phone
                               : (user as any).phone;
                             const parentPhoneParts = user.role === 'parent'
                               ? splitStoredParentPhone(rawPhone)
@@ -6788,7 +6854,7 @@ export default function AdminView({
                         >
                           Modifier
                         </button>
-                      {userRole === 'super_admin' && ['teacher', 'school_admin', 'parent'].includes(user.role) && !user.isDeleted && (
+                      {userRole === 'super_admin' && hasAnyLocalFunction(user) && !user.isDeleted && (
                         <button
                           onClick={() => {
                             setUserToDelete(user);
@@ -6801,7 +6867,7 @@ export default function AdminView({
                           Désactiver
                         </button>
                       )}
-                      {userRole === 'super_admin' && ['teacher', 'school_admin', 'parent'].includes(user.role) && user.isDeleted && (
+                      {userRole === 'super_admin' && hasAnyLocalFunction(user) && user.isDeleted && (
                         <button
                           onClick={() => {
                             setUserToReactivate(user);
@@ -6814,20 +6880,42 @@ export default function AdminView({
                           Réactiver
                         </button>
                       )}
-                      {userRole === 'super_admin' && !user.isDeleted && (user.role === 'teacher' || user.role === 'parent') && (
-                        <button
-                          onClick={() => {
-                            setMultiSchoolTargetUser(user);
-                            setMultiSchoolSelectedSchoolId('');
-                            setMultiSchoolRole(user.role);
-                            setMultiSchoolError(null);
-                            setManageMultiSchoolOpen(true);
-                          }}
-                          className="p-1 px-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold transition-colors"
-                          title="Ajouter à une autre école"
-                        >
-                          Ajouter à une autre école
-                        </button>
+                      {['super_admin', 'school_admin'].includes(userRole) && !user.isDeleted && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setMultiSchoolTargetUser(user);
+                              setMultiSchoolSelectedSchoolId(userRole === 'school_admin' ? currentSchoolId ?? '' : '');
+                              setMultiSchoolRole('teacher');
+                              setMultiSchoolError(null);
+                              setManageMultiSchoolOpen(true);
+                            }}
+                            className="p-1 px-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold transition-colors"
+                            title="Attribuer une fonction"
+                          >
+                            Attribuer une fonction
+                          </button>
+                          <button
+                            onClick={async () => {
+                              setManagedFunctionsUser(user);
+                              setManagedFunctions([]);
+                              setManagedFunctionsError(null);
+                              setManagedFunctionsLoading(true);
+                              try {
+                                const functions = await apiFetch(`/api/admin/users/${user.id}/functions`);
+                                setManagedFunctions(Array.isArray(functions) ? functions : []);
+                              } catch (error: any) {
+                                setManagedFunctionsError(error?.message || 'Échec lors du chargement des fonctions');
+                              } finally {
+                                setManagedFunctionsLoading(false);
+                              }
+                            }}
+                            className="p-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors"
+                            title="Gérer les fonctions"
+                          >
+                            Gérer les fonctions
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -6845,37 +6933,156 @@ export default function AdminView({
         </div>
       )}
 
-      {/* Multi-school manager modal (super_admin only) */}
+      {/* Local function assignment */}
       {manageMultiSchoolOpen && multiSchoolTargetUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/30" onClick={() => { setManageMultiSchoolOpen(false); setMultiSchoolTargetUser(null); setMultiSchoolError(null); }} />
           <div className="bg-white p-6 rounded shadow-lg z-50 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-2">Ajouter {multiSchoolTargetUser.name} à une autre école</h3>
+            <h3 className="text-lg font-semibold mb-2">Attribuer une fonction à {multiSchoolTargetUser.name}</h3>
             {multiSchoolError && <div className="text-rose-600 mb-2">{multiSchoolError}</div>}
-            <label className="block text-sm mb-2">
-              <span className="text-xs font-semibold">École</span>
-              <select className="w-full mt-1 p-2 border rounded" value={multiSchoolSelectedSchoolId} onChange={(e) => setMultiSchoolSelectedSchoolId(e.target.value ? Number(e.target.value) : '')}>
-                <option value="">Sélectionnez une école</option>
-                {schoolsList.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+            <label className="block text-sm mb-4">
+              <span className="text-xs font-semibold">Fonction</span>
+              <select
+                className="w-full mt-1 p-2 border rounded"
+                value={multiSchoolRole}
+                onChange={(event) => setMultiSchoolRole(event.target.value)}
+              >
+                {(userRole === 'super_admin'
+                  ? ['parent', 'teacher', 'school_admin', 'surveillant', 'super_admin']
+                  : ['parent', 'teacher', 'surveillant']).map((role) => (
+                  <option key={role} value={role}>{role}</option>
+                ))}
               </select>
             </label>
-            <label className="block text-sm mb-4">
-              <span className="text-xs font-semibold">Rôle dans cette école</span>
-              <div className="w-full mt-1 p-2 border rounded bg-slate-50 text-slate-700">{multiSchoolRole}</div>
-            </label>
+            {multiSchoolRole !== 'super_admin' && (
+              <label className="block text-sm mb-4">
+                <span className="text-xs font-semibold">Établissement</span>
+                <select className="w-full mt-1 p-2 border rounded" value={multiSchoolSelectedSchoolId} onChange={(e) => setMultiSchoolSelectedSchoolId(e.target.value ? Number(e.target.value) : '')}>
+                  <option value="">Sélectionnez un établissement</option>
+                  {schoolsList
+                    .filter((school) => userRole !== 'school_admin' || school.id === currentSchoolId)
+                    .map((school) => (<option key={school.id} value={school.id}>{school.name}</option>))}
+                </select>
+              </label>
+            )}
             <div className="flex gap-2 justify-end">
               <button className="px-3 py-2 rounded bg-slate-100" onClick={() => { setManageMultiSchoolOpen(false); setMultiSchoolTargetUser(null); setMultiSchoolError(null); }}>Annuler</button>
               <button className="px-3 py-2 rounded bg-indigo-600 text-white" onClick={async () => {
                 setMultiSchoolError(null);
-                if (!multiSchoolSelectedSchoolId) { setMultiSchoolError('Veuillez sélectionner une école'); return; }
+                if (multiSchoolRole !== 'super_admin' && !multiSchoolSelectedSchoolId) {
+                  setMultiSchoolError('Veuillez sélectionner un établissement');
+                  return;
+                }
                 try {
-                  const resp = await apiFetch(`/api/users/${multiSchoolTargetUser.id}/schools`, { method: 'POST', body: JSON.stringify({ schoolId: multiSchoolSelectedSchoolId, role: multiSchoolRole }) });
+                  await apiFetch(`/api/admin/users/${multiSchoolTargetUser.id}/functions`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      role: multiSchoolRole,
+                      ...(multiSchoolRole === 'super_admin' ? {} : { schoolId: multiSchoolSelectedSchoolId }),
+                    }),
+                  });
                   // refresh user list (simple reload)
                   window.location.reload();
                 } catch (err: any) {
-                  setMultiSchoolError(err?.message || 'Échec lors de l’ajout de l’école');
+                  setMultiSchoolError(err?.message || 'Échec lors de l’attribution de la fonction');
                 }
               }}>Valider</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {managedFunctionsUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => {
+              setManagedFunctionsUser(null);
+              setManagedFunctionsError(null);
+            }}
+          />
+          <div className="relative z-50 max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-6 shadow-lg">
+            <h3 className="mb-1 text-lg font-semibold">Fonctions de {managedFunctionsUser.name}</h3>
+            <p className="mb-4 text-sm text-slate-600">
+              Gérer une fonction ne désactive pas le compte utilisateur.
+            </p>
+            {managedFunctionsError && (
+              <div role="alert" className="mb-3 text-sm text-rose-600">{managedFunctionsError}</div>
+            )}
+            {managedFunctionsLoading ? (
+              <p className="text-sm text-slate-500">Chargement des fonctions…</p>
+            ) : managedFunctions.length === 0 ? (
+              <p className="text-sm text-slate-500">Aucune fonction locale trouvée.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {managedFunctions.map((membership) => {
+                  const inactive = membership.isActive === false;
+                  const schoolName = schoolsList.find((school) => school.id === membership.schoolId)?.name
+                    ?? `Établissement ${membership.schoolId}`;
+                  const isManageable = userRole === 'super_admin'
+                    || (
+                      userRole === 'school_admin'
+                      && membership.schoolId === currentSchoolId
+                      && membership.role !== 'school_admin'
+                    );
+                  return (
+                    <li key={membership.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                      <div>
+                        <div className="font-medium text-slate-800">{membership.role.replace('_', ' ')}</div>
+                        <div className="text-sm text-slate-500">{schoolName}</div>
+                        <span className={`text-xs font-semibold ${inactive ? 'text-rose-700' : 'text-emerald-700'}`}>
+                          {inactive ? 'Fonction désactivée' : 'Fonction active'}
+                        </span>
+                      </div>
+                      {isManageable && (
+                        <button
+                          type="button"
+                          className={`rounded border px-3 py-2 text-xs font-semibold ${
+                            inactive
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-rose-200 bg-rose-50 text-rose-700'
+                          }`}
+                          onClick={async () => {
+                            setManagedFunctionsError(null);
+                            try {
+                              if (inactive) {
+                                await apiFetch(`/api/admin/users/${managedFunctionsUser.id}/functions`, {
+                                  method: 'POST',
+                                  body: JSON.stringify({
+                                    schoolId: membership.schoolId,
+                                    role: membership.role,
+                                  }),
+                                });
+                              } else {
+                                await apiFetch(`/api/admin/users/${managedFunctionsUser.id}/functions/${membership.id}`, {
+                                  method: 'DELETE',
+                                });
+                              }
+                              window.location.reload();
+                            } catch (error: any) {
+                              setManagedFunctionsError(error?.message || 'Échec lors de la mise à jour de la fonction');
+                            }
+                          }}
+                        >
+                          {inactive ? 'Réactiver la fonction' : 'Désactiver la fonction'}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="rounded bg-slate-100 px-3 py-2 text-sm"
+                onClick={() => {
+                  setManagedFunctionsUser(null);
+                  setManagedFunctionsError(null);
+                }}
+              >
+                Fermer
+              </button>
             </div>
           </div>
         </div>

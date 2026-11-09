@@ -44,6 +44,8 @@ interface AbsenceViewProps {
   teachersList: Teacher[];
   approvedSubjectsList: { id: number; name: string }[];
   teacherSubjectIds?: number[];
+  teacherTeachingAssignments?: Array<{ classId: number; subjectId: number; isActive?: boolean }>;
+  teacherHomeroomClassIds?: number[];
   pendingReviewOnly?: boolean;
   showAbsenceDeclarationSection?: boolean;
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
@@ -68,7 +70,8 @@ export default function AbsenceView({
   schoolsList,
   teachersList,
   approvedSubjectsList,
-  teacherSubjectIds = [],
+  teacherHomeroomClassIds = [],
+  teacherTeachingAssignments = [],
   pendingReviewOnly = false,
   showAbsenceDeclarationSection = true,
   onAddAbsence,
@@ -83,6 +86,14 @@ export default function AbsenceView({
   onRecordAbsenceControl,
 }: AbsenceViewProps) {
   const sortedClasses = sortClasses(classesList || []);
+  const activeTeacherAssignments = userRole === 'teacher'
+    ? teacherTeachingAssignments.filter((assignment) => assignment.isActive === true)
+    : [];
+  const teacherTeachingClassIds = new Set(activeTeacherAssignments.map((assignment) => Number(assignment.classId)));
+  const teacherHomeroomClassIdSet = new Set(teacherHomeroomClassIds.map(Number));
+  const availableTeachingClasses = userRole === 'teacher'
+    ? sortedClasses.filter((klass) => teacherTeachingClassIds.has(Number(klass.id)) || teacherHomeroomClassIdSet.has(Number(klass.id)))
+    : sortedClasses;
   const sortedStudents = (studentsList || []).slice().sort((a, b) => {
     // Compare by last name, then first name, then class name
     const last = (a.lastName || '').toLowerCase();
@@ -369,6 +380,9 @@ export default function AbsenceView({
       .replace(/\s+/g, ' ');
 
   const selectedClassIdNumber = newAbsenceForm.classId ? Number(newAbsenceForm.classId) : null;
+  const selectedClassIsHomeroom = userRole === 'teacher'
+    && selectedClassIdNumber != null
+    && teacherHomeroomClassIdSet.has(selectedClassIdNumber);
   const selectedClassTeachers = teachersList.filter((teacher) =>
     Array.isArray(teacher.classIds) && selectedClassIdNumber != null && teacher.classIds.includes(selectedClassIdNumber)
   );
@@ -385,7 +399,10 @@ export default function AbsenceView({
   const availableSubjects = userRole === 'surveillant'
     ? approvedSubjectsList || []
     : userRole === 'teacher'
-    ? (approvedSubjectsList || []).filter((subject) => teacherSubjectIds.includes(Number(subject.id)))
+    ? (approvedSubjectsList || []).filter((subject) => activeTeacherAssignments.some((assignment) =>
+      Number(assignment.classId) === selectedClassIdNumber
+        && Number(assignment.subjectId) === Number(subject.id),
+    ))
     : (approvedSubjectsList || []).filter((subject) => {
       return classTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
     });
@@ -808,7 +825,7 @@ export default function AbsenceView({
               <label className="text-xs font-semibold text-slate-600">
                 Enfant
                 <select
-                  required
+                    required
                   value={declarationForm.studentId}
                   onChange={(event) => setDeclarationForm((previous) => ({ ...previous, studentId: event.target.value }))}
                   className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
@@ -945,10 +962,10 @@ export default function AbsenceView({
                 <RequiredLabel label="Sélectionner la Classe" required />
               </label>
               <CustomDropdown
-                options={[{ value: '', label: '-- Choisissez une classe --' }, ...sortedClasses.map((cl) => ({ value: String(cl.id), label: cl.name }))]}
+                options={[{ value: '', label: '-- Choisissez une classe --' }, ...availableTeachingClasses.map((cl) => ({ value: String(cl.id), label: cl.name }))]}
                 value={newAbsenceForm.classId}
                 onChange={(v) => {
-                  setNewAbsenceForm((prev) => ({ ...prev, classId: v, lastName: '', firstName: '', studentId: '' }));
+                  setNewAbsenceForm((prev) => ({ ...prev, classId: v, lastName: '', firstName: '', studentId: '', subjectId: '' }));
                   setSelectedAbsentStudentIds([]);
                 }}
                 placeholder="-- Choisissez une classe --"
@@ -1085,7 +1102,7 @@ export default function AbsenceView({
             </div>
             <div className="md:col-span-4">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Matières concernées" required />
+                <RequiredLabel label="Matières concernées" required={!selectedClassIsHomeroom} />
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border border-slate-200 rounded-2xl bg-white max-h-56 overflow-y-auto">
                 {availableSubjects.length > 0 ? availableSubjects.map((subject) => (
@@ -1099,14 +1116,16 @@ export default function AbsenceView({
                         const subjectId = String(subject.id);
                         setNewAbsenceForm((prev) => ({ ...prev, subjectId }));
                       }}
-                      required
+                      required={!selectedClassIsHomeroom}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
                     <span>{subject.name}</span>
                   </label>
                 )) : (
                   <div className="text-slate-500 text-xs sm:text-sm">
-                    Aucune matière attribuée pour cette classe et cet enseignant.
+                    {selectedClassIsHomeroom
+                      ? 'Le titulaire peut enregistrer une présence pour sa classe sans attribuer de matière.'
+                      : 'Aucune matière attribuée pour cette classe et cet enseignant.'}
                   </div>
                 )}
               </div>

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { students, studentAcademicYearStatuses, teachers, classes, classTeachers, classHomeroomAssignments, parents, users, schools, grades, evaluations, schoolClasses, teacherSubjects, userSchools } from '../src/db/schema.ts';
+import { students, studentAcademicYearStatuses, teachers, classes, classTeachers, classHomeroomAssignments, teacherClassSubjects, parents, users, schools, grades, evaluations, schoolClasses, teacherSubjects, userSchools } from '../src/db/schema.ts';
 
 const mockState = {
   actorRole: 'super_admin' as string,
@@ -37,6 +37,8 @@ const createBuilder = (rows: any[], projection?: any) => {
         builder._rows = mockState.classAssignments;
       } else if (table === classHomeroomAssignments) {
         builder._rows = mockState.homeroomRows;
+      } else if (table === teacherClassSubjects) {
+        builder._rows = mockState.classAssignments;
       } else if (table === teacherSubjects) {
         builder._rows = mockState.teacherSubjectRows;
       } else if (table === userSchools) {
@@ -111,6 +113,13 @@ const createBuilder = (rows: any[], projection?: any) => {
           classSchoolId: assignment.classSchoolId ?? assignment.schoolId,
           assignmentSchoolId: assignment.assignmentSchoolId ?? assignment.schoolId,
         }));
+      } else if (builder.table === teacherClassSubjects && joinedTable === classes) {
+        builder._rows = builder._rows.map((assignment: any) => ({
+          ...assignment,
+          classSchoolId: Object.prototype.hasOwnProperty.call(assignment, 'classSchoolId')
+            ? assignment.classSchoolId
+            : assignment.schoolId,
+        }));
       }
       return builder;
     },
@@ -124,10 +133,47 @@ const createBuilder = (rows: any[], projection?: any) => {
           isApprovedForSchool: assignment.approvedForSchoolIds?.includes(schoolId) === true,
           schoolClassStatus: assignment.approvedForSchoolIds?.includes(schoolId) ? 'approved' : null,
         }));
+      } else if (builder.table === teacherClassSubjects && joinedTable === schoolClasses) {
+        const query = condition ? new PgDialect().sqlToQuery(condition) : { params: [] };
+        const schoolId = (query.params as any[]).find((value) => typeof value === 'number');
+        builder._rows = builder._rows.map((assignment: any) => ({
+          ...assignment,
+          isApprovedForSchool: assignment.approvedForSchoolIds?.includes(schoolId) === true,
+        }));
       }
       return builder;
     },
     where(condition?: any) {
+      if (builder.table === userSchools && condition) {
+        const query = new PgDialect().sqlToQuery(condition);
+        const equalityConditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+          key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+          value: query.params[Number(match[2]) - 1],
+        }));
+        builder._rows = builder._rows.filter((row: any) => (
+          equalityConditions.every(({ key, value }: any) => {
+            if (key in row) return row[key] === value;
+            if (key === 'isDeleted') {
+              const joinedUser = mockState.users.find((user: any) => user.id === row.userId);
+              return (joinedUser?.isDeleted ?? false) === value;
+            }
+            return false;
+          })
+          && (!query.sql.includes('is_active') || row.isActive !== false)
+        ));
+      }
+      if (builder.table === teacherClassSubjects && condition) {
+        const query = new PgDialect().sqlToQuery(condition);
+        const values = query.params as any[];
+        const schoolId = values.find((value) => value === mockState.actorSchoolId);
+        builder._rows = builder._rows.filter((assignment: any) => (
+          assignment.teacherId === mockState.teacherRows[0]?.id
+          && assignment.schoolId === mockState.actorSchoolId
+          && assignment.isActive === true
+          && (assignment.classSchoolId === schoolId || assignment.isApprovedForSchool === true)
+          && (assignment.subjectSchoolId === schoolId || assignment.isSubjectApprovedForSchool === true)
+        ));
+      }
       if (builder.table === users && condition) {
         const query = new PgDialect().sqlToQuery(condition);
         const params = query.params as any[];
@@ -223,6 +269,9 @@ const mockDb: any = {
 };
 
 const normalizeDuplicateName = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+const addUserSchool = (userId: number, schoolId: number, role: string, isActive = true) => {
+  mockState.userSchoolRows.push({ userId, schoolId, role, isActive });
+};
 const normalizeDuplicateGender = (value: unknown) => {
   const normalized = String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (['m', 'male', 'masculin', 'homme', 'garcon', 'boy', 'boys'].includes(normalized)) return 'm';
@@ -292,13 +341,33 @@ const configureBatchImportMock = () => {
         if (table === schools) builder._rows = [{ id: 10, studentsCreationLocked: false }];
         else if (table === classes) builder._rows = [{ id: 5, schoolId: 10, academicYearId: 2 }];
         else if (table === parents) builder._rows = [{ id: 7, userId: 99, schoolId: 10 }];
+        else if (table === userSchools) builder._rows = mockState.userSchoolRows;
         else if (table === users) builder._rows = [{ id: 2, email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
         else builder._rows = rows;
         return builder;
       },
       innerJoin() { return builder; },
       leftJoin() { return builder; },
-      where() { return builder; },
+      where(condition: any) {
+        if (builder.table === userSchools && condition) {
+          const query = new PgDialect().sqlToQuery(condition);
+          const equalityConditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
+            key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
+            value: query.params[Number(match[2]) - 1],
+          }));
+          builder._rows = builder._rows.filter((membership: any) => (
+            equalityConditions.every(({ key, value }: any) => (
+              key in membership
+                ? membership[key] === value
+                : key === 'id'
+                  ? membership.userId === value
+                  : key === 'isDeleted' && false === value
+            ))
+            && (!query.sql.includes('is_active') || membership.isActive !== false)
+          ));
+        }
+        return builder;
+      },
       limit() { return builder; },
       then(resolve: (value: any) => void) { return Promise.resolve(builder._rows).then(resolve); },
       catch(reject: (reason?: any) => void) { return Promise.resolve(builder._rows).catch(reject); },
@@ -438,6 +507,8 @@ describe('GET /api/students (scope)', () => {
         { id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10, phone: '+22890000002' },
         { id: 99, name: 'Ama Diallo', gender: 'F', role: 'parent', phone: '+22890000003' },
       ];
+      addUserSchool(2, 10, 'school_admin');
+      addUserSchool(99, 10, 'parent');
       mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10, studentId: null }];
       mockState.students = [{
         id: 456,
@@ -685,8 +756,12 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'sim_teacher', schoolId: 10 }];  // User exists in DB
+    addUserSchool(7, 10, 'teacher');
     mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
-    mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
+    mockState.classAssignments = [{
+      teacherId: 42, classId: 1, subjectId: 5, schoolId: 10,
+      classSchoolId: 10, subjectSchoolId: 10, isActive: true,
+    }];
     // include an unrelated student to ensure only assigned-class students are returned
     mockState.students = [
       { id: 101, schoolId: 10, classId: 1, gender: 'F' },
@@ -712,8 +787,12 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'sim_teacher', schoolId: 10 }];
+    addUserSchool(7, 10, 'teacher');
     mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
-    mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
+    mockState.classAssignments = [{
+      teacherId: 42, classId: 1, subjectId: 5, schoolId: 10,
+      classSchoolId: 10, subjectSchoolId: 10, isActive: true,
+    }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: 1, isActive: true },
       { id: 102, schoolId: 10, classId: 1, isActive: false },
@@ -735,7 +814,10 @@ describe('GET /api/students (scope)', () => {
   it('returns [] when teacher has no id', async () => {
     mockState.users = [];  // No user found - actor.id will be null
     mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10 }];
-    mockState.classAssignments = [{ classId: 1, schoolId: 10 }];
+    mockState.classAssignments = [{
+      teacherId: 42, classId: 1, subjectId: 5, schoolId: 10,
+      classSchoolId: 10, subjectSchoolId: 10, isActive: true,
+    }];
     mockState.students = [{ id: 101, schoolId: 10, classId: 1 }];
 
     const res = await request(app)
@@ -779,6 +861,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 2;
     mockState.users = [{ id: 2, uid: 'sim_admin_school', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
     mockState.students = [
       { id: 101, schoolId: 10, classId: 1 },
       { id: 102, schoolId: 20, classId: 2 },
@@ -800,6 +883,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorRole = 'school_admin';
     mockState.actorSchoolId = 10;
     mockState.users = [{ id: 2, uid: 'sim_admin_school', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
     mockState.students = [
       { id: 101, schoolId: 10, classId: 1, isActive: true },
       { id: 102, schoolId: 10, classId: null, isActive: false },
@@ -820,8 +904,9 @@ describe('GET /api/students (scope)', () => {
 
   it('keeps includeFormer parent results limited to their own children', async () => {
     mockState.actorRole = 'parent';
-    mockState.actorSchoolId = null;
-    mockState.users = [{ id: 9, uid: 'sim_parent', schoolId: null }];
+    mockState.actorSchoolId = 10;
+    mockState.users = [{ id: 9, uid: 'sim_parent', schoolId: 10 }];
+    addUserSchool(9, 10, 'parent');
     mockState.parentRows = [{ id: 1, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: null, parentId: 1, isActive: false },
@@ -833,6 +918,7 @@ describe('GET /api/students (scope)', () => {
       .set('x-simulated-role', 'parent')
       .set('x-simulated-uid', 'sim_parent')
       .set('x-simulated-user-id', '9')
+      .set('x-simulated-school-id', '10')
       .expect(200);
 
     expect(res.body.map((student: any) => student.id)).toEqual([101]);
@@ -918,6 +1004,13 @@ describe('GET /api/students (scope)', () => {
   });
 
   const importBatchRow = async (row: Record<string, any>) => {
+    mockState.actorRole = 'school_admin';
+    mockState.actorSchoolId = 10;
+    mockState.actorId = 2;
+    mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10, isDeleted: false }];
+    addUserSchool(2, 10, 'school_admin');
+    mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
+    addUserSchool(99, 10, 'parent');
     const insertedRows = configureBatchImportMock();
     const res = await request(app)
       .post('/api/students/batch')
@@ -934,6 +1027,8 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 2;
     mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
+    addUserSchool(99, 10, 'parent');
     mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
 
     let failStatusInsert = true;
@@ -1018,6 +1113,8 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 2;
     mockState.users = [{ id: 2, uid: 'sim_admin_school', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
+    addUserSchool(99, 10, 'parent');
     mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
     mockState.students = [{
       id: 123,
@@ -1114,6 +1211,8 @@ describe('GET /api/students (scope)', () => {
     const insertedRows: any[] = [];
     mockState.students = [];
     mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
+    addUserSchool(99, 10, 'parent');
     mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
     mockDb.insert = (table: any) => ({
       values: (values: any) => {
@@ -1150,6 +1249,8 @@ describe('GET /api/students (scope)', () => {
   it('uppercases lastName on student update without uppercasing firstName', async () => {
     const insertedRows: any[] = [];
     mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
+    addUserSchool(99, 10, 'parent');
     mockState.parentRows = [{ id: 7, userId: 99, schoolId: 10 }];
     mockState.students = [{
       id: 123,
@@ -1210,6 +1311,7 @@ describe('GET /api/students (scope)', () => {
 
   it('allows a student to be detached from their current class without deleting their record', async () => {
     mockState.users = [{ id: 2, uid: 'sim_admin_school', email: 'admin@school.test', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
     mockState.parentRows = [{ id: 7, studentId: 123 }];
     mockState.students = [{
       id: 123,
@@ -1328,6 +1430,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorRole = 'parent';
     mockState.actorSchoolId = 10;
     mockState.users = [{ id: 9, uid: 'parent-a', role: 'parent', schoolId: 10 }];
+    addUserSchool(9, 10, 'parent');
     mockState.parentRows = [{ id: 7, userId: 9, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: 5, className: '6ème A', parentId: 7, birthDate: '2010-01-01', isActive: true },
@@ -1373,6 +1476,7 @@ describe('GET /api/students (scope)', () => {
     mockState.actorRole = 'school_admin';
     mockState.actorSchoolId = 10;
     mockState.users = [{ id: 2, uid: 'school-a-admin', role: 'school_admin', schoolId: 10 }];
+    addUserSchool(2, 10, 'school_admin');
     mockState.students = [
       { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', birthDate: '2010-01-01', isActive: true },
       { id: 201, schoolId: 20, classId: 300, firstName: 'Ama', lastName: 'School B', birthDate: '2010-01-01', isActive: true },
@@ -1432,8 +1536,19 @@ describe('GET /api/students (scope)', () => {
     mockState.actorSchoolId = 10;
     mockState.actorId = 7;
     mockState.users = [{ id: 7, uid: 'teacher-a', role: 'teacher', schoolId: 10 }];
+    addUserSchool(7, 10, 'teacher');
     mockState.teacherRows = [{ id: 42, userId: 7, schoolId: 10, specialization: 'Math' }];
-    mockState.classAssignments = [{ id: 1, teacherId: 42, classId: 300, schoolId: 10, classSchoolId: null, approvedForSchoolIds: [10] }];
+    mockState.classAssignments = [{
+      id: 1,
+      teacherId: 42,
+      classId: 300,
+      subjectId: 11,
+      schoolId: 10,
+      classSchoolId: null,
+      subjectSchoolId: 10,
+      isActive: true,
+      approvedForSchoolIds: [10],
+    }];
     mockState.teacherSubjectRows = [{ teacherId: 42, subjectId: 11, schoolId: 10 }];
     mockState.students = [
       { id: 101, schoolId: 10, classId: 300, firstName: 'Awa', lastName: 'School A', birthDate: '2010-01-01', isActive: true },

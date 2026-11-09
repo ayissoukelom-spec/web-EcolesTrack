@@ -227,7 +227,9 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [suspendedSchoolId, setSuspendedSchoolId] = useState<number | null>(null);
   const [availableSchools, setAvailableSchools] = useState<School[]>([]);
+  const [availableMemberships, setAvailableMemberships] = useState<Array<{ schoolId: number; role: string }>>([]);
   const [schoolToSwitchTo, setSchoolToSwitchTo] = useState<number | ''>('');
+  const [roleToSwitchTo, setRoleToSwitchTo] = useState('');
   const [isSwitchingSchool, setIsSwitchingSchool] = useState(false);
   const suspendedSchoolNoticeRef = useRef<number | null>(null);
 
@@ -282,8 +284,17 @@ export default function App() {
       void apiFetch('/api/auth/schools')
         .then((payload) => {
           const schools = Array.isArray(payload?.schools) ? payload.schools : [];
-          setAvailableSchools(schools);
-          setSchoolToSwitchTo(schools.find((school: School) => !school.isSuspended)?.id ?? '');
+           const memberships = Array.isArray(payload?.memberships)
+             ? payload.memberships.filter((membership: { isActive?: boolean | null }) => membership.isActive !== false)
+             : [];
+           const initialSchoolId = schools.find((school: School) => !school.isSuspended)?.id ?? '';
+           const initialRoles = memberships
+             .filter((membership: { schoolId: number }) => membership.schoolId === initialSchoolId)
+             .map((membership: { role: string }) => membership.role);
+           setAvailableSchools(schools);
+           setAvailableMemberships(memberships);
+           setSchoolToSwitchTo(initialSchoolId);
+           setRoleToSwitchTo(initialRoles.length === 1 ? initialRoles[0] : '');
         })
         .catch((error) => {
           console.error('Failed to load available schools after suspension:', error);
@@ -366,17 +377,20 @@ export default function App() {
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
 
-  const currentTeacherClassIds = (currentTeacherProfile?.classIds || [])
-    .map((classId: string | number) => Number(classId))
-    .filter((classId: number) => Number.isInteger(classId));
-  const currentTeacherSpecializations = currentTeacherProfile?.specialization
-    ? Array.isArray(currentTeacherProfile.specialization)
-      ? currentTeacherProfile.specialization
-      : String(currentTeacherProfile.specialization)
-          .split(/[,;&|\/\+]/)
-          .map((item) => item.trim())
-          .filter(Boolean)
-    : [];
+  const currentTeacherTeachingAssignments = (currentTeacherProfile?.teachingAssignments || [])
+    .filter((assignment) => assignment.isActive === true && assignment.schoolId === currentSchoolId);
+  const currentTeacherClassIds: number[] = Array.from(new Set<number>(currentTeacherTeachingAssignments
+    .map((assignment) => Number(assignment.classId))
+    .filter((classId) => Number.isInteger(classId))));
+  const currentTeacherSubjectIds: number[] = Array.from(new Set<number>(currentTeacherTeachingAssignments
+    .map((assignment) => Number(assignment.subjectId))
+    .filter((subjectId) => Number.isInteger(subjectId))));
+  const currentTeacherHomeroomClassIds: number[] = Array.from(new Set(
+    (currentTeacherProfile?.homeroomAssignments || [])
+      .filter((assignment) => assignment.schoolId === currentSchoolId)
+      .map((assignment) => Number(assignment.classId))
+      .filter((classId) => Number.isInteger(classId)),
+  ));
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
   const noteOverdueCount = currentRole === 'teacher' || currentRole === 'surveillant' || currentRole === 'school_admin' || currentRole === 'super_admin'
@@ -740,7 +754,9 @@ export default function App() {
     if (!existingSimUser) {
       if (newRole === 'teacher' || newRole === 'surveillant') {
         // pick a teacher in the current school if available, otherwise a generic teacher
-        const preferred = teachersList.find((t) => t.schoolId === currentSchoolId) || teachersList[0];
+        const preferred = currentSchoolId == null
+          ? undefined
+          : teachersList.find((t) => t.schoolId === currentSchoolId);
         if (preferred) {
           setSimulatedUser({ uid: `teacher_${preferred.userId || preferred.id}`, email: preferred.email || '', name: preferred.name || 'Enseignant', schoolId: preferred.schoolId });
         } else {
@@ -769,6 +785,10 @@ export default function App() {
     window.location.replace('/login');
   };
 
+  const suspendedSchoolRoles = [...new Set(availableMemberships
+    .filter((membership) => membership.schoolId === Number(schoolToSwitchTo))
+    .map((membership) => membership.role))];
+
   const handleSwitchFromSuspendedSchool = async () => {
     if (!schoolToSwitchTo || availableSchools.some((school) => (
       school.id === schoolToSwitchTo && school.isSuspended
@@ -777,18 +797,34 @@ export default function App() {
     setIsSwitchingSchool(true);
     setErrorMsg(null);
     try {
-      const result = await apiFetch('/api/auth/schools/active', {
+      const selectedRole = suspendedSchoolRoles.includes(roleToSwitchTo)
+        ? roleToSwitchTo
+        : suspendedSchoolRoles.length === 1 ? suspendedSchoolRoles[0] : '';
+      if (!selectedRole) {
+        throw new Error('Choisissez une fonction attribuée dans cette école.');
+      }
+      const result = await apiFetch('/api/auth/context/active', {
         method: 'POST',
-        body: JSON.stringify({ schoolId: Number(schoolToSwitchTo) }),
+        body: JSON.stringify({
+          kind: 'local',
+          schoolId: Number(schoolToSwitchTo),
+          role: selectedRole,
+        }),
       });
+      if (typeof result?.token !== 'string' || !result.token) {
+        throw new Error('Le serveur n’a pas émis de jeton pour ce nouvel espace.');
+      }
       const selectedSchoolId = Number(result?.schoolId ?? schoolToSwitchTo);
+      localStorage.setItem('ecoletrack_jwt_access', result.token);
       setActiveSchoolId(selectedSchoolId);
+      setSimulatedRole(result.role);
       if (authenticatedUser) {
-        setSimulatedUser({ ...authenticatedUser, schoolId: selectedSchoolId });
+        setSimulatedUser({ ...authenticatedUser, role: result.role, schoolId: selectedSchoolId });
       }
       suspendedSchoolNoticeRef.current = null;
       setSuspendedSchoolId(null);
       setAvailableSchools([]);
+      setAvailableMemberships([]);
       await fetchAllData(false);
     } catch (error: any) {
       setErrorMsg(error?.message || 'Impossible de sélectionner cette école.');
@@ -1402,17 +1438,43 @@ export default function App() {
                 id="suspended-school-switch"
                 className="w-full rounded border border-slate-700 bg-slate-800 p-2"
                 value={schoolToSwitchTo}
-                onChange={(event) => setSchoolToSwitchTo(Number(event.target.value))}
+                onChange={(event) => {
+                  const selectedSchool = Number(event.target.value);
+                  const roles = [...new Set(availableMemberships
+                    .filter((membership) => membership.schoolId === selectedSchool)
+                    .map((membership) => membership.role))];
+                  setSchoolToSwitchTo(selectedSchool);
+                  setRoleToSwitchTo(roles.length === 1 ? roles[0] : '');
+                }}
               >
                 {eligibleSchools.map((school) => (
                   <option key={school.id} value={school.id}>{school.name}</option>
                 ))}
               </select>
+              {suspendedSchoolRoles.length > 1 && (
+                <label className="mt-3 block text-sm" htmlFor="suspended-school-role-switch">
+                  Fonction
+                  <select
+                    id="suspended-school-role-switch"
+                    className="mt-2 w-full rounded border border-slate-700 bg-slate-800 p-2"
+                    value={roleToSwitchTo}
+                    onChange={(event) => setRoleToSwitchTo(event.target.value)}
+                  >
+                    <option value="">-- Choisissez une fonction --</option>
+                    {suspendedSchoolRoles.map((role) => (
+                      <option key={role} value={role}>{role}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 type="button"
                 className="mt-3 w-full rounded bg-indigo-600 px-4 py-2 font-medium hover:bg-indigo-700 disabled:opacity-50"
                 onClick={handleSwitchFromSuspendedSchool}
-                disabled={isSwitchingSchool || !schoolToSwitchTo}
+                disabled={isSwitchingSchool
+                  || !schoolToSwitchTo
+                  || suspendedSchoolRoles.length === 0
+                  || (suspendedSchoolRoles.length > 1 && !suspendedSchoolRoles.includes(roleToSwitchTo))}
               >
                 {isSwitchingSchool ? 'Ouverture...' : 'Accéder à cette école'}
               </button>
@@ -2015,7 +2077,9 @@ export default function App() {
                   classesList={classesList}
                   schoolsList={schoolsList}
                   teachersList={teachersList}
-                  teacherSubjectIds={currentRole === 'teacher' ? currentTeacherProfile?.subjectIds || [] : []}
+                  teacherSubjectIds={currentRole === 'teacher' ? currentTeacherSubjectIds : []}
+                  teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
+                  teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
                   approvedSubjectsList={approvedSubjectsList}
                   onAddAbsence={handleAddAbsence}
                   onAddLateArrival={handleAddLateArrival}
@@ -2065,9 +2129,8 @@ export default function App() {
                     schoolsList={schoolsList}
                     schoolFilterId={superAdminSchoolFilterId}
                     onSchoolFilterChange={setSuperAdminSchoolFilterId}
-                    teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
-                    teacherSpecializations={currentRole === 'teacher' ? currentTeacherSpecializations : []}
-                    teacherSubjectIds={currentRole === 'teacher' ? (currentTeacherProfile?.subjectIds || []) : []}
+                    teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
+                    teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
                     approvedSubjectsList={approvedSubjectsList}
                     teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
                     onAddEvaluation={handleAddEvaluation}
@@ -2086,7 +2149,8 @@ export default function App() {
                   schoolsList={schoolsList}
                   schoolFilterId={superAdminSchoolFilterId}
                   onSchoolFilterChange={setSuperAdminSchoolFilterId}
-                  teacherClassIds={currentRole === 'teacher' ? currentTeacherClassIds : []}
+                  teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
+                  teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
                   teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
                 />
               )}

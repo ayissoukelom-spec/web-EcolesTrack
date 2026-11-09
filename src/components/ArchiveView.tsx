@@ -25,7 +25,8 @@ interface ArchiveViewProps {
   schoolsList: { id: number; name: string }[];
   schoolFilterId?: number | null;
   onSchoolFilterChange?: (schoolId: number | null) => void;
-  teacherClassIds?: number[];
+  teacherHomeroomClassIds?: number[];
+  teacherTeachingAssignments?: Array<{ classId: number; subjectId: number; isActive?: boolean }>;
   teacherId?: number;
 }
 
@@ -38,12 +39,16 @@ export default function ArchiveView({
   schoolsList,
   schoolFilterId,
   onSchoolFilterChange,
-  teacherClassIds = [],
+  teacherTeachingAssignments = [],
   teacherId,
 }: ArchiveViewProps) {
   const sortedClasses = sortClasses(classesList || []);
+  const activeTeacherAssignments = userRole === 'teacher'
+    ? teacherTeachingAssignments.filter((assignment) => assignment.isActive === true)
+    : [];
+  const readableTeacherClassIds = new Set(activeTeacherAssignments.map((assignment) => Number(assignment.classId)));
   const availableClasses = userRole === 'teacher'
-    ? sortedClasses.filter((c) => teacherClassIds.includes(c.id))
+    ? sortedClasses.filter((c) => readableTeacherClassIds.has(Number(c.id)))
     : sortedClasses;
   const filteredClasses = schoolFilterId
     ? availableClasses.filter((c) => isClassVisibleToSchool(c, schoolFilterId))
@@ -280,8 +285,10 @@ export default function ArchiveView({
   const filteredArchived = evaluationsList
     .filter((ev) => {
       if (userRole === 'teacher') {
-        if (teacherId == null) return false;
-        if (ev.teacherId !== teacherId) return false;
+        if (ev.subjectId == null || !activeTeacherAssignments.some((assignment) =>
+          Number(assignment.classId) === Number(ev.classId)
+            && Number(assignment.subjectId) === Number(ev.subjectId),
+        )) return false;
       }
       if (schoolFilterId) {
         const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
@@ -347,7 +354,9 @@ export default function ArchiveView({
           >
             <option value="">Toutes les classes</option>
             {filteredClasses.map((cls) => (
-              <option key={cls.id} value={cls.id}>{cls.name}</option>
+              <option key={cls.id} value={cls.id}>
+                {cls.name}{userRole === 'teacher' && !activeTeacherAssignments.some((assignment) => Number(assignment.classId) === Number(cls.id)) ? ' (titulaire)' : ''}
+              </option>
             ))}
           </select>
         </div>

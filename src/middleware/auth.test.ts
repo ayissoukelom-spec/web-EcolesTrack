@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NextFunction } from 'express';
 
-var mockVerifyJwt: ReturnType<typeof vi.fn>;
+var mockVerifyAccessJwt: ReturnType<typeof vi.fn>;
+var mockLoadWithGeneration: ReturnType<typeof vi.fn>;
 var mockWhere: ReturnType<typeof vi.fn>;
 var mockDb: { select: ReturnType<typeof vi.fn> };
 
@@ -9,20 +11,27 @@ vi.mock('../db/index.ts', () => {
   mockDb = {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: (...args: any[]) => mockWhere(...args),
+        where: (...args: unknown[]) => {
+          const query: Promise<unknown> = Promise.resolve(mockWhere(...args));
+          return {
+            limit: () => query,
+            then: query.then.bind(query),
+          };
+        },
       })),
     })),
   };
-  return {
-    db: mockDb,
-  };
+  return { db: mockDb };
 });
 
-vi.mock('../lib/jwt.ts', () => {
-  mockVerifyJwt = vi.fn();
+vi.mock('../server/accessSessionRuntime.ts', () => {
+  mockVerifyAccessJwt = vi.fn();
+  mockLoadWithGeneration = vi.fn();
   return {
-    getJwtSecret: vi.fn(() => 'test-jwt-secret'),
-    verifyJwt: mockVerifyJwt,
+    accessJwtSigner: { verify: (...args: unknown[]) => mockVerifyAccessJwt(...args) },
+    generationAwareAccessSessionStore: {
+      loadWithGeneration: (...args: unknown[]) => mockLoadWithGeneration(...args),
+    },
   };
 });
 
@@ -33,11 +42,66 @@ import {
   requireRole,
   type AuthRequest,
   verifyToken,
-} from './auth';
+} from './auth.ts';
+import {
+  DEFAULT_ACCESS_JWT_AUDIENCE,
+  DEFAULT_ACCESS_JWT_ISSUER,
+} from '../server/accessJwtContract.ts';
 import {
   TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE,
   TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
 } from '../lib/teacherControl/security.ts';
+
+const user = {
+  id: 99,
+  uid: 'user_99',
+  email: 'user99@example.com',
+  name: 'User NinetyNine',
+  role: 'teacher',
+  schoolId: 12,
+  isDeleted: false,
+};
+
+function validClaims(overrides: Record<string, unknown> = {}) {
+  const iat = Math.floor(Date.now() / 1000) - 5;
+  return {
+    sub: String(user.id),
+    sid: 'web-session-99',
+    cv: 0,
+    jti: 'web-token-99',
+    iat,
+    exp: iat + 3600,
+    iss: DEFAULT_ACCESS_JWT_ISSUER,
+    aud: DEFAULT_ACCESS_JWT_AUDIENCE,
+    ...overrides,
+  };
+}
+
+function validSnapshot(claims = validClaims(), overrides: Record<string, unknown> = {}) {
+  const userId = Number(claims.sub);
+  return {
+    session: {
+      sessionId: claims.sid,
+      userId,
+      observedGeneration: '2',
+      status: 'active',
+      contextVersion: claims.cv,
+      context: null,
+      expiresAtEpochMs: Date.now() + 3_600_000,
+      ...overrides,
+    },
+    currentGeneration: '2',
+  };
+}
+
+function validLocalContext(role: 'parent' | 'teacher' | 'school_admin' | 'surveillant' = 'teacher') {
+  return {
+    kind: 'local',
+    identity: { userId: user.id },
+    active: { schoolId: 12, role },
+    membershipId: 44,
+  };
+}
 
 const createMockRes = () => {
   const res: any = {};
@@ -47,14 +111,14 @@ const createMockRes = () => {
   return res;
 };
 
-describe('auth middleware access control', () => {
+describe('Web access-session middleware', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'production';
     delete process.env.ALLOW_SIMULATED_AUTH;
-    process.env.JWT_SECRET = 'test-jwt-secret';
     mockDb.select.mockClear();
     mockWhere.mockReset();
-    mockVerifyJwt.mockClear();
+    mockVerifyAccessJwt.mockReset();
+    mockLoadWithGeneration.mockReset();
   });
 
   it('rejects simulated auth headers in production', async () => {
@@ -63,661 +127,521 @@ describe('auth middleware access control', () => {
     const res = createMockRes();
     const next = vi.fn();
 
-    await verifyToken(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
     expect(req.user).toBeUndefined();
   });
 
-  it('rejects simulated auth configuration in production', () => {
+  it('rejects simulated-auth configuration in production', () => {
     process.env.ALLOW_SIMULATED_AUTH = 'true';
-
     expect(assertSimulatedAuthConfiguration).toThrow(
       'ALLOW_SIMULATED_AUTH=true is not allowed when NODE_ENV=production.',
     );
   });
 
-  it('accepts disabled simulated auth configuration in production', () => {
-    process.env.ALLOW_SIMULATED_AUTH = 'false';
+  it('rejects a context-free session on protected routes after validating the session generation', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims));
+    mockWhere.mockResolvedValueOnce([user]).mockResolvedValueOnce([]);
 
-    expect(assertSimulatedAuthConfiguration).not.toThrow();
-  });
-
-  it('authorizes a valid JWT access token and populates req.user', async () => {
-    const token = 'valid-token';
-    const userRecord = {
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    };
-
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: userRecord.uid,
-      type: 'access',
-      jti: 'jti-99',
-      sub: String(userRecord.id),
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([userRecord]);
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([]);
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
+    const req = { headers: { authorization: 'Bearer strict-web-token' } } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    await verifyToken(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(mockLoadWithGeneration).toHaveBeenCalledWith(claims.sid);
+    expect(next).not.toHaveBeenCalled();
+    expect(req.user).toBeUndefined();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_CONTEXT_REQUIRED' }));
+  });
+
+  it('populates req.user from the exact active membership, not the historical account role', async () => {
+    const claims = validClaims();
+    const context = validLocalContext('surveillant');
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { context }));
+    mockWhere
+      .mockResolvedValueOnce([user])
+      .mockResolvedValueOnce([{ membershipId: 44, userId: user.id, schoolId: 12, role: 'surveillant' }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }])
+      .mockResolvedValueOnce([]);
+
+    const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer valid-access-token' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
     expect(req.user).toMatchObject({
-      id: userRecord.id,
-      uid: userRecord.uid,
-      email: userRecord.email,
-      name: userRecord.name,
-      role: userRecord.role,
-      appRole: 'teacher',
-      schoolId: userRecord.schoolId,
+      role: 'surveillant',
+      appRole: 'surveillant',
+      schoolId: 12,
+      accessContext: context,
     });
-    expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('accepts the same JWT from the short-lived cookie only for the teacher GPS document', async () => {
-    const userRecord = {
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    };
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: userRecord.uid,
-      type: 'access',
-      jti: 'jti-99',
-      sub: String(userRecord.id),
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([userRecord]);
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([]);
+  it('rejects a local context after its exact membership is removed', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, {
+      context: validLocalContext('teacher'),
+    }));
+    mockWhere.mockResolvedValueOnce([user]).mockResolvedValueOnce([]);
 
     const req = {
       method: 'GET',
-      path: TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
-      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=document-token` },
+      path: '/api/protected',
+      headers: { authorization: 'Bearer valid-access-token' },
     } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    await verifyToken(req, res as any, next as any);
-
-    expect(mockVerifyJwt).toHaveBeenCalledWith(
-      'document-token',
-      'test-jwt-secret',
-      expect.any(Object),
-    );
-    expect(next).toHaveBeenCalled();
-    expect(req.user).toMatchObject({ id: 99, role: 'teacher' });
-    expect(res.append).toHaveBeenCalledWith(
-      'Set-Cookie',
-      expect.stringContaining(`${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=; Path=${TEACHER_CONTROL_TEACHER_DOCUMENT_PATH}; Max-Age=0`),
-    );
-  });
-
-  it('does not accept the document cookie for API requests or reject invalid document cookies as authenticated', async () => {
-    const apiRequest = {
-      method: 'POST',
-      path: '/api/teacher-control/gps-challenges',
-      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=document-token` },
-    } as any as AuthRequest;
-    const apiResponse = createMockRes();
-    const apiNext = vi.fn();
-
-    await verifyToken(apiRequest, apiResponse as any, apiNext as any);
-
-    expect(apiNext).not.toHaveBeenCalled();
-    expect(apiResponse.status).toHaveBeenCalledWith(401);
-    expect(apiResponse.json).toHaveBeenCalledWith({ error: 'Unauthorized: Missing token' });
-    expect(mockVerifyJwt).not.toHaveBeenCalled();
-
-    mockVerifyJwt.mockImplementationOnce(() => {
-      throw new Error('jwt expired');
-    });
-    const invalidRequest = {
-      method: 'GET',
-      path: TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
-      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=expired-token` },
-    } as any as AuthRequest;
-    const invalidResponse = createMockRes();
-    const invalidNext = vi.fn();
-
-    await verifyToken(invalidRequest, invalidResponse as any, invalidNext as any);
-
-    expect(invalidNext).not.toHaveBeenCalled();
-    expect(invalidResponse.status).toHaveBeenCalledWith(401);
-    expect(invalidResponse.json).toHaveBeenCalledWith({ error: 'Unauthorized: Invalid token' });
-    expect(invalidResponse.append).toHaveBeenCalledWith(
-      'Set-Cookie',
-      expect.stringContaining(`${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=; Path=${TEACHER_CONTROL_TEACHER_DOCUMENT_PATH}; Max-Age=0`),
-    );
-  });
-
-  it('rejects a blacklisted access token', async () => {
-    const token = 'revoked-token';
-    const userRecord = {
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    };
-
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: userRecord.uid,
-      type: 'access',
-      jti: 'jti-99',
-    });
-    mockWhere.mockResolvedValueOnce([{ token }]);
-    mockWhere.mockResolvedValueOnce([userRecord]);
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('rejects a token when its jti is blacklisted', async () => {
-    const token = 'revoked-token';
-    const jti = 'jti-blacklisted';
-    const userRecord = {
-      id: 100,
-      uid: 'user_100',
-      email: 'user100@example.com',
-      name: 'User OneHundred',
-      role: 'teacher',
-      schoolId: 12,
-    };
-
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: userRecord.uid,
-      type: 'access',
-      jti,
-    });
-    mockWhere.mockResolvedValueOnce([{ tokenJti: jti }]);
-    mockWhere.mockResolvedValueOnce([userRecord]);
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('rejects a token for a soft-deleted user', async () => {
-    const token = 'deleted-token';
-
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: 'user_100',
-      type: 'access',
-      jti: 'jti-100',
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([{
-      id: 100,
-      uid: 'user_100',
-      role: 'parent',
-      isDeleted: true,
-    }]);
-
-    const req = { headers: { authorization: 'Bearer deleted-token' } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'Ce compte est désactivé. Contactez votre administrateur.',
-      code: 'ACCOUNT_DISABLED',
-    });
-  });
-
-    it('rejects an access token issued before the latest account deactivation', async () => {
-      mockVerifyJwt.mockReturnValueOnce({
-        uid: 'user_99',
-        type: 'access',
-        jti: 'jti-before-deactivation',
-        sub: '99',
-        authRevocationEventId: 0,
-      });
-      mockWhere.mockResolvedValueOnce([]);
-      mockWhere.mockResolvedValueOnce([{
-        id: 99,
-        uid: 'user_99',
-        email: 'user99@example.com',
-        name: 'User NinetyNine',
-        role: 'teacher',
-        schoolId: 12,
-      }]);
-      mockWhere.mockResolvedValueOnce([{ id: 21 }]);
-
-      const req = { headers: { authorization: 'Bearer old-token' } } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
-    });
-
-    it('rejects the same old token after reactivation has recorded a revocation boundary', async () => {
-      mockVerifyJwt.mockReturnValueOnce({
-        uid: 'user_99',
-        type: 'access',
-        jti: 'jti-before-deactivation',
-        sub: '99',
-        authRevocationEventId: 0,
-      });
-      mockWhere.mockResolvedValueOnce([]);
-      mockWhere.mockResolvedValueOnce([{
-        id: 99,
-        uid: 'user_99',
-        email: 'user99@example.com',
-        name: 'User NinetyNine',
-        role: 'teacher',
-        schoolId: 12,
-        isDeleted: false,
-      }]);
-      mockWhere.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
-
-      const req = { headers: { authorization: 'Bearer new-token' } } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
-    });
-
-    it('rejects a parent token issued before deactivation even after the parent is reactivated', async () => {
-      mockVerifyJwt.mockReturnValueOnce({
-        uid: 'parent-uid',
-        type: 'access',
-        jti: 'parent-token-before-deactivation',
-        sub: '600',
-        authRevocationEventId: 0,
-      });
-      mockWhere.mockResolvedValueOnce([]);
-      mockWhere.mockResolvedValueOnce([{
-        id: 600,
-        uid: 'parent-uid',
-        email: 'parent@example.com',
-        name: 'Parent Account',
-        role: 'parent',
-        schoolId: 12,
-        isDeleted: false,
-      }]);
-      mockWhere.mockResolvedValueOnce([{ id: 31 }, { id: 32 }]);
-
-      const req = { headers: { authorization: 'Bearer parent-token-before-deactivation' } } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
-    });
-
-    it('accepts a new token issued after reactivation using the current revocation event id', async () => {
-      mockVerifyJwt.mockReturnValueOnce({
-        uid: 'user_99',
-        type: 'access',
-        jti: 'jti-after-reactivation',
-        sub: '99',
-        authRevocationEventId: 22,
-      });
-      mockWhere.mockResolvedValueOnce([]);
-      mockWhere.mockResolvedValueOnce([{
-        id: 99,
-        uid: 'user_99',
-        email: 'user99@example.com',
-        name: 'User NinetyNine',
-        role: 'teacher',
-        schoolId: 12,
-        isDeleted: false,
-      }]);
-      mockWhere.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
-      mockWhere.mockResolvedValueOnce([]);
-
-      const req = { headers: { authorization: 'Bearer reactivated-current-token' } } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).toHaveBeenCalled();
-      expect(res.status).not.toHaveBeenCalled();
-    });
-
-    it('rejects a legacy token without a revocation claim after an account has been reactivated', async () => {
-      mockVerifyJwt.mockReturnValueOnce({
-        uid: 'user_99',
-        type: 'access',
-        jti: 'legacy-token',
-        sub: '99',
-      });
-      mockWhere.mockResolvedValueOnce([]);
-      mockWhere.mockResolvedValueOnce([{
-        id: 99,
-        uid: 'user_99',
-        email: 'user99@example.com',
-        name: 'User NinetyNine',
-        role: 'teacher',
-        schoolId: 12,
-        isDeleted: false,
-      }]);
-      mockWhere.mockResolvedValueOnce([{ id: 22 }]);
-
-      const req = { headers: { authorization: 'Bearer legacy-token-after-reactivation' } } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
-    });
-
-    it('rejects simulated authentication for a real deleted account', async () => {
-      process.env.NODE_ENV = 'test';
-      mockWhere.mockResolvedValueOnce([{ id: 700, isDeleted: true }]);
-
-      const req = {
-        headers: {
-          'x-simulated-role': 'teacher',
-          'x-simulated-uid': 'deleted-teacher',
-        },
-      } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(req.user).toBeUndefined();
-    });
-
-    it('rejects simulated auth when the supplied email belongs to a deleted account', async () => {
-      process.env.NODE_ENV = 'test';
-      mockWhere.mockResolvedValueOnce([{ id: 701, isDeleted: false }]);
-      mockWhere.mockResolvedValueOnce([{ id: 700, isDeleted: true }]);
-
-      const req = {
-        headers: {
-          'x-simulated-role': 'teacher',
-          'x-simulated-uid': 'active-uid',
-          'x-simulated-email': 'DELETED@example.test',
-        },
-      } as any as AuthRequest;
-      const res = createMockRes();
-      const next = vi.fn();
-
-      await verifyToken(req, res as any, next as any);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(401);
-    });
-
-  it('rejects a token when sub does not match the DB user id', async () => {
-    const token = 'mismatched-sub-token';
-    const userRecord = {
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    };
-
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: userRecord.uid,
-      type: 'access',
-      jti: 'jti-99',
-      sub: '100',
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([userRecord]);
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('restricts temporary-password tokens to password change and logout', async () => {
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: 'user_99',
-      type: 'access',
-      jti: 'jti-99',
-      sub: '99',
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([{
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    }]);
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
-
-    const req = {
-      headers: { authorization: 'Bearer temporary-token' },
-      method: 'GET',
-      path: '/api/grades',
-    } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'PASSWORD_RESET_REQUIRED' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_MEMBERSHIP_NOT_FOUND' }));
   });
 
-  it('allows a temporary-password token to reach the password-change endpoint', async () => {
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: 'user_99',
-      type: 'access',
-      jti: 'jti-99',
-      sub: '99',
-    });
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([{
-      id: 99,
-      uid: 'user_99',
-      email: 'user99@example.com',
-      name: 'User NinetyNine',
-      role: 'teacher',
-      schoolId: 12,
-    }]);
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([{ mustReset: true }]);
+  it('does not restore an administrator role from the historical account role when its membership is missing', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, {
+      context: validLocalContext('school_admin'),
+    }));
+    mockWhere.mockResolvedValueOnce([{ ...user, role: 'school_admin' }]).mockResolvedValueOnce([]);
 
     const req = {
-      headers: { authorization: 'Bearer temporary-token' },
-      method: 'POST',
-      path: '/api/auth/change-password',
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer test-token' },
     } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).toHaveBeenCalled();
-    expect(req.user?.id).toBe(99);
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('rejects an invalid JWT signature without falling back to simulated auth', async () => {
-    const token = 'invalid-token';
-    mockVerifyJwt.mockImplementationOnce(() => {
-      throw new Error('invalid signature');
-    });
-
-    const req = { headers: { authorization: `Bearer ${token}`, 'x-simulated-role': 'teacher' } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_MEMBERSHIP_NOT_FOUND' }));
   });
 
-  it('rejects a non-access token type', async () => {
-    const token = 'wrong-type-token';
-    mockVerifyJwt.mockReturnValueOnce({
-      uid: 'user_99',
-      type: 'refresh',
-      jti: 'jti-99',
-    });
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('rejects an expired JWT token', async () => {
-    const token = 'expired-token';
-    mockVerifyJwt.mockImplementationOnce(() => {
-      throw new Error('jwt expired');
-    });
-
-    const req = { headers: { authorization: `Bearer ${token}` } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    await verifyToken(req, res as any, next as any);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('authorizes simulated auth headers in test when no token is present', async () => {
-    process.env.NODE_ENV = 'development';
-    process.env.ALLOW_SIMULATED_AUTH = 'true';
-    delete process.env.JWT_SECRET;
-    mockWhere.mockResolvedValueOnce([]);
-    mockWhere.mockResolvedValueOnce([]);
-    expect(assertSimulatedAuthConfiguration).not.toThrow();
+  it('keeps an inactive administrator membership inactive', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, {
+      context: validLocalContext('school_admin'),
+    }));
+    mockWhere
+      .mockResolvedValueOnce([{ ...user, role: 'school_admin' }])
+      .mockResolvedValueOnce([{
+        membershipId: 44,
+        userId: user.id,
+        schoolId: 12,
+        role: 'school_admin',
+        isActive: false,
+      }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }]);
 
     const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer test-token' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_MEMBERSHIP_INACTIVE' }));
+  });
+
+  it('continues to authorize an active administrator membership', async () => {
+    const claims = validClaims();
+    const context = validLocalContext('school_admin');
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { context }));
+    mockWhere
+      .mockResolvedValueOnce([{ ...user, role: 'teacher' }])
+      .mockResolvedValueOnce([{
+        membershipId: 44,
+        userId: user.id,
+        schoolId: 12,
+        role: 'school_admin',
+        isActive: true,
+      }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }])
+      .mockResolvedValueOnce([]);
+
+    const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer test-token' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.user).toMatchObject({
+      role: 'school_admin',
+      appRole: 'school_admin',
+      schoolId: 12,
+      accessContext: context,
+    });
+  });
+
+  it('rejects a local context when the exact membership has become inactive', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, {
+      context: validLocalContext('teacher'),
+    }));
+    mockWhere
+      .mockResolvedValueOnce([user])
+      .mockResolvedValueOnce([{
+        membershipId: 44,
+        userId: user.id,
+        schoolId: 12,
+        role: 'teacher',
+        isActive: false,
+      }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }]);
+
+    const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer inactive-context-token' },
+    } as any as AuthRequest;
+    req.headers.authorization = 'Bearer inactive-context-token';
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_MEMBERSHIP_INACTIVE' }));
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('does not accept a school administrator account in the global super-admin context', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, {
+      context: {
+        kind: 'global',
+        identity: { userId: user.id },
+        globalRole: 'super_admin',
+      },
+    }));
+    mockWhere.mockResolvedValueOnce([{ ...user, role: 'school_admin' }]);
+
+    const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer valid-access-token' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ACCESS_GLOBAL_ROLE_INVALID' }));
+  });
+
+  it('continues to accept the global super-admin context for a super-admin account', async () => {
+    const claims = validClaims();
+    const context = {
+      kind: 'global',
+      identity: { userId: user.id },
+      globalRole: 'super_admin',
+    } as const;
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { context }));
+    mockWhere
+      .mockResolvedValueOnce([{ ...user, role: 'super_admin' }])
+      .mockResolvedValueOnce([]);
+
+    const req = {
+      method: 'GET',
+      path: '/api/protected',
+      headers: { authorization: 'Bearer test-token' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.user).toMatchObject({
+      role: 'super_admin',
+      appRole: 'super_admin',
+      schoolId: null,
+      accessContext: context,
+    });
+  });
+
+  it('rejects legacy Web JWT claims without trying a permissive fallback', async () => {
+    mockVerifyAccessJwt.mockReturnValueOnce({
+      valid: false,
+      reason: 'invalid_shape',
+    });
+    const req = {
       headers: {
+        authorization: 'Bearer legacy-token',
         'x-simulated-role': 'teacher',
-        'x-simulated-uid': 'sim_teacher_1',
-        'x-simulated-email': 'teacher@sim.local',
-        'x-simulated-name': 'Sim Teacher',
-        'x-simulated-school-id': '7',
       },
     } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    await verifyToken(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
-    expect(next).toHaveBeenCalled();
-    expect(req.user).toMatchObject({
-      uid: 'sim_teacher_1',
-      email: 'teacher@sim.local',
-      name: 'Sim Teacher',
-      role: 'teacher',
-      appRole: 'teacher',
-      schoolId: 7,
-      simulated: true,
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Invalid token' });
+    expect(mockLoadWithGeneration).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed or unverifiable tokens', async () => {
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: false, reason: 'verification_failed' });
+    const req = { headers: { authorization: 'Bearer malformed' } } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockLoadWithGeneration).not.toHaveBeenCalled();
+  });
+
+  it('surfaces missing Web JWT configuration as unavailable instead of treating it as bad credentials', async () => {
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: false, reason: 'invalid_configuration' });
+    const req = { headers: { authorization: 'Bearer token' } } as any as AuthRequest;
+    const res = createMockRes();
+
+    const nextMock = vi.fn();
+    const next: NextFunction = (error?: unknown) => {
+      nextMock(error);
+    };
+    await verifyToken(req, res, next);
+
+    expect(nextMock).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Web access-token verification is not configured.',
+      code: 'ACCESS_TOKEN_VERIFICATION_UNAVAILABLE',
     });
   });
 
-  it('autorise un role admin sur requireRole', () => {
-    const req = { user: { appRole: 'admin' } } as any as AuthRequest;
+  it('rejects a missing session', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(null);
+    mockWhere.mockResolvedValueOnce([user]);
+
+    const req = { headers: { authorization: 'Bearer token' } } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    requireRole(['admin'])(req, res as any, next as any);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('mappe le rôle surveillant comme accès de type enseignant', () => {
-    expect(mapToAppRole('surveillant')).toBe('teacher');
-  });
-
-  it('refuse un role parent sur une route admin/teacher', () => {
-    const req = { user: { appRole: 'parent' } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    requireRole(['admin', 'teacher'])(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Access session not found' });
   });
 
-  it('autorise owner quand resolver retourne true', async () => {
-    const req = { user: { appRole: 'parent' } } as any as AuthRequest;
+  it('rejects revoked or expired sessions', async () => {
+    for (const status of ['revoked', 'expired']) {
+      const claims = validClaims({ sid: `session-${status}` });
+      mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+      mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { status }));
+      mockWhere.mockResolvedValueOnce([user]);
+
+      const req = { headers: { authorization: 'Bearer token' } } as any as AuthRequest;
+      const res = createMockRes();
+      const next = vi.fn();
+
+      await verifyToken(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+    }
+  });
+
+  it('rejects a stale context version and an identity mismatch', async () => {
+    const staleClaims = validClaims({ cv: 1 });
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims: staleClaims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(staleClaims, { contextVersion: 0 }));
+    mockWhere.mockResolvedValueOnce([user]);
+    const staleRes = createMockRes();
+    const staleNext = vi.fn();
+    await verifyToken(
+      { headers: { authorization: 'Bearer stale-context' } } as any as AuthRequest,
+      staleRes,
+      staleNext,
+    );
+    expect(staleNext).not.toHaveBeenCalled();
+    expect(staleRes.status).toHaveBeenCalledWith(409);
+
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { userId: 100 }));
+    mockWhere.mockResolvedValueOnce([user]);
+    const identityRes = createMockRes();
+    const identityNext = vi.fn();
+    await verifyToken(
+      { headers: { authorization: 'Bearer wrong-user' } } as any as AuthRequest,
+      identityRes,
+      identityNext,
+    );
+    expect(identityNext).not.toHaveBeenCalled();
+    expect(identityRes.status).toHaveBeenCalledWith(401);
+  });
+
+  it('rejects sessions created before a global generation change', async () => {
+    const claims = validClaims();
+    const snapshot = validSnapshot(claims);
+    snapshot.currentGeneration = '3';
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(snapshot);
+    mockWhere.mockResolvedValueOnce([user]);
+
+    const req = { headers: { authorization: 'Bearer stale-generation' } } as any as AuthRequest;
     const res = createMockRes();
     const next = vi.fn();
 
-    const middleware = requireOwnership(async () => true, { bypassRoles: ['admin', 'teacher'] });
-    await middleware(req, res as any, next as any);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('refuse owner quand resolver retourne false (cross-user)', async () => {
-    const req = { user: { appRole: 'parent' } } as any as AuthRequest;
-    const res = createMockRes();
-    const next = vi.fn();
-
-    const middleware = requireOwnership(async () => false, { bypassRoles: ['admin', 'teacher'] });
-    await middleware(req, res as any, next as any);
+    await verifyToken(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized: Token revoked' });
+  });
+
+  it('rejects disabled accounts and still enforces the temporary-password restriction', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims));
+    mockWhere.mockResolvedValueOnce([{ ...user, isDeleted: true }]);
+    const disabledRes = createMockRes();
+    const disabledNext = vi.fn();
+    await verifyToken(
+      { headers: { authorization: 'Bearer disabled' } } as any as AuthRequest,
+      disabledRes,
+      disabledNext,
+    );
+    expect(disabledNext).not.toHaveBeenCalled();
+    expect(disabledRes.json).toHaveBeenCalledWith({
+      error: 'Unauthorized: Invalid token',
+    });
+
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { context: validLocalContext() }));
+    mockWhere
+      .mockResolvedValueOnce([user])
+      .mockResolvedValueOnce([{ membershipId: 44, userId: user.id, schoolId: 12, role: 'teacher' }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }])
+      .mockResolvedValueOnce([{ mustReset: true }]);
+    const resetRes = createMockRes();
+    const resetNext = vi.fn();
+    await verifyToken(
+      {
+        method: 'GET',
+        path: '/api/protected',
+        headers: { authorization: 'Bearer must-reset' },
+      } as any as AuthRequest,
+      resetRes,
+      resetNext,
+    );
+    expect(resetNext).not.toHaveBeenCalled();
+    expect(resetRes.status).toHaveBeenCalledWith(403);
+    expect(resetRes.json).toHaveBeenCalledWith({
+      error: 'Veuillez changer votre mot de passe avant de continuer.',
+      code: 'PASSWORD_RESET_REQUIRED',
+    });
+  });
+
+  it('allows the short-lived document cookie only on the teacher document route', async () => {
+    const claims = validClaims();
+    mockVerifyAccessJwt.mockReturnValueOnce({ valid: true, claims });
+    mockLoadWithGeneration.mockResolvedValueOnce(validSnapshot(claims, { context: validLocalContext() }));
+    mockWhere
+      .mockResolvedValueOnce([user])
+      .mockResolvedValueOnce([{ membershipId: 44, userId: user.id, schoolId: 12, role: 'teacher' }])
+      .mockResolvedValueOnce([{ id: 12, isSuspended: false }])
+      .mockResolvedValueOnce([]);
+    const req = {
+      method: 'GET',
+      path: TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
+      headers: { cookie: `${TEACHER_CONTROL_DOCUMENT_AUTH_COOKIE}=cookie-token` },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.append).toHaveBeenCalledWith('Set-Cookie', expect.stringContaining('Max-Age=0'));
+  });
+
+  it('supports simulated auth in tests only', async () => {
+    process.env.NODE_ENV = 'test';
+    mockWhere.mockResolvedValueOnce([]);
+    const req = {
+      headers: { 'x-simulated-role': 'teacher' },
+    } as any as AuthRequest;
+    const res = createMockRes();
+    const next = vi.fn();
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.user?.simulated).toBe(true);
+  });
+
+  it('maps roles and preserves role/ownership guards', async () => {
+    expect(mapToAppRole('surveillant')).toBe('surveillant');
+    expect(mapToAppRole('school_admin')).toBe('school_admin');
+    expect(mapToAppRole('super_admin')).toBe('super_admin');
+    expect(mapToAppRole('admin')).toBeUndefined();
+
+    const req = { user: { role: 'school_admin', appRole: 'school_admin' } } as any as AuthRequest;
+    const next = vi.fn();
+    const res = createMockRes();
+    requireRole(['school_admin'])(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+
+    const teacherOnlyNext = vi.fn();
+    requireRole(['teacher'])(
+      { user: { role: 'surveillant', appRole: 'surveillant' } } as any as AuthRequest,
+      res,
+      teacherOnlyNext,
+    );
+    expect(teacherOnlyNext).not.toHaveBeenCalled();
+
+    const ownerAllowed = vi.fn(async () => true);
+    const ownerDenied = vi.fn(async () => false);
+    const allowedNext = vi.fn();
+    const deniedNext = vi.fn();
+    await requireOwnership(ownerAllowed)(req, res, allowedNext);
+    await requireOwnership(ownerDenied)(req, res, deniedNext);
+    expect(allowedNext).toHaveBeenCalledTimes(1);
+    expect(deniedNext).not.toHaveBeenCalled();
   });
 });

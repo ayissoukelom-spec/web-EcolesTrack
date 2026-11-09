@@ -7,6 +7,8 @@ vi.mock('../contexts/AuthContext.tsx', () => ({
   useAuth: () => ({
     user: { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' },
     role: 'super_admin',
+    token: 'access-token',
+    activeSchoolId: null,
   }),
 }));
 
@@ -328,5 +330,45 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
 
     expect(await screen.findByText('L’email est requis')).toBeTruthy();
     expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(false);
+  });
+
+  it('switches an authenticated account to an assigned local function without logging out', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const onLogout = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), window.location.origin);
+      requests.push({ url: url.toString(), init });
+      if (url.pathname === '/api/auth/schools') {
+        return jsonResponse({
+          schools: [{ id: 25, name: 'École A', isSuspended: false }],
+          memberships: [{ membershipId: 7, schoolId: 25, role: 'teacher', isActive: true }],
+          isSuperAdmin: false,
+        });
+      }
+      if (url.pathname === '/api/auth/context/active') {
+        return jsonResponse({ token: 'teacher-context-token', role: 'teacher', schoolId: 25 });
+      }
+      return jsonResponse([]);
+    });
+
+    renderHeader({ onLogout });
+    fireEvent.click(document.getElementById('btn-sim-profile')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Changer d’espace' }));
+
+    const teacherChoice = await screen.findByRole('button', { name: /teacher.*École A/i });
+    fireEvent.click(teacherChoice);
+
+    await waitFor(() => {
+      expect(localStorage.setItem).toHaveBeenCalledWith('ecoletrack_jwt_access', 'teacher-context-token');
+      expect(localStorage.setItem).toHaveBeenCalledWith('ecoletrack_active_school_id', '25');
+      expect(localStorage.setItem).toHaveBeenCalledWith('ecoletrack_simulated_role', 'teacher');
+    });
+    const transition = requests.find(({ url }) => url.endsWith('/api/auth/context/active'));
+    expect(JSON.parse(String(transition?.init?.body))).toEqual({ kind: 'local', schoolId: 25, role: 'teacher' });
+    expect(onLogout).not.toHaveBeenCalled();
+    expect(requests
+      .filter(({ init }) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(init?.method || 'GET'))
+      .map(({ url }) => new URL(url).pathname))
+      .toEqual(['/api/auth/context/active']);
   });
 });
