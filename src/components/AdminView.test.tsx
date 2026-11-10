@@ -8,6 +8,7 @@ import AdminModal from './AdminModal';
 import type { AcademicYear, Class, Parent, School, Student, Teacher, User } from '../types';
 import { readFirstExcelSheetRecords } from '../lib/excelImport';
 import { apiFetch } from '../lib/api';
+import ExcelJS from 'exceljs';
 
 const renderWithAuth = (ui: JSX.Element) => render(<AuthProvider>{ui}</AuthProvider>);
 const getPrimarySchoolPhoneInput = () => screen.getAllByPlaceholderText('90000000')[0] as HTMLInputElement;
@@ -1687,8 +1688,8 @@ describe('AdminView create-user teacher form', () => {
       { id: 2, name: 'École du Nord', address: '', phone: '' },
     ];
     const teachers: Teacher[] = [
-      { id: 11, userId: 101, name: 'ZOU Jean', lastName: 'ZOU', firstNames: 'Jean', email: 'jean@example.com', phone: '+22890000011', specialization: 'Mathématiques', schoolId: 1 },
-      { id: 12, userId: 102, name: 'KOFFI Awa', lastName: 'KOFFI', firstNames: 'Awa', email: 'awa@example.com', phone: '+22890000012', specialization: 'Sciences', schoolId: 1, lastLoginAt: '2026-10-28T16:30:00.000Z' },
+      { id: 11, userId: 101, name: 'ZOU Jean', lastName: 'ZOU', firstNames: 'Jean', email: 'jean@example.com', phone: '+22890000011', specialization: 'Mathématiques', schoolId: 1, teachingAssignments: [{ id: 1, schoolId: 1, classId: 101, subjectId: 201, isActive: true }] },
+      { id: 12, userId: 102, name: 'KOFFI Awa', lastName: 'KOFFI', firstNames: 'Awa', email: 'awa@example.com', phone: '+22890000012', specialization: 'Sciences', schoolId: 1, lastLoginAt: '2026-10-28T16:30:00.000Z', teachingAssignments: [{ id: 2, schoolId: 1, classId: 102, subjectId: 201, isActive: true }, { id: 3, schoolId: 1, classId: 102, subjectId: 202, isActive: true }] },
       { id: 21, userId: 201, name: 'YAO Kossi', lastName: 'YAO', firstNames: 'Kossi', email: 'kossi@example.com', phone: '+22890000021', specialization: 'Histoire', schoolId: 2 },
     ];
     const originalCreateObjectURL = (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
@@ -1706,11 +1707,15 @@ describe('AdminView create-user teacher form', () => {
           userRole="super_admin"
           schoolsList={schools}
           yearsList={[]}
-          classesList={[]}
+          classesList={[
+            { id: 101, name: '6e A', schoolId: null, academicYearId: 1 },
+            { id: 102, name: '5e B', schoolId: null, academicYearId: 1 },
+          ]}
           teachersList={teachers}
           studentsList={[]}
           parentsList={[]}
           usersList={[]}
+          subjectsList={[{ id: 201, name: 'Mathématiques' }, { id: 202, name: 'Sciences' }]}
           onAddSchool={async () => ({})}
           onAddYear={() => undefined}
           onAddClass={async () => undefined}
@@ -1735,9 +1740,21 @@ describe('AdminView create-user teacher form', () => {
       await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
       const blob = createObjectURL.mock.calls[0][0] as Blob;
       const rows = await readFirstExcelSheetRecords(await blob.arrayBuffer());
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(Buffer.from(await blob.arrayBuffer()));
+      const assignmentDetails: unknown[][] = [];
+      workbook.getWorksheet('Détail des affectations')?.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) assignmentDetails.push(row.values as unknown[]);
+      });
 
       expect(click).toHaveBeenCalledTimes(1);
       expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('liste-enseignants.xlsx');
+      expect(workbook.getWorksheet('Enseignants')?.rowCount).toBe(3);
+      expect(assignmentDetails).toEqual([
+        [undefined, 'École du Lac', 11, 'ZOU Jean', 201, 'Mathématiques', '6e A', 'Affectation exacte confirmée'],
+        [undefined, 'École du Lac', 12, 'KOFFI Awa', 201, 'Mathématiques', '5e B', 'Affectation exacte confirmée'],
+        [undefined, 'École du Lac', 12, 'KOFFI Awa', 202, 'Sciences', '5e B', 'Affectation exacte confirmée'],
+      ]);
       expect(rows).toEqual([
         {
           'Nom complet': 'KOFFI Awa',

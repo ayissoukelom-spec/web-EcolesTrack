@@ -8560,24 +8560,37 @@ export async function createApp() {
       const teacherIds = teachersList.map((teacher) => teacher.id).filter(Boolean);
 
       const subjectAssignments = teacherIds.length > 0
-        ? await db.select({ teacherId: teacherSubjects.teacherId, subjectId: teacherSubjects.subjectId, subjectName: subjects.name })
+        ? await db.select({
+          teacherId: teacherSubjects.teacherId,
+          subjectId: teacherSubjects.subjectId,
+          schoolId: teacherSubjects.schoolId,
+          subjectName: subjects.name,
+        })
           .from(teacherSubjects)
           .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
           .where(actor.role === 'super_admin'
             ? inArray(teacherSubjects.teacherId, teacherIds)
             : and(inArray(teacherSubjects.teacherId, teacherIds), inArray(teacherSubjects.schoolId, querySchoolIds!)))
         : [];
-      const subjectAssignmentMap = new Map<number, Array<{ id: number; name: string }>>();
+      const subjectAssignmentMap = new Map<number, Array<{ id: number; name: string; schoolId: number | null }>>();
       for (const assignment of subjectAssignments) {
         const existing = subjectAssignmentMap.get(assignment.teacherId) ?? [];
-        existing.push({ id: assignment.subjectId, name: assignment.subjectName });
+        existing.push({
+          id: assignment.subjectId,
+          name: assignment.subjectName,
+          schoolId: assignment.schoolId,
+        });
         subjectAssignmentMap.set(assignment.teacherId, existing);
       }
 
-      let assignments: Array<{ teacherId: number; classId: number }> = [];
+      let assignments: Array<{ teacherId: number; classId: number; schoolId: number | null }> = [];
       if (teacherIds.length > 0) {
         assignments = await db
-          .select({ teacherId: classTeachers.teacherId, classId: classTeachers.classId })
+          .select({
+            teacherId: classTeachers.teacherId,
+            classId: classTeachers.classId,
+            schoolId: classTeachers.schoolId,
+          })
           .from(classTeachers)
           .where(actor.role === 'super_admin'
             ? inArray(classTeachers.teacherId, teacherIds)
@@ -8585,10 +8598,14 @@ export async function createApp() {
       }
 
       const administrativeClassMap = new Map<number, number[]>();
+      const administrativeClassAssignmentMap = new Map<number, Array<{ classId: number; schoolId: number | null }>>();
       assignments.forEach((item) => {
         const existing = administrativeClassMap.get(item.teacherId) || [];
         existing.push(item.classId);
         administrativeClassMap.set(item.teacherId, existing);
+        const scopedAssignments = administrativeClassAssignmentMap.get(item.teacherId) ?? [];
+        scopedAssignments.push({ classId: item.classId, schoolId: item.schoolId });
+        administrativeClassAssignmentMap.set(item.teacherId, scopedAssignments);
       });
       const homeroomConditions = [inArray(classHomeroomAssignments.teacherId, teacherIds)];
       if (actor.role !== 'super_admin') {
@@ -8674,6 +8691,7 @@ export async function createApp() {
         homeroomAssignments: homeroomAssignmentMap.get(teacher.id) ?? [],
         homeroomClassIds: Array.from(new Set((homeroomAssignmentMap.get(teacher.id) ?? []).map((assignment) => assignment.classId))),
         administrativeClassIds: Array.from(new Set(administrativeClassMap.get(teacher.id) ?? [])),
+        administrativeClassAssignments: administrativeClassAssignmentMap.get(teacher.id) ?? [],
         teachingAssignments: teachingAssignmentMap.get(teacher.id) || [],
       }));
       if (actor.role === 'teacher') {

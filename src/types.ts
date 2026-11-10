@@ -125,8 +125,9 @@ export interface Teacher {
   homeroomClassIds?: number[];
   homeroomAssignments?: Array<{ classId: number; schoolId: number }>;
   subjectIds?: number[];
-  assignedSubjects?: Array<Pick<Subject, 'id' | 'name'>>;
+  assignedSubjects?: Array<Pick<Subject, 'id' | 'name'> & { schoolId?: number | null }>;
   teachingAssignments?: Array<{ id: number; classId: number; subjectId: number; schoolId?: number; isActive: boolean }>;
+  administrativeClassAssignments?: Array<{ classId: number; schoolId?: number | null }>;
   gender?: string;
 }
 

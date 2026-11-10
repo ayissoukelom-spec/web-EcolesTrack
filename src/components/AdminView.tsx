@@ -41,6 +41,7 @@ import { matchesParentSearch } from '../lib/parentSearch';
 import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImportRow } from '../lib/parentImportValidation';
 import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import { buildTemporaryCredentialsWorkbook, mapTemporaryCredentialAccounts } from '../lib/temporaryCredentialsWorkbook';
+import { buildTeacherExportWorkbook } from '../lib/teacherAssignmentsExcel';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 import { EXAM_MENTIONS, type ExamMention } from '../lib/examMention';
 import type { TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
@@ -1315,11 +1316,13 @@ export default function AdminView({
         ? new Date(teacher.lastLoginAt).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
         : 'Jamais connecté',
     }));
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Enseignants');
-    worksheet.columns = Object.keys(rows[0] || {}).map((header) => ({ header, key: header }));
-    worksheet.addRows(rows.map((row) => Object.values(row)));
-    const excelBuffer = await workbook.xlsx.writeBuffer();
+    const excelBuffer = await buildTeacherExportWorkbook(
+      rows,
+      filteredTeachersList,
+      schoolsList,
+      classesList,
+      subjectsList as Subject[],
+    );
     const blob = new Blob([excelBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
