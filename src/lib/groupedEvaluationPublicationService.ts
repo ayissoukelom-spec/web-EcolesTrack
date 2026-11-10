@@ -3,6 +3,7 @@ import {
   formatGroupedEvaluationParentMessage,
   validateGroupedEvaluationPublication,
   validateGroupedEvaluationPublicationRequest,
+  type GroupedEvaluationPeriodType,
   type GroupedEvaluationPublicationRequest,
   type GroupedEvaluationPublicationResponse,
   type GroupedEvaluationValidationContext,
@@ -12,7 +13,7 @@ import {
 
 export interface GroupedPublicationContext extends GroupedEvaluationValidationContext {
   academicYearId: number;
-  periodType: 'trimester';
+  periodType: GroupedEvaluationPeriodType;
   periodOrderIndex: number;
   subjectNamesById: Record<number, string>;
 }
@@ -37,7 +38,7 @@ export interface GroupedEvaluationPublicationTransaction {
     authorUserId: number;
     academicYearId: number;
     kind: GroupedEvaluationPublicationRequest['kind'];
-    periodType: 'trimester';
+    periodType: GroupedEvaluationPeriodType;
     periodOrderIndex: number;
     startDate: string;
     endDate: string;
@@ -134,6 +135,7 @@ export function hashGroupedEvaluationRequest(
 function assertCompatibleTerms(
   request: GroupedEvaluationPublicationRequest,
   termsByClass: Record<number, SchoolTermPeriod[]>,
+  context: Pick<GroupedPublicationContext, 'academicYearId' | 'periodType' | 'periodOrderIndex'>,
 ): void {
   const selectedTerms = request.classIds.map((classId) => {
     const covering = (termsByClass[classId] ?? []).filter((term) =>
@@ -141,19 +143,28 @@ function assertCompatibleTerms(
     );
     return covering.length === 1 ? covering[0] : null;
   });
-  if (selectedTerms.some((term) => term == null)) return;
+  if (selectedTerms.some((term) => term == null)) {
+    throw new GroupedEvaluationValidationError(
+      'period_outside_single_term',
+      'La période doit être entièrement comprise dans un seul trimestre ou semestre pour chaque classe sélectionnée.',
+    );
+  }
   const firstTerm = selectedTerms[0]!;
+  const firstPeriodType = firstTerm.periodType ?? 'trimester';
   const incompatibleClasses = request.classIds.filter((classId, index) => {
     const term = selectedTerms[index]!;
     return term.academicYearId !== firstTerm.academicYearId
-      || term.periodType !== 'trimester'
+      || (term.periodType ?? 'trimester') !== firstPeriodType
       || (term.orderIndex ?? 0) <= 0
-      || term.orderIndex !== firstTerm.orderIndex;
+      || term.orderIndex !== firstTerm.orderIndex
+      || term.academicYearId !== context.academicYearId
+      || firstPeriodType !== context.periodType
+      || firstTerm.orderIndex !== context.periodOrderIndex;
   });
   if (incompatibleClasses.length > 0) {
     throw new GroupedEvaluationValidationError(
       'incompatible_terms',
-      'Toutes les classes doivent partager la même année scolaire et le même trimestre.',
+      'Toutes les classes doivent utiliser le même type de période, la même année scolaire et le même numéro de période.',
       { classIds: incompatibleClasses },
     );
   }
@@ -210,7 +221,7 @@ export async function publishGroupedEvaluations(
         validation.error.details,
       );
     }
-    assertCompatibleTerms(request, context.termsByClass);
+    assertCompatibleTerms(request, context.termsByClass, context);
     const value: ValidatedGroupedEvaluationPublication = validation.value;
 
     const publication = await tx.createPublication({
@@ -256,7 +267,7 @@ export async function publishGroupedEvaluations(
           type: value.evaluationType,
           date: value.evaluationDate,
           sequenceNumber,
-          generatedName: `${value.evaluationType === 'composition' ? 'Composition' : 'Devoir'} ${context.periodType === 'trimester' ? `T${context.periodOrderIndex}` : ''}.${sequenceNumber}`,
+          generatedName: `${value.evaluationType === 'composition' ? 'Composition' : 'Devoir'} ${context.periodType === 'trimester' ? 'T' : 'S'}${context.periodOrderIndex}.${sequenceNumber}`,
         });
         evaluationIds.push(evaluation.id);
       }

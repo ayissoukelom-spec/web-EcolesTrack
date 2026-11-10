@@ -78,8 +78,8 @@ describe('grouped evaluation publication contracts', () => {
       .toMatchObject({ error: { code: 'period_outside_single_term', details: { classId: 10 } } });
   });
 
-  it('rejects classes covered by different school years or trimester indexes', () => {
-    const incompatibleTerms = {
+  it('rejects classes covered by different school years or period indexes', () => {
+    const incompatibleTerms: GroupedEvaluationValidationContext = {
       ...context,
       termsByClass: {
         10: [{
@@ -103,6 +103,33 @@ describe('grouped evaluation publication contracts', () => {
 
     expect(validateGroupedEvaluationPublication(request, incompatibleTerms))
       .toMatchObject({ error: { code: 'incompatible_terms', details: { classIds: [11] } } });
+  });
+
+  it('rejects a programme mixing trimester and semester periods', () => {
+    const mixedPeriods: GroupedEvaluationValidationContext = {
+      ...context,
+      termsByClass: {
+        10: [{
+          id: 100,
+          startDate: '2026-11-01',
+          endDate: '2026-12-31',
+          academicYearId: 7,
+          periodType: 'trimester' as const,
+          orderIndex: 1,
+        }],
+        11: [{
+          id: 101,
+          startDate: '2026-11-01',
+          endDate: '2027-01-31',
+          academicYearId: 7,
+          periodType: 'semester' as const,
+          orderIndex: 1,
+        }],
+      },
+    };
+
+    expect(validateGroupedEvaluationPublication(request, mixedPeriods))
+      .toMatchObject({ error: { code: 'incompatible_terms' } });
   });
 
   it('rejects classes or subjects that are not approved by the establishment', () => {

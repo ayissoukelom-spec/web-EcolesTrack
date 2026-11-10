@@ -51,6 +51,7 @@ import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import { registerClassSubjectPivotRoute } from './src/lib/classSubjectPivotApi.ts';
 import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAdminWhatsAppApi.ts';
 import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
+import { planTeacherTeachingAssignmentSync } from './src/lib/teacherTeachingAssignments.ts';
 import {
   schools,
   teacherControlGpsSettings,
@@ -114,7 +115,7 @@ import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts'
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 import { resolveTeacherControlSchoolAccess } from './src/lib/teacherControl/authorization.ts';
 import { buildSimProfileDebugDto } from './src/server/debugSimProfileDto.ts';
-import { resolveSchoolPeriodTypeStates } from './src/lib/educationStructure.ts';
+import type { GroupedEvaluationPeriodType } from './src/lib/groupedEvaluationPublication.ts';
 import {
   GroupedEvaluationIdempotencyConflictError,
   GroupedEvaluationValidationError,
@@ -140,7 +141,7 @@ import {
   TEACHER_CONTROL_TEACHER_PERMISSIONS_POLICY,
 } from './src/lib/teacherControl/security.ts';
 import { registerTeacherControlApi } from './src/lib/teacherControl/api.ts';
-import { filterAvailableSchoolTerms, getPeriodTypeShortName, getSchoolPeriodTypeStates, inferLevelCodeFromClassName, resolveCycleForClass, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
+import { filterAvailableSchoolTerms, getPeriodTypeShortName, getSchoolPeriodTypeStates, inferLevelCodeFromClassName, inferPeriodTypeFromLegacyName, resolveCycleForClass, resolveSchoolPeriodTypeStates, resolveSchoolTermForClass, validateSchoolCycle } from './src/lib/educationStructure.ts';
 import { PARENT_IMPORT_HEADERS, validateParentImportRow } from './src/lib/parentImportValidation.ts';
 import { normalizeClassProgressionCode } from './src/lib/classProgression.ts';
 import { isExamResultStatus, isExamType } from './src/lib/examDecision.ts';
@@ -598,6 +599,14 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   return null;
 }
 
+function resolveGroupedPublicationPeriodType(
+  periodType: string | null,
+  legacyName: string,
+): GroupedEvaluationPeriodType | null {
+  const resolved = periodType ?? inferPeriodTypeFromLegacyName(legacyName);
+  return resolved === 'trimester' || resolved === 'semester' ? resolved : null;
+}
+
 function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublicationRepository {
   return {
     transaction: <T>(work: (transaction: GroupedEvaluationPublicationTransaction) => Promise<T>) =>
@@ -748,33 +757,38 @@ function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublic
             for (const classRow of classRows) {
               const compatibleTerms = termRows.filter((term) => {
                 if (term.isActive === false) return false;
-                const periodType = term.periodType ?? (
-                  /^Trimestre\b/i.test(term.name) ? 'trimester' : null
-                );
+                const periodType = resolveGroupedPublicationPeriodType(term.periodType, term.name);
+                if (!periodType) return false;
                 const state = periodStates.find((item) => item.periodType === periodType);
-                if (periodType !== 'trimester' || !state?.available) return false;
+                if (
+                  !state?.available
+                  || !Number.isInteger(term.orderIndex)
+                  || term.orderIndex <= 0
+                ) return false;
                 return classRow.cycleId != null
                   && state.activeCycleIds.includes(classRow.cycleId)
                   && (term.cycleId == null || term.cycleId === classRow.cycleId);
               });
-              termsByClass[classRow.id] = compatibleTerms.flatMap((term) => (
-                term.startDate && term.endDate
+              termsByClass[classRow.id] = compatibleTerms.flatMap((term) => {
+                const periodType = resolveGroupedPublicationPeriodType(term.periodType, term.name);
+                return term.startDate && term.endDate && periodType
                   ? [{
                     id: term.id,
                     startDate: term.startDate,
                     endDate: term.endDate,
                     academicYearId: term.academicYearId,
-                    periodType: term.periodType ?? 'trimester',
+                    periodType,
                     orderIndex: term.orderIndex,
                   }]
-                  : []
-              ));
+                  : [];
+              });
             }
 
-            const termsCoveringPeriod = request.classIds
-              .flatMap((classId) => termsByClass[classId] ?? [])
-              .filter((term) => term.startDate <= request.startDate && term.endDate >= request.endDate);
-            const periodOrderIndex = termsCoveringPeriod[0]?.orderIndex ?? 0;
+            const firstClassTerms = termsByClass[request.classIds[0]] ?? [];
+            const termsCoveringPeriod = firstClassTerms.filter((term) =>
+              term.startDate <= request.startDate && term.endDate >= request.endDate,
+            );
+            const selectedPeriod = termsCoveringPeriod.length === 1 ? termsCoveringPeriod[0] : null;
 
             return {
               approvedClassIds,
@@ -782,8 +796,8 @@ function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublic
               activeTeachingPairs: activePairs,
               termsByClass,
               academicYearId,
-              periodType: 'trimester',
-              periodOrderIndex,
+              periodType: selectedPeriod?.periodType ?? 'trimester',
+              periodOrderIndex: selectedPeriod?.orderIndex ?? 0,
               subjectNamesById,
             };
           },
@@ -1216,17 +1230,6 @@ async function validateTeacherSubjectIds(schoolId: number, requested: unknown) {
   return approvedSubjects.map((subject) => subject.id);
 }
 
-async function buildTeacherClassSubjectAssignments(input: {
-  schoolId: number;
-  classIds: number[];
-  subjectIds: number[];
-}) {
-  const generatedAssignments = input.classIds.flatMap((classId) => (
-    input.subjectIds.map((subjectId) => ({ classId, subjectId }))
-  ));
-  return validateTeacherClassSubjectAssignments(input.schoolId, generatedAssignments);
-}
-
 async function syncTeacherClassSubjectAssignments(
   teacherId: number,
   schoolId: number,
@@ -1238,48 +1241,23 @@ async function syncTeacherClassSubjectAssignments(
     eq(teacherClassSubjects.teacherId, teacherId),
     eq(teacherClassSubjects.schoolId, schoolId),
   ));
-  const desiredKeys = new Set(assignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
-  const existingKeys = new Set(existingAssignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
-
-  for (const existing of existingAssignments) {
-    const key = `${existing.classId}:${existing.subjectId}`;
-    if (existing.isActive && !desiredKeys.has(key)) {
-      await executor.update(teacherClassSubjects).set({ isActive: false, updatedAt: now })
-        .where(eq(teacherClassSubjects.id, existing.id));
+  const changes = planTeacherTeachingAssignmentSync(existingAssignments, assignments);
+  for (const change of changes) {
+    if (change.kind === 'deactivate' || change.kind === 'activate') {
+      await executor.update(teacherClassSubjects)
+        .set({ isActive: change.kind === 'activate', updatedAt: now })
+        .where(eq(teacherClassSubjects.id, change.id));
+    } else {
+      await executor.insert(teacherClassSubjects).values({
+        teacherId,
+        schoolId,
+        classId: change.assignment.classId,
+        subjectId: change.assignment.subjectId,
+        isActive: true,
+        updatedAt: now,
+      });
     }
   }
-
-  for (const assignment of assignments) {
-    if (existingKeys.has(`${assignment.classId}:${assignment.subjectId}`)) continue;
-    await executor.insert(teacherClassSubjects).values({
-      teacherId,
-      schoolId,
-      classId: assignment.classId,
-      subjectId: assignment.subjectId,
-      isActive: true,
-      updatedAt: now,
-    });
-  }
-}
-
-async function findInactiveTeacherClassSubjectConflicts(
-  teacherId: number,
-  schoolId: number,
-  assignments: Array<{ classId: number; subjectId: number }>,
-) {
-  if (assignments.length === 0) return [];
-  const desiredKeys = new Set(assignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
-  const existingAssignments = await db.select({
-    classId: teacherClassSubjects.classId,
-    subjectId: teacherClassSubjects.subjectId,
-    isActive: teacherClassSubjects.isActive,
-  }).from(teacherClassSubjects).where(and(
-    eq(teacherClassSubjects.teacherId, teacherId),
-    eq(teacherClassSubjects.schoolId, schoolId),
-  ));
-  return existingAssignments.filter((assignment) => (
-    assignment.isActive === false && desiredKeys.has(`${assignment.classId}:${assignment.subjectId}`)
-  ));
 }
 
 async function syncTeacherClassMemberships(
@@ -2652,25 +2630,30 @@ export async function createApp() {
       let normalizedTeachingAssignments: Array<{ classId: number; subjectId: number }> | null = null;
       let effectiveSubjectIds: number[] | undefined;
       if (role === 'teacher') {
-        const requestedClassIds = classIds ?? (Array.isArray(teachingAssignments) ? undefined : []);
-        const normalizedClassIds = await normalizeTeacherClassIds(resolvedSchoolId!, requestedClassIds, teachingAssignments);
-        const requestedSubjectIds = Array.isArray(subjectIds) ? subjectIds : globalSubjectIds;
+        const teachingAssignmentsProvided = teachingAssignments !== undefined;
+        normalizedTeachingAssignments = teachingAssignmentsProvided
+          ? await validateTeacherClassSubjectAssignments(resolvedSchoolId!, teachingAssignments)
+          : [];
+        if (normalizedTeachingAssignments == null) {
+          return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+        }
+        const pairClassIds = normalizedTeachingAssignments.map((assignment) => assignment.classId);
+        const pairSubjectIds = normalizedTeachingAssignments.map((assignment) => assignment.subjectId);
+        const requestedClassIds = classIds ?? (teachingAssignmentsProvided ? pairClassIds : []);
+        const normalizedClassIds = await normalizeTeacherClassIds(resolvedSchoolId!, requestedClassIds, pairClassIds);
+        const requestedSubjectIds = Array.isArray(subjectIds)
+          ? subjectIds
+          : Array.isArray(globalSubjectIds)
+            ? globalSubjectIds
+            : pairSubjectIds;
         const normalizedSubjectIds = Array.isArray(requestedSubjectIds)
           ? await validateTeacherSubjectIds(resolvedSchoolId!, requestedSubjectIds)
           : [];
         if (normalizedClassIds == null || normalizedSubjectIds == null) {
           return res.status(400).json({ error: 'Invalid teacher class or subject selection' });
         }
-        normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
-          schoolId: resolvedSchoolId!,
-          classIds: normalizedClassIds,
-          subjectIds: normalizedSubjectIds,
-        });
-        if (!normalizedTeachingAssignments) {
-          return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
-        }
-        effectiveClassIds = normalizedClassIds;
-        effectiveSubjectIds = normalizedSubjectIds;
+        effectiveClassIds = Array.from(new Set([...normalizedClassIds, ...pairClassIds]));
+        effectiveSubjectIds = Array.from(new Set([...normalizedSubjectIds, ...pairSubjectIds]));
       }
 
       if (role === 'surveillant') {
@@ -2989,7 +2972,7 @@ export async function createApp() {
         ? actor.schoolId
         : teacherProfileSchoolId ?? targetUser.schoolId;
       const teacherSelectionsProvided = role === 'teacher'
-        && (Array.isArray(classIds) || Array.isArray(subjectIds) || Array.isArray(globalSubjectIds));
+        && (teachingAssignments !== undefined || Array.isArray(classIds) || Array.isArray(subjectIds) || Array.isArray(globalSubjectIds));
       let effectiveClassIds: number[] | undefined;
       let normalizedTeachingAssignments: Array<{ classId: number; subjectId: number }> | null = null;
       let effectiveSubjectIds: number[] | undefined;
@@ -3029,6 +3012,13 @@ export async function createApp() {
           return res.status(400).json({ error: 'Invalid teacher subject selection' });
         }
         if (teacherSelectionsProvided) {
+          const exactAssignmentsProvided = teachingAssignments !== undefined;
+          const requestedTeachingAssignments = exactAssignmentsProvided
+            ? await validateTeacherClassSubjectAssignments(teachingAssignmentSchoolId, teachingAssignments)
+            : null;
+          if (exactAssignmentsProvided && requestedTeachingAssignments == null) {
+            return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+          }
           const requestedClassIds = Array.isArray(classIds)
             ? classIds
             : Array.from(new Set([
@@ -3039,29 +3029,15 @@ export async function createApp() {
           if (normalizedClassIds == null) {
             return res.status(400).json({ error: 'Invalid teacher class selection' });
           }
-          normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
-            schoolId: teachingAssignmentSchoolId,
-            classIds: normalizedClassIds,
-            subjectIds: normalizedSubjectIds,
-          });
-          if (!normalizedTeachingAssignments) {
-            return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
-          }
-          if (existingTeacherForUpdate) {
-            const inactiveConflicts = await findInactiveTeacherClassSubjectConflicts(
-              existingTeacherForUpdate.id,
-              teachingAssignmentSchoolId,
-              normalizedTeachingAssignments,
-            );
-            if (inactiveConflicts.length > 0) {
-              return res.status(409).json({
-                error: 'Selected classes and subjects include previously deactivated assignments. Review them before reassigning.',
-                code: 'INACTIVE_TEACHER_ASSIGNMENTS',
-              });
-            }
-          }
-          effectiveClassIds = normalizedClassIds;
-          effectiveSubjectIds = normalizedSubjectIds;
+          normalizedTeachingAssignments = requestedTeachingAssignments;
+          effectiveClassIds = Array.from(new Set([
+            ...normalizedClassIds,
+            ...(requestedTeachingAssignments ?? []).map((assignment) => assignment.classId),
+          ]));
+          effectiveSubjectIds = Array.from(new Set([
+            ...normalizedSubjectIds,
+            ...(requestedTeachingAssignments ?? []).map((assignment) => assignment.subjectId),
+          ]));
         }
       } else if (role === 'teacher' && teacherSelectionsProvided) {
         return res.status(400).json({ error: 'A school is required to update teacher assignments' });
@@ -8690,11 +8666,7 @@ export async function createApp() {
       }
 
       const { name, lastName, firstNames, email, phone, specialization, subjectIds, globalSubjectIds, schoolId, classIds, teachingAssignments, teachingAssignmentOverrides, gender } = req.body;
-      const requestedClassIds = Array.isArray(classIds)
-        ? classIds
-        : Array.isArray(teachingAssignments)
-          ? undefined
-          : [];
+      const teachingAssignmentsProvided = teachingAssignments !== undefined;
       const normalizedEmail = normalizeEmail(email);
 
       const fallbackName = typeof name === 'string' ? name.trim() : '';
@@ -8708,24 +8680,35 @@ export async function createApp() {
       const displayName = `${derivedLastName} ${derivedFirstNames}`.trim();
 
       const parsedSchoolId = parseInt(String(resolvedSchoolId), 10);
-      const normalizedClassIds = await normalizeTeacherClassIds(parsedSchoolId, requestedClassIds, teachingAssignments);
-      const requestedSubjectIds = Array.isArray(subjectIds) ? subjectIds : globalSubjectIds;
+      const validatedTeachingAssignments = teachingAssignmentsProvided
+        ? await validateTeacherClassSubjectAssignments(parsedSchoolId, teachingAssignments)
+        : [];
+      if (validatedTeachingAssignments == null) {
+        return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+      }
+      const requestedClassIds = Array.isArray(classIds)
+        ? classIds
+        : validatedTeachingAssignments.map((assignment) => assignment.classId);
+      const normalizedClassIds = await normalizeTeacherClassIds(parsedSchoolId, requestedClassIds, validatedTeachingAssignments.map((assignment) => assignment.classId));
+      const requestedSubjectIds = Array.isArray(subjectIds)
+        ? subjectIds
+        : Array.isArray(globalSubjectIds)
+          ? globalSubjectIds
+          : validatedTeachingAssignments.map((assignment) => assignment.subjectId);
       const normalizedSubjectIds = Array.isArray(requestedSubjectIds)
         ? await validateTeacherSubjectIds(parsedSchoolId, requestedSubjectIds)
         : [];
       if (normalizedClassIds == null || normalizedSubjectIds == null) {
         return res.status(400).json({ error: 'Invalid teacher class or subject selection' });
       }
-      const normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
-        schoolId: parsedSchoolId,
-        classIds: normalizedClassIds,
-        subjectIds: normalizedSubjectIds,
-      });
-      if (!normalizedTeachingAssignments) {
-        return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
-      }
-      const effectiveClassIds = normalizedClassIds;
-      const effectiveSubjectIds = normalizedSubjectIds;
+      const effectiveClassIds = Array.from(new Set([
+        ...normalizedClassIds,
+        ...validatedTeachingAssignments.map((assignment) => assignment.classId),
+      ]));
+      const effectiveSubjectIds = Array.from(new Set([
+        ...normalizedSubjectIds,
+        ...validatedTeachingAssignments.map((assignment) => assignment.subjectId),
+      ]));
 
       if (actor.role === 'school_admin') {
         if (actor.schoolId == null) {
@@ -8771,7 +8754,7 @@ export async function createApp() {
 
       const createdTeacher = teacherResult[0];
       await syncTeacherSubjectAssignments(createdTeacher.id, parsedSchoolId, effectiveSubjectIds);
-      await syncTeacherClassSubjectAssignments(createdTeacher.id, parsedSchoolId, normalizedTeachingAssignments);
+      await syncTeacherClassSubjectAssignments(createdTeacher.id, parsedSchoolId, validatedTeachingAssignments);
       if (parsedSchoolId != null) {
         try {
           await db.insert(userSchools).values({
@@ -12684,8 +12667,8 @@ export async function createApp() {
       }).from(schoolPeriodTypeApprovals)
         .where(eq(schoolPeriodTypeApprovals.schoolId, schoolId));
       const periodStates = resolveSchoolPeriodTypeStates(activeCycleRows, approvalRows);
-      const availableTrimester = periodStates.some((state) => state.periodType === 'trimester' && state.available);
-      if (!availableTrimester) {
+      const availablePeriod = periodStates.some((state) => state.available);
+      if (!availablePeriod) {
         return res.json({
           available: false,
           classes: [],
@@ -12771,16 +12754,18 @@ export async function createApp() {
       const termsByClass: GroupedPublicationContext['termsByClass'] = {};
       const classesWithTerms = [...classRecords.values()].filter((classRecord) => {
         const terms = termRows.flatMap((term) => {
-          const periodType = term.periodType ?? (/^Trimestre\b/i.test(term.name) ? 'trimester' : null);
+          const periodType = resolveGroupedPublicationPeriodType(term.periodType, term.name);
+          if (!periodType) return [];
           const periodState = periodStates.find((item) => item.periodType === periodType);
           if (
             term.academicYearId !== classRecord.academicYearId
             || term.isActive === false
-            || periodType !== 'trimester'
             || !periodState?.available
             || classRecord.cycleId == null
             || !periodState.activeCycleIds.includes(classRecord.cycleId)
             || (term.cycleId != null && term.cycleId !== classRecord.cycleId)
+            || !Number.isInteger(term.orderIndex)
+            || term.orderIndex <= 0
             || !term.startDate
             || !term.endDate
           ) return [];

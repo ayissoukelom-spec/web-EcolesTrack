@@ -1,5 +1,6 @@
 export type GroupedEvaluationKind = 'devoir' | 'examen';
 export type GroupedEvaluationType = 'devoir' | 'composition';
+export type GroupedEvaluationPeriodType = 'trimester' | 'semester';
 
 export interface GroupedEvaluationPublicationRequest {
   kind: GroupedEvaluationKind;
@@ -20,7 +21,7 @@ export interface SchoolTermPeriod {
   startDate: string;
   endDate: string;
   academicYearId?: number;
-  periodType?: string | null;
+  periodType?: GroupedEvaluationPeriodType | null;
   orderIndex?: number;
 }
 
@@ -199,7 +200,7 @@ export function validateGroupedEvaluationPublication(
       return {
         error: {
           code: 'period_outside_single_term',
-          message: 'La période doit être entièrement comprise dans un seul trimestre pour chaque classe sélectionnée.',
+          message: 'La période doit être entièrement comprise dans un seul trimestre ou semestre pour chaque classe sélectionnée.',
           details: { classId },
         },
       };
@@ -208,7 +209,7 @@ export function validateGroupedEvaluationPublication(
       return {
         error: {
           code: 'ambiguous_term',
-          message: 'Plusieurs trimestres couvrent la période pour une classe; la publication ne peut pas déterminer le trimestre.',
+          message: 'Plusieurs périodes couvrent les dates pour une classe; la publication ne peut pas déterminer la période.',
           details: { classId, termIds: coveringTerms.map((term) => term.id) },
         },
       };
@@ -218,15 +219,30 @@ export function validateGroupedEvaluationPublication(
   }
 
   const selectedTerms = request.classIds.map((classId) => resolvedTerms.get(classId)!);
-  if (selectedTerms.every((term) =>
-    term.academicYearId != null && term.periodType != null && term.orderIndex != null
-  )) {
+  const selectedPeriodType = selectedTerms[0].periodType ?? 'trimester';
+  const hasPeriodMetadata = selectedTerms.some((term) =>
+    term.academicYearId != null || term.periodType != null || term.orderIndex != null
+  );
+  if (
+    selectedTerms.some((term) => (term.periodType ?? 'trimester') !== selectedPeriodType)
+    || (hasPeriodMetadata && selectedTerms.some((term) =>
+      term.academicYearId == null || term.orderIndex == null
+    ))
+  ) {
+    return {
+      error: {
+        code: 'incompatible_terms',
+          message: 'Toutes les classes doivent utiliser le même type de période, la même année scolaire et le même numéro de période.',
+        details: { classIds: request.classIds },
+      },
+    };
+  }
+  if (hasPeriodMetadata) {
     const firstTerm = selectedTerms[0];
     const incompatibleClasses = request.classIds.filter((classId) => {
       const term = resolvedTerms.get(classId)!;
       return term.academicYearId !== firstTerm.academicYearId
-        || term.periodType !== 'trimester'
-        || term.periodType !== firstTerm.periodType
+        || (term.periodType ?? 'trimester') !== selectedPeriodType
         || term.orderIndex! <= 0
         || term.orderIndex !== firstTerm.orderIndex;
     });
@@ -234,7 +250,7 @@ export function validateGroupedEvaluationPublication(
       return {
         error: {
           code: 'incompatible_terms',
-          message: 'Toutes les classes doivent partager la même année scolaire et le même trimestre.',
+            message: 'Toutes les classes doivent utiliser le même type de période, la même année scolaire et le même numéro de période.',
           details: { classIds: incompatibleClasses },
         },
       };

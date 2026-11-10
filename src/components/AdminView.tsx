@@ -34,6 +34,7 @@ import ExcelJS from 'exceljs';
 import { readFirstExcelSheetRecords } from '../lib/excelImport';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
 import CustomDropdown from './CustomDropdown';
 import { canonicalizeUserPhone } from '../lib/phoneCanonicalization';
 import { matchesParentSearch } from '../lib/parentSearch';
@@ -42,6 +43,7 @@ import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import { buildTemporaryCredentialsWorkbook, mapTemporaryCredentialAccounts } from '../lib/temporaryCredentialsWorkbook';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 import { EXAM_MENTIONS, type ExamMention } from '../lib/examMention';
+import type { TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
 
 const validateRecords = (records: any[]) => {
     const rowErrors: {row: number; errors: string[]}[] = [];
@@ -426,7 +428,7 @@ interface AdminViewProps {
   onDeleteYear?: (id: number) => Promise<any>;
   onAddClass: (data: { name: string; levelId?: number | null; schoolId?: number | null; academicYearId: number; teacherId?: number }) => Promise<void>;
   educationLevels?: EducationLevel[];
-  onAddTeacher: (data: { name: string; lastName?: string; firstNames?: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => Promise<any>;
+  onAddTeacher: (data: { name: string; lastName?: string; firstNames?: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }>; gender?: string }) => Promise<any>;
   onApproveClass?: (id: number) => Promise<any>;
   onRejectClass?: (id: number) => Promise<any>;
   onRefreshClasses?: (schoolId: number) => Promise<Class[]>;
@@ -436,8 +438,8 @@ interface AdminViewProps {
   onBatchCreateParents?: (records: any[]) => void;
   importResult?: any | null;
   onClearImportResult?: () => void;
-  onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[] }) => Promise<any>;
-  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => Promise<any>;
+  onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
+  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
   onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }>;
   onDeleteUser?: (id: number) => Promise<void>;
   onReactivateUser?: (id: number) => Promise<void>;
@@ -516,6 +518,13 @@ export default function AdminView({
       .map((subject) => Number(subject.id))
       .filter((id) => Number.isInteger(id) && id > 0)
   ));
+  const getCompleteTeachingAssignments = (drafts: TeachingAssignmentDraft[] = []) => drafts
+    .filter((assignment): assignment is { classId: number; subjectId: number } => (
+      Number.isInteger(assignment.classId) && Number.isInteger(assignment.subjectId)
+    ));
+  const hasIncompleteTeachingAssignments = (drafts: TeachingAssignmentDraft[] = []) => (
+    getCompleteTeachingAssignments(drafts).length !== drafts.length
+  );
   const getTeacherAssignedClassIds = (teacherProfile: any) => Array.from(new Set([
     ...(teacherProfile?.administrativeClassIds ?? []),
     ...(teacherProfile?.teachingAssignments ?? [])
@@ -736,7 +745,7 @@ export default function AdminView({
   const [examInitialResultMentions, setExamInitialResultMentions] = useState<Record<number, ExamMention | ''>>({});
   const [examNotice, setExamNotice] = useState<string | null>(null);
   const [examSaving, setExamSaving] = useState(false);
-  const [teacherForm, setTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
+  const [teacherForm, setTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], teachingAssignments: [] as TeachingAssignmentDraft[], gender: '' });
   const [parentForm, setParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', studentId: '', gender: '', parentType: '' });
   const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', birthDate: '', schoolId: '', classId: '', parentId: '', academicYearId: '', teacherIds: [] as number[], schoolAdminId: '', gender: '', studentStatus: '' });
   const [studentError, setStudentError] = useState<string | null>(null);
@@ -744,7 +753,7 @@ export default function AdminView({
   const [newParentMode, setNewParentMode] = useState(false);
   const [newParentForm, setNewParentForm] = useState({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
   const [newTeacherMode, setNewTeacherMode] = useState(false);
-  const [newTeacherForm, setNewTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], gender: '' });
+  const [newTeacherForm, setNewTeacherForm] = useState({ lastName: '', firstNames: '', email: '', phone: '', specializations: [] as string[], schoolId: '', assignedClassIds: [] as number[], teachingAssignments: [] as TeachingAssignmentDraft[], gender: '' });
   const [allowSelectOverflow, setAllowSelectOverflow] = useState(false);
   const [editTeacherClasses, setEditTeacherClasses] = useState<Class[] | null>(null);
   const [editTeacherClassesLoading, setEditTeacherClassesLoading] = useState(false);
@@ -1693,8 +1702,9 @@ export default function AdminView({
       return;
     }
 
-    if (!Array.isArray(newTeacherForm.assignedClassIds) || newTeacherForm.assignedClassIds.length === 0) {
-      setStudentError("L'enseignant doit être affecté à au moins une classe.");
+    const teachingAssignments = getCompleteTeachingAssignments(newTeacherForm.teachingAssignments);
+    if (teachingAssignments.length === 0 || hasIncompleteTeachingAssignments(newTeacherForm.teachingAssignments)) {
+      setStudentError('Ajoutez au moins une affectation complète classe–matière pour cet enseignant.');
       return;
     }
     try {
@@ -1709,6 +1719,7 @@ export default function AdminView({
         subjectIds,
         schoolId: targetSchoolId,
         classIds: newTeacherForm.assignedClassIds,
+        teachingAssignments,
         gender: newTeacherForm.gender,
       });
       const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
@@ -1719,7 +1730,7 @@ export default function AdminView({
 
       setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
       setNewTeacherMode(false);
-      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], teachingAssignments: [], gender: '' });
     } catch (err: any) {
       setStudentError(err?.message || 'Erreur lors de la création de l’enseignant.');
       console.error('Failed to save new teacher:', err);
@@ -1909,8 +1920,9 @@ export default function AdminView({
         setStudentError('Le numéro de téléphone de l’enseignant doit contenir exactement 8 chiffres.');
         return;
       }
-      if (!Array.isArray(teacherForm.assignedClassIds) || teacherForm.assignedClassIds.length === 0) {
-        setStudentError("L'enseignant doit être affecté à au moins une classe.");
+      const teachingAssignments = getCompleteTeachingAssignments(teacherForm.teachingAssignments);
+      if (teachingAssignments.length === 0 || hasIncompleteTeachingAssignments(teacherForm.teachingAssignments)) {
+        setStudentError('Ajoutez au moins une affectation complète classe–matière pour cet enseignant.');
         return;
       }
       await onAddTeacher({
@@ -1923,9 +1935,10 @@ export default function AdminView({
         subjectIds: getSubjectIdsByNames(teacherForm.specializations, subjectsList),
         schoolId: teacherSchoolId,
         classIds: teacherForm.assignedClassIds,
+        teachingAssignments,
         gender: teacherForm.gender,
       });
-      setTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], gender: '' });
+      setTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], teachingAssignments: [], gender: '' });
     } else if (activeTab === 'parents') {
       if (!parentForm.parentType) {
         setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
@@ -1980,6 +1993,11 @@ export default function AdminView({
           setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
           return;
         }
+        const teachingAssignments = getCompleteTeachingAssignments(newTeacherForm.teachingAssignments);
+        if (teachingAssignments.length === 0 || hasIncompleteTeachingAssignments(newTeacherForm.teachingAssignments)) {
+          setStudentError('Ajoutez au moins une affectation complète classe–matière pour cet enseignant.');
+          return;
+        }
         const createdTeacher = await onAddTeacher({
           lastName: trimmedLastName,
           firstNames: trimmedFirstNames,
@@ -1990,6 +2008,7 @@ export default function AdminView({
           subjectIds: getSubjectIdsByNames(newTeacherForm.specializations, approvedSubjectsList),
           schoolId: targetSchoolId,
           classIds: newTeacherForm.assignedClassIds,
+          teachingAssignments,
           gender: newTeacherForm.gender,
         });
         const resolvedTeacherId = createdTeacher?.teacherId || createdTeacher?.id;
@@ -1999,7 +2018,7 @@ export default function AdminView({
         }
         setStudentForm({ ...studentForm, teacherIds: [resolvedTeacherId] });
         setNewTeacherMode(false);
-        setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+        setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], teachingAssignments: [], gender: '' });
         setStudentError(null);
         return;
       }
@@ -2039,7 +2058,7 @@ export default function AdminView({
       setNewParentMode(false);
       setNewParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: '', gender: '', parentType: '' });
       setNewTeacherMode(false);
-      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], gender: '' });
+      setNewTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: '', assignedClassIds: [], teachingAssignments: [], gender: '' });
     }
     setIsModalOpen(false);
   };
@@ -2411,6 +2430,7 @@ export default function AdminView({
   const [showCreateUserForm, setShowCreateUserForm] = useState(false);
   const [newUserForm, setNewUserForm] = useState(getDefaultNewUserForm);
   const [newUserAssignedClassIds, setNewUserAssignedClassIds] = useState<number[]>([]);
+  const [newUserTeachingAssignments, setNewUserTeachingAssignments] = useState<TeachingAssignmentDraft[]>([]);
   const [createUserError, setCreateUserError] = useState<string | null>(null);
   const [createdUserPreview, setCreatedUserPreview] = useState<any | null>(null);
   const [showCreatedUserPreview, setShowCreatedUserPreview] = useState(false);
@@ -2455,9 +2475,10 @@ export default function AdminView({
     address: string;
     studentId: string;
     assignedClassIds: number[];
+    teachingAssignments?: TeachingAssignmentDraft[];
     lastName?: string;
     firstNames?: string;
-  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [] });
+  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [] });
   const [userParentPhonePrefix, setUserParentPhonePrefix] = useState('');
 
   useEffect(() => {
@@ -2630,6 +2651,9 @@ export default function AdminView({
   const performCloseAllModals = () => {
     setShowImportDetails(false);
     setShowCreateUserForm(false);
+    setNewUserForm(getDefaultNewUserForm());
+    setNewUserAssignedClassIds([]);
+    setNewUserTeachingAssignments([]);
     setShowCreatedUserPreview(false);
     setEditUserOpen(false);
     setDeleteUserOpen(false);
@@ -3579,7 +3603,7 @@ export default function AdminView({
                       onChange={(e) => setUserForm({ ...userForm, schoolSearch: e.target.value })}
                       className="w-full mb-2 p-2 border rounded"
                     />
-                    <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds })}>
+                    <select className="w-full p-2 border rounded" value={userForm.schoolId} onChange={(e) => setUserForm({ ...userForm, schoolId: e.target.value, assignedClassIds: userForm.role === 'teacher' ? [] : userForm.assignedClassIds, teachingAssignments: userForm.role === 'teacher' ? [] : userForm.teachingAssignments })}>
                       <option value="">-- Sélectionner une école (optionnel) --</option>
                       {(schoolsList || []).filter((s) => {
                         const q = String(userForm.schoolSearch || '').trim().toLowerCase();
@@ -3630,6 +3654,18 @@ export default function AdminView({
                           .join(', ')}
                       </div>
                     )}
+                    <div className="mt-3">
+                      <label className="mb-2 block text-xs font-bold uppercase text-slate-500">
+                        Affectations exactes classe–matière
+                      </label>
+                      <TeachingAssignmentsEditor
+                        classes={(editTeacherClasses || []).map((cls) => ({ id: cls.id, name: cls.name }))}
+                        subjects={approvedTeacherSpecializations.map((subject) => ({ id: Number(subject.id), name: subject.name }))}
+                        value={userForm.teachingAssignments || []}
+                        onChange={(teachingAssignments) => setUserForm({ ...userForm, teachingAssignments })}
+                      />
+                      <p className="mt-1 text-xs text-slate-500">Seules les paires affichées ici seront ajoutées, conservées ou retirées des affectations pédagogiques exactes.</p>
+                    </div>
                   </div>
                 )}
                 {userForm.role === 'school_admin' && (
@@ -3816,6 +3852,11 @@ export default function AdminView({
                       const selectedSpecializations = Array.isArray(userForm.specialization)
                         ? userForm.specialization
                         : String(userForm.specialization || '').split(',').map((value) => value.trim()).filter(Boolean);
+                      const teachingAssignments = getCompleteTeachingAssignments(userForm.teachingAssignments);
+                      if (isTeacher && hasIncompleteTeachingAssignments(userForm.teachingAssignments)) {
+                        setEditUserError('Complétez ou supprimez chaque ligne d’affectation classe–matière.');
+                        return;
+                      }
                       await onUpdateUser(userToEdit.id, {
                         email,
                         name,
@@ -3833,6 +3874,7 @@ export default function AdminView({
                         address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
                         studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
                         classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
+                        teachingAssignments: updatedRole === 'teacher' ? teachingAssignments : undefined,
                       });
                       setEditUserOpen(false);
                       setUserToEdit(null);
@@ -4422,6 +4464,8 @@ export default function AdminView({
           onClose={() => {
             setShowCreateUserForm(false);
             setNewUserForm(getDefaultNewUserForm());
+            setNewUserAssignedClassIds([]);
+            setNewUserTeachingAssignments([]);
           }}
           contentClassName="max-w-3xl shadow-lg relative"
           overlayClassName="z-[9999]"
@@ -4434,7 +4478,12 @@ export default function AdminView({
                 <h3 className="text-lg font-bold text-slate-800">Créer un nouveau compte utilisateur</h3>
               </div>
               <button
-                onClick={() => setShowCreateUserForm(false)}
+                onClick={() => {
+                  setShowCreateUserForm(false);
+                  setNewUserForm(getDefaultNewUserForm());
+                  setNewUserAssignedClassIds([]);
+                  setNewUserTeachingAssignments([]);
+                }}
                 className="text-slate-400 hover:text-slate-600 font-bold text-lg cursor-pointer"
                 aria-label="Fermer"
               >
@@ -4488,6 +4537,10 @@ export default function AdminView({
                             : '',
                         academicYearId: selectedRole === 'school_admin' ? newUserForm.academicYearId : '',
                       });
+                      if (selectedRole !== 'teacher') {
+                        setNewUserAssignedClassIds([]);
+                        setNewUserTeachingAssignments([]);
+                      }
                     }}
                   >
                     {userRole === 'super_admin' && (
@@ -4518,6 +4571,7 @@ export default function AdminView({
                         onChange={(e) => {
                           setNewUserForm({ ...newUserForm, schoolId: e.target.value });
                           setNewUserAssignedClassIds([]);
+                          setNewUserTeachingAssignments([]);
                         }}
                       >
                         <option value="">-- Choisissez une école --</option>
@@ -4571,6 +4625,23 @@ export default function AdminView({
                             .join(', ')}
                         </div>
                       )}
+                      <div className="mt-3">
+                        <label className="mb-2 block text-xs font-bold uppercase text-slate-500">
+                          <RequiredLabel label="Affectations exactes classe–matière" required />
+                        </label>
+                        <TeachingAssignmentsEditor
+                          classes={(classesList || [])
+                            .filter((cls) => {
+                              const selectedSchoolId = newUserForm.schoolId ? Number(newUserForm.schoolId) : (userRole === 'school_admin' ? currentSchoolId : undefined);
+                              return !selectedSchoolId || isApprovedForSchool(cls, selectedSchoolId);
+                            })
+                            .map((cls) => ({ id: cls.id, name: cls.name }))}
+                          subjects={approvedTeacherSpecializations.map((subject) => ({ id: Number(subject.id), name: subject.name }))}
+                          value={newUserTeachingAssignments}
+                          onChange={setNewUserTeachingAssignments}
+                        />
+                        <p className="mt-1 text-xs text-slate-500">Chaque ligne est une affectation séparée; les classes et matières ne sont pas croisées automatiquement.</p>
+                      </div>
                     </div>}
                   </div>
                 )}
@@ -4722,6 +4793,8 @@ export default function AdminView({
                   onClick={() => {
                     setShowCreateUserForm(false);
                     setNewUserForm(getDefaultNewUserForm());
+                    setNewUserAssignedClassIds([]);
+                    setNewUserTeachingAssignments([]);
                   }}
                   className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold text-sm transition-colors cursor-pointer"
                 >
@@ -4773,6 +4846,12 @@ export default function AdminView({
                         setCreateUserError('Veuillez sélectionner au moins une classe pour l\'enseignant');
                         return;
                       }
+                      const teachingAssignments = getCompleteTeachingAssignments(newUserTeachingAssignments);
+                      if (newUserForm.role === 'teacher'
+                        && (teachingAssignments.length === 0 || hasIncompleteTeachingAssignments(newUserTeachingAssignments))) {
+                        setCreateUserError('Ajoutez au moins une affectation complète classe–matière pour l’enseignant.');
+                        return;
+                      }
                       if (onCreateUser) {
                         const resolvedSchoolId = newUserForm.schoolId
                           ? parseInt(newUserForm.schoolId)
@@ -4802,11 +4881,14 @@ export default function AdminView({
                           subjectIds: resolvedSubjectIds,
                           gender: newUserForm.gender || undefined,
                           classIds: newUserForm.role === 'teacher' ? newUserAssignedClassIds : undefined,
+                          teachingAssignments: newUserForm.role === 'teacher' ? teachingAssignments : undefined,
                         });
                         setShowCreateUserForm(false);
                         setCreatedUserPreview(created || null);
                         setShowCreatedUserPreview(true);
                         setNewUserForm({ uid: '', email: '', name: '', role: 'school_admin', schoolId: '', academicYearId: '', phone: '', specialization: [], gender: '' });
+                        setNewUserAssignedClassIds([]);
+                        setNewUserTeachingAssignments([]);
                       }
                     } catch (e: any) {
                       const message = e?.message || 'Échec de création du compte';
@@ -6101,6 +6183,9 @@ export default function AdminView({
                                   address: '',
                                   studentId: '',
                                   assignedClassIds,
+                                  teachingAssignments: (tc.teachingAssignments ?? [])
+                                    .filter((assignment) => assignment.isActive)
+                                    .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId })),
                                 });
                                 setEditUserOpen(true);
                               }}
@@ -6800,6 +6885,9 @@ export default function AdminView({
                               address: '',
                               studentId: '',
                               assignedClassIds,
+                              teachingAssignments: (teacherProfile?.teachingAssignments ?? [])
+                                .filter((assignment) => assignment.isActive)
+                                .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId })),
                             });
                             setEditUserOpen(true);
                           }}
@@ -7117,6 +7205,7 @@ export default function AdminView({
         handleSaveNewTeacher={handleSaveNewTeacher}
         userRole={userRole}
         currentSchoolId={currentSchoolId}
+        teacherSubjects={approvedTeacherSpecializations.map((subject) => ({ id: Number(subject.id), name: subject.name }))}
         groupPresets={groupPresets}
         subjectGroups={subjectGroups}
       />

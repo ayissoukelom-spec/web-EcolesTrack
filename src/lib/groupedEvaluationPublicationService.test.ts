@@ -61,7 +61,9 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
     sequenceNumber: number;
     date: string;
     type: string;
+    generatedName: string;
   }> = [];
+  context = context;
   notifications: Array<{ publicationId: number; userId: number }> = [];
   outboxNotificationIds: number[] = [];
   transactions = 0;
@@ -85,7 +87,7 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
     try {
       const tx: GroupedEvaluationPublicationTransaction = {
         findPublication: async (_schoolId, key) => this.records.get(key) ?? null,
-        loadContext: async () => context,
+        loadContext: async () => this.context,
         createPublication: async (input) => {
           if (this.records.has(input.idempotencyKey)) return null;
           const record = { id: this.nextId++, evaluationIds: [], recipientCount: 0, requestHash: input.requestHash };
@@ -104,6 +106,7 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
             sequenceNumber: input.sequenceNumber,
             date: input.date,
             type: input.type,
+            generatedName: input.generatedName,
           });
           const record = [...this.records.values()].find((item) => item.id === input.publicationId)!;
           record.evaluationIds.push(id);
@@ -163,8 +166,160 @@ describe('grouped evaluation publication service', () => {
     ]);
     expect(repository.evaluations.map((evaluation) => evaluation.type)).toEqual(Array(4).fill('composition'));
     expect(repository.evaluations.map((evaluation) => evaluation.date)).toEqual(Array(4).fill(request.startDate));
+    expect(repository.evaluations.map((evaluation) => evaluation.generatedName)).toEqual([
+      'Composition T1.1',
+      'Composition T1.2',
+      'Composition T1.1',
+      'Composition T1.2',
+    ]);
     expect(result.notification.push).toBe('pending');
     expect(result.notification.recipientCount).toBe(2);
+  });
+
+  it('publishes lycée evaluations in the approved semester and names them S1', async () => {
+    const repository = new FakeRepository();
+    repository.context = {
+      ...context,
+      periodType: 'semester',
+      periodOrderIndex: 1,
+      termsByClass: {
+        10: [{
+          id: 110,
+          startDate: '2026-09-01',
+          endDate: '2027-01-31',
+          academicYearId: 7,
+          periodType: 'semester',
+          orderIndex: 1,
+        }],
+      },
+    };
+
+    const result = await publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: { ...request, classIds: [10], subjectIds: [20] },
+    });
+
+    expect(result.evaluationCount).toBe(1);
+    expect(repository.evaluations[0].generatedName).toBe('Devoir S1.1');
+  });
+
+  it('rejects a program mixing trimester and semester classes', async () => {
+    const repository = new FakeRepository();
+    repository.context = {
+      ...context,
+      termsByClass: {
+        10: context.termsByClass[10],
+        11: [{
+          id: 111,
+          startDate: '2026-10-01',
+          endDate: '2027-01-31',
+          academicYearId: 7,
+          periodType: 'semester',
+          orderIndex: 1,
+        }],
+      },
+    };
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request,
+    })).rejects.toMatchObject({ code: 'incompatible_terms' });
+    expect(repository.records.size).toBe(0);
+    expect(repository.evaluations).toHaveLength(0);
+  });
+
+  it('rejects semester classes with different period numbers', async () => {
+    const repository = new FakeRepository();
+    repository.context = {
+      ...context,
+      periodType: 'semester',
+      termsByClass: {
+        10: [{
+          id: 110,
+          startDate: '2026-09-01',
+          endDate: '2027-01-31',
+          academicYearId: 7,
+          periodType: 'semester',
+          orderIndex: 1,
+        }],
+        11: [{
+          id: 111,
+          startDate: '2026-09-01',
+          endDate: '2027-01-31',
+          academicYearId: 7,
+          periodType: 'semester',
+          orderIndex: 2,
+        }],
+      },
+    };
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request,
+    })).rejects.toMatchObject({ code: 'incompatible_terms' });
+    expect(repository.records.size).toBe(0);
+  });
+
+  it('rejects classes assigned to different academic years', async () => {
+    const repository = new FakeRepository();
+    repository.context = {
+      ...context,
+      termsByClass: {
+        10: [{
+          id: 100,
+          startDate: '2026-11-01',
+          endDate: '2026-12-31',
+          academicYearId: 7,
+          periodType: 'trimester',
+          orderIndex: 1,
+        }],
+        11: [{
+          id: 101,
+          startDate: '2026-11-01',
+          endDate: '2026-12-31',
+          academicYearId: 8,
+          periodType: 'trimester',
+          orderIndex: 1,
+        }],
+      },
+    };
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request,
+    })).rejects.toMatchObject({ code: 'incompatible_terms' });
+    expect(repository.records.size).toBe(0);
+  });
+
+  it('rejects a class without a compatible approved period', async () => {
+    const repository = new FakeRepository();
+    repository.context = {
+      ...context,
+      termsByClass: { ...context.termsByClass, 11: [] },
+    };
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request,
+    })).rejects.toMatchObject({ code: 'period_outside_single_term' });
+    expect(repository.records.size).toBe(0);
+  });
+
+  it('rejects a class that is not approved for the active school', async () => {
+    const repository = new FakeRepository();
+    repository.context = { ...context, approvedClassIds: [10] };
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request,
+    })).rejects.toMatchObject({ code: 'class_not_approved' });
+    expect(repository.records.size).toBe(0);
   });
 
   it('assigns a distinct sequence within each class for the shared term', async () => {

@@ -307,7 +307,16 @@ export default function GroupedEvaluationPublicationForm({
                     checked={classIds.includes(item.id)}
                     onChange={() => toggleSelection(classIds, item.id, setClassIds)}
                   />
-                  {item.name}
+                  <span>
+                    {item.name}
+                    {(options?.termsByClass[item.id] ?? []).length > 0 && (
+                      <span className="ml-1 text-xs text-slate-500">
+                        ({[...new Set((options?.termsByClass[item.id] ?? []).map((term) =>
+                          `${term.periodType === 'semester' ? 'Semestre' : 'Trimestre'} ${term.periodType === 'semester' ? 'S' : 'T'}${term.orderIndex ?? ''}`,
+                        ))].join(', ')})
+                      </span>
+                    )}
+                  </span>
                 </label>
               ))}
               {classes.length === 0 && <p className="text-xs text-slate-500">Aucune classe avec affectation active.</p>}

@@ -465,7 +465,7 @@ export const evaluationPublications = pgTable('evaluation_publications', {
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
   createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   kind: text('kind').$type<'devoir' | 'examen'>().notNull(),
-  periodType: text('period_type').$type<'trimester'>().default('trimester').notNull(),
+  periodType: text('period_type').$type<'trimester' | 'semester'>().default('trimester').notNull(),
   periodOrderIndex: integer('period_order_index').notNull(),
   startDate: date('start_date', { mode: 'string' }).notNull(),
   endDate: date('end_date', { mode: 'string' }).notNull(),
@@ -491,7 +491,7 @@ export const evaluationPublications = pgTable('evaluation_publications', {
   ),
   publicationPeriodCheck: check(
     'evaluation_publications_period_check',
-    sql`${table.periodType} = 'trimester' AND ${table.periodOrderIndex} > 0`,
+    sql`${table.periodType} IN ('trimester', 'semester') AND ${table.periodOrderIndex} > 0`,
   ),
   publicationIdempotencyKeyCheck: check(
     'evaluation_publications_idempotency_key_check',

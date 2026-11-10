@@ -7,6 +7,7 @@ import ModalSurface from './ModalSurface';
 import PortalCustomDropdown from './CustomDropdown';
 import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
 import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
+import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
 
 export default function AdminModal(props: any) {
   const {
@@ -39,6 +40,7 @@ export default function AdminModal(props: any) {
     setAllowSelectOverflow,
     sortedParentPhonePrefixes,
     teacherSpecializations,
+    teacherSubjects = [],
     schoolsList,
     yearsList,
     teachersList,
@@ -891,7 +893,7 @@ export default function AdminModal(props: any) {
                     {schoolsList.find((s: any) => s.id === (currentSchoolId ?? schoolsList[0]?.id))?.name || 'Votre école sera assignée automatiquement'}
                   </div>
                 ) : (
-                  <select required value={teacherForm.schoolId} onChange={e => setTeacherForm({ ...teacherForm, schoolId: e.target.value, assignedClassIds: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                  <select required value={teacherForm.schoolId} onChange={e => setTeacherForm({ ...teacherForm, schoolId: e.target.value, assignedClassIds: [], teachingAssignments: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                     <option value="">-- Choisissez une école --</option>
                     {schoolsList.map((school: any) => (
                       <option key={school.id} value={String(school.id)}>{school.name}</option>
@@ -957,6 +959,18 @@ export default function AdminModal(props: any) {
                   );
                 })()}
                 {renderTeacherClassesState(selectedTeacherSchoolId)}
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <RequiredLabel label="Affectations exactes classe–matière" required />
+                </label>
+                <TeachingAssignmentsEditor
+                  classes={(teacherSchoolClasses ?? []).map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                  subjects={teacherSubjects.map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                  value={teacherForm.teachingAssignments || []}
+                  onChange={(teachingAssignments) => setTeacherForm({ ...teacherForm, teachingAssignments })}
+                />
+                <p className="mt-1 text-xs text-slate-500">Chaque ligne enregistre uniquement cette paire, sans croiser automatiquement les listes.</p>
               </div>
             </div>
           )}
@@ -1108,7 +1122,7 @@ export default function AdminModal(props: any) {
                         {autoSelectedSchoolName}
                       </div>
                     ) : (
-                      <select required value={newTeacherForm.schoolId} onChange={e => setNewTeacherForm({ ...newTeacherForm, schoolId: e.target.value, assignedClassIds: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
+                      <select required value={newTeacherForm.schoolId} onChange={e => setNewTeacherForm({ ...newTeacherForm, schoolId: e.target.value, assignedClassIds: [], teachingAssignments: [] })} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
                         <option value="">-- Choisissez une école --</option>
                         {schoolsList.map((school: any) => (
                           <option key={school.id} value={String(school.id)}>{school.name}</option>
@@ -1137,6 +1151,18 @@ export default function AdminModal(props: any) {
                     />
                       );
                     })()}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Affectations exactes classe–matière
+                    </label>
+                    <TeachingAssignmentsEditor
+                      classes={(teacherSchoolClasses ?? []).map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                      subjects={teacherSubjects.map((item: any) => ({ id: Number(item.id), name: String(item.name) }))}
+                      value={newTeacherForm.teachingAssignments || []}
+                      onChange={(teachingAssignments) => setNewTeacherForm({ ...newTeacherForm, teachingAssignments })}
+                    />
+                    <p className="mt-1 text-xs text-slate-500">Ajoutez explicitement chaque classe et la matière enseignée dans celle-ci.</p>
                   </div>
                   <div className="flex items-center justify-between gap-2 pt-2">
                     <button type="button" className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs sm:text-sm font-semibold transition-colors" onClick={() => setNewTeacherMode(false)}>
