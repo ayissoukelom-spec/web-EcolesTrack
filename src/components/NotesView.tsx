@@ -674,7 +674,7 @@ export default function NotesView({
         </div>
 
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-          {userRole === 'school_admin' && (
+          {(userRole === 'school_admin' || userRole === 'super_admin') && (
             <button
               type="button"
               aria-expanded={isGroupedPublicationFormOpen}
@@ -713,10 +713,11 @@ export default function NotesView({
         </div>
       </div>
 
-      {userRole === 'school_admin' && isGroupedPublicationFormOpen && (
+      {(userRole === 'school_admin' || userRole === 'super_admin') && isGroupedPublicationFormOpen && (
         <div id="grouped-evaluation-publication-panel">
           <GroupedEvaluationPublicationForm
             role={userRole}
+            schools={schoolsList}
             onPublished={onGroupedEvaluationPublication}
           />
         </div>

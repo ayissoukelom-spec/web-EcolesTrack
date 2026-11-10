@@ -413,10 +413,57 @@ describe('App navigation', () => {
 
     expect(await screen.findByTestId('grouped-evaluation-publication-form')).toBeVisible();
     expect(screen.getByLabelText('Date de début')).toBeVisible();
-    expect(screen.getByLabelText('6ème A')).toBeVisible();
+    expect(screen.getByLabelText(/6ème A/)).toBeVisible();
     expect(screen.getByText(/publication réelle est désactivée/i)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Publication réelle indisponible' })).toBeDisabled();
     expect(mockGroupedPublicationApi.submit).not.toHaveBeenCalled();
+  });
+
+  it('shows grouped publication in Notes for super_admin, not in the main menu, and loads the selected school', async () => {
+    mockUseRealNotesView.value = true;
+    mockGetSimulatedRole.mockReturnValue('super_admin');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-super-admin',
+      email: 'superadmin@example.com',
+      name: 'Super Admin',
+      schoolId: null,
+      role: 'super_admin',
+      id: 1,
+    });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/schools') return Promise.resolve([
+        { id: 4, name: 'École A' },
+        { id: 5, name: 'École B' },
+      ]);
+      return Promise.resolve([]);
+    });
+    mockGroupedPublicationApi.getAvailability.mockResolvedValue({ available: true });
+    mockGroupedPublicationApi.getOptions.mockResolvedValue({
+      available: true,
+      classes: [{ id: 1, name: '6ème A' }],
+      subjects: [{ id: 10, name: 'Mathématiques' }],
+      approvedClassIds: [1],
+      approvedSubjectIds: [10],
+      activeTeachingPairs: [{ classId: 1, subjectId: 10 }],
+      termsByClass: {
+        1: [{ id: 100, startDate: '2026-10-01', endDate: '2026-12-31', academicYearId: 5, periodType: 'trimester', orderIndex: 1 }],
+      },
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    expect(within(navigation).queryByRole('button', { name: 'Publication de devoirs groupés' })).toBeNull();
+    fireEvent.click(within(navigation).getByRole('button', { name: /Notes & Bulletins/i }));
+    const groupedPublicationButton = await screen.findByRole('button', { name: 'Publication groupée' });
+    expect(groupedPublicationButton).toBeVisible();
+    fireEvent.click(groupedPublicationButton);
+    fireEvent.change(await screen.findByLabelText('Établissement'), { target: { value: '5' } });
+
+    expect(await screen.findByLabelText(/6ème A/)).toBeVisible();
+    expect(mockGroupedPublicationApi.getAvailability).toHaveBeenCalledWith(5);
+    expect(mockGroupedPublicationApi.getOptions).toHaveBeenCalledWith(5);
   });
 
   it('routes super_admin from the actual sidebar Comptabilité entry to AccountingView', async () => {

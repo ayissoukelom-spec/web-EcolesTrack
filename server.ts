@@ -119,8 +119,8 @@ import type { GroupedEvaluationPeriodType } from './src/lib/groupedEvaluationPub
 import {
   GroupedEvaluationIdempotencyConflictError,
   GroupedEvaluationValidationError,
-  isAuthorizedGroupedPublicationActor,
   publishGroupedEvaluations,
+  resolveGroupedPublicationSchoolId,
   type GroupedEvaluationPublicationRepository,
   type GroupedEvaluationPublicationTransaction,
   type GroupedPublicationContext,
@@ -605,6 +605,35 @@ function resolveGroupedPublicationPeriodType(
 ): GroupedEvaluationPeriodType | null {
   const resolved = periodType ?? inferPeriodTypeFromLegacyName(legacyName);
   return resolved === 'trimester' || resolved === 'semester' ? resolved : null;
+}
+
+function parseGroupedPublicationSchoolId(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return null;
+  const schoolId = Number(value);
+  return Number.isSafeInteger(schoolId) ? schoolId : null;
+}
+
+async function resolveGroupedPublicationSchoolScope(
+  actor: ResolvedActor,
+  rawSchoolId: unknown,
+  hasRequestedSchoolId: boolean,
+): Promise<number | null> {
+  const requestedSchoolId = parseGroupedPublicationSchoolId(rawSchoolId);
+  const membership = actor.role === 'school_admin'
+    ? await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin')
+    : null;
+  const requestedSchoolExists = actor.role === 'super_admin'
+    && requestedSchoolId != null
+    && (await db.select({ id: schools.id }).from(schools)
+      .where(eq(schools.id, requestedSchoolId)).limit(1)).length > 0;
+
+  return resolveGroupedPublicationSchoolId(
+    actor,
+    requestedSchoolId,
+    hasRequestedSchoolId,
+    membership,
+    requestedSchoolExists,
+  );
 }
 
 function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublicationRepository {
@@ -12623,11 +12652,15 @@ export async function createApp() {
     }
     try {
       const actor = await resolveActor(req);
-      if (!actor || actor.role !== 'school_admin' || actor.id == null || actor.schoolId == null) {
+      if (!actor || actor.id == null) {
         return res.json({ available: false });
       }
-      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
-      if (!isAuthorizedGroupedPublicationActor(actor, membership)) return res.json({ available: false });
+      const schoolId = await resolveGroupedPublicationSchoolScope(
+        actor,
+        req.query.schoolId,
+        req.query.schoolId !== undefined,
+      );
+      if (schoolId == null) return res.json({ available: false });
 
       await db.select({ id: evaluationPublications.id }).from(evaluationPublications).limit(1);
       await db.select({ id: notificationDeliveryOutbox.id }).from(notificationDeliveryOutbox).limit(1);
@@ -12642,15 +12675,20 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role !== 'school_admin' || actor.id == null || actor.schoolId == null) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
-      if (!isAuthorizedGroupedPublicationActor(actor, membership)) {
-        return res.status(403).json({ error: 'Active school-admin membership required' });
+      if (actor.id == null) return res.status(403).json({ error: 'Forbidden' });
+      const schoolId = await resolveGroupedPublicationSchoolScope(
+        actor,
+        req.query.schoolId,
+        req.query.schoolId !== undefined,
+      );
+      if (schoolId == null) {
+        return res.status(403).json({
+          error: actor.role === 'super_admin'
+            ? 'A valid school selection is required'
+            : 'Active school-admin membership required',
+        });
       }
 
-      const schoolId = actor.schoolId;
       const activeCycleRows = await db.select({
         id: cycles.id,
         code: cycles.code,
@@ -12812,24 +12850,29 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role !== 'school_admin') {
-        return res.status(403).json({ error: 'Only school administrators can publish grouped evaluations' });
-      }
-      if (!Number.isInteger(actor.id) || actor.id == null || actor.schoolId == null) {
-        return res.status(403).json({ error: 'Verified school context is required' });
-      }
-      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
-      if (!isAuthorizedGroupedPublicationActor(actor, membership)) {
-        return res.status(403).json({ error: 'No active school administrator membership for this school context' });
-      }
-
       const body = req.body ?? {};
-      if (Object.prototype.hasOwnProperty.call(body, 'schoolId')) {
+      const hasRequestedSchoolId = Object.prototype.hasOwnProperty.call(body, 'schoolId');
+      if (actor.role === 'school_admin' && hasRequestedSchoolId) {
         return res.status(400).json({
           error: {
             code: 'school_context_missing',
             message: 'L’établissement est déterminé par le contexte actif vérifié côté serveur.',
           },
+        });
+      }
+      if (!Number.isInteger(actor.id) || actor.id == null || actor.id <= 0) {
+        return res.status(403).json({ error: 'Verified actor is required' });
+      }
+      const schoolId = await resolveGroupedPublicationSchoolScope(
+        actor,
+        typeof body.schoolId === 'number' ? String(body.schoolId) : body.schoolId,
+        hasRequestedSchoolId,
+      );
+      if (schoolId == null) {
+        return res.status(403).json({
+          error: actor.role === 'super_admin'
+            ? 'A valid school selection is required'
+            : 'Active school administrator membership and verified school context are required',
         });
       }
       if (!Array.isArray(body.classIds) || !Array.isArray(body.subjectIds)) {
@@ -12846,7 +12889,7 @@ export async function createApp() {
       const result = await publishGroupedEvaluations(
         createGroupedEvaluationPublicationRepository(),
         {
-          schoolId: actor.schoolId,
+          schoolId,
           authorUserId: actor.id,
           request: {
             kind: body.kind,

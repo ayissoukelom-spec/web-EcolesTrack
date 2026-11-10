@@ -17,6 +17,7 @@ import {
 
 interface GroupedEvaluationPublicationFormProps {
   role: string;
+  schools?: Array<{ id: number; name: string }>;
   onPublished?: () => void | Promise<void>;
 }
 
@@ -36,11 +37,13 @@ const describeApiError = (error: unknown): string => {
 
 export default function GroupedEvaluationPublicationForm({
   role,
+  schools = [],
   onPublished,
 }: GroupedEvaluationPublicationFormProps) {
   const [publicationEnabled, setPublicationEnabled] = useState(false);
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(true);
   const [options, setOptions] = useState<GroupedEvaluationPublicationOptions | null>(null);
+  const [selectedSchoolId, setSelectedSchoolId] = useState<number | null>(null);
   const [loadError, setLoadError] = useState('');
   const [availabilityError, setAvailabilityError] = useState('');
   const [kind, setKind] = useState<GroupedEvaluationKind>('devoir');
@@ -55,13 +58,23 @@ export default function GroupedEvaluationPublicationForm({
   const [success, setSuccess] = useState<GroupedEvaluationPublicationResponse | null>(null);
 
   useEffect(() => {
-    if (role !== 'school_admin') return;
+    if (role !== 'school_admin' && role !== 'super_admin') return;
+    if (role === 'super_admin' && selectedSchoolId == null) {
+      setPublicationEnabled(false);
+      setOptions(null);
+      setIsCheckingAvailability(false);
+      return;
+    }
     let active = true;
+    setIsCheckingAvailability(true);
+    setOptions(null);
+    setLoadError('');
+    setAvailabilityError('');
 
     void (async () => {
       const [availabilityResult, optionsResult] = await Promise.allSettled([
-        getGroupedEvaluationPublicationAvailability(),
-        getGroupedEvaluationPublicationOptions(),
+        getGroupedEvaluationPublicationAvailability(role === 'super_admin' ? selectedSchoolId! : undefined),
+        getGroupedEvaluationPublicationOptions(role === 'super_admin' ? selectedSchoolId! : undefined),
       ]);
       if (!active) return;
       if (availabilityResult.status === 'fulfilled') {
@@ -78,7 +91,7 @@ export default function GroupedEvaluationPublicationForm({
     })();
 
     return () => { active = false; };
-  }, [role]);
+  }, [role, selectedSchoolId]);
 
   const classes = options?.classes ?? [];
   const subjects = options?.subjects ?? [];
@@ -153,6 +166,7 @@ export default function GroupedEvaluationPublicationForm({
     }
 
     const fingerprint = JSON.stringify({
+      schoolId: role === 'super_admin' ? selectedSchoolId : null,
       kind,
       startDate,
       endDate,
@@ -182,17 +196,17 @@ export default function GroupedEvaluationPublicationForm({
     setValidationMessage('');
     setSuccess(null);
     try {
-      const result = await submitGroupedEvaluationPublication(
-        {
-          kind,
-          startDate,
-          endDate,
-          classIds,
-          subjectIds,
-          idempotencyKey: idempotencyRef.current.key,
-        },
-        idempotencyRef.current.key,
-      );
+      const publication = {
+        kind,
+        startDate,
+        endDate,
+        classIds,
+        subjectIds,
+        idempotencyKey: idempotencyRef.current.key,
+      };
+      const result = role === 'super_admin'
+        ? await submitGroupedEvaluationPublication(publication, idempotencyRef.current.key, selectedSchoolId!)
+        : await submitGroupedEvaluationPublication(publication, idempotencyRef.current.key);
       setSuccess(result);
       idempotencyRef.current = null;
       sessionStorage.removeItem(idempotencyStorageKey);
@@ -209,7 +223,7 @@ export default function GroupedEvaluationPublicationForm({
     }
   };
 
-  if (role !== 'school_admin') return null;
+  if (role !== 'school_admin' && role !== 'super_admin') return null;
 
   return (
     <section
@@ -228,6 +242,39 @@ export default function GroupedEvaluationPublicationForm({
           </p>
         </div>
       </div>
+
+      {role === 'super_admin' && (
+        <label className="mb-5 block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Établissement
+          <select
+            value={selectedSchoolId ?? ''}
+            onChange={(event) => {
+              const nextSchoolId = event.target.value ? Number(event.target.value) : null;
+              setSelectedSchoolId(nextSchoolId);
+              setPublicationEnabled(false);
+              setOptions(null);
+              setIsCheckingAvailability(nextSchoolId != null);
+              setClassIds([]);
+              setSubjectIds([]);
+              setSuccess(null);
+              setValidationMessage('');
+              idempotencyRef.current = null;
+            }}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800"
+          >
+            <option value="">Sélectionnez un établissement</option>
+            {schools.map((school) => (
+              <option key={school.id} value={school.id}>{school.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {role === 'super_admin' && selectedSchoolId == null && (
+        <p role="status" className="mb-4 text-sm text-slate-500">
+          Sélectionnez un établissement pour charger ses classes, matières et périodes.
+        </p>
+      )}
 
       {isCheckingAvailability && (
         <p role="status" className="flex items-center gap-2 text-sm text-slate-500">

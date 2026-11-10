@@ -6,6 +6,8 @@ vi.mock('./api.ts', () => ({ apiFetch: apiFetchMock }));
 
 import {
   GroupedEvaluationPublicationApiError,
+  getGroupedEvaluationPublicationAvailability,
+  getGroupedEvaluationPublicationOptions,
   submitGroupedEvaluationPublication,
 } from './groupedEvaluationPublicationApi';
 
@@ -14,6 +16,24 @@ afterEach(() => {
 });
 
 describe('grouped evaluation publication API', () => {
+  it('scopes super-admin availability and options requests to the selected school', async () => {
+    apiFetchMock.mockResolvedValue({ available: true });
+
+    await getGroupedEvaluationPublicationAvailability(12);
+    await getGroupedEvaluationPublicationOptions(12);
+
+    expect(apiFetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/admin/evaluation-publications/grouped/availability?schoolId=12',
+      undefined,
+    );
+    expect(apiFetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/admin/evaluation-publications/grouped/options?schoolId=12',
+      undefined,
+    );
+  });
+
   it('submits the program with an idempotency key and no client-supplied school context', async () => {
     apiFetchMock.mockResolvedValue({ publicationId: 7 });
     const request = {
@@ -43,6 +63,21 @@ describe('grouped evaluation publication API', () => {
       }),
     );
     expect(apiFetchMock.mock.calls[0][1].body).not.toContain('schoolId');
+  });
+
+  it('includes an explicit school only for a super-admin scoped submission', async () => {
+    apiFetchMock.mockResolvedValue({ publicationId: 7 });
+
+    await submitGroupedEvaluationPublication({
+      kind: 'devoir',
+      startDate: '2026-11-12',
+      endDate: '2026-11-15',
+      classIds: [1],
+      subjectIds: [10],
+      idempotencyKey: 'key-12345678',
+    }, 'key-12345678', 12);
+
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toMatchObject({ schoolId: 12 });
   });
 
   it.each([

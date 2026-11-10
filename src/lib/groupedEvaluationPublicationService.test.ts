@@ -3,6 +3,7 @@ import {
   GroupedEvaluationIdempotencyConflictError,
   isAuthorizedGroupedPublicationActor,
   publishGroupedEvaluations,
+  resolveGroupedPublicationSchoolId,
   type GroupedEvaluationPublicationRepository,
   type GroupedEvaluationPublicationTransaction,
   type GroupedPublicationContext,
@@ -150,6 +151,26 @@ describe('grouped evaluation publication service', () => {
     expect(isAuthorizedGroupedPublicationActor(actor, { ...membership, schoolId: 5 })).toBe(false);
     expect(isAuthorizedGroupedPublicationActor(actor, { ...membership, role: 'teacher' })).toBe(false);
     expect(isAuthorizedGroupedPublicationActor(actor, { ...membership, isActive: false })).toBe(false);
+  });
+
+  it('resolves school-admin publication scope only from the verified active school context', () => {
+    const actor = { id: 8, role: 'school_admin', schoolId: 4 };
+    const membership = { userId: 8, schoolId: 4, role: 'school_admin', isActive: true };
+
+    expect(resolveGroupedPublicationSchoolId(actor, null, false, membership, false)).toBe(4);
+    expect(resolveGroupedPublicationSchoolId(actor, 5, true, membership, true)).toBeNull();
+    expect(resolveGroupedPublicationSchoolId(actor, null, false, null, false)).toBeNull();
+    expect(resolveGroupedPublicationSchoolId({ ...actor, schoolId: null }, null, false, membership, false)).toBeNull();
+  });
+
+  it('allows only a verified super admin to select an existing publication school', () => {
+    const actor = { id: 1, role: 'super_admin', schoolId: null };
+
+    expect(resolveGroupedPublicationSchoolId(actor, 4, true, null, true)).toBe(4);
+    expect(resolveGroupedPublicationSchoolId(actor, 4, true, null, false)).toBeNull();
+    expect(resolveGroupedPublicationSchoolId(actor, null, false, null, true)).toBeNull();
+    expect(resolveGroupedPublicationSchoolId({ ...actor, role: 'teacher' }, 4, true, null, true)).toBeNull();
+    expect(resolveGroupedPublicationSchoolId({ ...actor, id: null }, 4, true, null, true)).toBeNull();
   });
 
   it('creates one evaluation for each approved class-subject pair with no teacher id', async () => {

@@ -65,19 +65,24 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   }
 }
 
-export const getGroupedEvaluationPublicationAvailability = () =>
-  request<{ available: boolean }>('/api/admin/evaluation-publications/grouped/availability');
+const withSchoolQuery = (endpoint: string, schoolId?: number) =>
+  schoolId == null ? endpoint : `${endpoint}?schoolId=${encodeURIComponent(String(schoolId))}`;
 
-export const getGroupedEvaluationPublicationOptions = () =>
-  request<GroupedEvaluationPublicationOptions>('/api/admin/evaluation-publications/grouped/options');
+export const getGroupedEvaluationPublicationAvailability = (schoolId?: number) =>
+  request<{ available: boolean }>(withSchoolQuery('/api/admin/evaluation-publications/grouped/availability', schoolId));
+
+export const getGroupedEvaluationPublicationOptions = (schoolId?: number) =>
+  request<GroupedEvaluationPublicationOptions>(withSchoolQuery('/api/admin/evaluation-publications/grouped/options', schoolId));
 
 export const submitGroupedEvaluationPublication = (
   publication: GroupedEvaluationPublicationRequest,
   idempotencyKey: string,
+  schoolId?: number,
 ) => request<GroupedEvaluationPublicationResponse>('/api/admin/evaluation-publications/grouped', {
   method: 'POST',
   headers: { 'Idempotency-Key': idempotencyKey },
   body: JSON.stringify({
+    ...(schoolId == null ? {} : { schoolId }),
     kind: publication.kind,
     startDate: publication.startDate,
     endDate: publication.endDate,

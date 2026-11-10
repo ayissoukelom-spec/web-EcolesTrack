@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe('GroupedEvaluationPublicationForm', () => {
-  it('is only rendered for a school admin', async () => {
+  it('does not render for unauthorized roles and loads the school-admin view', async () => {
     const { rerender } = render(
       <GroupedEvaluationPublicationForm role="teacher" />,
     );
@@ -83,6 +83,39 @@ describe('GroupedEvaluationPublicationForm', () => {
     expect(screen.getByText(/publication réelle est désactivée/i)).toBeTruthy();
     expect(screen.getByLabelText('Date de début')).toBeTruthy();
     expect(api.getOptions).toHaveBeenCalledOnce();
+  });
+
+  it('lets a super admin select a school before loading its grouped publication options', async () => {
+    api.getAvailability.mockResolvedValue({ available: true });
+    api.getOptions.mockResolvedValue(options);
+    api.submit.mockResolvedValue(successfulResponse);
+    render(
+      <GroupedEvaluationPublicationForm
+        role="super_admin"
+        schools={[{ id: 4, name: 'École A' }, { id: 5, name: 'École B' }]}
+      />,
+    );
+
+    expect(screen.getByText(/Sélectionnez un établissement pour charger/i)).toBeVisible();
+    expect(api.getOptions).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Établissement'), { target: { value: '5' } });
+
+    expect(await screen.findByLabelText(/6ème A/)).toBeVisible();
+    expect(api.getAvailability).toHaveBeenCalledWith(5);
+    expect(api.getOptions).toHaveBeenCalledWith(5);
+
+    fireEvent.change(screen.getByLabelText('Date de début'), { target: { value: '2026-11-12' } });
+    fireEvent.change(screen.getByLabelText('Date de fin'), { target: { value: '2026-11-15' } });
+    fireEvent.click(screen.getByLabelText(/6ème A/));
+    fireEvent.click(screen.getByLabelText('Mathématiques'));
+    fireEvent.click(screen.getByRole('button', { name: /Vérifier et publier/i }));
+
+    await screen.findByText(/Programme enregistré/);
+    expect(api.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ classIds: [1], subjectIds: [10] }),
+      expect.any(String),
+      5,
+    );
   });
 
   it('previews valid and invalid class-subject pairs and blocks an invalid submission', async () => {

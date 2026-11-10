@@ -119,6 +119,39 @@ export function isAuthorizedGroupedPublicationActor(
     && membership.isActive !== false;
 }
 
+export function resolveGroupedPublicationSchoolId(
+  actor: { id?: number | null; role?: string | null; schoolId?: number | null } | null,
+  requestedSchoolId: number | null,
+  hasRequestedSchoolId: boolean,
+  membership: {
+    userId: number;
+    schoolId: number;
+    role: string;
+    isActive: boolean | null;
+  } | null,
+  requestedSchoolExists: boolean,
+): number | null {
+  if (actor?.role === 'school_admin') {
+    return !hasRequestedSchoolId && isAuthorizedGroupedPublicationActor(actor, membership)
+      ? actor.schoolId
+      : null;
+  }
+  if (
+    actor?.role === 'super_admin'
+    && Number.isInteger(actor.id)
+    && actor.id != null
+    && actor.id > 0
+    && hasRequestedSchoolId
+    && Number.isInteger(requestedSchoolId)
+    && requestedSchoolId != null
+    && requestedSchoolId > 0
+    && requestedSchoolExists
+  ) {
+    return requestedSchoolId;
+  }
+  return null;
+}
+
 export function hashGroupedEvaluationRequest(
   request: GroupedEvaluationPublicationRequest,
 ): string {
