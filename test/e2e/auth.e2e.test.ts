@@ -1292,6 +1292,11 @@ function createMockDb() {
               }
               for (const item of obj) {
                 if (item == null) continue;
+                if (tableName === 'teacherSubjects') {
+                  FIXTURES.teacherSubjects.push(item as any);
+                  inserted.push(item);
+                  continue;
+                }
                 if (item.notificationId != null) {
                   const nextId = FIXTURES.notificationAttachments.reduce((max, row: any) => Math.max(max, Number(row.id) || 0), 0) + 1;
                   const row = { id: nextId, ...item };
@@ -1647,6 +1652,7 @@ function createMockDb() {
               if (tableName === 'students') return updateRow(FIXTURES.students);
               if (tableName === 'parents') return updateRow(FIXTURES.parents);
               if (tableName === 'teachers') return updateRow(FIXTURES.teachers);
+              if (tableName === 'teacherClassSubjects') return updateRow(FIXTURES.teacherClassSubjects);
               if (tableName === 'homeroomAssignments') return updateRow(FIXTURES.homeroomAssignments);
               if (tableName === 'userSchools') return updateRow(FIXTURES.userSchools);
               if (tableName === 'localAuths') return updateRow(FIXTURES.localAuths);
@@ -1702,6 +1708,16 @@ function createMockDb() {
             const before = FIXTURES.homeroomAssignments.length;
             const remaining = FIXTURES.homeroomAssignments.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
             FIXTURES.homeroomAssignments.splice(0, before, ...remaining);
+            return [];
+          }
+          if (tableName === 'classTeachers') {
+            const remaining = FIXTURES.classTeachers.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
+            FIXTURES.classTeachers.splice(0, FIXTURES.classTeachers.length, ...remaining);
+            return [];
+          }
+          if (tableName === 'teacherClassSubjects') {
+            const remaining = FIXTURES.teacherClassSubjects.filter((row) => !Object.entries(conditions).every(([key, value]) => (row as any)[key] === value));
+            FIXTURES.teacherClassSubjects.splice(0, FIXTURES.teacherClassSubjects.length, ...remaining);
             return [];
           }
           if (tableName === 'teacherSubjects') {
@@ -7234,7 +7250,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+228 90000000',
         specialization: 'Science',
         classIds: [1],
-        teachingAssignments: [{ classId: 1, subjectId: 902 }],
+        subjectIds: [902],
       });
 
     expect(createRes.status).toBe(201);
@@ -7266,6 +7282,433 @@ describe('E2E security: auth & privilege checks', () => {
     expect(createRes.body.classIds).toContain(1);
   });
 
+  it('creates class-subject assignments from every selected class and subject', async () => {
+    FIXTURES.subjects.push(
+      { id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any,
+      { id: 903, schoolId: 10, name: 'Math', subjectTypeId: 12, status: 'approved' } as any,
+    );
+    const isolatedSchoolResponse = await request(app)
+      .post('/api/admin/users')
+      .set('Authorization', 'Bearer token-school')
+      .send({
+        uid: 'teacher-cross-school-assignment',
+        email: 'teacher-cross-school-assignment@x.test',
+        lastName: 'Cross',
+        firstNames: 'School',
+        name: 'Cross School',
+        role: 'teacher',
+        schoolId: 10,
+        phone: '+22890000030',
+        subjectIds: [902],
+        classIds: [3],
+      });
+    expect(isolatedSchoolResponse.status).toBe(400);
+    expect(FIXTURES.users.some((user) => user.uid === 'teacher-cross-school-assignment')).toBe(false);
+
+    const cases = [
+      {
+        uid: 'teacher-matrix-single',
+        email: 'teacher-matrix-single@x.test',
+        phone: '+22890000031',
+        classIds: [1],
+        subjectIds: [902],
+        expected: [{ classId: 1, subjectId: 902 }],
+      },
+      {
+        uid: 'teacher-matrix-common',
+        email: 'teacher-matrix-common@x.test',
+        phone: '+22890000032',
+        classIds: [1, 2],
+        subjectIds: [902],
+        expected: [{ classId: 1, subjectId: 902 }, { classId: 2, subjectId: 902 }],
+      },
+      {
+        uid: 'teacher-matrix-multiple',
+        email: 'teacher-matrix-multiple@x.test',
+        phone: '+22890000033',
+        classIds: [1, 2],
+        subjectIds: [902, 903],
+        expected: [
+          { classId: 1, subjectId: 902 },
+          { classId: 1, subjectId: 903 },
+          { classId: 2, subjectId: 902 },
+          { classId: 2, subjectId: 903 },
+        ],
+      },
+      {
+        uid: 'teacher-matrix-no-subject',
+        email: 'teacher-matrix-no-subject@x.test',
+        phone: '+22890000035',
+        classIds: [1],
+        subjectIds: [],
+        expected: [],
+      },
+    ];
+
+    const createdTeachers: Array<{ teacherId: number; expected: Array<{ classId: number; subjectId: number }> }> = [];
+    for (const [index, testCase] of cases.entries()) {
+      const response = await request(app)
+        .post('/api/admin/users')
+        .set('x-simulated-role', 'super_admin')
+        .set('x-simulated-uid', 'super-uid')
+        .set('x-simulated-email', 'super@x.test')
+        .send({
+          ...testCase,
+          lastName: 'Matrix',
+          firstNames: `Teacher ${index}`,
+          name: `Matrix Teacher ${index}`,
+          role: 'teacher',
+          schoolId: 10,
+          specialization: '',
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.classIds.sort()).toEqual([...testCase.classIds].sort());
+      const createdUser = FIXTURES.users.find((user) => user.uid === testCase.uid);
+      const profile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
+      expect(profile).toBeDefined();
+      expect(FIXTURES.classTeachers.filter((row) => row.teacherId === profile?.id).map((row) => row.classId).sort())
+        .toEqual([...testCase.classIds].sort());
+      const recordedAssignments = FIXTURES.teacherClassSubjects
+        .filter((assignment) => assignment.teacherId === profile?.id && assignment.isActive)
+        .map(({ classId, subjectId }) => ({ classId, subjectId }))
+        .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId);
+      expect(recordedAssignments).toEqual(
+        [...testCase.expected].sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId),
+      );
+      createdTeachers.push({ teacherId: profile!.id, expected: testCase.expected });
+    }
+
+    const publicCreate = await request(app)
+      .post('/api/teachers')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        lastName: 'Public',
+        firstNames: 'Route',
+        name: 'Public Route',
+        email: 'teacher-public-route@x.test',
+        phone: '+22890000036',
+        specialization: 'Science',
+        schoolId: 10,
+        classIds: [1, 2],
+        subjectIds: [902],
+      });
+    expect(publicCreate.status).toBe(201);
+    expect(FIXTURES.classTeachers.filter((row) => row.teacherId === publicCreate.body.teacherId)
+      .map((row) => row.classId).sort()).toEqual([1, 2]);
+    expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === publicCreate.body.teacherId && row.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 2, subjectId: 902 }]);
+
+    const readback = await request(app)
+      .get('/api/teachers?schoolId=10')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test');
+    expect(readback.status).toBe(200);
+    for (const created of createdTeachers) {
+      const teacher = readback.body.find((row: any) => row.id === created.teacherId);
+      expect(teacher).toBeDefined();
+      expect(teacher.teachingAssignments
+        .filter((assignment: any) => assignment.isActive)
+        .map(({ classId, subjectId }: any) => ({ classId, subjectId }))
+        .sort((left: any, right: any) => left.classId - right.classId || left.subjectId - right.subjectId))
+        .toEqual([...created.expected].sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId));
+    }
+  });
+
+  it('reopens selected classes and subjects and applies the cartesian product when adding a class', async () => {
+    FIXTURES.subjects.push(
+      { id: 902, schoolId: 10, name: 'Global Science', subjectTypeId: 12, status: 'approved' } as any,
+      { id: 903, schoolId: 10, name: 'Specific Math', subjectTypeId: 12, status: 'approved' } as any,
+    );
+    FIXTURES.schoolSubjects.push(
+      { id: 902, schoolId: 10, subjectId: 902, status: 'approved', subjectTypeId: 12 },
+      { id: 903, schoolId: 10, subjectId: 903, status: 'approved', subjectTypeId: 12 },
+    );
+    const created = await request(app)
+      .post('/api/admin/users')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        uid: 'teacher-reopened-global-config',
+        email: 'teacher-reopened-global-config@x.test',
+        lastName: 'Reopened',
+        firstNames: 'Teacher',
+        name: 'Reopened Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        phone: '+22890000037',
+        specialization: 'Global Science, Specific Math',
+        subjectIds: [902, 903],
+        classIds: [1],
+      });
+
+    expect(created.status).toBe(201);
+    const listed = await request(app)
+      .get('/api/teachers?schoolId=10')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test');
+    expect(listed.status).toBe(200);
+    const profile = listed.body.find((row: any) => row.teacherId === created.body.teacherId);
+    expect(FIXTURES.teacherClassSubjects
+      .filter((assignment) => assignment.teacherId === created.body.teacherId && assignment.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 1, subjectId: 903 }]);
+    expect(FIXTURES.teacherSubjects.filter((assignment) => assignment.teacherId === created.body.teacherId)
+      .map((assignment) => assignment.subjectId).sort()).toEqual([902, 903]);
+    expect(profile.teachingAssignments
+      .filter((assignment: any) => assignment.isActive)
+      .map(({ classId, subjectId }: any) => ({ classId, subjectId }))
+      .sort((left: any, right: any) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 1, subjectId: 903 }]);
+
+    const addedClass = await request(app)
+      .put(`/api/admin/users/${profile.userId}`)
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Reopened Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        subjectIds: [902, 903],
+        classIds: [1, 2],
+      });
+    expect(addedClass.status).toBe(200);
+    expect(FIXTURES.teacherClassSubjects
+      .filter((assignment) => assignment.teacherId === profile.teacherId && assignment.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId })))
+      .toEqual([
+        { classId: 1, subjectId: 902 },
+        { classId: 1, subjectId: 903 },
+        { classId: 2, subjectId: 902 },
+        { classId: 2, subjectId: 903 },
+      ]);
+    expect(FIXTURES.classTeachers.some((assignment) => assignment.teacherId === profile.teacherId && assignment.classId === 2)).toBe(true);
+    expect(FIXTURES.teacherSubjects.filter((assignment) => assignment.teacherId === profile.teacherId)
+      .map((assignment) => assignment.subjectId).sort()).toEqual([902, 903]);
+  });
+
+  it('preserves a no-op matrix and synchronizes intentional class and subject changes', async () => {
+    FIXTURES.subjects.push(
+      { id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any,
+      { id: 903, schoolId: 10, name: 'Math', subjectTypeId: 12, status: 'approved' } as any,
+    );
+    FIXTURES.teacherSubjects.push(
+      { teacherId: 77, schoolId: 10, subjectId: 902 },
+      { teacherId: 77, schoolId: 10, subjectId: 903 },
+    );
+    FIXTURES.teachers.push({ id: 177, userId: 3, schoolId: 20, phone: '+22890000038', specialization: 'Other school' } as any);
+    FIXTURES.classTeachers.push({ classId: 3, teacherId: 177, schoolId: 20 });
+    FIXTURES.teacherClassSubjects.push({
+      id: 102,
+      teacherId: 177,
+      schoolId: 20,
+      classId: 3,
+      subjectId: 902,
+      isActive: true,
+    });
+    FIXTURES.teacherClassSubjects.push({
+      id: 101,
+      teacherId: 77,
+      schoolId: 10,
+      classId: 1,
+      subjectId: 903,
+      isActive: true,
+    });
+    FIXTURES.teacherClassSubjects.push({
+      id: 103,
+      teacherId: 77,
+      schoolId: 10,
+      classId: 1,
+      subjectId: 902,
+      isActive: true,
+    });
+
+    const noOpBefore = structuredClone({
+      teacherSubjects: FIXTURES.teacherSubjects.filter((row) => row.teacherId === 77),
+      classTeachers: FIXTURES.classTeachers.filter((row) => row.teacherId === 77),
+      teacherClassSubjects: FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77),
+    });
+    const noOp = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [1],
+        subjectIds: [902, 903],
+      });
+
+    expect(noOp.status, JSON.stringify(noOp.body)).toBe(200);
+    expect({
+      teacherSubjects: FIXTURES.teacherSubjects.filter((row) => row.teacherId === 77),
+      classTeachers: FIXTURES.classTeachers.filter((row) => row.teacherId === 77),
+      teacherClassSubjects: FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77),
+    }).toEqual(noOpBefore);
+
+    FIXTURES.teacherSubjects.splice(
+      0,
+      FIXTURES.teacherSubjects.length,
+      ...FIXTURES.teacherSubjects.filter((row) => row.teacherId !== 77),
+    );
+    const partialNoOp = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({ name: 'Teacher', role: 'teacher', schoolId: 10, classIds: [1] });
+    expect(partialNoOp.status, JSON.stringify(partialNoOp.body)).toBe(200);
+    expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId })))
+      .toEqual([{ classId: 1, subjectId: 903 }, { classId: 1, subjectId: 902 }]);
+    expect(FIXTURES.teacherSubjects.filter((row) => row.teacherId === 77)
+      .map((row) => row.subjectId).sort()).toEqual([902, 903]);
+
+    const partialNoOpWithoutClasses = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({ name: 'Teacher', role: 'teacher', schoolId: 10, subjectIds: [902, 903] });
+    expect(partialNoOpWithoutClasses.status, JSON.stringify(partialNoOpWithoutClasses.body)).toBe(200);
+    expect(FIXTURES.classTeachers.filter((row) => row.teacherId === 77 && row.schoolId === 10)
+      .map((row) => row.classId)).toEqual([1]);
+
+    const addClass = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [1, 2],
+        subjectIds: [902, 903],
+      });
+
+    expect(addClass.status).toBe(200);
+    expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([
+        { classId: 1, subjectId: 902 },
+        { classId: 1, subjectId: 903 },
+        { classId: 2, subjectId: 902 },
+        { classId: 2, subjectId: 903 },
+      ]);
+    expect(FIXTURES.classTeachers.some((row) => row.teacherId === 77 && row.classId === 2)).toBe(true);
+
+    const addSubject = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [1, 2],
+        subjectIds: [903],
+      });
+    expect(addSubject.status).toBe(200);
+    expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([
+        { classId: 1, subjectId: 903 },
+        { classId: 2, subjectId: 903 },
+      ]);
+
+    const removeClass = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [2],
+        subjectIds: [903],
+      });
+    expect(removeClass.status).toBe(200);
+    expect(FIXTURES.classTeachers.some((row) => row.teacherId === 77 && row.classId === 1)).toBe(false);
+    expect(FIXTURES.teacherClassSubjects.some((row) => row.teacherId === 77 && row.classId === 1 && row.isActive)).toBe(false);
+
+    const removeSubject = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [2],
+        subjectIds: [],
+      });
+    expect(removeSubject.status).toBe(200);
+    expect(FIXTURES.teacherClassSubjects.some((row) => row.teacherId === 77 && row.classId === 2 && row.isActive)).toBe(false);
+    expect(FIXTURES.teacherSubjects.some((row) => row.teacherId === 77 && row.schoolId === 10)).toBe(false);
+
+    const reopened = await request(app)
+      .get('/api/teachers?schoolId=10')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test');
+    const reopenedTeacher = reopened.body.find((row: any) => row.teacherId === 77);
+    expect(reopenedTeacher.administrativeClassIds).toContain(2);
+    expect(reopenedTeacher.teachingAssignments.filter((assignment: any) => assignment.isActive)).toEqual([]);
+    const reopenedNoOp = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [2],
+        subjectIds: [],
+      });
+    expect(reopenedNoOp.status).toBe(200);
+    expect(FIXTURES.classTeachers.some((row) => row.teacherId === 77 && row.schoolId === 10 && row.classId === 2)).toBe(true);
+    expect(FIXTURES.teacherClassSubjects.some((row) => row.teacherId === 77 && row.schoolId === 10 && row.classId === 2 && row.isActive)).toBe(false);
+    expect(FIXTURES.teacherClassSubjects.find((row) => row.teacherId === 177 && row.schoolId === 20))
+      .toMatchObject({ classId: 3, subjectId: 902, isActive: true });
+
+    const explicitAddition = await request(app)
+      .put('/api/admin/users/3')
+      .set('x-simulated-role', 'super_admin')
+      .set('x-simulated-uid', 'super-uid')
+      .set('x-simulated-email', 'super@x.test')
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [2],
+        subjectIds: [903],
+      });
+    expect(explicitAddition.status).toBe(409);
+    expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.schoolId === 10 && row.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId })))
+      .toEqual([]);
+    expect(FIXTURES.teacherClassSubjects.find((row) => row.teacherId === 177 && row.schoolId === 20))
+      .toMatchObject({ classId: 3, subjectId: 902, isActive: true });
+  });
+
   it('rolls back a teacher account when a pedagogical assignment fails during creation', async () => {
     FIXTURES.subjects.push({ id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any);
     const usersBefore = FIXTURES.users.length;
@@ -7294,7 +7737,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+228 99999999',
         specialization: 'Science',
         classIds: [1],
-        teachingAssignments: [{ classId: 1, subjectId: 902 }],
+        subjectIds: [902],
       });
 
     expect(response.status).toBe(500);
@@ -7309,7 +7752,7 @@ describe('E2E security: auth & privilege checks', () => {
     expect(mockDb.db.__transactionRollbackCount).toBe(rollbacksBefore + 1);
   });
 
-  it('does not associate a subject approved only for another school when creating a teacher', async () => {
+  it('rejects a subject approved only for another school when creating a teacher', async () => {
     const createRes = await request(app)
       .post('/api/admin/users')
       .set('Authorization', 'Bearer token-school')
@@ -7326,15 +7769,9 @@ describe('E2E security: auth & privilege checks', () => {
         subjectIds: [901],
       });
 
-    expect(createRes.status).toBe(201);
-    const createdUser = FIXTURES.users.find((user) => user.uid === 'teacher-with-unapproved-subject');
-    const teacherProfile = FIXTURES.teachers.find((teacher: any) => teacher.userId === createdUser?.id);
-    expect(teacherProfile).toBeDefined();
-    expect(FIXTURES.teacherSubjects).not.toContainEqual(expect.objectContaining({
-      teacherId: teacherProfile?.id,
-      schoolId: 10,
-      subjectId: 901,
-    }));
+    expect(createRes.status).toBe(400);
+    expect(FIXTURES.users.some((user) => user.uid === 'teacher-with-unapproved-subject')).toBe(false);
+    expect(FIXTURES.teacherSubjects.some((assignment) => assignment.schoolId === 10 && assignment.subjectId === 901)).toBe(false);
   });
 
   it('7. distinguishes class association, pedagogical assignment, and homeroom access', async () => {
@@ -7348,6 +7785,8 @@ describe('E2E security: auth & privilege checks', () => {
       .get('/api/my-homeroom-classes/1');
     expect(associationOnlyHomeroom.status).toBe(404);
     FIXTURES.schoolSubjects.push({ id: 2, schoolId: 10, subjectId: 901, status: 'approved', subjectTypeId: 11 } as any);
+    FIXTURES.subjects.push({ id: 902, schoolId: 10, name: 'Unauthorized Science', subjectTypeId: 12, status: 'approved' } as any);
+    FIXTURES.schoolSubjects.push({ id: 3, schoolId: 10, subjectId: 902, status: 'approved', subjectTypeId: 12 } as any);
     FIXTURES.teacherClassSubjects.push({
       id: 101,
       teacherId: 77,
@@ -7367,6 +7806,13 @@ describe('E2E security: auth & privilege checks', () => {
     expect(res.body[0]).toMatchObject({ id: 1, name: 'Assigned Class' });
     expect(res.body.some((c: any) => c.id === 2)).toBe(false);
     expect(res.body.some((c: any) => c.id === 3)).toBe(false);
+
+    const subjectsResponse = await request(app)
+      .get('/api/subjects')
+      .set('Authorization', '******');
+    expect(subjectsResponse.status).toBe(200);
+    expect(subjectsResponse.body.map((subject: any) => subject.id)).toContain(901);
+    expect(subjectsResponse.body.map((subject: any) => subject.id)).not.toContain(902);
 
     const pedagogicalAssignmentIsNotHomeroom = await request(app)
       .get('/api/my-homeroom-classes/1')

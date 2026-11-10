@@ -1028,7 +1028,7 @@ export default function App() {
     }
   };
 
-  const handleAddTeacher = async (data: { name?: string; lastName?: string; firstNames?: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }>; gender?: string }) => {
+  const handleAddTeacher = async (data: { name?: string; lastName?: string; firstNames?: string; email: string; phone: string; specialization: string | string[]; subjectIds?: number[]; schoolId: number; classIds?: number[]; gender?: string }) => {
     try {
       const payload = {
         ...data,
@@ -1107,7 +1107,7 @@ export default function App() {
     }
   };
 
-  const handleCreateUser = async (data: { uid?: string; email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
+  const handleCreateUser = async (data: { uid?: string; email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; classIds?: number[] }) => {
     try {
       const payload = {
         ...data,
@@ -1135,7 +1135,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateUser = async (id: number, data: { email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => {
+  const handleUpdateUser = async (id: number, data: { email: string; name?: string; lastName?: string; firstNames?: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[] }) => {
     try {
       const payload = {
         ...data,

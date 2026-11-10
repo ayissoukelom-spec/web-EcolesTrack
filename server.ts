@@ -587,12 +587,24 @@ async function syncTeacherSubjectAssignments(
         ),
       ));
 
-  await executor.delete(teacherSubjects).where(and(
+  const existingAssignments = await executor.select().from(teacherSubjects).where(and(
     eq(teacherSubjects.teacherId, teacherId),
     eq(teacherSubjects.schoolId, schoolId),
   ));
-  if (approvedSubjects.length > 0) {
-    await executor.insert(teacherSubjects).values(approvedSubjects.map((subject) => ({
+  const approvedIds = new Set(approvedSubjects.map((subject) => subject.id));
+  const existingIds = new Set(existingAssignments.map((assignment) => assignment.subjectId));
+  for (const assignment of existingAssignments) {
+    if (!approvedIds.has(assignment.subjectId)) {
+      await executor.delete(teacherSubjects).where(and(
+        eq(teacherSubjects.teacherId, teacherId),
+        eq(teacherSubjects.schoolId, schoolId),
+        eq(teacherSubjects.subjectId, assignment.subjectId),
+      ));
+    }
+  }
+  const missingAssignments = approvedSubjects.filter((subject) => !existingIds.has(subject.id));
+  if (missingAssignments.length > 0) {
+    await executor.insert(teacherSubjects).values(missingAssignments.map((subject) => ({
       teacherId,
       schoolId,
       subjectId: subject.id,
@@ -688,6 +700,58 @@ async function validateTeacherClassSubjectAssignments(schoolId: number, requeste
   return Array.from(pairs.values());
 }
 
+async function normalizeTeacherClassIds(schoolId: number, requested: unknown, fallbackAssignments: unknown) {
+  const requestedIds = Array.isArray(requested)
+    ? requested
+    : Array.isArray(fallbackAssignments)
+      ? fallbackAssignments.map((assignment) => (assignment as any)?.classId)
+      : null;
+  if (requestedIds == null) return null;
+
+  const classIds = new Set<number>();
+  for (const value of requestedIds) {
+    const classId = parsePositiveInteger(value);
+    if (classId == null || !(await isApprovedClassForSchool(classId, schoolId))) return null;
+    classIds.add(classId);
+  }
+  return Array.from(classIds);
+}
+
+async function validateTeacherSubjectIds(schoolId: number, requested: unknown) {
+  if (!Array.isArray(requested)) return null;
+  const subjectIds = new Set<number>();
+  for (const value of requested) {
+    const subjectId = parsePositiveInteger(value);
+    if (subjectId == null) return null;
+    subjectIds.add(subjectId);
+  }
+  if (subjectIds.size === 0) return [];
+
+  const approvedSubjects = await db.select({ id: subjects.id }).from(subjects)
+    .leftJoin(schoolSubjects, and(
+      eq(schoolSubjects.subjectId, subjects.id),
+      eq(schoolSubjects.schoolId, schoolId),
+      eq(schoolSubjects.status, 'approved'),
+    ))
+    .where(and(
+      inArray(subjects.id, Array.from(subjectIds)),
+      or(eq(subjects.schoolId, schoolId), eq(schoolSubjects.status, 'approved')),
+    ));
+  if (approvedSubjects.length !== subjectIds.size) return null;
+  return approvedSubjects.map((subject) => subject.id);
+}
+
+async function buildTeacherClassSubjectAssignments(input: {
+  schoolId: number;
+  classIds: number[];
+  subjectIds: number[];
+}) {
+  const generatedAssignments = input.classIds.flatMap((classId) => (
+    input.subjectIds.map((subjectId) => ({ classId, subjectId }))
+  ));
+  return validateTeacherClassSubjectAssignments(input.schoolId, generatedAssignments);
+}
+
 async function syncTeacherClassSubjectAssignments(
   teacherId: number,
   schoolId: number,
@@ -695,30 +759,79 @@ async function syncTeacherClassSubjectAssignments(
   executor: TeacherCreationDatabaseExecutor = db,
 ) {
   const now = new Date();
-  await executor.update(teacherClassSubjects).set({ isActive: false, updatedAt: now }).where(and(
+  const existingAssignments = await executor.select().from(teacherClassSubjects).where(and(
     eq(teacherClassSubjects.teacherId, teacherId),
     eq(teacherClassSubjects.schoolId, schoolId),
   ));
-  for (const assignment of assignments) {
-    const where = and(
-      eq(teacherClassSubjects.teacherId, teacherId),
-      eq(teacherClassSubjects.schoolId, schoolId),
-      eq(teacherClassSubjects.classId, assignment.classId),
-      eq(teacherClassSubjects.subjectId, assignment.subjectId),
-    );
-    const [existing] = await executor.select().from(teacherClassSubjects).where(where);
-    if (existing) {
-      await executor.update(teacherClassSubjects).set({ isActive: true, updatedAt: now }).where(eq(teacherClassSubjects.id, existing.id));
-    } else {
-      await executor.insert(teacherClassSubjects).values({
-        teacherId,
-        schoolId,
-        classId: assignment.classId,
-        subjectId: assignment.subjectId,
-        isActive: true,
-        updatedAt: now,
-      });
+  const desiredKeys = new Set(assignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
+  const existingKeys = new Set(existingAssignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
+
+  for (const existing of existingAssignments) {
+    const key = `${existing.classId}:${existing.subjectId}`;
+    if (existing.isActive && !desiredKeys.has(key)) {
+      await executor.update(teacherClassSubjects).set({ isActive: false, updatedAt: now })
+        .where(eq(teacherClassSubjects.id, existing.id));
     }
+  }
+
+  for (const assignment of assignments) {
+    if (existingKeys.has(`${assignment.classId}:${assignment.subjectId}`)) continue;
+    await executor.insert(teacherClassSubjects).values({
+      teacherId,
+      schoolId,
+      classId: assignment.classId,
+      subjectId: assignment.subjectId,
+      isActive: true,
+      updatedAt: now,
+    });
+  }
+}
+
+async function findInactiveTeacherClassSubjectConflicts(
+  teacherId: number,
+  schoolId: number,
+  assignments: Array<{ classId: number; subjectId: number }>,
+) {
+  if (assignments.length === 0) return [];
+  const desiredKeys = new Set(assignments.map((assignment) => `${assignment.classId}:${assignment.subjectId}`));
+  const existingAssignments = await db.select({
+    classId: teacherClassSubjects.classId,
+    subjectId: teacherClassSubjects.subjectId,
+    isActive: teacherClassSubjects.isActive,
+  }).from(teacherClassSubjects).where(and(
+    eq(teacherClassSubjects.teacherId, teacherId),
+    eq(teacherClassSubjects.schoolId, schoolId),
+  ));
+  return existingAssignments.filter((assignment) => (
+    assignment.isActive === false && desiredKeys.has(`${assignment.classId}:${assignment.subjectId}`)
+  ));
+}
+
+async function syncTeacherClassMemberships(
+  teacherId: number,
+  schoolId: number,
+  classIds: number[],
+  executor: TeacherCreationDatabaseExecutor = db,
+) {
+  const existingAssignments = await executor.select().from(classTeachers).where(and(
+    eq(classTeachers.teacherId, teacherId),
+    eq(classTeachers.schoolId, schoolId),
+  ));
+  const desiredClassIds = new Set(classIds);
+  const existingClassIds = new Set(existingAssignments.map((assignment) => assignment.classId));
+
+  for (const assignment of existingAssignments) {
+    if (!desiredClassIds.has(assignment.classId)) {
+      await executor.delete(classTeachers).where(and(
+        eq(classTeachers.teacherId, teacherId),
+        eq(classTeachers.schoolId, schoolId),
+        eq(classTeachers.classId, assignment.classId),
+      ));
+    }
+  }
+  for (const classId of classIds) {
+    if (existingClassIds.has(classId)) continue;
+    await executor.insert(classTeachers).values({ classId, teacherId, schoolId });
   }
 }
 
@@ -1973,7 +2086,7 @@ export async function createApp() {
       let actor = await resolveActor(req);
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
-      const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
+      const { uid, email, name, lastName, firstNames, role, schoolId: rawSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, globalSubjectIds, gender, classIds, teachingAssignments, teachingAssignmentOverrides, studentId } = req.body;
       const normalizedEmail = normalizeEmail(email);
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
       if (isEmailRequiredForRole(role) && !normalizedEmail) return res.status(400).json({ error: 'Missing required field: email' });
@@ -2060,18 +2173,30 @@ export async function createApp() {
       if (role === 'teacher' && resolvedSchoolId == null) {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
       }
-      const normalizedTeachingAssignments = role === 'teacher' && Array.isArray(teachingAssignments)
-        ? await validateTeacherClassSubjectAssignments(resolvedSchoolId!, teachingAssignments)
-        : null;
-      if (role === 'teacher' && Array.isArray(teachingAssignments) && !normalizedTeachingAssignments) {
-        return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+      let effectiveClassIds: number[] | undefined;
+      let normalizedTeachingAssignments: Array<{ classId: number; subjectId: number }> | null = null;
+      let effectiveSubjectIds: number[] | undefined;
+      if (role === 'teacher') {
+        const requestedClassIds = classIds ?? (Array.isArray(teachingAssignments) ? undefined : []);
+        const normalizedClassIds = await normalizeTeacherClassIds(resolvedSchoolId!, requestedClassIds, teachingAssignments);
+        const requestedSubjectIds = Array.isArray(subjectIds) ? subjectIds : globalSubjectIds;
+        const normalizedSubjectIds = Array.isArray(requestedSubjectIds)
+          ? await validateTeacherSubjectIds(resolvedSchoolId!, requestedSubjectIds)
+          : [];
+        if (normalizedClassIds == null || normalizedSubjectIds == null) {
+          return res.status(400).json({ error: 'Invalid teacher class or subject selection' });
+        }
+        normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
+          schoolId: resolvedSchoolId!,
+          classIds: normalizedClassIds,
+          subjectIds: normalizedSubjectIds,
+        });
+        if (!normalizedTeachingAssignments) {
+          return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+        }
+        effectiveClassIds = normalizedClassIds;
+        effectiveSubjectIds = normalizedSubjectIds;
       }
-      const effectiveClassIds = role === 'teacher' && normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.classId)))
-        : classIds;
-      const effectiveSubjectIds = role === 'teacher' && normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.subjectId)))
-        : subjectIds;
 
       if (role === 'surveillant') {
         if (resolvedSchoolId == null) {
@@ -2171,42 +2296,9 @@ export async function createApp() {
             .returning();
           newTeacherProfile = profile;
 
-          if (Array.isArray(effectiveSubjectIds)) {
-            await syncTeacherSubjectAssignments(profile.id, resolvedSchoolId, effectiveSubjectIds, tx);
-          }
-          if (normalizedTeachingAssignments) {
-            await syncTeacherClassSubjectAssignments(profile.id, resolvedSchoolId, normalizedTeachingAssignments, tx);
-          }
-
-          if (Array.isArray(effectiveClassIds) && effectiveClassIds.length > 0) {
-            for (const rawClassId of effectiveClassIds) {
-              const classId = Number(rawClassId);
-              if (Number.isNaN(classId)) continue;
-
-              const [classRow] = await tx.select().from(classes).where(eq(classes.id, classId));
-              const approved = await isApprovedClassForSchool(classId, resolvedSchoolId, tx);
-              if (
-                !classRow
-                || (classRow.schoolId != null && classRow.schoolId !== resolvedSchoolId)
-                || !approved
-              ) {
-                continue;
-              }
-
-              const existingAssignment = await tx.select().from(classTeachers).where(and(
-                eq(classTeachers.classId, classId),
-                eq(classTeachers.teacherId, profile.id),
-                eq(classTeachers.schoolId, resolvedSchoolId),
-              ));
-              if (existingAssignment.length === 0) {
-                await tx.insert(classTeachers).values({
-                  classId,
-                  teacherId: profile.id,
-                  schoolId: resolvedSchoolId,
-                });
-              }
-            }
-          }
+          await syncTeacherSubjectAssignments(profile.id, resolvedSchoolId, effectiveSubjectIds ?? [], tx);
+          await syncTeacherClassSubjectAssignments(profile.id, resolvedSchoolId, normalizedTeachingAssignments ?? [], tx);
+          await syncTeacherClassMemberships(profile.id, resolvedSchoolId, effectiveClassIds ?? [], tx);
 
           const assignments = await tx
             .select({ classId: classTeachers.classId })
@@ -2323,7 +2415,7 @@ export async function createApp() {
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const id = parseInt(req.params.id);
-      const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, gender, classIds, teachingAssignments, studentId } = req.body;
+      const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, globalSubjectIds, gender, classIds, teachingAssignments, teachingAssignmentOverrides, studentId } = req.body;
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
       if (role === 'parent' && incomingSchoolId != null && incomingSchoolId !== ''
@@ -2421,19 +2513,84 @@ export async function createApp() {
       const teachingAssignmentSchoolId = actor.role === 'school_admin'
         ? actor.schoolId
         : teacherProfileSchoolId ?? targetUser.schoolId;
-      const normalizedTeachingAssignments = role === 'teacher' && Array.isArray(teachingAssignments) && teachingAssignmentSchoolId != null
-        ? await validateTeacherClassSubjectAssignments(teachingAssignmentSchoolId, teachingAssignments)
-        : null;
-      if (role === 'teacher' && Array.isArray(teachingAssignments)
-        && (teachingAssignmentSchoolId == null || !normalizedTeachingAssignments)) {
-        return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+      const teacherSelectionsProvided = role === 'teacher'
+        && (Array.isArray(classIds) || Array.isArray(subjectIds) || Array.isArray(globalSubjectIds));
+      let effectiveClassIds: number[] | undefined;
+      let normalizedTeachingAssignments: Array<{ classId: number; subjectId: number }> | null = null;
+      let effectiveSubjectIds: number[] | undefined;
+      if (role === 'teacher' && teachingAssignmentSchoolId != null) {
+        const existingTeacherSubjects = existingTeacherForUpdate
+          ? await db.select({ subjectId: teacherSubjects.subjectId }).from(teacherSubjects).where(and(
+            eq(teacherSubjects.teacherId, existingTeacherForUpdate.id),
+            eq(teacherSubjects.schoolId, teachingAssignmentSchoolId),
+          ))
+          : [];
+        const existingTeacherClasses = existingTeacherForUpdate
+          ? await db.select({ classId: classTeachers.classId }).from(classTeachers).where(and(
+            eq(classTeachers.teacherId, existingTeacherForUpdate.id),
+            eq(classTeachers.schoolId, teachingAssignmentSchoolId),
+          ))
+          : [];
+        const existingActiveTeachingAssignments = existingTeacherForUpdate
+          ? await db.select({
+            classId: teacherClassSubjects.classId,
+            subjectId: teacherClassSubjects.subjectId,
+          }).from(teacherClassSubjects).where(and(
+            eq(teacherClassSubjects.teacherId, existingTeacherForUpdate.id),
+            eq(teacherClassSubjects.schoolId, teachingAssignmentSchoolId),
+            eq(teacherClassSubjects.isActive, true),
+          ))
+          : [];
+        const requestedSubjectIds = Array.isArray(subjectIds)
+          ? subjectIds
+          : Array.isArray(globalSubjectIds)
+            ? globalSubjectIds
+            : Array.from(new Set([
+              ...existingTeacherSubjects.map((assignment) => assignment.subjectId),
+              ...existingActiveTeachingAssignments.map((assignment) => assignment.subjectId),
+            ]));
+        const normalizedSubjectIds = await validateTeacherSubjectIds(teachingAssignmentSchoolId, requestedSubjectIds);
+        if (normalizedSubjectIds == null) {
+          return res.status(400).json({ error: 'Invalid teacher subject selection' });
+        }
+        if (teacherSelectionsProvided) {
+          const requestedClassIds = Array.isArray(classIds)
+            ? classIds
+            : Array.from(new Set([
+              ...existingTeacherClasses.map((assignment) => assignment.classId),
+              ...existingActiveTeachingAssignments.map((assignment) => assignment.classId),
+            ]));
+          const normalizedClassIds = await normalizeTeacherClassIds(teachingAssignmentSchoolId, requestedClassIds, undefined);
+          if (normalizedClassIds == null) {
+            return res.status(400).json({ error: 'Invalid teacher class selection' });
+          }
+          normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
+            schoolId: teachingAssignmentSchoolId,
+            classIds: normalizedClassIds,
+            subjectIds: normalizedSubjectIds,
+          });
+          if (!normalizedTeachingAssignments) {
+            return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
+          }
+          if (existingTeacherForUpdate) {
+            const inactiveConflicts = await findInactiveTeacherClassSubjectConflicts(
+              existingTeacherForUpdate.id,
+              teachingAssignmentSchoolId,
+              normalizedTeachingAssignments,
+            );
+            if (inactiveConflicts.length > 0) {
+              return res.status(409).json({
+                error: 'Selected classes and subjects include previously deactivated assignments. Review them before reassigning.',
+                code: 'INACTIVE_TEACHER_ASSIGNMENTS',
+              });
+            }
+          }
+          effectiveClassIds = normalizedClassIds;
+          effectiveSubjectIds = normalizedSubjectIds;
+        }
+      } else if (role === 'teacher' && teacherSelectionsProvided) {
+        return res.status(400).json({ error: 'A school is required to update teacher assignments' });
       }
-      const effectiveClassIds = normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.classId)))
-        : classIds;
-      const effectiveSubjectIds = normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.subjectId)))
-        : subjectIds;
       const parentProfileRows = await db.select({
         id: parents.id,
         studentId: parents.studentId,
@@ -2744,46 +2901,7 @@ export async function createApp() {
         }
 
         if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(effectiveClassIds)) {
-          console.log('Updating class assignments for teacher (admin update):', { teacherProfileId, classIds: effectiveClassIds });
-          await db.delete(classTeachers).where(and(
-            eq(classTeachers.teacherId, teacherProfileId),
-            eq(classTeachers.schoolId, assignmentSchoolId),
-          ));
-          if (effectiveClassIds.length > 0) {
-            for (const rawClassId of effectiveClassIds) {
-              const cid = parseInt(rawClassId, 10);
-              if (Number.isNaN(cid)) {
-                console.log('DIAG admin update skip invalid id', { rawClassId, teacherProfileId });
-                continue;
-              }
-              const [cls] = await db.select().from(classes).where(eq(classes.id, cid));
-              const [schoolClassRow] = assignmentSchoolId != null ? await db.select().from(schoolClasses).where(and(eq(schoolClasses.classId, cid), eq(schoolClasses.schoolId, assignmentSchoolId))) : [null];
-              const approved = await isApprovedClassForSchool(cid, assignmentSchoolId);
-
-              if (!cls) {
-                console.log('DIAG admin update - ignored', { cid, teacherProfileId, assignmentSchoolId, reason: 'class_not_found', cls: null, schoolClassRow, approved });
-                continue;
-              }
-
-              if (cls.schoolId != null && assignmentSchoolId != null && cls.schoolId !== assignmentSchoolId) {
-                console.log('DIAG admin update - ignored', { cid, teacherProfileId, assignmentSchoolId, reason: 'class_school_mismatch', cls, schoolClassRow, approved });
-                continue;
-              }
-
-              if (!approved) {
-                console.log('DIAG admin update - ignored', { cid, teacherProfileId, assignmentSchoolId, reason: 'not_approved_for_school', cls, schoolClassRow, approved });
-                continue;
-              }
-
-              try {
-                await db.insert(classTeachers).values({ classId: cid, teacherId: teacherProfileId, schoolId: assignmentSchoolId });
-                const insertedRows = await db.select().from(classTeachers).where(and(eq(classTeachers.classId, cid), eq(classTeachers.teacherId, teacherProfileId)));
-                console.log('DIAG admin update - inserted', { cid, teacherProfileId, insertedCount: insertedRows.length, cls, schoolClassRow, approved, assignmentSchoolId });
-              } catch (e: any) {
-                console.warn('Failed to insert classTeachers during admin update', { cid, teacherProfileId, err: e?.message || e });
-              }
-            }
-          }
+          await syncTeacherClassMemberships(teacherProfileId, assignmentSchoolId, effectiveClassIds);
         }
       } else if (!isAddingFunction && role === 'parent') {
         const parentValues: any = {
@@ -8096,8 +8214,12 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden: only admin roles can create teachers' });
       }
 
-      const { name, lastName, firstNames, email, phone, specialization, subjectIds, schoolId, classIds, teachingAssignments, gender } = req.body;
-      const requestedClassIds = Array.isArray(classIds) ? classIds : [];
+      const { name, lastName, firstNames, email, phone, specialization, subjectIds, globalSubjectIds, schoolId, classIds, teachingAssignments, teachingAssignmentOverrides, gender } = req.body;
+      const requestedClassIds = Array.isArray(classIds)
+        ? classIds
+        : Array.isArray(teachingAssignments)
+          ? undefined
+          : [];
       const normalizedEmail = normalizeEmail(email);
 
       const fallbackName = typeof name === 'string' ? name.trim() : '';
@@ -8111,18 +8233,24 @@ export async function createApp() {
       const displayName = `${derivedLastName} ${derivedFirstNames}`.trim();
 
       const parsedSchoolId = parseInt(String(resolvedSchoolId), 10);
-      const normalizedTeachingAssignments = Array.isArray(teachingAssignments)
-        ? await validateTeacherClassSubjectAssignments(parsedSchoolId, teachingAssignments)
-        : null;
-      if (Array.isArray(teachingAssignments) && !normalizedTeachingAssignments) {
+      const normalizedClassIds = await normalizeTeacherClassIds(parsedSchoolId, requestedClassIds, teachingAssignments);
+      const requestedSubjectIds = Array.isArray(subjectIds) ? subjectIds : globalSubjectIds;
+      const normalizedSubjectIds = Array.isArray(requestedSubjectIds)
+        ? await validateTeacherSubjectIds(parsedSchoolId, requestedSubjectIds)
+        : [];
+      if (normalizedClassIds == null || normalizedSubjectIds == null) {
+        return res.status(400).json({ error: 'Invalid teacher class or subject selection' });
+      }
+      const normalizedTeachingAssignments = await buildTeacherClassSubjectAssignments({
+        schoolId: parsedSchoolId,
+        classIds: normalizedClassIds,
+        subjectIds: normalizedSubjectIds,
+      });
+      if (!normalizedTeachingAssignments) {
         return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
       }
-      const effectiveClassIds = normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.classId)))
-        : requestedClassIds;
-      const effectiveSubjectIds = normalizedTeachingAssignments
-        ? Array.from(new Set(normalizedTeachingAssignments.map((assignment) => assignment.subjectId)))
-        : subjectIds;
+      const effectiveClassIds = normalizedClassIds;
+      const effectiveSubjectIds = normalizedSubjectIds;
 
       if (actor.role === 'school_admin') {
         if (actor.schoolId == null) {
@@ -8167,12 +8295,8 @@ export async function createApp() {
       }).returning();
 
       const createdTeacher = teacherResult[0];
-      if (Array.isArray(effectiveSubjectIds)) {
-        await syncTeacherSubjectAssignments(createdTeacher.id, parsedSchoolId, effectiveSubjectIds);
-      }
-      if (normalizedTeachingAssignments) {
-        await syncTeacherClassSubjectAssignments(createdTeacher.id, parsedSchoolId, normalizedTeachingAssignments);
-      }
+      await syncTeacherSubjectAssignments(createdTeacher.id, parsedSchoolId, effectiveSubjectIds);
+      await syncTeacherClassSubjectAssignments(createdTeacher.id, parsedSchoolId, normalizedTeachingAssignments);
       if (parsedSchoolId != null) {
         try {
           await db.insert(userSchools).values({
@@ -8193,57 +8317,7 @@ export async function createApp() {
         /* ignore */
       }
 
-      // Assign provided classes to this teacher when classIds are supplied
-      if (effectiveClassIds.length > 0) {
-        const parsedSchoolId = parseInt(schoolId, 10);
-        console.log('Assigning classes to teacher (public create):', { teacherId: createdTeacher?.id, classIds: effectiveClassIds });
-        for (const rawId of effectiveClassIds) {
-          const cid = Number(rawId);
-          if (Number.isNaN(cid)) {
-            console.log('DIAG public create skip invalid id', { rawId, teacherId: createdTeacher?.id });
-            continue;
-          }
-          const [cls] = await db.select().from(classes).where(eq(classes.id, cid));
-          const [schoolClassRow] = parsedSchoolId != null ? await db.select().from(schoolClasses).where(and(eq(schoolClasses.classId, cid), eq(schoolClasses.schoolId, parsedSchoolId))) : [null];
-          const approved = await isApprovedClassForSchool(cid, parsedSchoolId);
-
-          if (!cls) {
-            console.log('DIAG public create - ignored', { cid, teacherId: createdTeacher?.id, parsedSchoolId, reason: 'class_not_found', cls: null, schoolClassRow, approved });
-            continue;
-          }
-
-          if (cls.schoolId != null && cls.schoolId !== parsedSchoolId) {
-            console.log('DIAG public create - ignored', { cid, teacherId: createdTeacher?.id, parsedSchoolId, reason: 'class_school_mismatch', cls, schoolClassRow, approved });
-            continue;
-          }
-
-          if (!approved) {
-            console.log('DIAG public create - ignored', { cid, teacherId: createdTeacher?.id, parsedSchoolId, reason: 'not_approved_for_school', cls, schoolClassRow, approved });
-            continue;
-          }
-
-          try {
-              const existingAssignment = await db.select().from(classTeachers).where(and(
-                eq(classTeachers.classId, cid),
-                eq(classTeachers.teacherId, createdTeacher.id),
-                eq(classTeachers.schoolId, parsedSchoolId),
-              ));
-            if (existingAssignment.length === 0) {
-              await db.insert(classTeachers).values({ classId: cid, teacherId: createdTeacher.id, schoolId: parsedSchoolId });
-                const insertedRows = await db.select().from(classTeachers).where(and(
-                  eq(classTeachers.classId, cid),
-                  eq(classTeachers.teacherId, createdTeacher.id),
-                  eq(classTeachers.schoolId, parsedSchoolId),
-                ));
-              console.log('DIAG public create - inserted', { cid, teacherId: createdTeacher.id, insertedCount: insertedRows.length, cls, schoolClassRow, approved, parsedSchoolId });
-            } else {
-              console.log('DIAG public create - ignored', { cid, teacherId: createdTeacher.id, reason: 'already_assigned', existingCount: existingAssignment.length, cls, schoolClassRow, approved, parsedSchoolId });
-            }
-          } catch (e: any) {
-            console.error('Failed to assign teacher to class', cid, e?.message || e);
-          }
-        }
-      }
+      await syncTeacherClassMemberships(createdTeacher.id, parsedSchoolId, effectiveClassIds);
 
       // Fetch classIds for the response
       let classIdsForResponse: number[] = [];

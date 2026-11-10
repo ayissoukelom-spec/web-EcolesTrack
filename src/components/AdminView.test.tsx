@@ -1250,6 +1250,110 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
+  it('reopens the selected classes and subjects and submits the simple teacher selection', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const user: User = {
+      id: 703,
+      uid: 'teacher_703',
+      email: 'teacher-assignments@example.test',
+      name: 'Ada Lovelace',
+      lastName: 'Lovelace',
+      firstNames: 'Ada',
+      role: 'teacher',
+      schoolId: 1,
+      phone: '+22890000000',
+    };
+    const teacher: Teacher = {
+      id: 33,
+      userId: 703,
+      email: user.email!,
+      name: user.name,
+      lastName: user.lastName,
+      firstNames: user.firstNames,
+      schoolId: 1,
+      phone: user.phone,
+      classIds: [11],
+      administrativeClassIds: [11, 12],
+      assignedSubjects: [{ id: 5, name: 'Math' }, { id: 6, name: 'Science' }],
+      teachingAssignments: [
+        { id: 1, classId: 11, subjectId: 6, schoolId: 1, isActive: true },
+        { id: 2, classId: 12, subjectId: 5, schoolId: 1, isActive: false },
+      ],
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify([
+      { id: 11, schoolId: 1, name: 'Class A' },
+      { id: 12, schoolId: 1, name: 'Class B' },
+      { id: 13, schoolId: 1, name: 'Class C' },
+    ]), { status: 200 }));
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[
+            { id: 11, schoolId: 1, academicYearId: 1, name: 'Class A' },
+            { id: 12, schoolId: 1, academicYearId: 1, name: 'Class B' },
+            { id: 13, schoolId: 1, academicYearId: 1, name: 'Class C' },
+          ]}
+          teachersList={[teacher]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[user]}
+          subjectsList={[{ id: 5, schoolId: 1, name: 'Math' }, { id: 6, schoolId: 1, name: 'Science' }]}
+          approvedSubjectsList={[{ id: 5, schoolId: 1, name: 'Math' }, { id: 6, schoolId: 1, name: 'Science' }]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onUpdateUser={onUpdateUser}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+      const dialog = screen.getByRole('dialog');
+      expect((within(dialog).getByRole('checkbox', { name: 'Math' }) as HTMLInputElement).checked).toBe(true);
+      expect((within(dialog).getByRole('checkbox', { name: 'Science' }) as HTMLInputElement).checked).toBe(true);
+      await waitFor(() => expect(within(dialog).getByRole('checkbox', { name: 'Class A' })).toBeInTheDocument());
+      expect((within(dialog).getByRole('checkbox', { name: 'Class A' }) as HTMLInputElement).checked).toBe(true);
+      expect((within(dialog).getByRole('checkbox', { name: 'Class B' }) as HTMLInputElement).checked).toBe(true);
+
+      fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Class C' }));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enregistrer' }));
+
+      await waitFor(() => {
+        expect(onUpdateUser).toHaveBeenCalledWith(703, expect.objectContaining({
+          classIds: [11, 12, 13],
+          subjectIds: [5, 6],
+        }));
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comptes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      const accountDialog = screen.getByRole('dialog');
+      await waitFor(() => expect(within(accountDialog).getByRole('checkbox', { name: 'Class A' })).toBeInTheDocument());
+      expect((within(accountDialog).getByRole('checkbox', { name: 'Math' }) as HTMLInputElement).checked).toBe(true);
+      expect((within(accountDialog).getByRole('checkbox', { name: 'Science' }) as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(within(accountDialog).getByRole('button', { name: 'Enregistrer' }));
+      await waitFor(() => {
+        expect(onUpdateUser).toHaveBeenLastCalledWith(703, expect.objectContaining({
+          classIds: [11, 12],
+          subjectIds: [5, 6],
+        }));
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('updates a parent without an email or student without calling trim on null', async () => {
     const onUpdateUser = vi.fn().mockResolvedValue({});
     const parent: Parent = {
