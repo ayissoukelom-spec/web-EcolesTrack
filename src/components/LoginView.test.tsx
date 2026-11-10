@@ -268,6 +268,12 @@ describe('LoginView', () => {
         token: 'parent-without-email-jwt',
         mustReset: true,
       },
+      { success: true, reauthenticationRequired: false, token: 'fresh-parent-session-jwt' },
+      {
+        schools: [{ id: 5, name: 'École A', isSuspended: false }],
+        memberships: [{ membershipId: 35, schoolId: 5, role: 'parent', isActive: true }],
+      },
+      { token: 'parent-context-jwt', role: 'parent', schoolId: 5 },
       {},
     ]);
 
@@ -283,11 +289,66 @@ describe('LoginView', () => {
     fireEvent.change(screen.getByLabelText(/Confirmer le nouveau mot de passe/i, { selector: 'input' }), { target: { value: 'Changed-Password-2026!' } });
     fireEvent.click(screen.getByRole('button', { name: /Mettre à jour le mot de passe/i }));
 
-    await waitFor(() => expect((window.fetch as any).mock.calls).toHaveLength(2));
-    expect(JSON.parse((window.fetch as any).mock.calls[1][1].body)).toEqual({
+    await waitFor(() => expect(mockOnLogin).toHaveBeenCalledWith('parent'));
+    const calls = (window.fetch as any).mock.calls;
+    expect(calls).toHaveLength(5);
+    expect(JSON.parse(calls[1][1].body)).toEqual({
       currentPassword: 'temporary-password',
       newPassword: 'Changed-Password-2026!',
     });
+    expect(calls[1][1].headers.Authorization).toBe('Bearer parent-without-email-jwt');
+    expect(calls[2][1].headers.Authorization).toBe('Bearer fresh-parent-session-jwt');
+    expect(JSON.parse(calls[3][1].body)).toEqual({ kind: 'local', schoolId: 5, role: 'parent' });
+    expect(calls[3][1].headers.Authorization).toBe('Bearer fresh-parent-session-jwt');
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('parent-context-jwt');
+  });
+
+  it('preserves school and function selection after a required password change', async () => {
+    window.fetch = createFetchMock([
+      {
+        id: 36,
+        uid: 'multi_role_user',
+        email: 'multi@example.com',
+        name: 'Multi Role',
+        role: 'parent',
+        token: 'temporary-multi-session-jwt',
+        mustReset: true,
+      },
+      { success: true, reauthenticationRequired: false, token: 'fresh-multi-session-jwt' },
+      {
+        schools: [{ id: 5, name: 'École A', isSuspended: false }],
+        memberships: [
+          { membershipId: 36, schoolId: 5, role: 'parent', isActive: true },
+          { membershipId: 37, schoolId: 5, role: 'teacher', isActive: true },
+        ],
+      },
+      { token: 'teacher-context-jwt', role: 'teacher', schoolId: 5 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'multi@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'temporary-password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await screen.findByText(/Vous devez remplacer le mot de passe par défaut/i);
+    fireEvent.change(screen.getByLabelText(/Mot de passe actuel/i, { selector: 'input' }), { target: { value: 'temporary-password' } });
+    fireEvent.change(screen.getByLabelText(/^Nouveau mot de passe/i, { selector: 'input' }), { target: { value: 'Changed-Password-2026!' } });
+    fireEvent.change(screen.getByLabelText(/Confirmer le nouveau mot de passe/i, { selector: 'input' }), { target: { value: 'Changed-Password-2026!' } });
+    fireEvent.click(screen.getByRole('button', { name: /Mettre à jour le mot de passe/i }));
+
+    const roleSelect = await screen.findByLabelText(/Fonction/i) as HTMLSelectElement;
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('fresh-multi-session-jwt');
+    fireEvent.change(roleSelect, { target: { value: 'teacher' } });
+    fireEvent.click(screen.getByRole('button', { name: /Continuer/i }));
+
+    await waitFor(() => expect(mockOnLogin).toHaveBeenCalledWith('teacher'));
+    const calls = (window.fetch as any).mock.calls;
+    expect(calls).toHaveLength(5);
+    expect(calls[2][1].headers.Authorization).toBe('Bearer fresh-multi-session-jwt');
+    expect(JSON.parse(calls[3][1].body)).toEqual({ kind: 'local', schoolId: 5, role: 'teacher' });
+    expect(calls[3][1].headers.Authorization).toBe('Bearer fresh-multi-session-jwt');
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('teacher-context-jwt');
   });
 
   it('does not store access token when login response is missing token', async () => {

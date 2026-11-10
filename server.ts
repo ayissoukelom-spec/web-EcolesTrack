@@ -3324,6 +3324,27 @@ export async function createApp() {
         return res.status(409).json({ error: 'Impossible de révoquer les sessions de ce compte' });
       }
 
+      if (mustReset) {
+        const sessionResult = await createAccessSessionService().createForAuthenticatedUser({
+          userId: userRecord.id,
+          expectedGeneration: revocation.currentGeneration,
+        });
+        if (sessionResult.ok === false) {
+          console.error('change-password error: unable to establish session after required password change', sessionResult.error.reason);
+          return res.status(503).json({
+            error: 'Mot de passe modifié, mais la nouvelle session n’a pas pu être établie. Veuillez vous reconnecter.',
+            code: 'ACCESS_SESSION_CREATION_FAILED',
+          });
+        }
+
+        return res.json({
+          success: true,
+          reauthenticationRequired: false,
+          token: sessionResult.accessToken,
+          tokenType: 'access',
+        });
+      }
+
       res.json({ success: true, reauthenticationRequired: true });
     } catch (err: unknown) {
       if (err instanceof LocalAuthCredentialUpdateError) {

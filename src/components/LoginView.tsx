@@ -195,21 +195,32 @@ export default function LoginView({ onLogin }: Props) {
     }
   };
 
-  const finishLoginAfterPasswordChange = async (user: any) => {
-    // called after ChangePasswordView.onSuccess
-    try {
-      setSimulatedRole(user.role || 'parent');
-      setActiveSchoolId(null);
-      setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
-      if (user.role === 'super_admin') {
-        await activateContext({ kind: 'global' }, user);
+  const finishLoginAfterPasswordChange = async (user: any, accessToken: string) => {
+    persistAccessToken(accessToken);
+    setSimulatedRole(user.role || 'parent');
+    setActiveSchoolId(null);
+    setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
+    if (user.role === 'super_admin') {
+      await activateContext({ kind: 'global' }, user);
+      return;
+    }
+
+    const schoolData = await loadSchools();
+    const availableSchoolIds = [...new Set<number>(
+      (schoolData.memberships || []).map((membership: { schoolId: number }) => membership.schoolId),
+    )];
+    if (availableSchoolIds.length === 1) {
+      const schoolId = availableSchoolIds[0];
+      const roles = (schoolData.memberships || [])
+        .filter((membership: { schoolId: number }) => membership.schoolId === schoolId)
+        .map((membership: { role: string }) => membership.role);
+      if (roles.length === 1) {
+        await activateContext({ kind: 'local', schoolId, role: roles[0] }, user);
         return;
       }
-      await loadSchools();
-      setSelectionPending(true);
-    } catch (e) {
-      setError('Erreur après mise à jour du mot de passe');
     }
+
+    setSelectionPending(true);
   };
 
   if (selectionPending) {
@@ -284,7 +295,7 @@ export default function LoginView({ onLogin }: Props) {
   return (
     <>
       {showChangePassword && loggedInUser ? (
-        <ChangePasswordView user={loggedInUser} onSuccess={() => finishLoginAfterPasswordChange(loggedInUser)} />
+        <ChangePasswordView user={loggedInUser} onSuccess={(accessToken) => finishLoginAfterPasswordChange(loggedInUser, accessToken)} />
       ) : (
         <div className="relative isolate min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4">
           <link

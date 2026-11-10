@@ -7,7 +7,7 @@ import togoFlag from '../assets/flags/togo_drap.jpg';
 
 interface Props {
   user: User;
-  onSuccess: () => void;
+  onSuccess: (accessToken: string) => void | Promise<void>;
 }
 
 export default function ChangePasswordView({ user, onSuccess }: Props) {
@@ -47,7 +47,7 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
 
     try {
       setLoading(true);
-      await apiFetch('/api/auth/change-password', {
+      const result = await apiFetch('/api/auth/change-password', {
         method: 'POST',
         body: JSON.stringify({
           ...(simulatedUser.email ? { email: simulatedUser.email } : {}),
@@ -55,8 +55,10 @@ export default function ChangePasswordView({ user, onSuccess }: Props) {
           newPassword,
         }),
       });
-      console.log('DEBUG change-password success');
-      onSuccess();
+      if (typeof result?.token !== 'string' || !result.token.trim()) {
+        throw new Error('Mot de passe modifié, mais la nouvelle session est indisponible. Veuillez vous reconnecter.');
+      }
+      await onSuccess(result.token);
     } catch (err: any) {
       setError(err?.message || 'Impossible de changer le mot de passe.');
     } finally {

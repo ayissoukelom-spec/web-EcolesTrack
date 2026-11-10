@@ -1985,13 +1985,13 @@ describe('E2E security: auth & privilege checks', () => {
     resetLocalLoginRateLimit();
   });
 
-  async function loginTeacherWithPassword(password = 'Current-Password-2026!') {
+  async function loginTeacherWithPassword(password = 'Current-Password-2026!', mustReset = false) {
     const salt = crypto.randomBytes(16).toString('hex');
     (FIXTURES.localAuths as any[]).push({
       userId: 3,
       passwordHash: crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex'),
       salt,
-      mustReset: false,
+      mustReset,
     } as any);
     const login = await request(app)
       .post('/api/auth/local-login')
@@ -2156,6 +2156,51 @@ describe('E2E security: auth & privilege checks', () => {
       .get('/api/grades')
       .set('Authorization', `Bearer ${token}`);
     expect(oldSessionRequest.status).toBe(401);
+  });
+
+  it('establishes a new Web session after a required password change and keeps prior tokens revoked', async () => {
+    const temporaryPassword = 'Temporary-Password-2026!';
+    const { token } = await loginTeacherWithPassword(temporaryPassword, true);
+
+    const response = await request(app)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: temporaryPassword, newPassword: 'Changed-Password-2026!' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      reauthenticationRequired: false,
+      tokenType: 'access',
+    });
+    expect(response.body.token).toEqual(expect.any(String));
+    expect(response.body.token).not.toBe(token);
+    expect((FIXTURES.users.find((user: any) => user.id === 3) as any)?.accessSessionGeneration).toBe(2);
+    expect((FIXTURES.localAuths[0] as any).mustReset).toBe(false);
+
+    const oldSessionRequest = await request(app)
+      .get('/api/auth/schools')
+      .set('Authorization', `Bearer ${token}`);
+    expect(oldSessionRequest.status).toBe(401);
+
+    const currentSessionRequest = await request(app)
+      .get('/api/auth/schools')
+      .set('Authorization', `Bearer ${response.body.token}`);
+    expect(currentSessionRequest.status).toBe(200);
+    expect(currentSessionRequest.body.memberships).toEqual(
+      expect.arrayContaining([expect.objectContaining({ schoolId: 10, role: 'teacher' })]),
+    );
+
+    const oldPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'teacher@school.test', password: temporaryPassword });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app)
+      .post('/api/auth/local-login')
+      .send({ email: 'teacher@school.test', password: 'Changed-Password-2026!' });
+    expect(newPasswordLogin.status).toBe(200);
+    expect(newPasswordLogin.body.mustReset).toBe(false);
   });
 
   it('rejects a wrong current password without changing credentials or generation', async () => {
