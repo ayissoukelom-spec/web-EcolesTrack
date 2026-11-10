@@ -111,6 +111,8 @@ export default function NotesView({
     : evaluationsList;
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedEvalId, setSelectedEvalId] = useState('');
+  const [selectedEvaluationType, setSelectedEvaluationType] = useState('');
+  const [selectedEvaluationSubject, setSelectedEvaluationSubject] = useState('');
   const selectedClassIdNumber = selectedClassId ? Number(selectedClassId) : null;
   const selectedEvalIdNumber = selectedEvalId ? Number(selectedEvalId) : null;
   const [isNewEvalFormOpen, setIsNewEvalFormOpen] = useState(false);
@@ -460,6 +462,32 @@ export default function NotesView({
     return true;
   }), [approvedEvaluations, selectedClassIdNumber, userRole, teacherId, studentsList, gradesList]);
 
+  const evaluationSubjectOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const evaluation of selectableEvaluations) {
+      const label = String(evaluation.subject || '').trim();
+      if (!label) continue;
+      const value = evaluation.subjectId != null
+        ? `id:${evaluation.subjectId}`
+        : `name:${label.toLocaleLowerCase('fr-FR')}`;
+      if (!options.has(value)) options.set(value, label);
+    }
+    return [...options.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label, 'fr', { sensitivity: 'base' }));
+  }, [selectableEvaluations]);
+
+  const filteredSelectableEvaluations = useMemo(() => selectableEvaluations.filter((evaluation) => {
+    if (selectedEvaluationType && evaluation.type !== selectedEvaluationType) return false;
+    if (selectedEvaluationSubject) {
+      const subjectValue = evaluation.subjectId != null
+        ? `id:${evaluation.subjectId}`
+        : `name:${String(evaluation.subject || '').trim().toLocaleLowerCase('fr-FR')}`;
+      if (subjectValue !== selectedEvaluationSubject) return false;
+    }
+    return true;
+  }), [selectableEvaluations, selectedEvaluationType, selectedEvaluationSubject]);
+
   useEffect(() => {
     if (pendingScrollTarget) {
       const target = document.getElementById(pendingScrollTarget);
@@ -488,11 +516,11 @@ export default function NotesView({
     if (!selectedClassId) {
       const firstClassId = String(filteredClasses[0].id);
       setSelectedClassId(firstClassId);
-      const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === firstClassId);
+      const firstSelectableEval = filteredSelectableEvaluations.find((ev) => String(ev.classId) === firstClassId);
       if (firstSelectableEval) {
         // If tests provided an initial selected evaluation, prefer it when applicable
         if (initialSelectedEvalId != null) {
-          const match = selectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === firstClassId);
+          const match = filteredSelectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === firstClassId);
           if (match) {
             setSelectedEvalId(String(initialSelectedEvalId));
             populateGradeInputsForEvaluation(String(initialSelectedEvalId));
@@ -511,12 +539,19 @@ export default function NotesView({
       return;
     }
 
+    if (selectedEvalId && !filteredSelectableEvaluations.some((evaluation) => String(evaluation.id) === selectedEvalId)) {
+      setSelectedEvalId('');
+      setGradeInputValues({});
+      setGradeValidationErrors({});
+      return;
+    }
+
     // Only auto-select if no evaluation is currently selected for this class
-    if (!selectedEvalId) {
-      const firstSelectableEval = selectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
+    if (!selectedEvalId && !selectedEvaluationType && !selectedEvaluationSubject) {
+      const firstSelectableEval = filteredSelectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
       if (firstSelectableEval) {
         if (initialSelectedEvalId != null) {
-          const match = selectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === selectedClassId);
+          const match = filteredSelectableEvaluations.find((ev) => ev.id === initialSelectedEvalId && String(ev.classId) === selectedClassId);
           if (match) {
             setSelectedEvalId(String(initialSelectedEvalId));
             populateGradeInputsForEvaluation(String(initialSelectedEvalId));
@@ -532,7 +567,15 @@ export default function NotesView({
         if (Object.keys(gradeInputValues).length > 0) setGradeInputValues({});
       }
     }
-  }, [filteredClasses, selectableEvaluations, selectedClassId, selectedEvalId, gradeInputValues]);
+  }, [
+    filteredClasses,
+    filteredSelectableEvaluations,
+    selectedClassId,
+    selectedEvalId,
+    selectedEvaluationType,
+    selectedEvaluationSubject,
+    gradeInputValues,
+  ]);
 
   const archivedEvaluations = approvedEvaluations
     .filter((ev) => {
@@ -912,8 +955,9 @@ export default function NotesView({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-4 border border-slate-50 rounded-2xl shadow-sm">
         {userRole === 'super_admin' && (
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Filtrer par école</label>
+            <label htmlFor="notes-school-filter" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Filtrer par école</label>
             <select
+              id="notes-school-filter"
               value={schoolFilterId ?? ''}
               onChange={(e) => {
                 const value = e.target.value;
@@ -932,21 +976,16 @@ export default function NotesView({
           </div>
         )}
         <div>
-          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Division (Classe)</label>
+          <label htmlFor="notes-class-filter" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Division (Classe)</label>
           <select
+            id="notes-class-filter"
             value={selectedClassId}
             onChange={(e) => {
               const nextClassId = e.target.value;
               setSelectedClassId(nextClassId);
               setGradeValidationErrors({});
-              const firstEvalForClass = approvedEvaluations.find((ev) => String(ev.classId) === nextClassId);
-              if (firstEvalForClass) {
-                setSelectedEvalId(String(firstEvalForClass.id));
-                populateGradeInputsForEvaluation(String(firstEvalForClass.id));
-              } else {
-                setSelectedEvalId('');
-                setGradeInputValues({});
-              }
+              setSelectedEvalId('');
+              setGradeInputValues({});
             }}
             disabled={userRole === 'teacher' && availableClasses.length === 0}
             className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none disabled:opacity-50"
@@ -972,8 +1011,47 @@ export default function NotesView({
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Évaluation (Devoir de la classe)</label>
+          <label htmlFor="notes-evaluation-type-filter" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Type d’évaluation</label>
           <select
+            id="notes-evaluation-type-filter"
+            value={selectedEvaluationType}
+            onChange={(e) => {
+              setSelectedEvaluationType(e.target.value);
+              setGradeValidationErrors({});
+            }}
+            disabled={!selectedClassId}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none disabled:opacity-50"
+          >
+            <option value="">Tous les types</option>
+            {evaluationTypes.map((type) => (
+              <option key={type.value} value={type.value}>{type.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="notes-evaluation-subject-filter" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Matière</label>
+          <select
+            id="notes-evaluation-subject-filter"
+            value={selectedEvaluationSubject}
+            onChange={(e) => {
+              setSelectedEvaluationSubject(e.target.value);
+              setGradeValidationErrors({});
+            }}
+            disabled={!selectedClassId}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none disabled:opacity-50"
+          >
+            <option value="">Toutes les matières</option>
+            {evaluationSubjectOptions.map((subject) => (
+              <option key={subject.value} value={subject.value}>{subject.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="notes-evaluation-select" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Évaluation (Devoir de la classe)</label>
+          <select
+            id="notes-evaluation-select"
             value={selectedEvalId}
             onChange={(e) => {
               const evId = e.target.value;
@@ -985,12 +1063,15 @@ export default function NotesView({
             className="w-full px-3 py-2 bg-slate-50 border border-slate-100 text-xs sm:text-sm rounded-xl focus:outline-none disabled:opacity-50"
           >
             <option value="">-- Sélectionnez un devoir --</option>
-            {selectableEvaluations.map((ev) => (
+            {filteredSelectableEvaluations.map((ev) => (
               <option key={ev.id} value={ev.id}>
                 {ev.subject} — {ev.title} ({ev.date}){userRole === 'school_admin' && isEvaluationCompleted(ev) ? ' — Archivée' : ''}
               </option>
             ))}
           </select>
+          {selectedClassId && filteredSelectableEvaluations.length === 0 && (
+            <p className="mt-2 text-[11px] text-slate-500 italic">Aucune évaluation correspondante</p>
+          )}
         </div>
       </div>
 

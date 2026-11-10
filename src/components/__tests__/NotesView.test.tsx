@@ -84,6 +84,14 @@ function findEvaluationSelect() {
   return evalSelect;
 }
 
+function getEvaluationFilterSelects() {
+  return {
+    type: screen.getByLabelText('Type d’évaluation') as HTMLSelectElement,
+    subject: screen.getByLabelText('Matière') as HTMLSelectElement,
+    evaluation: findEvaluationSelect() as HTMLSelectElement,
+  };
+}
+
 // Mock evaluation utils used by NotesView to control completed/fully graded behaviour
 vi.mock('../../lib/evaluationUtils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/evaluationUtils')>();
@@ -122,6 +130,151 @@ const baseProps = {
   onAddEvaluation: vi.fn(),
   onAddGrade: vi.fn(),
 };
+
+const evaluationFilterProps = {
+  ...baseProps,
+  evaluationsList: [
+    { id: 1, classId: 85, teacherId: 10, subjectId: 10, subject: 'Mathématiques', title: 'Devoir de maths', type: 'devoir', date: '2026-07-01', maxScore: 20, coefficient: 1 },
+    { id: 2, classId: 85, teacherId: 10, subjectId: 10, subject: 'Mathématiques', title: 'Interrogation de maths', type: 'interrogation', date: '2026-06-01', maxScore: 20, coefficient: 1 },
+    { id: 3, classId: 85, teacherId: 10, subjectId: 11, subject: 'Sciences', title: 'Devoir de sciences', type: 'devoir', date: '2026-05-01', maxScore: 20, coefficient: 1 },
+    { id: 4, classId: 85, teacherId: 10, subjectId: 10, subject: 'Mathématiques', title: 'Composition de maths', type: 'composition', date: '2026-04-01', maxScore: 20, coefficient: 1 },
+  ],
+};
+
+test('shows evaluation type and subject filters before the scheduled evaluation and keeps all options by default', () => {
+  renderWithAuth(<NotesView {...evaluationFilterProps} /> as any, 'school_admin', 1);
+
+  const { type, subject, evaluation } = getEvaluationFilterSelects();
+  expect(type.value).toBe('');
+  expect(subject.value).toBe('');
+  expect(type.compareDocumentPosition(subject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(subject.compareDocumentPosition(evaluation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(evaluation).getByRole('option', { name: /Devoir de maths/ })).toBeDefined();
+  expect(within(evaluation).getByRole('option', { name: /Interrogation de maths/ })).toBeDefined();
+  expect(within(evaluation).getByRole('option', { name: /Devoir de sciences/ })).toBeDefined();
+  expect(within(evaluation).getByRole('option', { name: /Composition de maths/ })).toBeDefined();
+  expect(within(subject).getByRole('option', { name: 'Mathématiques' })).toBeDefined();
+  expect(within(subject).getByRole('option', { name: 'Sciences' })).toBeDefined();
+});
+
+test('combines type and subject filters, preserving compatible selection and clearing an incompatible one', async () => {
+  renderWithAuth(
+    <NotesView
+      {...evaluationFilterProps}
+      gradesList={[{ id: 12, evaluationId: 1, studentId: 201, score: '15', remarks: '' }]}
+      initialSelectedEvalId={1}
+      teacherId={10}
+      teacherTeachingAssignments={[
+        { classId: 85, subjectId: 10, isActive: true },
+        { classId: 85, subjectId: 11, isActive: true },
+      ]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const { type, subject, evaluation } = getEvaluationFilterSelects();
+  fireEvent.change(type, { target: { value: 'devoir' } });
+  expect(evaluation.value).toBe('1');
+  expect(within(evaluation).getByRole('option', { name: /Devoir de maths/ })).toBeDefined();
+  expect(within(evaluation).getByRole('option', { name: /Devoir de sciences/ })).toBeDefined();
+  expect(within(evaluation).queryByRole('option', { name: /Interrogation de maths/ })).toBeNull();
+  expect(within(evaluation).queryByRole('option', { name: /Composition de maths/ })).toBeNull();
+
+  fireEvent.change(subject, { target: { value: 'id:10' } });
+  expect(evaluation.value).toBe('1');
+  expect(within(evaluation).queryByRole('option', { name: /Devoir de sciences/ })).toBeNull();
+
+  fireEvent.change(subject, { target: { value: 'id:11' } });
+  await waitFor(() => expect(evaluation.value).toBe(''));
+  expect(within(evaluation).getByRole('option', { name: /Devoir de sciences/ })).toBeDefined();
+  expect(within(evaluation).queryByRole('option', { name: /Devoir de maths/ })).toBeNull();
+
+  fireEvent.change(type, { target: { value: 'composition' } });
+  expect(within(evaluation).queryByRole('option', { name: /Composition de maths/ })).toBeNull();
+  expect(screen.getByText('Aucune évaluation correspondante')).toBeDefined();
+});
+
+test('restores saved grades after an incompatible filter clears the current selection', async () => {
+  renderWithAuth(
+    <NotesView
+      {...evaluationFilterProps}
+      gradesList={[{ id: 12, evaluationId: 1, studentId: 201, score: '15', remarks: '' }]}
+      initialSelectedEvalId={1}
+      teacherId={10}
+      teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]}
+    /> as any,
+    'teacher',
+    1,
+  );
+
+  const { type, evaluation } = getEvaluationFilterSelects();
+  expect(screen.getByText('Note déjà enregistrée')).toBeDefined();
+  fireEvent.change(type, { target: { value: 'composition' } });
+  await waitFor(() => expect(evaluation.value).toBe(''));
+  expect(screen.queryByText('Note déjà enregistrée')).toBeNull();
+
+  fireEvent.change(type, { target: { value: '' } });
+  await waitFor(() => expect(evaluation.value).toBe('1'));
+  expect(screen.getByText('Note déjà enregistrée')).toBeDefined();
+  expect(screen.getByText('15 /20')).toBeDefined();
+});
+
+test('recalculates filter options when class, school, or evaluation period data changes', async () => {
+  const schoolAdminChange = vi.fn();
+  const contextProps = {
+    ...evaluationFilterProps,
+    evaluationsList: [
+      ...evaluationFilterProps.evaluationsList,
+      { id: 5, classId: 86, teacherId: 10, subjectId: 12, subject: 'Histoire', title: 'Devoir classe B', type: 'devoir', date: '2026-07-01', maxScore: 20, coefficient: 1 },
+    ],
+    classesList: [
+      ...baseProps.classesList,
+      { id: 86, schoolId: 2, academicYearId: 2026, name: '6ème B' },
+    ],
+    schoolsList: [...baseProps.schoolsList, { id: 2, name: 'École Deux' }],
+  };
+  const { rerender } = renderWithAuth(
+    <NotesView {...contextProps} schoolFilterId={null} onSchoolFilterChange={schoolAdminChange} /> as any,
+    'super_admin',
+    null,
+  );
+
+  const classSelect = screen.getByLabelText('Division (Classe)') as HTMLSelectElement;
+  const schoolSelect = screen.getByLabelText('Filtrer par école') as HTMLSelectElement;
+  fireEvent.change(classSelect, { target: { value: '86' } });
+  const { subject, evaluation } = getEvaluationFilterSelects();
+  expect(within(subject).getByRole('option', { name: 'Histoire' })).toBeDefined();
+  expect(within(subject).queryByRole('option', { name: 'Mathématiques' })).toBeNull();
+  expect(within(evaluation).getByRole('option', { name: /Devoir classe B/ })).toBeDefined();
+  expect(within(evaluation).queryByRole('option', { name: /Devoir de maths/ })).toBeNull();
+
+  fireEvent.change(schoolSelect, { target: { value: '1' } });
+  expect(schoolAdminChange).toHaveBeenCalledWith(1);
+  rerender(
+    <AuthProvider>
+      <NotesView {...contextProps} schoolFilterId={1} onSchoolFilterChange={schoolAdminChange} />
+    </AuthProvider>,
+  );
+  await waitFor(() => expect(screen.queryByRole('option', { name: '6ème B' })).toBeNull());
+
+  rerender(
+    <AuthProvider>
+      <NotesView
+        {...contextProps}
+        evaluationsList={[
+          { id: 9, classId: 85, teacherId: 10, subjectId: 13, subject: 'Géographie', title: 'Évaluation nouvelle période', type: 'evaluation_mensuelle', date: '2026-09-01', maxScore: 20, coefficient: 1, termId: 2 },
+        ]}
+        schoolFilterId={1}
+        onSchoolFilterChange={schoolAdminChange}
+      />
+    </AuthProvider>,
+  );
+  await waitFor(() => {
+    expect(within(getEvaluationFilterSelects().subject).getByRole('option', { name: 'Géographie' })).toBeDefined();
+    expect(within(getEvaluationFilterSelects().evaluation).getByRole('option', { name: /Évaluation nouvelle période/ })).toBeDefined();
+  });
+});
 
 test('teacher sees only non-completed evaluations and archive contains completed', () => {
   renderWithAuth(<NotesView {...baseProps} teacherId={10} teacherTeachingAssignments={[{ classId: 85, subjectId: 10, isActive: true }]} /> as any, 'teacher', 1);
@@ -210,8 +363,11 @@ test('teacher subject picker excludes approved subjects that are not assigned by
 
   fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
 
-  expect(screen.getByRole('option', { name: 'Math' })).toBeDefined();
-  expect(screen.queryByRole('option', { name: 'Science' })).toBeNull();
+  const createFormSelects = Array.from(document.querySelectorAll('#box-eval-form select'));
+  const createFormSubjectSelect = createFormSelects[1];
+  if (!createFormSubjectSelect) throw new Error('Could not locate create evaluation subject selector');
+  expect(within(createFormSubjectSelect).getByRole('option', { name: 'Math' })).toBeDefined();
+  expect(within(createFormSubjectSelect).queryByRole('option', { name: 'Science' })).toBeNull();
 });
 
 test('teacher class picker excludes a class without an exact active teaching pair', () => {
@@ -255,7 +411,7 @@ test('allows creating an evaluation with the monthly evaluation type', () => {
   fireEvent.change(classSelect, { target: { value: '85' } });
   fireEvent.change(subjectSelect, { target: { value: 'Math' } });
   fireEvent.change(typeSelect, { target: { value: 'evaluation_mensuelle' } });
-  expect(screen.getByRole('option', { name: 'Évaluation mensuelle' })).toBeDefined();
+  expect(within(typeSelect).getByRole('option', { name: 'Évaluation mensuelle' })).toBeDefined();
   fireEvent.click(screen.getByRole('button', { name: 'Publier le Devoir' }));
 
   expect(onAddEvaluation).toHaveBeenCalledWith(expect.objectContaining({
