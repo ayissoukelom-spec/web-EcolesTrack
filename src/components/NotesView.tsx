@@ -31,6 +31,7 @@ import {
 import { validateGradeScore } from '../lib/gradeValidation';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import { sortStudentsAlphabetically } from '../lib/studentOrdering';
+import GroupedEvaluationPublicationForm from './GroupedEvaluationPublicationForm';
 
 interface NotesViewProps {
   evaluationsList: Evaluation[];
@@ -52,6 +53,7 @@ interface NotesViewProps {
   initialSelectedEvalId?: number | null;
   // Test helper: directly trigger save for a student (tests only)
   testTriggerSaveForStudentId?: number | null;
+  onGroupedEvaluationPublication?: () => void | Promise<void>;
 }
 
 export default function NotesView({
@@ -71,6 +73,7 @@ export default function NotesView({
   initialSelectedEvalId,
   testTriggerSaveForStudentId,
   onAddClass,
+  onGroupedEvaluationPublication,
 }: NotesViewProps) {
   const { role, activeSchoolId } = useAuth();
   const userRole = role as UserRole;
@@ -117,6 +120,7 @@ export default function NotesView({
   const [isSavingAllGrades, setIsSavingAllGrades] = useState(false);
   const isSavingAllGradesRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
+  const [isGroupedPublicationFormOpen, setIsGroupedPublicationFormOpen] = useState(false);
 
   // New Eval form states
   const formatLocalDatetime = (value = new Date()) => {
@@ -669,31 +673,54 @@ export default function NotesView({
           <p className="text-sm text-slate-500">Planifiez les devoirs, saisissez les résultats et consultez les bulletins scolaires</p>
         </div>
 
-        {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
-          <button
-            type="button"
-            onClick={() => {
-              const initialClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
-              if (initialClasses.length > 0) {
-                setNewEvalClassId(String(initialClasses[0].id));
-              }
-              setNewEvalSubject('');
-              setNewEvalSubjectId(null);
-              setNewEvalType('');
-              setNewEvalCoefficient(1);
-              setNewEvalMaxScore(20);
-              setNewEvalDate(formatLocalDatetime());
-              setIsNewEvalFormOpen(!isNewEvalFormOpen);
-            }}
-            disabled={userRole === 'teacher' && availableClasses.length === 0}
-            className={`flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md transition-colors w-full sm:w-auto justify-center ${userRole === 'teacher' && availableClasses.length === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-            id="btn-new-eval-trigger"
-          >
-            <Plus className="h-4.5 w-4.5" />
-            Créer un Devoir / Évaluation
-          </button>
-        )}
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          {userRole === 'school_admin' && (
+            <button
+              type="button"
+              aria-expanded={isGroupedPublicationFormOpen}
+              aria-controls="grouped-evaluation-publication-panel"
+              onClick={() => setIsGroupedPublicationFormOpen((isOpen) => !isOpen)}
+              className="flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-white px-4 py-2.5 text-xs font-semibold text-indigo-700 shadow-sm transition-colors hover:bg-indigo-50 sm:text-sm"
+              data-testid="btn-grouped-evaluation-publication"
+            >
+              {isGroupedPublicationFormOpen ? 'Fermer Publication groupée' : 'Publication groupée'}
+            </button>
+          )}
+          {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+            <button
+              type="button"
+              onClick={() => {
+                const initialClasses = filteredClasses.length > 0 ? filteredClasses : availableClasses;
+                if (initialClasses.length > 0) {
+                  setNewEvalClassId(String(initialClasses[0].id));
+                }
+                setNewEvalSubject('');
+                setNewEvalSubjectId(null);
+                setNewEvalType('');
+                setNewEvalCoefficient(1);
+                setNewEvalMaxScore(20);
+                setNewEvalDate(formatLocalDatetime());
+                setIsNewEvalFormOpen(!isNewEvalFormOpen);
+              }}
+              disabled={userRole === 'teacher' && availableClasses.length === 0}
+              className={`flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md transition-colors hover:bg-indigo-700 sm:text-sm ${userRole === 'teacher' && availableClasses.length === 0 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+              id="btn-new-eval-trigger"
+            >
+              <Plus className="h-4.5 w-4.5" />
+              Créer un Devoir / Évaluation
+            </button>
+          )}
+        </div>
       </div>
+
+      {userRole === 'school_admin' && isGroupedPublicationFormOpen && (
+        <div id="grouped-evaluation-publication-panel">
+          <GroupedEvaluationPublicationForm
+            role={userRole}
+            onPublished={onGroupedEvaluationPublication}
+          />
+        </div>
+      )}
 
       {overdueCount > 0 && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl p-4 shadow-sm space-y-2">

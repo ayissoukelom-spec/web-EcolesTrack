@@ -2135,6 +2135,7 @@ export default function App() {
                     teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
                     onAddEvaluation={handleAddEvaluation}
                     onAddGrade={handleAddGrade}
+                    onGroupedEvaluationPublication={() => { void fetchAllData(false); }}
                   />
                 )
               )}

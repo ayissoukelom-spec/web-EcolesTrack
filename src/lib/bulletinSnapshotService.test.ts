@@ -749,6 +749,10 @@ describe('generateBulletinSnapshot', () => {
     ]))).toBe('Mme Aline');
   });
 
+  it('n’exige pas de nom d’enseignant pour une évaluation administrative sans teacherId', () => {
+    expect(resolveSubjectTeacherName([], new Map([[7, 'Mme Aline']]))).toBeNull();
+  });
+
   it('conserve le nom actuel de l enseignant lorsque les évaluations pointent vers teacher_id 23 et user_id 54', () => {
     const teacherName = 'MASSEDA Ghislain Ikechuku Junior';
     const oldName = 'Ancien nom enseignant';

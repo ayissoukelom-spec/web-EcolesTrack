@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, check, customType, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { bigint, boolean, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { emailTrimCharactersSql } from '../lib/emailUniqueness.ts';
 import type { VerifiedAccessContext } from '../server/verifiedAccessContext.ts';
@@ -459,12 +459,57 @@ export const examResults = pgTable('exam_results', {
   examResultStudentYearTypeUniqueIdx: uniqueIndex('exam_results_student_year_type_idx').on(table.studentId, table.academicYearId, table.examType),
 }));
 
+export const evaluationPublications = pgTable('evaluation_publications', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'restrict' }).notNull(),
+  createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  kind: text('kind').$type<'devoir' | 'examen'>().notNull(),
+  periodType: text('period_type').$type<'trimester'>().default('trimester').notNull(),
+  periodOrderIndex: integer('period_order_index').notNull(),
+  startDate: date('start_date', { mode: 'string' }).notNull(),
+  endDate: date('end_date', { mode: 'string' }).notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestHash: text('request_hash').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  publicationIdSchoolUniqueIdx: uniqueIndex('evaluation_publications_id_school_id_unique')
+    .on(table.id, table.schoolId),
+  publicationSchoolIdempotencyUniqueIdx: uniqueIndex('evaluation_publications_school_idempotency_unique')
+    .on(table.schoolId, table.idempotencyKey),
+  publicationSchoolStartDateIdx: index('evaluation_publications_school_start_date_idx')
+    .on(table.schoolId, table.startDate),
+  publicationAuthorIdx: index('evaluation_publications_created_by_user_id_idx')
+    .on(table.createdByUserId),
+  publicationDateRangeCheck: check(
+    'evaluation_publications_date_range_check',
+    sql`${table.startDate} <= ${table.endDate}`,
+  ),
+  publicationKindCheck: check(
+    'evaluation_publications_kind_check',
+    sql`${table.kind} IN ('devoir', 'examen')`,
+  ),
+  publicationPeriodCheck: check(
+    'evaluation_publications_period_check',
+    sql`${table.periodType} = 'trimester' AND ${table.periodOrderIndex} > 0`,
+  ),
+  publicationIdempotencyKeyCheck: check(
+    'evaluation_publications_idempotency_key_check',
+    sql`${table.idempotencyKey} = btrim(${table.idempotencyKey}) AND length(${table.idempotencyKey}) BETWEEN 8 AND 128`,
+  ),
+  publicationRequestHashCheck: check(
+    'evaluation_publications_request_hash_check',
+    sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+}));
+
 // 8. Evaluations
 export const evaluations = pgTable('evaluations', {
   id: serial('id').primaryKey(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
-  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }).notNull(),
+  publicationId: integer('publication_id'),
+  teacherId: integer('teacher_id').references(() => teachers.id, { onDelete: 'cascade' }),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }),
   subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'set null' }),
   subject: text('subject').notNull(), // e.g. "Mathématiques"
@@ -481,6 +526,19 @@ export const evaluations = pgTable('evaluations', {
   evaluationTermClassSequenceIdx: uniqueIndex('evaluations_school_term_class_sequence_idx')
     .on(table.schoolId, table.termId, table.classId, table.sequenceNumber)
     .where(sql`${table.sequenceNumber} IS NOT NULL`),
+  evaluationPublicationIdx: index('evaluations_publication_id_idx').on(table.publicationId),
+  evaluationPublicationClassSubjectUniqueIdx: uniqueIndex('evaluations_publication_class_subject_unique')
+    .on(table.publicationId, table.classId, table.subjectId)
+    .where(sql`${table.publicationId} IS NOT NULL`),
+  evaluationPublicationSchoolFk: foreignKey({
+    columns: [table.publicationId, table.schoolId],
+    foreignColumns: [evaluationPublications.id, evaluationPublications.schoolId],
+    name: 'evaluations_publication_school_fk',
+  }).onDelete('restrict'),
+  evaluationPublicationTeacherCheck: check(
+    'evaluations_publication_teacher_check',
+    sql`(${table.publicationId} IS NULL AND ${table.teacherId} IS NOT NULL) OR (${table.publicationId} IS NOT NULL AND ${table.teacherId} IS NULL AND ${table.schoolId} IS NOT NULL AND ${table.termId} IS NOT NULL)`,
+  ),
 }));
 
 // 9. Grades (Notes)
@@ -611,6 +669,7 @@ export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(), // Recipient users.id
   evaluationId: integer('evaluation_id').references(() => evaluations.id, { onDelete: 'cascade' }),
+  publicationId: integer('publication_id').references(() => evaluationPublications.id, { onDelete: 'restrict' }),
   title: text('title').notNull(),
   body: text('body').notNull(),
   type: text('type').notNull(), // 'absence' | 'grade' | 'info'
@@ -620,6 +679,47 @@ export const notifications = pgTable('notifications', {
 }, (table) => ({
   dedupeKeyUniqueIdx: uniqueIndex('notifications_dedupe_key_idx').on(table.dedupeKey)
     .where(sql`${table.dedupeKey} IS NOT NULL`),
+  notificationPublicationUserUniqueIdx: uniqueIndex('notifications_publication_user_unique')
+    .on(table.publicationId, table.userId)
+    .where(sql`${table.publicationId} IS NOT NULL`),
+  notificationPublicationEvaluationCheck: check(
+    'notifications_publication_evaluation_check',
+    sql`${table.publicationId} IS NULL OR ${table.evaluationId} IS NULL`,
+  ),
+}));
+
+export const notificationDeliveryOutbox = pgTable('notification_delivery_outbox', {
+  id: serial('id').primaryKey(),
+  notificationId: integer('notification_id').references(() => notifications.id, { onDelete: 'cascade' }).notNull(),
+  channel: text('channel').$type<'push'>().notNull(),
+  status: text('status').$type<'pending' | 'sending' | 'sent' | 'failed'>().default('pending').notNull(),
+  attemptCount: integer('attempt_count').default(0).notNull(),
+  nextAttemptAt: timestamp('next_attempt_at').defaultNow().notNull(),
+  lastError: text('last_error'),
+  sentAt: timestamp('sent_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  notificationChannelUniqueIdx: uniqueIndex('notification_delivery_outbox_notification_channel_unique')
+    .on(table.notificationId, table.channel),
+  pendingDeliveryIdx: index('notification_delivery_outbox_pending_idx')
+    .on(table.nextAttemptAt, table.id)
+    .where(sql`${table.status} = 'pending'`),
+  staleDeliveryIdx: index('notification_delivery_outbox_sending_updated_idx')
+    .on(table.updatedAt, table.id)
+    .where(sql`${table.status} = 'sending'`),
+  deliveryChannelCheck: check(
+    'notification_delivery_outbox_channel_check',
+    sql`${table.channel} = 'push'`,
+  ),
+  deliveryStatusCheck: check(
+    'notification_delivery_outbox_status_check',
+    sql`${table.status} IN ('pending', 'sending', 'sent', 'failed')`,
+  ),
+  deliveryAttemptCountCheck: check(
+    'notification_delivery_outbox_attempt_count_check',
+    sql`${table.attemptCount} >= 0`,
+  ),
 }));
 
 // 12b. Notification attachments
@@ -1201,6 +1301,7 @@ export const schoolsRelations = relations(schools, ({ many }) => ({
   schoolSubjects: many(schoolSubjects),
   classHomeroomAssignments: many(classHomeroomAssignments),
   periodTypeApprovals: many(schoolPeriodTypeApprovals),
+  evaluationPublications: many(evaluationPublications),
 }));
 
 export const academicYearsRelations = relations(academicYears, ({ one, many }) => ({
@@ -1250,6 +1351,23 @@ export const schoolTermsRelations = relations(schoolTerms, ({ one, many }) => ({
   cycle: one(cycles, { fields: [schoolTerms.cycleId], references: [cycles.id] }),
   template: one(cyclePeriodTemplates, { fields: [schoolTerms.templateId], references: [cyclePeriodTemplates.id] }),
   evaluations: many(evaluations),
+}));
+
+export const evaluationPublicationsRelations = relations(evaluationPublications, ({ one, many }) => ({
+  school: one(schools, {
+    fields: [evaluationPublications.schoolId],
+    references: [schools.id],
+  }),
+  academicYear: one(academicYears, {
+    fields: [evaluationPublications.academicYearId],
+    references: [academicYears.id],
+  }),
+  createdBy: one(users, {
+    fields: [evaluationPublications.createdByUserId],
+    references: [users.id],
+  }),
+  evaluations: many(evaluations),
+  notifications: many(notifications),
 }));
 
 export const subjectTypesRelations = relations(subjectTypes, ({ many }) => ({
@@ -1480,6 +1598,10 @@ export const evaluationsRelations = relations(evaluations, ({ one, many }) => ({
     fields: [evaluations.classId],
     references: [classes.id],
   }),
+  publication: one(evaluationPublications, {
+    fields: [evaluations.publicationId, evaluations.schoolId],
+    references: [evaluationPublications.id, evaluationPublications.schoolId],
+  }),
   teacher: one(teachers, {
     fields: [evaluations.teacherId],
     references: [teachers.id],
@@ -1532,10 +1654,22 @@ export const lateArrivalsRelations = relations(lateArrivals, ({ one }) => ({
   }),
 }));
 
-export const notificationsRelations = relations(notifications, ({ one }) => ({
+export const notificationsRelations = relations(notifications, ({ one, many }) => ({
   recipient: one(users, {
     fields: [notifications.userId],
     references: [users.id],
+  }),
+  publication: one(evaluationPublications, {
+    fields: [notifications.publicationId],
+    references: [evaluationPublications.id],
+  }),
+  deliveryOutbox: many(notificationDeliveryOutbox),
+}));
+
+export const notificationDeliveryOutboxRelations = relations(notificationDeliveryOutbox, ({ one }) => ({
+  notification: one(notifications, {
+    fields: [notificationDeliveryOutbox.notificationId],
+    references: [notifications.id],
   }),
 }));
 

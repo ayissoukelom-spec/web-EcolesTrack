@@ -20,6 +20,12 @@ const mockGetActiveSchoolId = vi.hoisted(() => vi.fn(() => 1));
 const mockSetSimulatedRole = vi.hoisted(() => vi.fn());
 const mockSetActiveSchoolId = vi.hoisted(() => vi.fn());
 const mockSetSimulatedUser = vi.hoisted(() => vi.fn());
+const mockUseRealNotesView = vi.hoisted(() => ({ value: false }));
+const mockGroupedPublicationApi = vi.hoisted(() => ({
+  getAvailability: vi.fn(),
+  getOptions: vi.fn(),
+  submit: vi.fn(),
+}));
 
 const localStorageMock = (() => {
   const store: Record<string, string> = {};
@@ -54,7 +60,8 @@ vi.mock('./lib/api.ts', () => ({
   findTeacherProfileFromSimulatedUser: () => null,
 }));
 
-vi.mock('./lib/evaluationUtils.ts', () => ({
+vi.mock('./lib/evaluationUtils.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./lib/evaluationUtils.ts')>(),
   countOverdueEvaluations: mockCountOverdueEvaluations,
   isEvaluationArchived: () => false,
   isEvaluationLockedBySchoolAdmin: () => false,
@@ -132,14 +139,25 @@ vi.mock('./components/AbsenceDeclarationValidationsView.tsx', () => ({
     </div>
   ),
 }));
-vi.mock('./components/NotesView.tsx', () => ({
-  default: ({ onAddGrade, gradesList }: { onAddGrade?: (data: any) => Promise<void>; gradesList?: any[] }) => (
-    <>
-      <div>NotesView</div>
-      {onAddGrade && <button onClick={() => onAddGrade({ evaluationId: 42, studentId: 7, score: '14', remarks: '' })}>Mock save grade</button>}
-      <div data-testid="mock-grades">{JSON.stringify(gradesList || [])}</div>
-    </>
-  ),
+vi.mock('./components/NotesView.tsx', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./components/NotesView.tsx')>();
+  return {
+    default: (props: any) => mockUseRealNotesView.value
+      ? <actual.default {...props} />
+      : (
+        <>
+          <div>NotesView</div>
+          {props.onAddGrade && <button onClick={() => props.onAddGrade({ evaluationId: 42, studentId: 7, score: '14', remarks: '' })}>Mock save grade</button>}
+          <div data-testid="mock-grades">{JSON.stringify(props.gradesList || [])}</div>
+        </>
+      ),
+  };
+});
+vi.mock('./lib/groupedEvaluationPublicationApi.ts', () => ({
+  getGroupedEvaluationPublicationAvailability: mockGroupedPublicationApi.getAvailability,
+  getGroupedEvaluationPublicationOptions: mockGroupedPublicationApi.getOptions,
+  getGroupedEvaluationValidationContext: (options: unknown) => options,
+  submitGroupedEvaluationPublication: mockGroupedPublicationApi.submit,
 }));
 vi.mock('./components/NotificationView.tsx', () => ({ default: () => <div>NotificationView</div> }));
 vi.mock('./components/AuditView.tsx', () => ({ default: () => <div>AuditView</div> }));
@@ -154,6 +172,7 @@ describe('App navigation', () => {
   afterEach(() => {
     cleanup();
     localStorageMock.clear();
+    mockUseRealNotesView.value = false;
   });
 
   beforeEach(() => {
@@ -167,6 +186,9 @@ describe('App navigation', () => {
 
     mockApiFetch.mockReset();
     mockCountOverdueEvaluations.mockReset();
+    mockGroupedPublicationApi.getAvailability.mockReset();
+    mockGroupedPublicationApi.getOptions.mockReset();
+    mockGroupedPublicationApi.submit.mockReset();
     mockSetSimulatedRole.mockReset();
     mockSetActiveSchoolId.mockReset();
     mockSetSimulatedUser.mockReset();
@@ -350,6 +372,51 @@ describe('App navigation', () => {
     fireEvent.click(bulletinButton);
 
     expect(await screen.findByText('BulletinsView')).toBeTruthy();
+  });
+
+  it('shows and opens grouped publication from the real School Admin Notes view while publication is disabled', async () => {
+    mockUseRealNotesView.value = true;
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-school-admin',
+      email: 'admin@example.com',
+      name: 'Admin',
+      schoolId: 1,
+      role: 'school_admin',
+      id: 1,
+    });
+    mockGroupedPublicationApi.getAvailability.mockResolvedValue({ available: false });
+    mockGroupedPublicationApi.getOptions.mockResolvedValue({
+      available: true,
+      classes: [{ id: 1, name: '6ème A' }],
+      subjects: [{ id: 10, name: 'Mathématiques' }],
+      approvedClassIds: [1],
+      approvedSubjectIds: [10],
+      activeTeachingPairs: [{ classId: 1, subjectId: 10 }],
+      termsByClass: {
+        1: [{ id: 100, startDate: '2026-10-01', endDate: '2026-12-31', academicYearId: 5, periodType: 'trimester', orderIndex: 1 }],
+      },
+    });
+
+    render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>,
+    );
+
+    const navigation = await screen.findByRole('navigation', { name: 'Navigation principale' });
+    fireEvent.click(within(navigation).getByRole('button', { name: /Notes & Bulletins/i }));
+
+    const groupedPublicationButton = await screen.findByRole('button', { name: 'Publication groupée' });
+    expect(groupedPublicationButton).toBeVisible();
+    fireEvent.click(groupedPublicationButton);
+
+    expect(await screen.findByTestId('grouped-evaluation-publication-form')).toBeVisible();
+    expect(screen.getByLabelText('Date de début')).toBeVisible();
+    expect(screen.getByLabelText('6ème A')).toBeVisible();
+    expect(screen.getByText(/publication réelle est désactivée/i)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Publication réelle indisponible' })).toBeDisabled();
+    expect(mockGroupedPublicationApi.submit).not.toHaveBeenCalled();
   });
 
   it('routes super_admin from the actual sidebar Comptabilité entry to AccountingView', async () => {

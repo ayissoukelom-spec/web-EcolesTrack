@@ -101,9 +101,11 @@ import {
   schoolCycles,
   cyclePeriodTemplates,
   evaluationParticipations,
+  evaluationPublications,
+  notificationDeliveryOutbox,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -112,6 +114,23 @@ import { getFallbackSchoolIdsForActor } from './src/lib/authSchoolMembership.ts'
 import { isStudentAcademicYearStatus } from './src/lib/studentAcademicYearStatus.ts';
 import { resolveTeacherControlSchoolAccess } from './src/lib/teacherControl/authorization.ts';
 import { buildSimProfileDebugDto } from './src/server/debugSimProfileDto.ts';
+import { resolveSchoolPeriodTypeStates } from './src/lib/educationStructure.ts';
+import {
+  GroupedEvaluationIdempotencyConflictError,
+  GroupedEvaluationValidationError,
+  isAuthorizedGroupedPublicationActor,
+  publishGroupedEvaluations,
+  type GroupedEvaluationPublicationRepository,
+  type GroupedEvaluationPublicationTransaction,
+  type GroupedPublicationContext,
+} from './src/lib/groupedEvaluationPublicationService.ts';
+import {
+  isGroupedPushDeliveryEnabled,
+  processGroupedPushOutboxBatch,
+  type ClaimedGroupedPushDelivery,
+  type GroupedPushDeliveryRepository,
+  type GroupedPushDeliveryTransport,
+} from './src/lib/groupedEvaluationPushDelivery.ts';
 import {
   TEACHER_CONTROL_APP_PERMISSIONS_POLICY,
   TEACHER_CONTROL_DEFAULT_PERMISSIONS_POLICY,
@@ -356,6 +375,180 @@ export function findConflictingSchoolTerm(existingTerms: Array<{ id?: number | n
   }) ?? null;
 }
 
+function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
+  return {
+    claimDue: async (limit, now) => db.transaction(async (tx) => {
+      const candidates = await tx.select({
+        id: notificationDeliveryOutbox.id,
+        notificationId: notifications.id,
+        userId: notifications.userId,
+        title: notifications.title,
+        body: notifications.body,
+        publicationId: notifications.publicationId,
+      }).from(notificationDeliveryOutbox)
+        .innerJoin(notifications, eq(notifications.id, notificationDeliveryOutbox.notificationId))
+        .where(and(
+          eq(notificationDeliveryOutbox.channel, 'push'),
+          eq(notificationDeliveryOutbox.status, 'pending'),
+          lte(notificationDeliveryOutbox.nextAttemptAt, now),
+          isNotNull(notifications.publicationId),
+        ))
+        .orderBy(notificationDeliveryOutbox.nextAttemptAt, notificationDeliveryOutbox.id)
+        .limit(limit);
+
+      const claimed: ClaimedGroupedPushDelivery[] = [];
+      for (const candidate of candidates) {
+        const [claim] = await tx.update(notificationDeliveryOutbox)
+          .set({
+            status: 'sending',
+            attemptCount: sql`${notificationDeliveryOutbox.attemptCount} + 1`,
+            lastError: null,
+            updatedAt: now,
+          })
+          .where(and(
+            eq(notificationDeliveryOutbox.id, candidate.id),
+            eq(notificationDeliveryOutbox.status, 'pending'),
+            lte(notificationDeliveryOutbox.nextAttemptAt, now),
+          ))
+          .returning({
+            id: notificationDeliveryOutbox.id,
+            attemptCount: notificationDeliveryOutbox.attemptCount,
+          });
+        if (!claim || candidate.publicationId == null) continue;
+        claimed.push({
+          ...candidate,
+          publicationId: candidate.publicationId,
+          attemptCount: claim.attemptCount,
+        });
+      }
+      return claimed;
+    }),
+    markSent: async (id, attemptCount, sentAt) => {
+      await db.update(notificationDeliveryOutbox).set({
+        status: 'sent',
+        sentAt,
+        lastError: null,
+        updatedAt: sentAt,
+      }).where(and(
+        eq(notificationDeliveryOutbox.id, id),
+        eq(notificationDeliveryOutbox.status, 'sending'),
+        eq(notificationDeliveryOutbox.attemptCount, attemptCount),
+      ));
+    },
+    markFailed: async (id, attemptCount, error, updatedAt) => {
+      await db.update(notificationDeliveryOutbox).set({
+        status: 'failed',
+        lastError: error,
+        updatedAt,
+      }).where(and(
+        eq(notificationDeliveryOutbox.id, id),
+        eq(notificationDeliveryOutbox.status, 'sending'),
+        eq(notificationDeliveryOutbox.attemptCount, attemptCount),
+      ));
+    },
+    scheduleRetry: async (id, attemptCount, error, nextAttemptAt, updatedAt) => {
+      await db.update(notificationDeliveryOutbox).set({
+        status: 'pending',
+        lastError: error,
+        nextAttemptAt,
+        updatedAt,
+      }).where(and(
+        eq(notificationDeliveryOutbox.id, id),
+        eq(notificationDeliveryOutbox.status, 'sending'),
+        eq(notificationDeliveryOutbox.attemptCount, attemptCount),
+      ));
+    },
+    markUncertain: async (id, attemptCount, error, updatedAt) => {
+      await db.update(notificationDeliveryOutbox).set({
+        lastError: error,
+        updatedAt,
+      }).where(and(
+        eq(notificationDeliveryOutbox.id, id),
+        eq(notificationDeliveryOutbox.status, 'sending'),
+        eq(notificationDeliveryOutbox.attemptCount, attemptCount),
+      ));
+    },
+  };
+}
+
+const groupedPushDeliveryTransport: GroupedPushDeliveryTransport = {
+  send: async (delivery, idempotencyKey) => {
+    const apiBaseUrl = process.env.API_URL?.trim().replace(/\/+$/, '');
+    if (!apiBaseUrl) {
+      return { outcome: 'permanent_failure', error: 'API_URL is not configured for push delivery.' };
+    }
+
+    const payload = {
+      parentId: String(delivery.userId),
+      title: delivery.title,
+      message: delivery.body,
+      category: 'evaluation',
+      metadata: {
+        target: 'homework',
+        notificationId: delivery.notificationId,
+        publicationId: delivery.publicationId,
+      },
+      dedupeKey: idempotencyKey,
+      groupedDelivery: true,
+    };
+
+    let signed: { signature: string; timestamp: string };
+    try {
+      signed = signInternalPayload(payload);
+    } catch (error) {
+      return {
+        outcome: 'permanent_failure',
+        error: error instanceof Error ? error.message : 'INTERNAL_SECRET is not configured.',
+      };
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${apiBaseUrl}/api/internal/evaluation-notification`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Signature': signed.signature,
+          'X-Internal-Timestamp': signed.timestamp,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(45_000),
+      });
+    } catch (error) {
+      throw new Error(
+        `Push dispatch outcome is unknown: ${error instanceof Error ? error.message : 'network failure'}`,
+      );
+    }
+
+    if (!response.ok) {
+      const error = `Push API returned HTTP ${response.status}.`;
+      return response.status === 429 || response.status >= 500
+        ? { outcome: 'retryable_failure', error }
+        : { outcome: 'permanent_failure', error };
+    }
+
+    const result = await response.json() as {
+      success?: boolean;
+      delivery?: { outcome?: string; error?: string };
+    };
+    if (result.success !== true || !result.delivery) {
+      throw new Error('Push API response did not contain a provider delivery result.');
+    }
+    if (
+      result.delivery.outcome !== 'sent'
+      && result.delivery.outcome !== 'retryable_failure'
+      && result.delivery.outcome !== 'permanent_failure'
+      && result.delivery.outcome !== 'no_subscription'
+    ) {
+      throw new Error('Push API returned an unrecognized provider delivery result.');
+    }
+    return {
+      outcome: result.delivery.outcome,
+      error: result.delivery.error,
+    };
+  },
+};
+
 export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | null> {
   if (!req.user) return null;
 
@@ -403,6 +596,288 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
   }
 
   return null;
+}
+
+function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublicationRepository {
+  return {
+    transaction: <T>(work: (transaction: GroupedEvaluationPublicationTransaction) => Promise<T>) =>
+      db.transaction(async (executor) => {
+        const getPublication = async (schoolId: number, idempotencyKey: string) => {
+          const [publication] = await executor.select({
+            id: evaluationPublications.id,
+            requestHash: evaluationPublications.requestHash,
+          }).from(evaluationPublications).where(and(
+            eq(evaluationPublications.schoolId, schoolId),
+            eq(evaluationPublications.idempotencyKey, idempotencyKey),
+          )).limit(1);
+          if (!publication) return null;
+
+          const [childRows, notificationRows] = await Promise.all([
+            executor.select({ id: evaluations.id }).from(evaluations)
+              .where(eq(evaluations.publicationId, publication.id))
+              .orderBy(evaluations.id),
+            executor.selectDistinct({ userId: notifications.userId }).from(notifications)
+              .where(eq(notifications.publicationId, publication.id)),
+          ]);
+          return {
+            id: publication.id,
+            requestHash: publication.requestHash,
+            evaluationIds: childRows.map((row) => row.id),
+            recipientCount: notificationRows.length,
+          };
+        };
+
+        const transaction: GroupedEvaluationPublicationTransaction = {
+          findPublication: getPublication,
+          getPublication,
+          loadContext: async (schoolId, request): Promise<GroupedPublicationContext> => {
+            const classRows = await executor.select({
+              id: classes.id,
+              schoolId: classes.schoolId,
+              academicYearId: classes.academicYearId,
+              levelId: classes.levelId,
+              cycleId: levels.cycleId,
+              cycleCode: cycles.code,
+            }).from(classes)
+              .leftJoin(levels, eq(classes.levelId, levels.id))
+              .leftJoin(cycles, eq(levels.cycleId, cycles.id))
+              .where(inArray(classes.id, request.classIds));
+
+            const approvedClassIds = classRows
+              .filter((row) => row.schoolId === schoolId)
+              .map((row) => row.id);
+            const globalClassIds = classRows
+              .filter((row) => row.schoolId == null)
+              .map((row) => row.id);
+            if (globalClassIds.length > 0) {
+              const approvedGlobalRows = await executor.select({ classId: schoolClasses.classId })
+                .from(schoolClasses).where(and(
+                  eq(schoolClasses.schoolId, schoolId),
+                  eq(schoolClasses.status, 'approved'),
+                  inArray(schoolClasses.classId, globalClassIds),
+                ));
+              approvedClassIds.push(...approvedGlobalRows.map((row) => row.classId));
+            }
+
+            const academicYearIds = [...new Set(classRows.map((row) => row.academicYearId))];
+            if (classRows.length !== request.classIds.length || academicYearIds.length !== 1) {
+              throw new GroupedEvaluationValidationError(
+                'incompatible_terms',
+                'Toutes les classes doivent appartenir à la même année scolaire.',
+                { classIds: request.classIds },
+              );
+            }
+            const academicYearId = academicYearIds[0];
+            const [academicYear] = await executor.select({
+              id: academicYears.id,
+              schoolId: academicYears.schoolId,
+            }).from(academicYears).where(eq(academicYears.id, academicYearId)).limit(1);
+            if (!academicYear || (academicYear.schoolId != null && academicYear.schoolId !== schoolId)) {
+              throw new GroupedEvaluationValidationError(
+                'incompatible_terms',
+                'L’année scolaire sélectionnée n’est pas disponible dans cet établissement.',
+              );
+            }
+
+            const subjectRows = await executor.select({
+              id: subjects.id,
+              name: subjects.name,
+              schoolId: subjects.schoolId,
+            }).from(subjects)
+              .leftJoin(schoolSubjects, and(
+                eq(schoolSubjects.subjectId, subjects.id),
+                eq(schoolSubjects.schoolId, schoolId),
+                eq(schoolSubjects.status, 'approved'),
+              ))
+              .where(and(
+                inArray(subjects.id, request.subjectIds),
+                or(eq(subjects.schoolId, schoolId), eq(schoolSubjects.status, 'approved')),
+              ));
+            const approvedSubjectIds = subjectRows.map((row) => row.id);
+            const subjectNamesById = Object.fromEntries(subjectRows.map((row) => [row.id, row.name]));
+
+            const activePairs = classRows.length === 0 || subjectRows.length === 0
+              ? []
+              : await executor.selectDistinct({
+                classId: teacherClassSubjects.classId,
+                subjectId: teacherClassSubjects.subjectId,
+              }).from(teacherClassSubjects)
+                .innerJoin(teachers, and(
+                  eq(teachers.id, teacherClassSubjects.teacherId),
+                  eq(teachers.schoolId, schoolId),
+                ))
+                .innerJoin(userSchools, and(
+                  eq(userSchools.userId, teachers.userId),
+                  eq(userSchools.schoolId, schoolId),
+                  eq(userSchools.role, 'teacher'),
+                  sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+                ))
+                .innerJoin(users, and(
+                  eq(users.id, teachers.userId),
+                  eq(users.isDeleted, false),
+                ))
+                .where(and(
+                  eq(teacherClassSubjects.schoolId, schoolId),
+                  eq(teacherClassSubjects.isActive, true),
+                  inArray(teacherClassSubjects.classId, request.classIds),
+                  inArray(teacherClassSubjects.subjectId, request.subjectIds),
+                ));
+
+            const activeCycleRows = await executor.select({
+              id: cycles.id,
+              code: cycles.code,
+            }).from(schoolCycles)
+              .innerJoin(cycles, eq(schoolCycles.cycleId, cycles.id))
+              .where(and(
+                eq(schoolCycles.schoolId, schoolId),
+                eq(schoolCycles.isActive, true),
+                eq(cycles.isActive, true),
+              ));
+            const approvalRows = await executor.select({
+              periodType: schoolPeriodTypeApprovals.periodType,
+              status: schoolPeriodTypeApprovals.status,
+            }).from(schoolPeriodTypeApprovals)
+              .where(eq(schoolPeriodTypeApprovals.schoolId, schoolId));
+            const periodStates = resolveSchoolPeriodTypeStates(activeCycleRows, approvalRows);
+            const termRows = await executor.select().from(schoolTerms).where(and(
+              eq(schoolTerms.academicYearId, academicYearId),
+              or(eq(schoolTerms.schoolId, schoolId), sql`${schoolTerms.schoolId} IS NULL`),
+            ));
+
+            const termsByClass: GroupedPublicationContext['termsByClass'] = {};
+            for (const classRow of classRows) {
+              const compatibleTerms = termRows.filter((term) => {
+                if (term.isActive === false) return false;
+                const periodType = term.periodType ?? (
+                  /^Trimestre\b/i.test(term.name) ? 'trimester' : null
+                );
+                const state = periodStates.find((item) => item.periodType === periodType);
+                if (periodType !== 'trimester' || !state?.available) return false;
+                return classRow.cycleId != null
+                  && state.activeCycleIds.includes(classRow.cycleId)
+                  && (term.cycleId == null || term.cycleId === classRow.cycleId);
+              });
+              termsByClass[classRow.id] = compatibleTerms.flatMap((term) => (
+                term.startDate && term.endDate
+                  ? [{
+                    id: term.id,
+                    startDate: term.startDate,
+                    endDate: term.endDate,
+                    academicYearId: term.academicYearId,
+                    periodType: term.periodType ?? 'trimester',
+                    orderIndex: term.orderIndex,
+                  }]
+                  : []
+              ));
+            }
+
+            const termsCoveringPeriod = request.classIds
+              .flatMap((classId) => termsByClass[classId] ?? [])
+              .filter((term) => term.startDate <= request.startDate && term.endDate >= request.endDate);
+            const periodOrderIndex = termsCoveringPeriod[0]?.orderIndex ?? 0;
+
+            return {
+              approvedClassIds,
+              approvedSubjectIds,
+              activeTeachingPairs: activePairs,
+              termsByClass,
+              academicYearId,
+              periodType: 'trimester',
+              periodOrderIndex,
+              subjectNamesById,
+            };
+          },
+          createPublication: async (input) => {
+            const [created] = await executor.insert(evaluationPublications).values({
+              schoolId: input.schoolId,
+              academicYearId: input.academicYearId,
+              createdByUserId: input.authorUserId,
+              kind: input.kind,
+              periodType: input.periodType,
+              periodOrderIndex: input.periodOrderIndex,
+              startDate: input.startDate,
+              endDate: input.endDate,
+              idempotencyKey: input.idempotencyKey,
+              requestHash: input.requestHash,
+            }).onConflictDoNothing({
+              target: [evaluationPublications.schoolId, evaluationPublications.idempotencyKey],
+            }).returning({ id: evaluationPublications.id });
+            return created ?? null;
+          },
+          nextSequence: async (schoolId, termId, classId) => {
+            const lockKey = `evaluation-sequence:${schoolId}:${termId}:${classId}`;
+            await executor.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+            const [existing] = await executor.select({
+              maxSequence: sql<number>`COALESCE(MAX(${evaluations.sequenceNumber}), 0)::integer`,
+            }).from(evaluations).where(and(
+              eq(evaluations.schoolId, schoolId),
+              eq(evaluations.termId, termId),
+              eq(evaluations.classId, classId),
+            ));
+            return Number(existing?.maxSequence ?? 0) + 1;
+          },
+          createEvaluation: async (input) => {
+            const [created] = await executor.insert(evaluations).values({
+              publicationId: input.publicationId,
+              classId: input.classId,
+              schoolId: input.schoolId,
+              teacherId: null,
+              termId: input.termId,
+              subjectId: input.subjectId,
+              subject: input.subject,
+              title: input.generatedName,
+              type: input.type,
+              sequenceNumber: input.sequenceNumber,
+              generatedName: input.generatedName,
+              coefficient: 1,
+              maxScore: 20,
+              countInBulletin: false,
+              date: input.date,
+            }).returning({ id: evaluations.id });
+            if (!created) throw new Error('Evaluation insert did not return an id.');
+            return created;
+          },
+          getParentUserIds: async (schoolId, selectedClassIds) => {
+            if (selectedClassIds.length === 0) return [];
+            const rows = await executor.selectDistinct({ userId: parents.userId })
+              .from(students)
+              .innerJoin(parents, eq(students.parentId, parents.id))
+              .where(and(
+                eq(students.schoolId, schoolId),
+                eq(students.isActive, true),
+                inArray(students.classId, selectedClassIds),
+                isNotNull(parents.userId),
+              ));
+            return rows.flatMap((row) => row.userId == null ? [] : [row.userId]);
+          },
+          createLocalNotifications: async ({ publicationId, recipientUserIds, title, body }) => {
+            if (recipientUserIds.length === 0) return [];
+            const rows = recipientUserIds.map((userId) => ({
+              userId,
+              publicationId,
+              title,
+              body,
+              type: 'info',
+              dedupeKey: `grouped-evaluation-publication-${publicationId}-${userId}`,
+            }));
+            const created = await executor.insert(notifications).values(rows)
+              .onConflictDoNothing()
+              .returning({ id: notifications.id });
+            return created.map((row) => row.id);
+          },
+          createPushOutbox: async (notificationIds) => {
+            if (notificationIds.length === 0) return;
+            await executor.insert(notificationDeliveryOutbox).values(notificationIds.map((notificationId) => ({
+              notificationId,
+              channel: 'push' as const,
+              status: 'pending' as const,
+              attemptCount: 0,
+            })));
+          },
+        };
+        return work(transaction);
+      }),
+  };
 }
 
 async function getUserSchoolMemberships(userId: number | null | undefined) {
@@ -11679,10 +12154,18 @@ export async function createApp() {
           schoolId: subject.schoolId ?? null,
         }));
 
+        const teacherScope = await getTeacherAuthorizationScope(actor);
+        if (!teacherScope) {
+          res.set('Cache-Control', 'no-store');
+          res.json([]);
+          return;
+        }
+        result = result.filter((subject) => teacherScope.subjectIds.has(subject.id));
         if (approvedOnly) {
           result = result.filter((subject) => subject.status === 'approved');
         }
 
+        res.set('Cache-Control', 'no-store');
         res.json(result);
         return;
       }
@@ -12151,6 +12634,267 @@ export async function createApp() {
   // MODULE NOTES (EVALUATIONS & GRADES) API
   // ==========================================
 
+  app.get('/api/admin/evaluation-publications/grouped/availability', requireAuth, async (req: AuthRequest, res) => {
+    if (process.env.GROUPED_EVALUATION_PUBLICATIONS_ENABLED !== 'true') {
+      return res.json({ available: false });
+    }
+    try {
+      const actor = await resolveActor(req);
+      if (!actor || actor.role !== 'school_admin' || actor.id == null || actor.schoolId == null) {
+        return res.json({ available: false });
+      }
+      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
+      if (!isAuthorizedGroupedPublicationActor(actor, membership)) return res.json({ available: false });
+
+      await db.select({ id: evaluationPublications.id }).from(evaluationPublications).limit(1);
+      await db.select({ id: notificationDeliveryOutbox.id }).from(notificationDeliveryOutbox).limit(1);
+      return res.json({ available: true });
+    } catch (error) {
+      console.error('GET grouped evaluation publication availability failed:', error);
+      return res.json({ available: false });
+    }
+  });
+
+  app.get('/api/admin/evaluation-publications/grouped/options', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'school_admin' || actor.id == null || actor.schoolId == null) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
+      if (!isAuthorizedGroupedPublicationActor(actor, membership)) {
+        return res.status(403).json({ error: 'Active school-admin membership required' });
+      }
+
+      const schoolId = actor.schoolId;
+      const activeCycleRows = await db.select({
+        id: cycles.id,
+        code: cycles.code,
+      }).from(schoolCycles)
+        .innerJoin(cycles, eq(schoolCycles.cycleId, cycles.id))
+        .where(and(
+          eq(schoolCycles.schoolId, schoolId),
+          eq(schoolCycles.isActive, true),
+          eq(cycles.isActive, true),
+        ));
+      const approvalRows = await db.select({
+        periodType: schoolPeriodTypeApprovals.periodType,
+        status: schoolPeriodTypeApprovals.status,
+      }).from(schoolPeriodTypeApprovals)
+        .where(eq(schoolPeriodTypeApprovals.schoolId, schoolId));
+      const periodStates = resolveSchoolPeriodTypeStates(activeCycleRows, approvalRows);
+      const availableTrimester = periodStates.some((state) => state.periodType === 'trimester' && state.available);
+      if (!availableTrimester) {
+        return res.json({
+          available: false,
+          classes: [],
+          subjects: [],
+          approvedClassIds: [],
+          approvedSubjectIds: [],
+          activeTeachingPairs: [],
+          termsByClass: {},
+        });
+      }
+
+      const assignmentRows = await db.selectDistinct({
+        classId: teacherClassSubjects.classId,
+        className: classes.name,
+        academicYearId: classes.academicYearId,
+        cycleId: levels.cycleId,
+        subjectId: subjects.id,
+        subjectName: subjects.name,
+      }).from(teacherClassSubjects)
+        .innerJoin(teachers, and(
+          eq(teachers.id, teacherClassSubjects.teacherId),
+          eq(teachers.schoolId, schoolId),
+        ))
+        .innerJoin(users, and(
+          eq(users.id, teachers.userId),
+          eq(users.isDeleted, false),
+        ))
+        .innerJoin(userSchools, and(
+          eq(userSchools.userId, teachers.userId),
+          eq(userSchools.schoolId, schoolId),
+          eq(userSchools.role, 'teacher'),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+        ))
+        .innerJoin(classes, eq(classes.id, teacherClassSubjects.classId))
+        .leftJoin(levels, eq(classes.levelId, levels.id))
+        .leftJoin(cycles, eq(levels.cycleId, cycles.id))
+        .innerJoin(subjects, eq(subjects.id, teacherClassSubjects.subjectId))
+        .leftJoin(schoolClasses, and(
+          eq(schoolClasses.classId, classes.id),
+          eq(schoolClasses.schoolId, schoolId),
+          eq(schoolClasses.status, 'approved'),
+        ))
+        .leftJoin(schoolSubjects, and(
+          eq(schoolSubjects.subjectId, subjects.id),
+          eq(schoolSubjects.schoolId, schoolId),
+          eq(schoolSubjects.status, 'approved'),
+        ))
+        .where(and(
+          eq(teacherClassSubjects.schoolId, schoolId),
+          eq(teacherClassSubjects.isActive, true),
+          or(eq(classes.schoolId, schoolId), isNotNull(schoolClasses.id)),
+          or(eq(subjects.schoolId, schoolId), isNotNull(schoolSubjects.id)),
+        ));
+
+      const classRecords = new Map<number, {
+        id: number;
+        name: string;
+        academicYearId: number;
+        cycleId: number | null;
+      }>();
+      const activeTeachingPairs: Array<{ classId: number; subjectId: number }> = [];
+      const subjectsById = new Map<number, { id: number; name: string }>();
+      for (const row of assignmentRows) {
+        if (!classRecords.has(row.classId)) {
+          classRecords.set(row.classId, {
+            id: row.classId,
+            name: row.className,
+            academicYearId: row.academicYearId,
+            cycleId: row.cycleId,
+          });
+        }
+        activeTeachingPairs.push({ classId: row.classId, subjectId: row.subjectId });
+        subjectsById.set(row.subjectId, { id: row.subjectId, name: row.subjectName });
+      }
+
+      const academicYearIds = [...new Set([...classRecords.values()].map((item) => item.academicYearId))];
+      const termRows = academicYearIds.length === 0
+        ? []
+        : await db.select().from(schoolTerms).where(and(
+          inArray(schoolTerms.academicYearId, academicYearIds),
+          or(eq(schoolTerms.schoolId, schoolId), sql`${schoolTerms.schoolId} IS NULL`),
+        ));
+      const termsByClass: GroupedPublicationContext['termsByClass'] = {};
+      const classesWithTerms = [...classRecords.values()].filter((classRecord) => {
+        const terms = termRows.flatMap((term) => {
+          const periodType = term.periodType ?? (/^Trimestre\b/i.test(term.name) ? 'trimester' : null);
+          const periodState = periodStates.find((item) => item.periodType === periodType);
+          if (
+            term.academicYearId !== classRecord.academicYearId
+            || term.isActive === false
+            || periodType !== 'trimester'
+            || !periodState?.available
+            || classRecord.cycleId == null
+            || !periodState.activeCycleIds.includes(classRecord.cycleId)
+            || (term.cycleId != null && term.cycleId !== classRecord.cycleId)
+            || !term.startDate
+            || !term.endDate
+          ) return [];
+          return [{
+            id: term.id,
+            startDate: term.startDate,
+            endDate: term.endDate,
+            academicYearId: term.academicYearId,
+            periodType,
+            orderIndex: term.orderIndex,
+          }];
+        });
+        termsByClass[classRecord.id] = terms;
+        return terms.length > 0;
+      });
+      const availableClassIds = new Set(classesWithTerms.map((item) => item.id));
+      const filteredPairs = activeTeachingPairs.filter((pair) => availableClassIds.has(pair.classId));
+      const availableSubjectIds = new Set(filteredPairs.map((pair) => pair.subjectId));
+
+      return res.json({
+        available: true,
+        classes: classesWithTerms.map(({ id, name }) => ({ id, name })),
+        subjects: [...subjectsById.values()].filter((subject) => availableSubjectIds.has(subject.id)),
+        approvedClassIds: classesWithTerms.map((item) => item.id),
+        approvedSubjectIds: [...availableSubjectIds],
+        activeTeachingPairs: filteredPairs,
+        termsByClass: Object.fromEntries(
+          Object.entries(termsByClass).filter(([classId]) => availableClassIds.has(Number(classId))),
+        ),
+      });
+    } catch (error) {
+      console.error('GET grouped evaluation publication options failed:', error);
+      return res.status(503).json({
+        error: 'Grouped evaluation publication options are not available.',
+      });
+    }
+  });
+
+  app.post('/api/admin/evaluation-publications/grouped', requireAuth, async (req: AuthRequest, res) => {
+    if (process.env.GROUPED_EVALUATION_PUBLICATIONS_ENABLED !== 'true') {
+      return res.status(404).json({ error: 'Route not found' });
+    }
+
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'school_admin') {
+        return res.status(403).json({ error: 'Only school administrators can publish grouped evaluations' });
+      }
+      if (!Number.isInteger(actor.id) || actor.id == null || actor.schoolId == null) {
+        return res.status(403).json({ error: 'Verified school context is required' });
+      }
+      const membership = await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin');
+      if (!isAuthorizedGroupedPublicationActor(actor, membership)) {
+        return res.status(403).json({ error: 'No active school administrator membership for this school context' });
+      }
+
+      const body = req.body ?? {};
+      if (Object.prototype.hasOwnProperty.call(body, 'schoolId')) {
+        return res.status(400).json({
+          error: {
+            code: 'school_context_missing',
+            message: 'L’établissement est déterminé par le contexte actif vérifié côté serveur.',
+          },
+        });
+      }
+      if (!Array.isArray(body.classIds) || !Array.isArray(body.subjectIds)) {
+        return res.status(400).json({
+          error: {
+            code: 'invalid_selection',
+            message: 'Sélectionnez au moins une classe et une matière.',
+          },
+        });
+      }
+      const idempotencyKey = typeof body.idempotencyKey === 'string'
+        ? body.idempotencyKey
+        : req.header('Idempotency-Key') ?? '';
+      const result = await publishGroupedEvaluations(
+        createGroupedEvaluationPublicationRepository(),
+        {
+          schoolId: actor.schoolId,
+          authorUserId: actor.id,
+          request: {
+            kind: body.kind,
+            startDate: body.startDate,
+            endDate: body.endDate,
+            classIds: body.classIds,
+            subjectIds: body.subjectIds,
+            idempotencyKey,
+          },
+        },
+      );
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof GroupedEvaluationValidationError) {
+        return res.status(400).json({
+          error: { code: error.code, message: error.message, details: error.details },
+        });
+      }
+      if (error instanceof GroupedEvaluationIdempotencyConflictError) {
+        return res.status(409).json({
+          error: { code: 'idempotency_conflict', message: error.message },
+        });
+      }
+      console.error('POST /api/admin/evaluation-publications/grouped failed:', error);
+      return res.status(500).json({
+        error: {
+          code: 'persistence_failed',
+          message: 'La publication groupée n’a pas pu être enregistrée.',
+        },
+      });
+    }
+  });
+
   // Evaluations list - Filtered by school
   app.get('/api/evaluations', requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -12181,8 +12925,8 @@ export async function createApp() {
         })
         .from(evaluations)
         .innerJoin(classes, eq(evaluations.classId, classes.id))
-        .innerJoin(teachers, eq(evaluations.teacherId, teachers.id))
-        .innerJoin(users, eq(teachers.userId, users.id))
+        .leftJoin(teachers, eq(evaluations.teacherId, teachers.id))
+        .leftJoin(users, eq(teachers.userId, users.id))
         .leftJoin(subjects, eq(evaluations.subjectId, subjects.id));
 
       if (actor.role !== 'super_admin') {
@@ -12526,32 +13270,6 @@ export async function createApp() {
         }
       }
 
-      // Generate sequence number for this (termId, classId) combination
-      // Using a transaction to avoid race conditions
-      const sequenceNumber = await db.transaction(async (tx) => {
-        // Get the maximum sequence number for this (termId, classId)
-        const existingSequences = await tx
-          .select({ maxSeq: sql<number>`MAX(${evaluations.sequenceNumber})` })
-          .from(evaluations)
-          .where(and(
-            eq(evaluations.termId, resolvedTermId),
-            eq(evaluations.classId, parseInt(classId)),
-            eq(evaluations.schoolId, approvalSchoolId),
-          ));
-
-        const maxSeq = existingSequences[0]?.maxSeq ?? 0;
-        const nextSequenceNumber = (maxSeq || 0) + 1;
-
-        console.log('DEBUG sequence generation', {
-          termId: resolvedTermId,
-          classId: parseInt(classId),
-          maxSeq,
-          nextSequenceNumber,
-        });
-
-        return nextSequenceNumber;
-      });
-
       // Get the short term name for display
       const [selectedTermInfo] = await db
         .select({ name: schoolTerms.name, orderIndex: schoolTerms.orderIndex, periodType: schoolTerms.periodType })
@@ -12562,26 +13280,39 @@ export async function createApp() {
       const evaluationTypeLabel = normalizedType === 'evaluation_mensuelle'
         ? 'Évaluation mensuelle'
         : `${normalizedType.charAt(0).toUpperCase()}${normalizedType.slice(1)}`;
-      const generatedName = `${evaluationTypeLabel} ${termShortName}.${sequenceNumber}`;
+      const { createdEvaluation, generatedName } = await db.transaction(async (tx) => {
+        const lockKey = `evaluation-sequence:${approvalSchoolId}:${resolvedTermId}:${parseInt(classId)}`;
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+        const [existingSequences] = await tx
+          .select({ maxSeq: sql<number>`COALESCE(MAX(${evaluations.sequenceNumber}), 0)::integer` })
+          .from(evaluations)
+          .where(and(
+            eq(evaluations.termId, resolvedTermId),
+            eq(evaluations.classId, parseInt(classId)),
+            eq(evaluations.schoolId, approvalSchoolId),
+          ));
 
-      const result = await db.insert(evaluations).values({
-        classId: parseInt(classId),
-        schoolId: approvalSchoolId,
-        teacherId: resolvedTeacherId,
-        termId: resolvedTermId,
-        subjectId: resolvedSubjectId,
-        subject: resolvedSubjectName,
-        title: generatedName,
-        type: normalizedType,
-        sequenceNumber,
-        generatedName,
-        coefficient: coefficient ? parseInt(coefficient) : 1,
-        maxScore: maxScore ? parseInt(maxScore) : 20,
-        countInBulletin: false,
-        date,
-      }).returning();
-
-      const [createdEvaluation] = result;
+        const sequenceNumber = Number(existingSequences?.maxSeq ?? 0) + 1;
+        const generatedName = `${evaluationTypeLabel} ${termShortName}.${sequenceNumber}`;
+        const [createdEvaluation] = await tx.insert(evaluations).values({
+          classId: parseInt(classId),
+          schoolId: approvalSchoolId,
+          teacherId: resolvedTeacherId,
+          termId: resolvedTermId,
+          subjectId: resolvedSubjectId,
+          subject: resolvedSubjectName,
+          title: generatedName,
+          type: normalizedType,
+          sequenceNumber,
+          generatedName,
+          coefficient: coefficient ? parseInt(coefficient) : 1,
+          maxScore: maxScore ? parseInt(maxScore) : 20,
+          countInBulletin: false,
+          date,
+        }).returning();
+        if (!createdEvaluation) throw new Error('Evaluation insert did not return a row.');
+        return { createdEvaluation, generatedName };
+      });
       const baseClassStudentParentsQuery = db
         .select({ parentUserId: parents.userId })
         .from(students)
@@ -12904,14 +13635,18 @@ if (uniqueParentIds.length > 0) {
       // Prefer the evaluation.createdAt timestamp if available, otherwise fall back to evaluation.date.
       if (student.enrolledAt && (evaluation.createdAt || evaluation.date)) {
         const enrollmentDate = new Date(student.enrolledAt);
-        const evaluationTimestamp = new Date(evaluation.createdAt || evaluation.date);
+        const evaluationTimestamp = new Date(
+          evaluation.teacherId == null
+            ? evaluation.date
+            : evaluation.createdAt || evaluation.date,
+        );
         if (Number.isNaN(evaluationTimestamp.getTime())) {
           return res.status(400).json({ error: 'Evaluation timestamp invalide' });
         }
 
         if (enrollmentDate.getTime() > evaluationTimestamp.getTime()) {
           return res.status(400).json({ 
-            error: `Impossible de créer une note pour ${student.lastName} ${student.firstName}: cet élève n'était pas encore inscrit au moment de la création du devoir (${evaluation.createdAt || evaluation.date})`
+            error: `Impossible de créer une note pour ${student.lastName} ${student.firstName}: cet élève n'était pas encore inscrit au moment de référence du devoir (${evaluation.teacherId == null ? evaluation.date : evaluation.createdAt || evaluation.date})`
           });
         }
       }
@@ -14049,6 +14784,34 @@ export async function startServer() {
       console.error('Failed to list registered routes:', e);
     }
     console.log(`Server starting on http://localhost:${PORT}`);
+
+    if (isGroupedPushDeliveryEnabled(process.env)) {
+      void (async () => {
+        try {
+          await db.select({ id: notificationDeliveryOutbox.id })
+            .from(notificationDeliveryOutbox)
+            .limit(1);
+        } catch (error) {
+          console.error('Grouped push worker disabled: outbox schema is unavailable.', error);
+          return;
+        }
+
+        const runBatch = async () => {
+          try {
+            const result = await processGroupedPushOutboxBatch(
+              createGroupedPushDeliveryRepository(),
+              groupedPushDeliveryTransport,
+            );
+            if (result.claimed > 0) console.info('Grouped push outbox batch completed:', result);
+          } catch (error) {
+            console.error('Grouped push outbox batch failed:', error);
+          }
+        };
+        void runBatch();
+        const timer = setInterval(() => { void runBatch(); }, 15_000);
+        timer.unref();
+      })();
+    }
   });
 }
 
