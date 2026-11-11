@@ -617,6 +617,154 @@ describe('AbsenceView surveillant', () => {
     expect(screen.queryByRole('button', { name: 'Justifier' })).toBeNull();
   });
 
+  it.each([
+    ['school_admin', true],
+    ['surveillant', true],
+    ['super_admin', true],
+    ['teacher', false],
+    ['parent', false],
+  ] as const)('affiche l’action de réexamen pour %s uniquement', (userRole, visible) => {
+    render(
+      <AbsenceView
+        userRole={userRole}
+        absencesList={[{
+          id: 32,
+          studentId: 30,
+          studentName: 'Élève Rejetée',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+          justificationStatus: 'REJECTED',
+        }] as any}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onReexamineAbsenceJustification={vi.fn().mockResolvedValue(undefined)}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+
+    expect(Boolean(screen.queryByRole('button', { name: 'Réexaminer et accepter' }))).toBe(visible);
+  });
+
+  it.each(['PENDING', 'APPROVED'] as const)(
+    'ne propose pas le réexamen pour une justification %s',
+    (justificationStatus) => {
+      render(
+        <AbsenceView
+          userRole="school_admin"
+          absencesList={[{
+            id: 32,
+            studentId: 30,
+            studentName: 'Élève',
+            classId: 10,
+            className: '6e A',
+            date: '2026-09-02',
+            period: 'morning',
+            isJustified: justificationStatus === 'APPROVED',
+            justificationStatus,
+          }] as any}
+          classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+          studentsList={[]}
+          schoolsList={[]}
+          teachersList={[]}
+          approvedSubjectsList={[]}
+          onAddAbsence={vi.fn()}
+          onReexamineAbsenceJustification={vi.fn().mockResolvedValue(undefined)}
+          onJustifyAbsence={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByRole('button', { name: 'Réexaminer et accepter' })).toBeNull();
+    },
+  );
+
+  it('demande confirmation explicite avant le réexamen', async () => {
+    const onReexamine = vi.fn().mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    render(
+      <AbsenceView
+        userRole="school_admin"
+        absencesList={[{
+          id: 32,
+          studentId: 30,
+          studentName: 'Élève Rejetée',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+          justificationStatus: 'REJECTED',
+        }] as any}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onReexamineAbsenceJustification={onReexamine}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Réexaminer et accepter' }));
+    expect(onReexamine).not.toHaveBeenCalled();
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining('Confirmez-vous avoir vérifié les justificatifs'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Réexaminer et accepter' }));
+    await waitFor(() => expect(onReexamine).toHaveBeenCalledWith(32));
+  });
+
+  it('ignore le double clic pendant un réexamen en cours', async () => {
+    const pending = createDeferred<void>();
+    const onReexamine = vi.fn(() => pending.promise);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(
+      <AbsenceView
+        userRole="school_admin"
+        absencesList={[{
+          id: 32,
+          studentId: 30,
+          studentName: 'Élève Rejetée',
+          classId: 10,
+          className: '6e A',
+          date: '2026-09-02',
+          period: 'morning',
+          isJustified: false,
+          justificationStatus: 'REJECTED',
+        }] as any}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        studentsList={[]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[]}
+        onAddAbsence={vi.fn()}
+        onReexamineAbsenceJustification={onReexamine}
+        onJustifyAbsence={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Réexaminer et accepter' });
+    fireEvent.click(button);
+    await waitFor(() => expect(onReexamine).toHaveBeenCalledTimes(1));
+    expect((screen.getByRole('button', { name: 'Validation en cours…' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onReexamine).toHaveBeenCalledTimes(1);
+
+    pending.resolve();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Réexaminer et accepter' })).toBeEnabled());
+  });
+
   it('enregistre un retard avec son motif sans créer une absence', async () => {
     const onAddAbsence = vi.fn();
     const onAddLateArrival = vi.fn().mockResolvedValue(undefined);

@@ -11642,6 +11642,180 @@ export async function createApp() {
     }
   });
 
+  app.put('/api/absences/:id/justification/reexamine', requireAuth, async (req: AuthRequest, res) => {
+    const transitionLost = Symbol('JUSTIFICATION_REEXAMINATION_TRANSITION_LOST');
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid absence id' });
+
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['school_admin', 'surveillant', 'super_admin'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Not authorized to reexamine absence justifications' });
+      }
+      if (actor.role !== 'super_admin'
+        && !await getActiveUserSchoolMembership(actor.id, actor.schoolId, actor.role)) {
+        return res.status(403).json({ error: 'An active school membership is required' });
+      }
+
+      const reviewedAt = new Date();
+      const result = await db.transaction(async (tx) => {
+        const [absence] = await tx.select().from(absences).where(eq(absences.id, id)).for('update');
+        if (!absence) return { kind: 'not_found' as const };
+        if (absence.justificationStatus !== 'REJECTED') return { kind: 'not_rejected' as const };
+
+        const [student] = await tx.select({
+          id: students.id,
+          schoolId: students.schoolId,
+          firstName: students.firstName,
+          parentId: students.parentId,
+        }).from(students).where(eq(students.id, absence.studentId));
+        if (!student) return { kind: 'student_not_found' as const };
+        const [classRecord] = await tx.select().from(classes).where(eq(classes.id, absence.classId));
+        if (!classRecord) return { kind: 'class_not_found' as const };
+
+        if (actor.role !== 'super_admin') {
+          if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
+            return { kind: 'outside_school' as const };
+          }
+          const classInScope = classRecord.schoolId === actor.schoolId
+            || await isApprovedClassForSchool(absence.classId, actor.schoolId);
+          if (!classInScope) return { kind: 'outside_class' as const };
+        }
+
+        const [previousReviewer] = absence.reviewedBy != null
+          ? await tx.select().from(users).where(eq(users.id, absence.reviewedBy))
+          : [null];
+        const originalDecision = {
+          status: 'REJECTED',
+          rejectionReason: absence.rejectionReason,
+          reviewedBy: absence.reviewedBy,
+          reviewedAt: absence.reviewedAt,
+          reviewerName: previousReviewer?.name ?? null,
+          reviewerEmail: previousReviewer?.email ?? null,
+          reviewerRole: previousReviewer?.role ?? 'unknown',
+        };
+
+        await tx.insert(auditEvents).values({
+          actorUserId: absence.reviewedBy ?? null,
+          actorRole: previousReviewer?.role ?? 'unknown',
+          actorEmail: previousReviewer?.email ?? null,
+          actorName: previousReviewer?.name ?? null,
+          action: 'preserve_rejected_justification_decision',
+          resourceType: 'absence_justification',
+          resourceId: id,
+          schoolId: student.schoolId,
+          description: `Décision initiale de refus conservée avant réexamen : ${JSON.stringify(originalDecision)}`,
+          createdAt: reviewedAt,
+        });
+
+        const [updatedAbsence] = await tx.update(absences).set({
+          justificationStatus: 'APPROVED',
+          isJustified: true,
+          rejectionReason: null,
+          reviewedBy: actor.id ?? null,
+          reviewedAt,
+        }).where(and(
+          eq(absences.id, id),
+          eq(absences.justificationStatus, 'REJECTED'),
+        )).returning();
+        if (!updatedAbsence) throw transitionLost;
+
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name ?? null,
+          action: 'approve_rejected_justification_after_reexamination',
+          resourceType: 'absence_justification',
+          resourceId: id,
+          schoolId: student.schoolId,
+          description: `Justification acceptée après vérification physique des pièces. Décision initiale : ${JSON.stringify(originalDecision)}`,
+          createdAt: reviewedAt,
+        });
+
+        const [parentRecord] = student.parentId != null
+          ? await tx.select({ userId: parents.userId }).from(parents).where(eq(parents.id, student.parentId))
+          : [null];
+        return {
+          kind: 'approved' as const,
+          absence: updatedAbsence,
+          student,
+          parentUserId: parentRecord?.userId ?? null,
+        };
+      });
+
+      if (result.kind === 'not_found') return res.status(404).json({ error: 'Absence not found' });
+      if (result.kind === 'not_rejected') {
+        return res.status(409).json({
+          error: 'Only rejected justifications can be reexamined',
+          code: 'JUSTIFICATION_NOT_REJECTED',
+        });
+      }
+      if (result.kind === 'student_not_found') return res.status(404).json({ error: 'Student not found' });
+      if (result.kind === 'class_not_found') return res.status(404).json({ error: 'Class not found' });
+      if (result.kind === 'outside_school') return res.status(403).json({ error: 'Actor is outside the student school' });
+      if (result.kind === 'outside_class') return res.status(403).json({ error: 'Class is outside the actor school' });
+
+      if (result.parentUserId) {
+        const notificationTitle = "Justification d'absence validée après réexamen";
+        const notificationMessage = `La justification de l'absence de ${result.student.firstName || "l'élève"} a été validée par l'établissement après vérification des justificatifs.`;
+        try {
+          await db.insert(notifications).values({
+            userId: result.parentUserId,
+            title: notificationTitle,
+            body: notificationMessage,
+            type: 'absence',
+          });
+        } catch (notificationInsertError) {
+          console.error('Failed to insert absence justification reexamination notification:', notificationInsertError);
+        }
+
+        try {
+          const notificationPayload = {
+            parentId: String(result.parentUserId),
+            title: notificationTitle,
+            message: notificationMessage,
+            category: 'absence',
+            metadata: {
+              target: 'absence',
+              absenceId: result.absence.id,
+              studentId: result.student.id,
+              classId: result.absence.classId,
+              status: 'APPROVED',
+              reexamined: true,
+            },
+            dedupeKey: `absence-justification-reexamination-${result.absence.id}`,
+          };
+          const { signature, timestamp } = signInternalPayload(notificationPayload);
+          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Internal-Signature': signature,
+              'X-Internal-Timestamp': timestamp,
+            },
+            body: JSON.stringify(notificationPayload),
+          });
+        } catch (pushNotificationError) {
+          console.error('Failed to dispatch absence justification reexamination push notification:', pushNotificationError);
+        }
+      }
+
+      return res.json(result.absence);
+    } catch (error: any) {
+      if (error === transitionLost) {
+        return res.status(409).json({
+          error: 'Justification decision changed during reexamination',
+          code: 'JUSTIFICATION_REEXAMINATION_CONFLICT',
+        });
+      }
+      console.error('Failed to reexamine absence justification:', error);
+      return res.status(500).json({ error: 'Failed to reexamine absence justification' });
+    }
+  });
+
   app.post('/api/internal/absence-justification', handleInternalJustificationUpload, verifyInternalJustificationAuth, async (req: any, res) => {
     const absenceId = parseInt(String(req.body?.absenceId ?? ''), 10);
     const parentId = parseInt(String(req.body?.parentId ?? ''), 10);

@@ -51,6 +51,7 @@ interface AbsenceViewProps {
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+  onReexamineAbsenceJustification?: (id: number) => Promise<void>;
   onCreateAbsenceDeclaration?: (data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
   onUpdateAbsenceDeclaration?: (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
   onCancelAbsenceDeclaration?: (id: number) => Promise<void>;
@@ -77,6 +78,7 @@ export default function AbsenceView({
   onAddAbsence,
   onAddLateArrival,
   onReviewAbsence,
+  onReexamineAbsenceJustification,
   onCreateAbsenceDeclaration,
   onUpdateAbsenceDeclaration,
   onCancelAbsenceDeclaration,
@@ -129,6 +131,9 @@ export default function AbsenceView({
   const [reviewingAbsence, setReviewingAbsence] = useState<Absence | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reexaminingAbsenceId, setReexaminingAbsenceId] = useState<number | null>(null);
+  const [reexaminationError, setReexaminationError] = useState<string | null>(null);
+  const reexaminingAbsenceIdRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const MAX_JUSTIFICATION_FILES = 5;
   const MAX_JUSTIFICATION_FILE_SIZE = 5 * 1024 * 1024;
@@ -606,6 +611,7 @@ export default function AbsenceView({
   };
 
   const canReviewJustification = ['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(userRole);
+  const canReexamineJustification = ['school_admin', 'surveillant', 'super_admin'].includes(userRole);
   const getJustificationStatus = (absence: Absence) => absence.justificationStatus || (absence.isJustified ? 'APPROVED' : null);
 
   const submitReview = async (status: 'APPROVED' | 'REJECTED') => {
@@ -631,6 +637,26 @@ export default function AbsenceView({
       await onReviewAbsence(absence.id, 'APPROVED');
     } catch (error: any) {
       setReviewError(error?.message || 'Impossible d’accepter la justification.');
+    }
+  };
+
+  const reexamineAbsenceJustification = async (absence: Absence) => {
+    if (!onReexamineAbsenceJustification || reexaminingAbsenceIdRef.current !== null) return;
+    const confirmed = window.confirm(
+      `Confirmez-vous avoir vérifié les justificatifs présentés pour l'absence de ${absence.studentName} ? Cette décision validera définitivement la justification.`,
+    );
+    if (!confirmed) return;
+
+    setReexaminationError(null);
+    reexaminingAbsenceIdRef.current = absence.id;
+    setReexaminingAbsenceId(absence.id);
+    try {
+      await onReexamineAbsenceJustification(absence.id);
+    } catch (error: any) {
+      setReexaminationError(error?.message || 'Impossible de réexaminer la justification.');
+    } finally {
+      reexaminingAbsenceIdRef.current = null;
+      setReexaminingAbsenceId(null);
     }
   };
 
@@ -1533,6 +1559,21 @@ export default function AbsenceView({
                         Rejeter
                       </button>
                     </>
+                  )}
+                  {abs.kind === 'absence' && canReexamineJustification
+                    && getJustificationStatus(abs) === 'REJECTED'
+                    && onReexamineAbsenceJustification && (
+                    <div className="inline-flex flex-col items-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void reexamineAbsenceJustification(abs)}
+                        disabled={reexaminingAbsenceId !== null}
+                        className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100/80 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition-all cursor-pointer"
+                      >
+                        {reexaminingAbsenceId === abs.id ? 'Validation en cours…' : 'Réexaminer et accepter'}
+                      </button>
+                      {reexaminationError && <p role="alert" className="max-w-xs text-xs text-rose-600">{reexaminationError}</p>}
+                    </div>
                   )}
                   {abs.kind === 'absence' && !getJustificationStatus(abs) && userRole === 'parent' && (
                     <button

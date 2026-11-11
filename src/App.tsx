@@ -29,6 +29,7 @@ import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
 import { useLateArrivals } from './hooks/useLateArrivals.ts';
 import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
+import { reexamineAbsenceJustification } from './lib/absenceJustificationApi.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import type { ClassAgeStats } from './lib/studentAgeStats.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
@@ -1250,6 +1251,11 @@ export default function App() {
     await fetchAllData(false);
   };
 
+  const handleReexamineAbsenceJustification = async (id: number) => {
+    await reexamineAbsenceJustification(id);
+    await fetchAllData(false);
+  };
+
   const handleJustifyAbsence = async (id: number, reason: string, files?: File[] | File | null) => {
     try {
       await justifyAbsence(id, reason, files ?? undefined);
@@ -2085,6 +2091,7 @@ export default function App() {
                   onAddAbsence={handleAddAbsence}
                   onAddLateArrival={handleAddLateArrival}
                   onReviewAbsence={handleReviewAbsence}
+                  onReexamineAbsenceJustification={handleReexamineAbsenceJustification}
                   onCreateAbsenceDeclaration={handleCreateAbsenceDeclaration}
                   onUpdateAbsenceDeclaration={handleUpdateAbsenceDeclaration}
                   onCancelAbsenceDeclaration={handleCancelAbsenceDeclaration}

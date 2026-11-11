@@ -111,14 +111,18 @@ vi.mock('./components/AdminView.tsx', () => ({
 }));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./components/AbsenceView.tsx', () => ({
-  default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence }: {
+  default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence, onReexamineAbsenceJustification }: {
     absencesList?: Array<{ id: number }>;
     pendingReviewOnly?: boolean;
     onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+    onReexamineAbsenceJustification?: (id: number) => Promise<void>;
   }) => (
     <>
       <div>{pendingReviewOnly ? 'PendingReviewView' : 'AbsenceView'}</div>
       <div data-testid="mock-absence-ids">{absencesList.map((absence) => absence.id).join(',')}</div>
+      {onReexamineAbsenceJustification && (
+        <button onClick={() => onReexamineAbsenceJustification(30)}>Mock reexamine rejected</button>
+      )}
       {pendingReviewOnly && (
         <>
           <button onClick={() => onReviewAbsence?.(30, 'APPROVED')}>Mock approve pending</button>
@@ -1443,5 +1447,26 @@ describe('App navigation', () => {
     await waitFor(() => expect(within(menuButton).getByText('1')).toBeInTheDocument());
     expect(mockApiFetch).toHaveBeenCalledWith('/api/absences/30/justification/review', expect.objectContaining({ method: 'PUT' }));
     expect(summaryRequests).toBeGreaterThan(1);
+  });
+
+  it('wires the reexamination action in the live Absences navigation', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetSimulatedUser.mockReturnValue({ uid: 'sim-school-admin', email: 'admin@example.com', name: 'Admin', schoolId: 1, role: 'school_admin', id: 1 });
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/schools' || url === '/api/academic-years' || url === '/api/teachers' || url === '/api/parents' || url === '/api/evaluations' || url === '/api/grades' || url === '/api/notifications' || url === '/api/simulation/users') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    fireEvent.click((await screen.findAllByTestId('sidebar-nav-absences'))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock reexamine rejected' }));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/absences/30/justification/reexamine',
+        expect.objectContaining({ method: 'PUT', body: '{}' }),
+      );
+    });
   });
 });
