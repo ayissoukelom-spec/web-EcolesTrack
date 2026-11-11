@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { apiFetch, setActiveSchoolId, setSimulatedRole, setSimulatedUser, getSessionExpiredMessage, clearSessionExpiredMessage } from '../lib/api.ts';
+import { apiFetch, clearAuthSession, setActiveSchoolId, setSimulatedRole, setSimulatedUser, getSessionExpiredMessage, clearSessionExpiredMessage } from '../lib/api.ts';
 import ChangePasswordView from './ChangePasswordView';
 import RequiredLabel from './RequiredLabel';
 import logoImage from '../assets/logo.png';
@@ -77,30 +77,41 @@ export default function LoginView({ onLogin }: Props) {
     selection: { kind: 'global' } | { kind: 'local'; schoolId: number; role: string },
     account: any = loggedInUser,
   ) => {
-    const result = await apiFetch('/api/auth/context/active', {
-      method: 'POST',
-      body: JSON.stringify(selection),
-    });
-    persistAccessToken(result.token);
-    setActiveSchoolId(result.schoolId ?? null);
-    setSimulatedRole(result.role);
-    setSimulatedUser({
-      id: account?.id,
-      uid: account?.uid || `local_${Date.now()}`,
-      email: account?.email,
-      name: account?.name,
-      role: result.role,
-      schoolId: result.schoolId ?? undefined,
-    });
-    await apiFetch('/api/auth/register-or-login', { method: 'POST' });
-    window.history.pushState(null, '', '/');
-    onLogin(result.role);
+    try {
+      const result = await apiFetch('/api/auth/context/active', {
+        method: 'POST',
+        body: JSON.stringify(selection),
+      });
+      if (typeof result?.token !== 'string' || !result.token) {
+        throw new Error('Le serveur n’a pas émis de jeton pour ce nouvel espace.');
+      }
+      persistAccessToken(result.token);
+      await apiFetch('/api/auth/register-or-login', { method: 'POST' });
+      setActiveSchoolId(result.schoolId ?? null);
+      setSimulatedRole(result.role);
+      setSimulatedUser({
+        id: account?.id,
+        uid: account?.uid || `local_${Date.now()}`,
+        email: account?.email,
+        name: account?.name,
+        role: result.role,
+        schoolId: result.schoolId ?? undefined,
+      });
+      window.history.pushState(null, '', '/');
+      onLogin(result.role);
+    } catch (activationError) {
+      clearAuthSession();
+      setLoggedInUser(null);
+      setSelectionPending(false);
+      throw activationError;
+    }
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
+    let authenticatedSessionStarted = false;
     try {
       const response = await fetch('/api/auth/local-login', {
         method: 'POST',
@@ -118,20 +129,16 @@ export default function LoginView({ onLogin }: Props) {
       }
 
       const user = await response.json();
+      clearAuthSession();
       setLoggedInUser(user);
       persistAccessToken(user.token);
+      authenticatedSessionStarted = true;
 
       if (user.mustReset) {
         setShowChangePassword(true);
         setLoading(false);
         return;
       }
-
-      // Persist simulation state locally so apiFetch will include headers
-      setSimulatedRole(user.role || 'parent');
-      // Reset any previously selected school before membership sync
-      setActiveSchoolId(null);
-      setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
 
       if (user.role === 'super_admin') {
         await activateContext({ kind: 'global' }, user);
@@ -158,6 +165,11 @@ export default function LoginView({ onLogin }: Props) {
 
       setSelectionPending(true);
     } catch (err: any) {
+      if (authenticatedSessionStarted) {
+        clearAuthSession();
+        setLoggedInUser(null);
+        setSelectionPending(false);
+      }
       setError(err?.message || 'Échec de la connexion');
     } finally {
       setLoading(false);
@@ -188,7 +200,8 @@ export default function LoginView({ onLogin }: Props) {
       });
       setSelectionPending(false);
     } catch (err: any) {
-      setActiveSchoolId(null);
+      clearAuthSession();
+      setLoggedInUser(null);
       setError(err?.message || 'Impossible de sélectionner l’école.');
     } finally {
       setLoading(false);
@@ -196,31 +209,37 @@ export default function LoginView({ onLogin }: Props) {
   };
 
   const finishLoginAfterPasswordChange = async (user: any, accessToken: string) => {
+    clearAuthSession();
     persistAccessToken(accessToken);
-    setSimulatedRole(user.role || 'parent');
-    setActiveSchoolId(null);
-    setSimulatedUser({ id: user.id, uid: user.uid || `local_${Date.now()}`, email: user.email, name: user.name });
-    if (user.role === 'super_admin') {
-      await activateContext({ kind: 'global' }, user);
-      return;
-    }
-
-    const schoolData = await loadSchools();
-    const availableSchoolIds = [...new Set<number>(
-      (schoolData.memberships || []).map((membership: { schoolId: number }) => membership.schoolId),
-    )];
-    if (availableSchoolIds.length === 1) {
-      const schoolId = availableSchoolIds[0];
-      const roles = (schoolData.memberships || [])
-        .filter((membership: { schoolId: number }) => membership.schoolId === schoolId)
-        .map((membership: { role: string }) => membership.role);
-      if (roles.length === 1) {
-        await activateContext({ kind: 'local', schoolId, role: roles[0] }, user);
+    try {
+      if (user.role === 'super_admin') {
+        await activateContext({ kind: 'global' }, user);
         return;
       }
-    }
 
-    setSelectionPending(true);
+      const schoolData = await loadSchools();
+      const availableSchoolIds = [...new Set<number>(
+        (schoolData.memberships || []).map((membership: { schoolId: number }) => membership.schoolId),
+      )];
+      if (availableSchoolIds.length === 1) {
+        const schoolId = availableSchoolIds[0];
+        const roles = (schoolData.memberships || [])
+          .filter((membership: { schoolId: number }) => membership.schoolId === schoolId)
+          .map((membership: { role: string }) => membership.role);
+        if (roles.length === 1) {
+          await activateContext({ kind: 'local', schoolId, role: roles[0] }, user);
+          return;
+        }
+      }
+
+      setLoggedInUser(user);
+      setSelectionPending(true);
+    } catch (error) {
+      clearAuthSession();
+      setLoggedInUser(null);
+      setSelectionPending(false);
+      throw error;
+    }
   };
 
   if (selectionPending) {

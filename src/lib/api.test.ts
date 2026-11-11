@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiFetchBlob, findTeacherProfileFromSimulatedUser, getSimulationHeaders, getUiErrorMessage, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
+import { apiFetch, apiFetchBlob, clearAuthSession, findTeacherProfileFromSimulatedUser, getSimulationHeaders, getUiErrorMessage, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -206,6 +206,139 @@ describe('apiFetch', () => {
     expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
     expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores only a late CONTEXT_VERSION_STALE response from an older token', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'account-a-token');
+    let resolveResponse!: (response: unknown) => void;
+    (globalThis.fetch as unknown as vi.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }));
+
+    const request = apiFetch('/api/classes').catch((error) => error);
+    clearAuthSession();
+    localStorage.setItem('ecoletrack_jwt_access', 'account-b-token');
+    setSimulatedRole('parent');
+    setSimulatedUser({ id: 2, uid: 'account-b', email: 'b@example.test' });
+    resolveResponse({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        error: 'Unauthorized: Access session invalid',
+        code: 'CONTEXT_VERSION_STALE',
+      }),
+    });
+    const error = await request;
+
+    expect(error).toMatchObject({ status: 409, code: 'STALE_AUTH_RESPONSE' });
+    expect(getUiErrorMessage(error, 'fallback')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('account-b-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
+    expect(JSON.parse(localStorage.getItem('ecoletrack_simulated_user') || 'null')).toMatchObject({ uid: 'account-b' });
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves CONTEXT_VERSION_STALE errors for the currently active token', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'account-b-token');
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        error: 'Unauthorized: Access session invalid',
+        code: 'CONTEXT_VERSION_STALE',
+      }),
+    } as any);
+
+    await expect(apiFetch('/api/classes')).rejects.toMatchObject({
+      status: 409,
+      code: 'CONTEXT_VERSION_STALE',
+      message: 'Unauthorized: Access session invalid',
+    });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('account-b-token');
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores account A session errors that arrive after logout and account B login', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'account-a-token');
+    setSimulatedRole('teacher');
+    setSimulatedUser({ id: 1, uid: 'account-a', email: 'a@example.test' });
+
+    let resolveResponse!: (response: unknown) => void;
+    (globalThis.fetch as unknown as vi.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }));
+    const request = apiFetch('/api/dashboard/summary').catch((error) => error);
+
+    clearAuthSession();
+    localStorage.setItem('ecoletrack_jwt_access', 'account-b-token');
+    setSimulatedRole('parent');
+    setSimulatedUser({ id: 2, uid: 'account-b', email: 'b@example.test' });
+    resolveResponse({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({
+        error: 'Unauthorized: Access session invalid',
+        code: 'ACCESS_SESSION_INVALID',
+      }),
+    });
+    const error = await request;
+
+    expect(error).toMatchObject({ status: 401, isUnauthorized: true, code: 'STALE_AUTH_RESPONSE' });
+    expect(getUiErrorMessage(error, 'fallback')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('account-b-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
+    expect(JSON.parse(localStorage.getItem('ecoletrack_simulated_user') || 'null')).toMatchObject({ uid: 'account-b' });
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('handles an Access session invalid response for the current account as an active session error', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'account-b-token');
+    setSimulatedRole('parent');
+    setSimulatedUser({ id: 2, uid: 'account-b', email: 'b@example.test' });
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({
+        error: 'Unauthorized: Access session invalid',
+        code: 'ACCESS_SESSION_INVALID',
+      }),
+    } as any);
+
+    await expect(apiFetch('/api/dashboard/summary')).rejects.toMatchObject({
+      status: 401,
+      isUnauthorized: true,
+      code: 'ACCESS_SESSION_INVALID',
+    });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_user')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBe('Votre session a expiré. Veuillez vous reconnecter.');
+    expect(replaceMock).toHaveBeenCalledWith('/login');
   });
 
   it('does not let a late disabled-account response log out a newer session', async () => {

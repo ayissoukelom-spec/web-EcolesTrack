@@ -47,6 +47,7 @@ const localStorageMock = (() => {
 
 vi.mock('./lib/api.ts', () => ({
   apiFetch: mockApiFetch,
+  fetchLateArrivalJustifications: () => Promise.resolve([]),
   getSimulatedRole: () => mockGetSimulatedRole(),
   getUiErrorMessage: (message: string | null) => message,
   setSimulatedRole: mockSetSimulatedRole,
@@ -1180,7 +1181,7 @@ describe('App navigation', () => {
     ], 2);
 
     const menuButton = await screen.findByTestId('sidebar-nav-absence-validations');
-    expect(within(menuButton).getByText('Validation des absences à traiter')).toBeInTheDocument();
+    expect(within(menuButton).getByText('Justifications à traiter')).toBeInTheDocument();
     expect(within(menuButton).getByText('2')).toBeInTheDocument();
   });
 

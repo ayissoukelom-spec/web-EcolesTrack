@@ -236,17 +236,19 @@ export function clearSessionExpiredMessage() {
   localStorage.removeItem(SESSION_EXPIRED_MESSAGE_KEY);
 }
 
-function handleUnauthorizedResponse(
+function handleStaleAuthenticationResponse(
   status: number,
   errorBody: { code?: unknown; error?: unknown },
   requestAccessToken: string | null,
 ): boolean {
-  if (status !== 401) return false;
+  const isContextVersionConflict = status === 409 && errorBody.code === 'CONTEXT_VERSION_STALE';
+  if (status !== 401 && !isContextVersionConflict) return false;
 
   const currentAccessToken = typeof localStorage === 'undefined'
     ? null
     : localStorage.getItem(LOCAL_STORAGE_ACCESS_TOKEN_KEY);
   if (requestAccessToken !== currentAccessToken) return true;
+  if (status !== 401) return false;
 
   const isDisabledAccount = errorBody.code === 'ACCOUNT_DISABLED';
   const errorMessage = typeof errorBody.error === 'string' ? errorBody.error : String(errorBody.error ?? '');
@@ -491,9 +493,9 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     if (errBody.code === 'SCHOOL_SUSPENDED' && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: errBody.schoolId } }));
     }
-    if (response.status === 401) {
-      (error as any).isUnauthorized = true;
-      if (handleUnauthorizedResponse(response.status, errBody, requestAccessToken)) {
+    if (response.status === 401 || (response.status === 409 && errBody.code === 'CONTEXT_VERSION_STALE')) {
+      if (response.status === 401) (error as any).isUnauthorized = true;
+      if (handleStaleAuthenticationResponse(response.status, errBody, requestAccessToken)) {
         error.message = 'La réponse d’authentification concerne une session précédente.';
         (error as any).code = 'STALE_AUTH_RESPONSE';
       }
@@ -549,9 +551,9 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     if (errBody.code === 'SCHOOL_SUSPENDED' && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: errBody.schoolId } }));
     }
-    if (response.status === 401) {
-      (error as any).isUnauthorized = true;
-      if (handleUnauthorizedResponse(response.status, errBody, requestAccessToken)) {
+    if (response.status === 401 || (response.status === 409 && errBody.code === 'CONTEXT_VERSION_STALE')) {
+      if (response.status === 401) (error as any).isUnauthorized = true;
+      if (handleStaleAuthenticationResponse(response.status, errBody, requestAccessToken)) {
         error.message = 'La réponse d’authentification concerne une session précédente.';
         (error as any).code = 'STALE_AUTH_RESPONSE';
       }

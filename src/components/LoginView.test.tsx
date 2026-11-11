@@ -230,6 +230,121 @@ describe('LoginView', () => {
     expect(JSON.parse(contextRequest[1].body)).toEqual({ kind: 'global' });
   });
 
+  it('does not publish the super administrator before global context and initial sync complete', async () => {
+    let resolveContext!: (response: unknown) => void;
+    let resolveRegisterSync!: (response: unknown) => void;
+    const apiRequests: Array<{ url: string; storedToken: string | null; authorization?: string }> = [];
+    window.fetch = vi.fn((input: RequestInfo | URL, options?: RequestInit) => {
+      const requestUrl = String(input);
+      const pathname = new URL(requestUrl, window.location.origin).pathname;
+      if (pathname === '/api/auth/local-login') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 10,
+            uid: 'super_10',
+            email: 'super@example.com',
+            name: 'Super Admin',
+            role: 'super_admin',
+            token: 'initial-jwt',
+            mustReset: false,
+          }),
+        } as Response);
+      }
+
+      const headers = options?.headers as Record<string, string> | undefined;
+      apiRequests.push({
+        url: pathname,
+        storedToken: localStorage.getItem('ecoletrack_jwt_access'),
+        authorization: headers?.Authorization,
+      });
+      if (pathname === '/api/auth/context/active') {
+        return new Promise((resolve) => {
+          resolveContext = resolve;
+        });
+      }
+      if (pathname === '/api/auth/register-or-login') {
+        return new Promise((resolve) => {
+          resolveRegisterSync = resolve;
+        });
+      }
+      throw new Error(`Unexpected request: ${pathname}`);
+    }) as typeof fetch;
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'super@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => expect(resolveContext).toBeTypeOf('function'));
+    expect(apiRequests.map(({ url }) => url)).toEqual(['/api/auth/context/active']);
+    expect(apiRequests[0].authorization).toBe(`Bearer ${apiRequests[0].storedToken}`);
+    expect(apiRequests[0].storedToken).not.toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_user')).toBeNull();
+    expect(mockOnLogin).not.toHaveBeenCalled();
+
+    resolveContext({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ token: 'global-context-jwt', role: 'super_admin', schoolId: null }),
+    });
+    await waitFor(() => expect(resolveRegisterSync).toBeTypeOf('function'));
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('global-context-jwt');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_user')).toBeNull();
+    expect(mockOnLogin).not.toHaveBeenCalled();
+
+    resolveRegisterSync({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+    await waitFor(() => expect(mockOnLogin).toHaveBeenCalledWith('super_admin'));
+
+    expect(apiRequests.map(({ url }) => url)).toEqual([
+      '/api/auth/context/active',
+      '/api/auth/register-or-login',
+    ]);
+    expect(apiRequests[1].storedToken).toBe(localStorage.getItem('ecoletrack_jwt_access'));
+    expect(apiRequests[1].storedToken).not.toBe(apiRequests[0].storedToken);
+    expect(apiRequests[1].authorization).toBe(`Bearer ${apiRequests[1].storedToken}`);
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('super_admin');
+    expect(JSON.parse(localStorage.getItem('ecoletrack_simulated_user') || 'null')).toMatchObject({
+      uid: 'super_10',
+      role: 'super_admin',
+    });
+  });
+
+  it('activates a single school administrator context before publishing the account', async () => {
+    window.fetch = createFetchMock([
+      { id: 12, uid: 'school_admin_12', email: 'admin@example.com', name: 'School Admin', role: 'school_admin', token: 'initial-admin-jwt', mustReset: false },
+      {
+        schools: [{ id: 7, name: 'École Admin', isSuspended: false }],
+        memberships: [{ membershipId: 71, schoolId: 7, role: 'school_admin', isActive: true }],
+      },
+      { token: 'school-admin-context-jwt', role: 'school_admin', schoolId: 7 },
+      {},
+    ]);
+
+    render(<LoginView onLogin={mockOnLogin} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email ou numéro de téléphone/i }), { target: { value: 'admin@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Mot de passe/i, { selector: 'input' }), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: /Se connecter/i }));
+
+    await waitFor(() => {
+      expect(mockOnLogin).toHaveBeenCalledWith('school_admin');
+      expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('school-admin-context-jwt');
+    });
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('school_admin');
+    expect(JSON.parse(localStorage.getItem('ecoletrack_simulated_user') || 'null')).toMatchObject({
+      uid: 'school_admin_12',
+      role: 'school_admin',
+      schoolId: 7,
+    });
+  });
+
   it('submits a phone number in the shared identifier field without email-only browser validation', async () => {
     window.fetch = createFetchMock([
       { id: 2, uid: 'parent_2', email: 'parent@example.com', name: 'Parent Example', role: 'parent', token: 'parent-jwt', mustReset: false },
