@@ -116,6 +116,7 @@ type Regularization = {
     id: number;
     schoolId: number;
     sessionId: number | null;
+    linkedSessionStartedAt?: string | null;
     requestType: 'incomplete_session' | 'immediate_report' | 'late_declaration';
     schoolNameSnapshot: string;
     classId: number | null;
@@ -659,8 +660,8 @@ export default function TeacherControlView({
   const [filterRevision, setFilterRevision] = useState(0);
   const [sessionAudit, setSessionAudit] = useState<Record<number, SessionAuditEvent[]>>({});
   const [auditLoadingSessionId, setAuditLoadingSessionId] = useState<number | null>(null);
-  const [requestEndTimes, setRequestEndTimes] = useState<Record<number, string>>({});
   const [requestReasons, setRequestReasons] = useState<Record<number, string>>({});
+  const [completionReasons, setCompletionReasons] = useState<Record<number, string>>({});
   const [regularizationEndTimes, setRegularizationEndTimes] = useState<Record<number, string>>({});
   const [regularizationStartTimes, setRegularizationStartTimes] = useState<Record<number, string>>({});
   const [regularizationReasons, setRegularizationReasons] = useState<Record<number, string>>({});
@@ -1241,17 +1242,16 @@ export default function TeacherControlView({
   };
 
   const submitRegularization = async (session: Session) => {
-    const proposedEndedAt = parseLomeInput(requestEndTimes[session.id] ?? '');
     const reason = requestReasons[session.id]?.trim() ?? '';
-    if (!proposedEndedAt || !reason) {
-      setError('Indiquez une heure de fin proposée et un motif.');
+    if (!reason) {
+      setError('Indiquez le motif de la demande de régularisation.');
       return;
     }
     setBusyAction(`regularize-${session.id}`);
     setError(null);
     try {
-      await postJson(`/api/teacher-control/sessions/${session.id}/regularizations`, { proposedEndedAt, reason });
-      await refreshAfterAction('Votre demande de régularisation a été transmise.');
+      await postJson(`/api/teacher-control/sessions/${session.id}/regularizations`, { reason });
+      await refreshAfterAction('Votre demande a été transmise. L’heure de soumission du serveur est proposée comme heure de fin.');
       setRequestReasons((previous) => ({ ...previous, [session.id]: '' }));
     } catch (actionError) {
       showError(actionError, 'Impossible de transmettre la demande de régularisation.');
@@ -1326,10 +1326,13 @@ export default function TeacherControlView({
     }
   };
 
-  const completeImmediateRegularization = async (request: Regularization['request']) => {
-    const proposedEndedAt = parseLomeInput(requestEndTimes[request.id] ?? '');
-    if (!proposedEndedAt) {
-      setError('Indiquez une heure de fin déclarée valide.');
+  const completeImmediateRegularization = async (
+    request: Regularization['request'],
+    mode: 'gps' | 'regularization',
+  ) => {
+    const reason = completionReasons[request.id]?.trim() ?? '';
+    if (!reason) {
+      setError('Indiquez le motif de la fin de séance.');
       return;
     }
     if (actionInFlight.current) return;
@@ -1337,14 +1340,35 @@ export default function TeacherControlView({
     setBusyAction(`complete-report-${request.id}`);
     setError(null);
     try {
+      let gpsPayload: Record<string, unknown> = {};
+      if (mode === 'gps') {
+        setGpsStatus('locating');
+        const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
+        const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
+        setGpsReading(fix);
+        setGpsStatus('obtained');
+        const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', {
+          action: 'end_session',
+          regularizationRequestId: request.id,
+        });
+        setGpsStatus('verifying');
+        gpsPayload = { ...fix, gpsChallenge: challenge };
+      }
       await postJson(`/api/teacher-control/regularizations/${request.id}/complete`, {
-        proposedEndedAt,
+        mode,
+        reason,
         description: unrecordedCompletionDescription[request.id]?.trim() || null,
+        ...gpsPayload,
       });
-      await refreshAfterAction('L’heure de fin déclarée a été ajoutée à votre signalement.');
-      setRequestEndTimes((current) => ({ ...current, [request.id]: '' }));
+      setGpsStatus(mode === 'gps' ? 'validated' : 'idle');
+      await refreshAfterAction(mode === 'gps'
+        ? 'La fin GPS a été validée et transmise à l’administration.'
+        : 'La fin a été horodatée par le serveur et transmise à l’administration.');
+      setCompletionReasons((current) => ({ ...current, [request.id]: '' }));
       setUnrecordedCompletionDescription((current) => ({ ...current, [request.id]: '' }));
     } catch (requestError) {
+      const failure = gpsFailureMessage(requestError);
+      if (mode === 'gps') setGpsStatus(failure.status);
       showError(requestError, 'Impossible de compléter le signalement.');
     } finally {
       actionInFlight.current = false;
@@ -1356,14 +1380,19 @@ export default function TeacherControlView({
     request: Regularization['request'],
     decision: 'accepted' | 'rejected' | 'modified_accepted',
   ) => {
+    if (!isSchoolAdmin) return;
     const reason = regularizationReasons[request.id]?.trim() ?? '';
     const proposedEndedAt = decision === 'modified_accepted'
       ? parseLomeInput(regularizationEndTimes[request.id]
         ?? (request.proposedEndedAt ? formatLomeInput(new Date(request.proposedEndedAt)) : ''))
       : null;
-    const proposedStartedAt = decision === 'modified_accepted' && request.requestType !== 'incomplete_session'
+    const linkedSessionStart = request.linkedSessionStartedAt
+      ?? (request.sessionId == null ? null : sessions.find((session) => session.id === request.sessionId)?.startedAt ?? null);
+    const startTimeWasEdited = Object.prototype.hasOwnProperty.call(regularizationStartTimes, request.id);
+    const proposedStartedAt = decision === 'modified_accepted'
+      && startTimeWasEdited
       ? parseLomeInput(regularizationStartTimes[request.id]
-        ?? formatLomeInput(new Date(request.referenceStartedAt ?? request.declaredStartedAt ?? request.createdAt)))
+        ?? formatLomeInput(new Date(linkedSessionStart ?? request.referenceStartedAt ?? request.declaredStartedAt ?? request.createdAt)))
       : null;
     if ((decision === 'rejected' || decision === 'modified_accepted') && !reason) {
       setError('Un motif est obligatoire pour cette décision.');
@@ -1373,7 +1402,7 @@ export default function TeacherControlView({
       setError('Indiquez une nouvelle heure de fin valide.');
       return;
     }
-    if (decision === 'modified_accepted' && request.requestType !== 'incomplete_session' && !proposedStartedAt) {
+    if (decision === 'modified_accepted' && startTimeWasEdited && !proposedStartedAt) {
       setError('Indiquez une nouvelle heure de début valide.');
       return;
     }
@@ -1385,12 +1414,34 @@ export default function TeacherControlView({
         ...(reason ? { reason } : {}),
         ...(proposedEndedAt ? { proposedEndedAt } : {}),
         ...(proposedStartedAt ? { proposedStartedAt } : {}),
-        ...(isSuperAdmin ? { schoolId: schoolId ?? request.schoolId } : {}),
+        ...(isSuperAdmin && schoolId != null ? { schoolId } : {}),
       });
       await refreshAfterAction('La décision a été enregistrée et auditée.');
-      if (isSuperAdmin && schoolId == null) await refreshRegularizations();
     } catch (actionError) {
       showError(actionError, 'Impossible d’enregistrer la décision.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const correctCompletedSession = async (
+    session: Session,
+    correction: { startedAt?: string; endedAt?: string; reason: string },
+  ) => {
+    if (!isSchoolAdmin) return;
+    setBusyAction(`correct-session-${session.id}`);
+    setError(null);
+    try {
+      await postJson(`/api/teacher-control/sessions/${session.id}/correction`, {
+        ...correction,
+        expectedStartedAt: session.startedAt,
+        expectedEndedAt: session.validatedEndedAt,
+      });
+      await refreshAfterAction('Les heures de la séance ont été corrigées et auditées.');
+      const events = await apiFetch(`/api/teacher-control/sessions/${session.id}/audit${schoolQuery}`) as SessionAuditEvent[];
+      setSessionAudit((current) => ({ ...current, [session.id]: events }));
+    } catch (correctionError) {
+      showError(correctionError, 'Impossible de corriger les heures de la séance.');
     } finally {
       setBusyAction(null);
     }
@@ -1880,51 +1931,34 @@ export default function TeacherControlView({
 
             {isTeacher && entry.request.requestType === 'immediate_report'
               && entry.request.status === 'pending' && entry.request.proposedEndedAt == null && (
-              <div className="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:grid-cols-2">
-                <p className="text-sm text-slate-700 sm:col-span-2">Après le cours, complétez le signalement avec l’heure de fin déclarée.</p>
+                <TeacherImmediateReportCompletion
+                  request={entry.request}
+                  reason={completionReasons[entry.request.id] ?? ''}
+                  description={unrecordedCompletionDescription[entry.request.id] ?? ''}
+                  busy={busyAction != null}
+                  onReasonChange={(value) => setCompletionReasons((current) => ({ ...current, [entry.request.id]: value }))}
+                  onDescriptionChange={(value) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: value }))}
+                  onSubmit={(mode) => void completeImmediateRegularization(entry.request, mode)}
+                />
+            )}
+
+            {isSchoolAdmin && entry.request.status === 'pending' && (
+              <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
                 <label className="text-xs font-semibold text-slate-700">
-                  Heure de fin déclarée · heure de Lomé
+                  Heure de début retenue · heure de Lomé
                   <input
                     type="datetime-local"
                     className={`${inputClass} mt-1`}
-                    aria-label={`Heure de fin déclarée demande ${entry.request.id}`}
-                    min={entry.request.referenceStartedAt ? formatLomeInput(new Date(entry.request.referenceStartedAt)) : undefined}
+                    value={regularizationStartTimes[entry.request.id]
+                      ?? formatLomeInput(new Date(entry.request.sessionId != null
+                        ? entry.request.linkedSessionStartedAt
+                          ?? sessions.find((session) => session.id === entry.request.sessionId)?.startedAt
+                          ?? entry.request.referenceStartedAt ?? entry.request.createdAt
+                        : entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
                     max={formatLomeInput()}
-                    value={requestEndTimes[entry.request.id] ?? ''}
-                    onChange={(event) => setRequestEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
+                    onChange={(event) => setRegularizationStartTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
                   />
                 </label>
-                <label className="text-xs font-semibold text-slate-700">
-                  Précision facultative
-                  <textarea
-                    className={`${inputClass} mt-1 min-h-16`}
-                    value={unrecordedCompletionDescription[entry.request.id] ?? ''}
-                    maxLength={2000}
-                    onChange={(event) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: event.target.value }))}
-                  />
-                </label>
-                <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void completeImmediateRegularization(entry.request)}>
-                  {busyAction === `complete-report-${entry.request.id}` && <RefreshCw className="h-4 w-4 animate-spin" />}
-                  Ajouter l’heure de fin déclarée
-                </button>
-              </div>
-            )}
-
-            {(isSchoolAdmin || isSuperAdmin) && entry.request.status === 'pending' && (
-              <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
-                {entry.request.requestType !== 'incomplete_session' && (
-                  <label className="text-xs font-semibold text-slate-700">
-                    Heure de début retenue · heure de Lomé
-                    <input
-                      type="datetime-local"
-                      className={`${inputClass} mt-1`}
-                      value={regularizationStartTimes[entry.request.id]
-                        ?? formatLomeInput(new Date(entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
-                      max={formatLomeInput()}
-                      onChange={(event) => setRegularizationStartTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
-                    />
-                  </label>
-                )}
                 <label className="text-xs font-semibold text-slate-700">
                   Heure de fin modifiée (facultative sauf acceptation après modification)
                   <input
@@ -2500,10 +2534,8 @@ export default function TeacherControlView({
             <TeacherRegularizationForms
               sessions={sessions.filter((session) => session.status === 'open')}
               regularizations={regularizations}
-              requestEndTimes={requestEndTimes}
               requestReasons={requestReasons}
               busyAction={busyAction}
-              onEndTimeChange={(id, value) => setRequestEndTimes((previous) => ({ ...previous, [id]: value }))}
               onReasonChange={(id, value) => setRequestReasons((previous) => ({ ...previous, [id]: value }))}
               onSubmit={(session) => void submitRegularization(session)}
             />
@@ -2543,6 +2575,16 @@ export default function TeacherControlView({
                 ))}
               </div>
             </div>
+          )}
+
+          {selectedSession && isSchoolAdmin && selectedSession.status === 'completed' && (
+            <SessionTimeCorrectionForm
+              key={`${selectedSession.id}:${selectedSession.startedAt}:${selectedSession.validatedEndedAt}`}
+              session={selectedSession}
+              busy={busyAction === `correct-session-${selectedSession.id}`}
+              disabled={busyAction != null}
+              onSubmit={(correction) => void correctCompletedSession(selectedSession, correction)}
+            />
           )}
 
           {selectedSession && !isTeacher && (
@@ -2656,50 +2698,33 @@ export default function TeacherControlView({
               ))}
               {isTeacher && entry.request.requestType === 'immediate_report'
                 && entry.request.status === 'pending' && entry.request.proposedEndedAt == null && (
-                  <div className="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:grid-cols-2">
-                    <p className="text-sm text-slate-700 sm:col-span-2">Après le cours, complétez le signalement avec l’heure de fin déclarée. Cette heure restera une déclaration à examiner, sans validation GPS fictive.</p>
-                    <label className="text-xs font-semibold text-slate-700">
-                      Heure de fin déclarée · heure de Lomé
-                      <input
-                        type="datetime-local"
-                        className={`${inputClass} mt-1`}
-                        aria-label={`Heure de fin déclarée demande ${entry.request.id}`}
-                        min={entry.request.referenceStartedAt ? formatLomeInput(new Date(entry.request.referenceStartedAt)) : undefined}
-                        max={formatLomeInput()}
-                        value={requestEndTimes[entry.request.id] ?? ''}
-                        onChange={(event) => setRequestEndTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
-                      />
-                    </label>
-                    <label className="text-xs font-semibold text-slate-700">
-                      Précision facultative
-                      <textarea
-                        className={`${inputClass} mt-1 min-h-16`}
-                        value={unrecordedCompletionDescription[entry.request.id] ?? ''}
-                        maxLength={2000}
-                        onChange={(event) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: event.target.value }))}
-                      />
-                    </label>
-                    <button className={buttonClass} type="button" disabled={busyAction != null} onClick={() => void completeImmediateRegularization(entry.request)}>
-                      {busyAction === `complete-report-${entry.request.id}` && <RefreshCw className="h-4 w-4 animate-spin" />}
-                      Ajouter l’heure de fin déclarée
-                    </button>
-                  </div>
-                )}
-              {(isSchoolAdmin || isSuperAdmin) && entry.request.status === 'pending' && (
-                <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
-                  {entry.request.requestType !== 'incomplete_session' && (
+                    <TeacherImmediateReportCompletion
+                      request={entry.request}
+                      reason={completionReasons[entry.request.id] ?? ''}
+                      description={unrecordedCompletionDescription[entry.request.id] ?? ''}
+                      busy={busyAction != null}
+                      onReasonChange={(value) => setCompletionReasons((current) => ({ ...current, [entry.request.id]: value }))}
+                      onDescriptionChange={(value) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: value }))}
+                      onSubmit={(mode) => void completeImmediateRegularization(entry.request, mode)}
+                    />
+                  )}
+                {isSchoolAdmin && entry.request.status === 'pending' && (
+                  <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
                     <label className="text-xs font-semibold text-slate-700">
                       Heure de début retenue · heure de Lomé
                       <input
                         type="datetime-local"
                         className={`${inputClass} mt-1`}
                         value={regularizationStartTimes[entry.request.id]
-                          ?? formatLomeInput(new Date(entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
+                          ?? formatLomeInput(new Date(entry.request.sessionId != null
+                            ? entry.request.linkedSessionStartedAt
+                              ?? sessions.find((session) => session.id === entry.request.sessionId)?.startedAt
+                              ?? entry.request.referenceStartedAt ?? entry.request.createdAt
+                            : entry.request.referenceStartedAt ?? entry.request.declaredStartedAt ?? entry.request.createdAt))}
                         max={formatLomeInput()}
                         onChange={(event) => setRegularizationStartTimes((current) => ({ ...current, [entry.request.id]: event.target.value }))}
                       />
                     </label>
-                  )}
                   <label className="text-xs font-semibold text-slate-700">
                     Heure de fin modifiée (facultative sauf acceptation après modification)
                     <input
@@ -3273,19 +3298,15 @@ function SessionCard({
 function TeacherRegularizationForms({
   sessions,
   regularizations,
-  requestEndTimes,
   requestReasons,
   busyAction,
-  onEndTimeChange,
   onReasonChange,
   onSubmit,
 }: {
   sessions: Session[];
   regularizations: Regularization[];
-  requestEndTimes: Record<number, string>;
   requestReasons: Record<number, string>;
   busyAction: string | null;
-  onEndTimeChange: (sessionId: number, value: string) => void;
   onReasonChange: (sessionId: number, value: string) => void;
   onSubmit: (session: Session) => void;
 }) {
@@ -3296,33 +3317,21 @@ function TeacherRegularizationForms({
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
       <h2 className="font-bold text-slate-900">Demander une régularisation</h2>
-      <p className="mt-1 text-sm text-slate-600">Une demande exige l’heure de fin proposée et un motif. L’acceptation doit encore être décidée par l’administrateur d’école.</p>
+      <p className="mt-1 text-sm text-slate-600">L’heure de fin proposée est générée par le serveur lors de l’envoi. L’acceptation doit encore être décidée par l’administrateur d’établissement.</p>
       <div className="mt-4 grid gap-4">
         {openSessionsWithoutPending.map((session) => (
-          <form key={session.id} className="grid gap-3 rounded-xl border border-white bg-white p-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => { event.preventDefault(); onSubmit(session); }}>
+          <form key={session.id} className="grid gap-3 rounded-xl border border-white bg-white p-3 sm:grid-cols-[1fr_auto]" onSubmit={(event) => { event.preventDefault(); onSubmit(session); }}>
             <div className="text-sm">
               <p className="font-semibold text-slate-900">{session.classNameSnapshot} · {session.subjectNameSnapshot}</p>
               <p className="text-xs text-slate-500">Début : {formatLomeDate(session.startedAt)}</p>
             </div>
-            <label className="text-xs font-semibold text-slate-700">
-              Fin proposée · heure de Lomé
-              <input
-                type="datetime-local"
-                className={`${inputClass} mt-1`}
-                min={formatLomeInput(new Date(session.startedAt))}
-                max={formatLomeInput()}
-                value={requestEndTimes[session.id] ?? ''}
-                onChange={(event) => onEndTimeChange(session.id, event.target.value)}
-                required
-              />
-            </label>
             <div className="flex items-end">
               <button type="submit" className={buttonClass} disabled={busyAction != null}>
                 {busyAction === `regularize-${session.id}` ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 Envoyer
               </button>
             </div>
-            <label className="text-xs font-semibold text-slate-700 sm:col-span-3">
+            <label className="text-xs font-semibold text-slate-700 sm:col-span-2">
               Motif obligatoire
               <textarea className={`${inputClass} mt-1 min-h-16`} required value={requestReasons[session.id] ?? ''} onChange={(event) => onReasonChange(session.id, event.target.value)} />
             </label>
@@ -3389,10 +3398,146 @@ function SessionDetails({ session }: { session: Session }) {
       </dl>
       <p className="mt-4 flex items-start gap-2 rounded-xl bg-white p-3 text-xs text-slate-600">
         <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
-        L’API actuelle ne fournit pas de route d’historique d’audit détaillé par séance. Les décisions de régularisation disponibles sont consultables dans la section correspondante.
+        Les preuves GPS originales et les corrections d’heures sont conservées dans le journal détaillé de cette séance.
       </p>
     </section>
   );
+}
+
+function SessionTimeCorrectionForm({
+  session,
+  busy,
+  disabled,
+  onSubmit,
+}: {
+  session: Session;
+  busy: boolean;
+  disabled: boolean;
+  onSubmit: (correction: { startedAt?: string; endedAt?: string; reason: string }) => void;
+}) {
+  const originalStartedAt = formatLomeInput(new Date(session.startedAt));
+  const originalEndedAt = formatLomeInput(new Date(session.validatedEndedAt ?? session.startedAt));
+  const [startedAtInput, setStartedAtInput] = useState(originalStartedAt);
+  const [endedAtInput, setEndedAtInput] = useState(originalEndedAt);
+  const [reason, setReason] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const startedAt = startedAtInput === originalStartedAt ? undefined : parseLomeInput(startedAtInput) ?? undefined;
+    const endedAt = endedAtInput === originalEndedAt ? undefined : parseLomeInput(endedAtInput) ?? undefined;
+    if (!startedAt && !endedAt) {
+      setFormError('Modifiez au moins une heure avant l’enregistrement.');
+      return;
+    }
+    if ((startedAtInput !== originalStartedAt && !startedAt) || (endedAtInput !== originalEndedAt && !endedAt)) {
+      setFormError('Les heures corrigées doivent être valides.');
+      return;
+    }
+    if (!reason.trim()) {
+      setFormError('Le motif de correction est obligatoire.');
+      return;
+    }
+    setFormError(null);
+    onSubmit({ ...(startedAt ? { startedAt } : {}), ...(endedAt ? { endedAt } : {}), reason: reason.trim() });
+  };
+
+  return (
+    <form className="grid gap-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 sm:grid-cols-2" onSubmit={submit}>
+      <h2 className="font-bold text-slate-900 sm:col-span-2">Corriger les heures de la séance terminée</h2>
+      <label className="text-xs font-semibold text-slate-700">
+        Début retenu · heure de Lomé
+        <input
+          type="datetime-local"
+          className={`${inputClass} mt-1`}
+          value={startedAtInput}
+          max={formatLomeInput()}
+          onChange={(event) => setStartedAtInput(event.target.value)}
+          required
+        />
+      </label>
+      <label className="text-xs font-semibold text-slate-700">
+        Fin retenue · heure de Lomé
+        <input
+          type="datetime-local"
+          className={`${inputClass} mt-1`}
+          value={endedAtInput}
+          min={startedAtInput}
+          max={formatLomeInput()}
+          onChange={(event) => setEndedAtInput(event.target.value)}
+          required
+        />
+      </label>
+      <label className="text-xs font-semibold text-slate-700 sm:col-span-2">
+        Motif obligatoire
+        <textarea
+          className={`${inputClass} mt-1 min-h-16`}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          required
+        />
+      </label>
+      {formError && <p role="alert" className="text-sm text-rose-700 sm:col-span-2">{formError}</p>}
+      <div className="sm:col-span-2">
+        <button type="submit" className={buttonClass} disabled={disabled || !reason.trim()}>
+          {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
+          Enregistrer et auditer la correction
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function TeacherImmediateReportCompletion({
+    request,
+    reason,
+    description,
+    busy,
+    onReasonChange,
+    onDescriptionChange,
+    onSubmit,
+}: {
+    request: Regularization['request'];
+    reason: string;
+    description: string;
+    busy: boolean;
+    onReasonChange: (value: string) => void;
+    onDescriptionChange: (value: string) => void;
+    onSubmit: (mode: 'gps' | 'regularization') => void;
+}) {
+    return (
+      <div className="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:grid-cols-2">
+        <p className="text-sm text-slate-700 sm:col-span-2">
+          Complétez la fin de séance. L’heure sera enregistrée par le serveur; aucune heure manuelle n’est demandée.
+        </p>
+        <label className="text-xs font-semibold text-slate-700">
+          Motif obligatoire
+          <textarea
+            className={`${inputClass} mt-1 min-h-16`}
+            value={reason}
+            onChange={(event) => onReasonChange(event.target.value)}
+            required
+          />
+        </label>
+        <label className="text-xs font-semibold text-slate-700">
+          Précision facultative
+          <textarea
+            className={`${inputClass} mt-1 min-h-16`}
+            value={description}
+            maxLength={2000}
+            onChange={(event) => onDescriptionChange(event.target.value)}
+          />
+        </label>
+        <div className="flex flex-wrap gap-2 sm:col-span-2">
+          <button className={buttonClass} type="button" disabled={busy || !reason.trim()} onClick={() => onSubmit('gps')}>
+            <MapPin className="h-4 w-4" /> Terminer avec GPS
+          </button>
+          <button className={secondaryButtonClass} type="button" disabled={busy || !reason.trim()} onClick={() => onSubmit('regularization')}>
+            <Clock3 className="h-4 w-4" /> Signaler l’échec GPS et proposer l’heure serveur
+          </button>
+        </div>
+      </div>
+    );
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

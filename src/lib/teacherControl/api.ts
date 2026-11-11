@@ -873,19 +873,50 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     const access = await requireSchoolAccess(actor, null, ['teacher']);
     const settings = await getEnabledGpsSettings(access.schoolId);
     const teacherId = await getTeacherId(actor, access.schoolId);
-    const resourceId = action === 'end_session' ? positiveInteger(body.sessionId) : null;
+    const regularizationRequestId = action === 'end_session'
+      ? positiveInteger(body.regularizationRequestId)
+      : null;
+    if (action === 'start_session' && body.regularizationRequestId != null) {
+      throw new TeacherControlApiError(400, 'regularizationRequestId is only valid for an end challenge');
+    }
+    if (action === 'start_session' && body.sessionId != null) {
+      throw new TeacherControlApiError(400, 'sessionId is only valid for an end challenge');
+    }
+    if (action === 'end_session' && body.sessionId != null && regularizationRequestId != null) {
+      throw new TeacherControlApiError(400, 'Choose either a session or regularization request');
+    }
+    const sessionId = action === 'end_session' && regularizationRequestId == null
+      ? positiveInteger(body.sessionId)
+      : null;
+    const resourceId = regularizationRequestId != null ? -regularizationRequestId : sessionId;
     if (action === 'end_session') {
-      if (!resourceId) throw new TeacherControlApiError(400, 'sessionId is required for an end challenge');
-      const [session] = await db.select({ id: teacherControlSessions.id })
-        .from(teacherControlSessions)
-        .where(and(
-          eq(teacherControlSessions.id, resourceId),
-          eq(teacherControlSessions.schoolId, access.schoolId),
-          eq(teacherControlSessions.teacherId, teacherId),
-          eq(teacherControlSessions.status, 'open'),
-        ))
-        .limit(1);
-      if (!session) throw new TeacherControlApiError(404, 'Open session not found');
+      if (regularizationRequestId != null) {
+        const [requestRow] = await db.select({ id: teacherControlRegularizationRequests.id })
+          .from(teacherControlRegularizationRequests)
+          .where(and(
+            eq(teacherControlRegularizationRequests.id, regularizationRequestId),
+            eq(teacherControlRegularizationRequests.schoolId, access.schoolId),
+            eq(teacherControlRegularizationRequests.teacherId, teacherId),
+            eq(teacherControlRegularizationRequests.requestType, 'immediate_report'),
+            eq(teacherControlRegularizationRequests.status, 'pending'),
+            isNull(teacherControlRegularizationRequests.sessionId),
+            isNull(teacherControlRegularizationRequests.proposedEndedAt),
+          ))
+          .limit(1);
+        if (!requestRow) throw new TeacherControlApiError(404, 'Pending immediate report not found');
+      } else {
+        if (!sessionId) throw new TeacherControlApiError(400, 'sessionId or regularizationRequestId is required for an end challenge');
+        const [session] = await db.select({ id: teacherControlSessions.id })
+          .from(teacherControlSessions)
+          .where(and(
+            eq(teacherControlSessions.id, sessionId),
+            eq(teacherControlSessions.schoolId, access.schoolId),
+            eq(teacherControlSessions.teacherId, teacherId),
+            eq(teacherControlSessions.status, 'open'),
+          ))
+          .limit(1);
+        if (!session) throw new TeacherControlApiError(404, 'Open session not found');
+      }
     }
     await db.delete(teacherControlGpsChallenges).where(lt(teacherControlGpsChallenges.expiresAt, new Date()));
     const token = randomBytes(32).toString('base64url');
@@ -902,7 +933,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       challenge: token,
       action,
       schoolId: access.schoolId,
-      sessionId: resourceId,
+      sessionId,
+      regularizationRequestId,
       expiresAt,
     };
   }, resolveActor));
@@ -1098,6 +1130,16 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       });
       const endedAt = new Date();
       if (endedAt < session.startedAt) throw new TeacherControlApiError(409, 'End time cannot precede session start');
+      const [pendingRequest] = await tx.select({ id: teacherControlRegularizationRequests.id })
+        .from(teacherControlRegularizationRequests)
+        .where(and(
+          eq(teacherControlRegularizationRequests.sessionId, sessionId),
+          eq(teacherControlRegularizationRequests.status, 'pending'),
+        ))
+        .limit(1);
+      if (pendingRequest) {
+        throw new TeacherControlApiError(409, 'Resolve the pending regularization before ending the session');
+      }
 
       const [updated] = await tx.update(teacherControlSessions).set({
         status: 'completed',
@@ -1180,17 +1222,138 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     });
   }, resolveActor));
 
+  app.post('/api/teacher-control/sessions/:sessionId/correction', handleRoute(async (req, _res, actor) => {
+    if (actor.role !== 'school_admin') throw new TeacherControlApiError(403, 'Forbidden');
+    const sessionId = positiveInteger(req.params.sessionId);
+    const body = req.body as Record<string, unknown>;
+    const reason = nonEmptyText(body.reason);
+    const hasStartedAt = Object.prototype.hasOwnProperty.call(body, 'startedAt');
+    const hasEndedAt = Object.prototype.hasOwnProperty.call(body, 'endedAt');
+    if (!sessionId || !reason || (!hasStartedAt && !hasEndedAt)) {
+      throw new TeacherControlApiError(400, 'sessionId, at least one corrected time and a reason are required');
+    }
+    const requestedStartedAt = hasStartedAt ? parseDate(body.startedAt) : null;
+    const requestedEndedAt = hasEndedAt ? parseDate(body.endedAt) : null;
+    const expectedStartedAt = parseDate(body.expectedStartedAt);
+    const expectedEndedAt = parseDate(body.expectedEndedAt);
+    if ((hasStartedAt && !requestedStartedAt)
+      || (hasEndedAt && !requestedEndedAt)
+      || !expectedStartedAt
+      || !expectedEndedAt) {
+      throw new TeacherControlApiError(400, 'Expected and corrected times must be valid timestamps');
+    }
+    const access = await requireSchoolAccess(actor, null, ['school_admin']);
+
+    return db.transaction(async (tx) => {
+      const [sessionSnapshot] = await tx.select({
+        teacherId: teacherControlSessions.teacherId,
+      }).from(teacherControlSessions).where(and(
+        eq(teacherControlSessions.id, sessionId),
+        eq(teacherControlSessions.schoolId, access.schoolId),
+        eq(teacherControlSessions.status, 'completed'),
+      )).limit(1);
+      if (!sessionSnapshot) throw new TeacherControlApiError(404, 'Completed session not found');
+      await lockTeacherControlTeacher(tx, sessionSnapshot.teacherId, access.schoolId);
+      const [session] = await tx.select().from(teacherControlSessions).where(and(
+        eq(teacherControlSessions.id, sessionId),
+        eq(teacherControlSessions.schoolId, access.schoolId),
+        eq(teacherControlSessions.status, 'completed'),
+      )).for('update').limit(1);
+      if (!session || !session.validatedEndedAt) {
+        throw new TeacherControlApiError(409, 'The session is no longer completed');
+      }
+      if (session.startedAt.getTime() !== expectedStartedAt.getTime()
+        || session.validatedEndedAt.getTime() !== expectedEndedAt.getTime()) {
+        throw new TeacherControlApiError(409, 'The session changed since it was loaded; refresh before correcting it');
+      }
+      const [pendingRequest] = await tx.select({ id: teacherControlRegularizationRequests.id })
+        .from(teacherControlRegularizationRequests)
+        .where(and(
+          eq(teacherControlRegularizationRequests.sessionId, sessionId),
+          eq(teacherControlRegularizationRequests.status, 'pending'),
+        ))
+        .limit(1);
+      if (pendingRequest) {
+        throw new TeacherControlApiError(409, 'Resolve the pending regularization before correcting the session');
+      }
+
+      const startedAt = requestedStartedAt ?? session.startedAt;
+      const endedAt = requestedEndedAt ?? session.validatedEndedAt;
+      const now = new Date();
+      if (startedAt >= endedAt || startedAt > now || endedAt > now) {
+        throw new TeacherControlApiError(400, 'Corrected session times must be ordered and cannot be in the future');
+      }
+      await assertNoTeacherControlOverlap(tx, {
+        schoolId: access.schoolId,
+        teacherId: session.teacherId,
+        startedAt,
+        endedAt,
+        excludedSessionId: sessionId,
+      });
+
+      const [updated] = await tx.update(teacherControlSessions).set({
+        startedAt,
+        validatedEndedAt: endedAt,
+        updatedAt: now,
+      }).where(and(
+        eq(teacherControlSessions.id, sessionId),
+        eq(teacherControlSessions.schoolId, access.schoolId),
+        eq(teacherControlSessions.status, 'completed'),
+      )).returning();
+      await insertAudit(tx, auditInput({
+        schoolId: access.schoolId,
+        schoolNameSnapshot: session.schoolNameSnapshot,
+        action: 'session_times_corrected',
+        resourceType: 'session',
+        resourceId: sessionId,
+        beforeValues: {
+          startedAt: session.startedAt,
+          validatedEndedAt: session.validatedEndedAt,
+          startSource: session.startSource,
+          startDistanceMeters: session.startDistanceMeters,
+          startAccuracyMeters: session.startAccuracyMeters,
+          startGeofenceRadiusMeters: session.startGeofenceRadiusMeters,
+          endSource: session.endSource,
+          endDistanceMeters: session.endDistanceMeters,
+          endAccuracyMeters: session.endAccuracyMeters,
+          endGeofenceRadiusMeters: session.endGeofenceRadiusMeters,
+        },
+        afterValues: {
+          startedAt: updated.startedAt,
+          validatedEndedAt: updated.validatedEndedAt,
+          startSource: updated.startSource,
+          startDistanceMeters: updated.startDistanceMeters,
+          startAccuracyMeters: updated.startAccuracyMeters,
+          startGeofenceRadiusMeters: updated.startGeofenceRadiusMeters,
+          endSource: updated.endSource,
+          endDistanceMeters: updated.endDistanceMeters,
+          endAccuracyMeters: updated.endAccuracyMeters,
+          endGeofenceRadiusMeters: updated.endGeofenceRadiusMeters,
+        },
+        reason,
+      }, actor));
+      return {
+        ...updated,
+        ...calculateTeacherControlCompensation({
+          startedAt: updated.startedAt,
+          validatedEndedAt: updated.validatedEndedAt,
+          hourlyRateXof: updated.hourlyRateXofSnapshot,
+        }),
+      };
+    });
+  }, resolveActor));
+
   app.post('/api/teacher-control/sessions/:sessionId/regularizations', handleRoute(async (req, _res, actor) => {
     if (actor.role !== 'teacher' || actor.id == null) throw new TeacherControlApiError(403, 'Forbidden');
     const sessionId = positiveInteger(req.params.sessionId);
     const body = req.body as Record<string, unknown>;
-    const proposedEndedAt = parseDate(body.proposedEndedAt);
     const reason = nonEmptyText(body.reason);
-    if (!sessionId || !proposedEndedAt || !reason) throw new TeacherControlApiError(400, 'sessionId, proposedEndedAt and reason are required');
+    if (!sessionId || !reason) throw new TeacherControlApiError(400, 'sessionId and reason are required');
+    if (body.proposedEndedAt != null) {
+      throw new TeacherControlApiError(400, 'The proposed end time is generated by the server');
+    }
     const access = await requireSchoolAccess(actor, null, ['teacher']);
     const teacherId = await getTeacherId(actor, access.schoolId);
-    const now = new Date();
-    if (proposedEndedAt > now) throw new TeacherControlApiError(400, 'Proposed end time cannot be in the future');
     return db.transaction(async (tx) => {
       await lockTeacherControlTeacher(tx, teacherId, access.schoolId);
       const [session] = await tx.select().from(teacherControlSessions).where(and(
@@ -1200,6 +1363,8 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         eq(teacherControlSessions.status, 'open'),
       )).for('update').limit(1);
       if (!session) throw new TeacherControlApiError(404, 'Open session not found');
+      const now = new Date();
+      const proposedEndedAt = now;
       if (proposedEndedAt < session.startedAt) throw new TeacherControlApiError(400, 'Proposed end time cannot precede the session start');
       await assertNoTeacherControlOverlap(tx, {
         schoolId: access.schoolId,
@@ -1346,9 +1511,15 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     if (actor.role !== 'teacher' || actor.id == null) throw new TeacherControlApiError(403, 'Forbidden');
     const requestId = positiveInteger(req.params.requestId);
     const body = req.body as Record<string, unknown>;
-    const proposedEndedAt = parseDate(body.proposedEndedAt);
+    const mode = body.mode;
+    const reason = nonEmptyText(body.reason);
     const description = parseBoundedText(body.description, 2000, 'description');
-    if (!requestId || !proposedEndedAt) throw new TeacherControlApiError(400, 'A valid proposedEndedAt is required');
+    if (!requestId || (mode !== 'gps' && mode !== 'regularization') || !reason) {
+      throw new TeacherControlApiError(400, 'requestId, a valid completion mode and a reason are required');
+    }
+    if (body.proposedEndedAt != null) {
+      throw new TeacherControlApiError(400, 'The proposed end time is generated by the server');
+    }
     const access = await requireSchoolAccess(actor, body.schoolId, ['teacher']);
     const teacherId = await getTeacherId(actor, access.schoolId);
     return db.transaction(async (tx) => {
@@ -1357,26 +1528,81 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         eq(teacherControlRegularizationRequests.id, requestId),
         eq(teacherControlRegularizationRequests.schoolId, access.schoolId),
         eq(teacherControlRegularizationRequests.teacherId, teacherId),
-        eq(teacherControlRegularizationRequests.status, 'pending'),
         eq(teacherControlRegularizationRequests.requestType, 'immediate_report'),
       )).for('update').limit(1);
-      if (!requestRow || !requestRow.referenceStartedAt || requestRow.sessionId != null) {
+      if (!requestRow || !requestRow.referenceStartedAt) {
         throw new TeacherControlApiError(404, 'Pending immediate report not found');
       }
+      if (requestRow.status !== 'pending' || requestRow.proposedEndedAt != null || requestRow.sessionId != null) {
+        throw new TeacherControlApiError(409, 'This immediate report has already been completed or is no longer pending');
+      }
+      let endGpsEvidence: { distanceMeters: number; accuracyMeters: number } | null = null;
+      let gpsFix: ReturnType<typeof gpsCoordinates> | null = null;
+      let gpsSettings: Awaited<ReturnType<typeof getEnabledGpsSettings>> | null = null;
+      if (mode === 'gps') {
+        gpsFix = gpsCoordinates(body);
+        const [settings] = await tx.select({
+          isEnabled: teacherControlGpsSettings.isEnabled,
+          latitude: teacherControlGpsSettings.latitude,
+          longitude: teacherControlGpsSettings.longitude,
+          geofenceRadiusMeters: teacherControlGpsSettings.geofenceRadiusMeters,
+          maxGpsAccuracyMeters: teacherControlGpsSettings.maxGpsAccuracyMeters,
+        }).from(teacherControlGpsSettings)
+          .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
+          .limit(1);
+        gpsSettings = gpsSiteFromSettings(settings);
+        const gpsValidation = validateTeacherControlGpsFix(gpsFix, gpsSettings);
+        if (gpsValidation.accepted === false) {
+          throw new TeacherControlApiError(400, `GPS validation failed: ${gpsValidation.reason}`);
+        }
+        endGpsEvidence = {
+          distanceMeters: gpsValidation.distanceMeters,
+          accuracyMeters: gpsValidation.accuracyMeters,
+        };
+        await consumeGpsChallenge(tx, {
+          token: body.gpsChallenge,
+          actorUserId: actor.id,
+          schoolId: access.schoolId,
+          action: 'end_session',
+          resourceId: -requestId,
+        });
+      } else if (body.gpsChallenge != null || body.latitude != null || body.longitude != null || body.accuracyMeters != null) {
+        throw new TeacherControlApiError(400, 'GPS evidence is only accepted for GPS completion');
+      }
       const now = new Date();
-      if (proposedEndedAt <= requestRow.referenceStartedAt || proposedEndedAt > now) {
-        throw new TeacherControlApiError(400, 'The declared end time must follow the server report time and cannot be in the future');
+      if (now <= requestRow.referenceStartedAt) {
+        throw new TeacherControlApiError(400, 'The server end time must follow the server report time');
       }
       await assertNoTeacherControlOverlap(tx, {
         schoolId: access.schoolId,
         teacherId,
         startedAt: requestRow.referenceStartedAt,
-        endedAt: proposedEndedAt,
+        endedAt: now,
         excludedRequestId: requestId,
       });
+      const currentTechnicalDetails = requestRow.technicalDetails ?? {};
+      const retainedTechnicalDetails = Object.fromEntries(
+        Object.entries(currentTechnicalDetails).filter(([key]) => key !== 'endGpsEvidence'),
+      );
+      const technicalDetails = {
+        ...retainedTechnicalDetails,
+        endSource: mode === 'gps' ? 'gps' : 'regularization',
+        endReason: reason,
+        ...(endGpsEvidence && gpsFix && gpsSettings ? {
+          endGpsEvidence: {
+            latitude: gpsFix.latitude,
+            longitude: gpsFix.longitude,
+            accuracyMeters: endGpsEvidence.accuracyMeters,
+            distanceMeters: endGpsEvidence.distanceMeters,
+            geofenceRadiusMeters: gpsSettings.geofenceRadiusMeters,
+            validatedAt: now.toISOString(),
+          },
+        } : {}),
+      };
       const [updated] = await tx.update(teacherControlRegularizationRequests).set({
-        proposedEndedAt,
+        proposedEndedAt: now,
         description: description ? [requestRow.description, description].filter(Boolean).join('\n\n') : requestRow.description,
+        technicalDetails,
         updatedAt: now,
       }).where(eq(teacherControlRegularizationRequests.id, requestId)).returning();
       await insertAudit(tx, auditInput({
@@ -1385,8 +1611,16 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         action: 'immediate_session_report_completed',
         resourceType: 'regularization_request',
         resourceId: requestId,
-        beforeValues: { proposedEndedAt: requestRow.proposedEndedAt },
-        afterValues: { proposedEndedAt: updated.proposedEndedAt },
+        beforeValues: {
+          proposedEndedAt: requestRow.proposedEndedAt,
+          technicalDetails: requestRow.technicalDetails,
+        },
+        afterValues: {
+          proposedEndedAt: updated.proposedEndedAt,
+          endSource: mode === 'gps' ? 'gps' : 'regularization',
+          endGpsEvidence: endGpsEvidence && gpsFix && gpsSettings ? technicalDetails.endGpsEvidence : null,
+        },
+        reason,
       }, actor));
       return updated;
     });
@@ -1404,7 +1638,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           teacherControlRegularizationRequests.id,
         ))
         .orderBy(desc(teacherControlRegularizationRequests.createdAt));
-      return groupRegularizationHistory(rows);
+      return await addLinkedSessionStarts(groupRegularizationHistory(rows));
     }
     if (actor.role === 'teacher') {
       const access = await requireSchoolAccess(actor, null, ['teacher']);
@@ -1422,7 +1656,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           eq(teacherControlRegularizationRequests.teacherId, teacherId),
         ))
         .orderBy(desc(teacherControlRegularizationRequests.createdAt));
-      return groupRegularizationHistory(rows);
+      return await addLinkedSessionStarts(groupRegularizationHistory(rows));
     }
     const access = await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'super_admin']);
     const rows = await db.select({
@@ -1435,11 +1669,11 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       ))
       .where(eq(teacherControlRegularizationRequests.schoolId, access.schoolId))
       .orderBy(desc(teacherControlRegularizationRequests.createdAt));
-    return groupRegularizationHistory(rows);
+    return await addLinkedSessionStarts(groupRegularizationHistory(rows));
   }, resolveActor));
 
   app.post('/api/teacher-control/regularizations/:requestId/decision', handleRoute(async (req, _res, actor) => {
-    if (actor.role !== 'school_admin' && actor.role !== 'super_admin') throw new TeacherControlApiError(403, 'Forbidden');
+    if (actor.role !== 'school_admin') throw new TeacherControlApiError(403, 'Forbidden');
     const requestId = positiveInteger(req.params.requestId);
     const body = req.body as Record<string, unknown>;
     const decision = body.decision;
@@ -1501,7 +1735,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       }
       const decidedStartedAt = decision === 'rejected'
         ? null
-        : decision === 'modified_accepted' && !isExistingSessionRequest
+        : decision === 'modified_accepted'
           ? body.proposedStartedAt === undefined
             ? proposedStartedAt
             : parseDate(body.proposedStartedAt)
@@ -1531,6 +1765,53 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           excludedRequestId: requestId,
         });
       }
+
+      const completionSource = requestRow.technicalDetails?.endSource;
+      const rawEndGpsEvidence = requestRow.technicalDetails?.endGpsEvidence;
+      const endGpsEvidence = rawEndGpsEvidence && typeof rawEndGpsEvidence === 'object' && !Array.isArray(rawEndGpsEvidence)
+        ? rawEndGpsEvidence as Record<string, unknown>
+        : null;
+      const hasValidatedEndGpsEvidence = endGpsEvidence != null
+        && typeof endGpsEvidence.latitude === 'number'
+        && Number.isFinite(endGpsEvidence.latitude)
+        && endGpsEvidence.latitude >= -90
+        && endGpsEvidence.latitude <= 90
+        && typeof endGpsEvidence.longitude === 'number'
+        && Number.isFinite(endGpsEvidence.longitude)
+        && endGpsEvidence.longitude >= -180
+        && endGpsEvidence.longitude <= 180
+        && typeof endGpsEvidence.distanceMeters === 'number'
+        && Number.isSafeInteger(endGpsEvidence.distanceMeters)
+        && endGpsEvidence.distanceMeters >= 0
+        && typeof endGpsEvidence.accuracyMeters === 'number'
+        && Number.isSafeInteger(endGpsEvidence.accuracyMeters)
+        && endGpsEvidence.accuracyMeters >= 0
+        && typeof endGpsEvidence.geofenceRadiusMeters === 'number'
+        && Number.isSafeInteger(endGpsEvidence.geofenceRadiusMeters)
+        && endGpsEvidence.geofenceRadiusMeters > 0
+        && typeof endGpsEvidence.validatedAt === 'string'
+        && requestRow.proposedEndedAt != null
+        && Date.parse(endGpsEvidence.validatedAt) === requestRow.proposedEndedAt.getTime();
+      if (decision !== 'rejected'
+        && requestRow.requestType === 'immediate_report'
+        && completionSource !== 'gps'
+        && completionSource !== 'regularization') {
+        throw new TeacherControlApiError(409, 'The immediate report completion source is missing or invalid');
+      }
+      if (decision !== 'rejected'
+        && requestRow.requestType === 'immediate_report'
+        && completionSource === 'gps'
+        && !hasValidatedEndGpsEvidence) {
+        throw new TeacherControlApiError(409, 'The GPS end proof does not match the submitted end time');
+      }
+      const approvedEndSource = decision !== 'rejected'
+        && requestRow.requestType === 'immediate_report'
+        && completionSource === 'gps'
+        ? 'gps'
+        : 'regularization';
+      const approvedEndGpsEvidence = approvedEndSource === 'gps' && endGpsEvidence
+        ? endGpsEvidence
+        : null;
 
       let updatedSession = session ?? null;
       let linkedSessionId = session?.id ?? null;
@@ -1573,10 +1854,10 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           startAccuracyMeters: null,
           startGeofenceRadiusMeters: null,
           validatedEndedAt: decidedEndedAt,
-          endSource: 'regularization',
-          endDistanceMeters: null,
-          endAccuracyMeters: null,
-          endGeofenceRadiusMeters: null,
+          endSource: approvedEndSource,
+          endDistanceMeters: approvedEndGpsEvidence ? approvedEndGpsEvidence.distanceMeters as number : null,
+          endAccuracyMeters: approvedEndGpsEvidence ? approvedEndGpsEvidence.accuracyMeters as number : null,
+          endGeofenceRadiusMeters: approvedEndGpsEvidence ? approvedEndGpsEvidence.geofenceRadiusMeters as number : null,
           closedAt: null,
           closedByUserId: null,
           closedByNameSnapshot: null,
@@ -1599,6 +1880,9 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
             validatedEndedAt: decidedEndedAt,
             startSource: createdSession.startSource,
             endSource: createdSession.endSource,
+            endDistanceMeters: createdSession.endDistanceMeters,
+            endAccuracyMeters: createdSession.endAccuracyMeters,
+            endGeofenceRadiusMeters: createdSession.endGeofenceRadiusMeters,
           },
           reason,
         }, actor));
@@ -1629,6 +1913,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       if (isExistingSessionRequest && decision !== 'rejected' && session && decidedEndedAt) {
         [updatedSession] = await tx.update(teacherControlSessions).set({
           status: 'completed',
+          startedAt: decidedStartedAt ?? session.startedAt,
           validatedEndedAt: decidedEndedAt,
           endSource: 'regularization',
           updatedAt: now,
@@ -2091,4 +2376,25 @@ function groupRegularizationHistory(
     if (row.decision) entry.decisions.push(row.decision);
   }
   return [...grouped.values()];
+}
+
+async function addLinkedSessionStarts(
+  entries: ReturnType<typeof groupRegularizationHistory>,
+) {
+  const sessionIds = entries.flatMap(({ request }) => request.sessionId == null ? [] : [request.sessionId]);
+  const linkedSessions = sessionIds.length === 0
+    ? []
+    : await db.select({
+      id: teacherControlSessions.id,
+      startedAt: teacherControlSessions.startedAt,
+    }).from(teacherControlSessions)
+      .where(inArray(teacherControlSessions.id, sessionIds));
+  const startsById = new Map(linkedSessions.map((session) => [session.id, session.startedAt.toISOString()]));
+  return entries.map(({ request, decisions }) => ({
+    request: {
+      ...request,
+      linkedSessionStartedAt: request.sessionId == null ? null : startsById.get(request.sessionId) ?? null,
+    },
+    decisions,
+  }));
 }

@@ -563,6 +563,37 @@ describe('teacher control API authorization and input validation', () => {
     mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
   };
 
+  const configureCompletedSessionForCorrection = () => {
+    mockActor.role = 'school_admin';
+    mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
+    mockDatabaseState.teachers = [{ id: 21, userId: 601, schoolId: 8 }];
+    mockDatabaseState.sessions = [{
+      id: 91,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherUserId: 601,
+      teacherNameSnapshot: 'Teacher One',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      status: 'completed',
+      startedAt: new Date('2026-10-31T10:00:00.000Z'),
+      validatedEndedAt: new Date('2026-10-31T12:00:00.000Z'),
+      startSource: 'gps',
+      startDistanceMeters: 10,
+      startAccuracyMeters: 15,
+      startGeofenceRadiusMeters: 200,
+      endSource: 'gps',
+      endDistanceMeters: 12,
+      endAccuracyMeters: 18,
+      endGeofenceRadiusMeters: 200,
+      closedAt: null,
+      hourlyRateXofSnapshot: 500,
+    }];
+  };
+
   const configureGpsStart = async () => {
     mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'teacher', isActive: true }];
     mockDatabaseState.teachers = [{ id: 21, userId: 501, schoolId: 8 }];
@@ -1105,12 +1136,12 @@ describe('teacher control API authorization and input validation', () => {
       release.resolve();
 
       const [end, decision] = await Promise.all([endPromise, decisionPromise]);
-      expect(end.status).toBe(200);
-      expect(decision.status).toBe(409);
-      expect(mockDatabaseState.sessions[0]).toMatchObject({ status: 'completed', endSource: 'gps' });
-      expect(mockDatabaseState.regularizationRequests[0].status).toBe('pending');
-      expect(mockDatabaseState.regularizationDecisions).toHaveLength(0);
-      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session', 'teacher', 'session']);
+      expect(end.status).toBe(409);
+      expect(decision.status).toBe(200);
+      expect(mockDatabaseState.sessions[0]).toMatchObject({ status: 'completed', endSource: 'regularization' });
+      expect(mockDatabaseState.regularizationRequests[0].status).toBe('accepted');
+      expect(mockDatabaseState.regularizationDecisions).toHaveLength(1);
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session', 'teacher', 'session', 'request']);
     } finally {
       release.resolve();
       mockDatabaseState.teacherLockHooks = null;
@@ -1261,13 +1292,53 @@ describe('teacher control API authorization and input validation', () => {
     const response = await request(createTestApp())
       .post('/api/teacher-control/sessions/601/regularizations')
       .send({
-        proposedEndedAt: new Date(Date.now() - 60_000).toISOString(),
         reason: 'Clôture manquée',
       });
 
     expect(response.status).toBe(409);
     expect(mockDatabaseState.regularizationRequests).toHaveLength(1);
     expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'session']);
+  });
+
+  it('creates an incomplete-session end request with server time and rejects teacher-supplied times', async () => {
+    configureUnrecordedTeacher();
+    const startedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.sessions = [{
+      id: 604,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherUserId: 501,
+      teacherNameSnapshot: 'Test actor',
+      status: 'open',
+      startedAt,
+      validatedEndedAt: null,
+      startSource: 'gps',
+      startDistanceMeters: 0,
+      startAccuracyMeters: 20,
+      startGeofenceRadiusMeters: 200,
+      closedAt: null,
+    }];
+    const app = createTestApp();
+    const invalid = await request(app)
+      .post('/api/teacher-control/sessions/604/regularizations')
+      .send({ reason: 'GPS de fin indisponible', proposedEndedAt: startedAt.toISOString() });
+    expect(invalid.status).toBe(400);
+
+    const submittedAt = Date.now();
+    const response = await request(app)
+      .post('/api/teacher-control/sessions/604/regularizations')
+      .send({ reason: 'GPS de fin indisponible' });
+    expect(response.status).toBe(200);
+    expect(Date.parse(response.body.proposedEndedAt)).toBeGreaterThanOrEqual(submittedAt);
+    expect(response.body.sessionId).toBe(604);
+    expect(mockDatabaseState.sessions[0]).toMatchObject({
+      startedAt,
+      status: 'open',
+      validatedEndedAt: null,
+      startSource: 'gps',
+      startDistanceMeters: 0,
+    });
   });
 
   it('closes an incomplete session only after taking the teacher then session lock', async () => {
@@ -1381,6 +1452,17 @@ describe('teacher control API authorization and input validation', () => {
       reason: 'GPS unavailable',
       description: null,
       incidentType: 'gps_unavailable',
+      technicalDetails: {
+        endSource: 'gps',
+        endGpsEvidence: {
+          latitude: 6.1375,
+          longitude: 1.2123,
+          accuracyMeters: 20,
+          distanceMeters: 0,
+          geofenceRadiusMeters: 200,
+          validatedAt: new Date(referenceStartedAt.getTime() + 1_000).toISOString(),
+        },
+      },
       status: 'pending',
       submittedByUserId: 501,
       submittedByNameSnapshot: 'Teacher One',
@@ -1393,15 +1475,400 @@ describe('teacher control API authorization and input validation', () => {
       .send({ proposedEndedAt: new Date(Date.now() + 60_000).toISOString() });
     expect(invalidEnd.status).toBe(400);
 
-    const validEndAt = new Date(Date.now() - 1_800_000).toISOString();
+    const submittedAt = Date.now();
     const response = await request(app)
       .post('/api/teacher-control/regularizations/9/complete')
-      .send({ proposedEndedAt: validEndAt, description: 'Cours terminé.' });
+      .send({ mode: 'regularization', reason: 'GPS de fin indisponible', description: 'Cours terminé.' });
     expect(response.status).toBe(200);
     expect(response.body.referenceStartedAt).toBe(referenceStartedAt.toISOString());
-    expect(response.body.proposedEndedAt).toBe(validEndAt);
+    expect(Date.parse(response.body.proposedEndedAt)).toBeGreaterThanOrEqual(submittedAt);
     expect(response.body.description).toBe('Cours terminé.');
+    expect(response.body.technicalDetails).toMatchObject({
+      endSource: 'regularization',
+      endReason: 'GPS de fin indisponible',
+    });
+    expect(response.body.technicalDetails).not.toHaveProperty('endGpsEvidence');
+    expect(mockDatabaseState.auditEvents[0]).toMatchObject({
+      beforeValues: {
+        technicalDetails: {
+          endSource: 'gps',
+          endGpsEvidence: { latitude: 6.1375, longitude: 1.2123 },
+        },
+      },
+      afterValues: { endGpsEvidence: null },
+    });
     expect(response.body.sessionId).toBeNull();
+
+    const repeatedGpsCompletion = await request(app)
+      .post('/api/teacher-control/regularizations/9/complete')
+      .send({ mode: 'gps', reason: 'Nouvelle tentative GPS' });
+    expect(repeatedGpsCompletion.status).toBe(409);
+    expect(mockDatabaseState.regularizationRequests[0].proposedEndedAt).toEqual(new Date(response.body.proposedEndedAt));
+    expect(mockDatabaseState.regularizationRequests[0].technicalDetails).not.toHaveProperty('endGpsEvidence');
+    expect(mockDatabaseState.auditEvents).toHaveLength(1);
+  });
+
+  it('serializes concurrent immediate-report completions and records only one server end time', async () => {
+    configureUnrecordedTeacher();
+    const referenceStartedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 10,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'immediate_report',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt,
+      declaredStartedAt: null,
+      proposedEndedAt: null,
+      reason: 'GPS indisponible',
+      description: null,
+      incidentType: 'gps_unavailable',
+      technicalDetails: null,
+      status: 'pending',
+      submittedByUserId: 501,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: referenceStartedAt,
+      updatedAt: referenceStartedAt,
+    }];
+    const app = createTestApp();
+    const acquired = createDeferred();
+    const waiting = createDeferred();
+    const release = createDeferred();
+    mockDatabaseState.skipConcurrentRollback = true;
+    mockDatabaseState.teacherLockHooks = {
+      onAcquired: acquired.resolve,
+      onWaiting: waiting.resolve,
+      hold: release.promise,
+    };
+
+    try {
+      const firstPromise = request(app)
+        .post('/api/teacher-control/regularizations/10/complete')
+        .send({ mode: 'regularization', reason: 'Fin déclarée' })
+        .then((response) => response);
+      await acquired.promise;
+      const secondPromise = request(app)
+        .post('/api/teacher-control/regularizations/10/complete')
+        .send({ mode: 'regularization', reason: 'Deuxième soumission' })
+        .then((response) => response);
+      await waiting.promise;
+      release.resolve();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(409);
+      expect(mockDatabaseState.regularizationRequests[0].proposedEndedAt).toEqual(new Date(first.body.proposedEndedAt));
+      expect(mockDatabaseState.auditEvents).toHaveLength(1);
+      expect(mockDatabaseState.lockOrder).toEqual(['teacher', 'request', 'teacher', 'request']);
+    } finally {
+      release.resolve();
+      mockDatabaseState.teacherLockHooks = null;
+      mockDatabaseState.skipConcurrentRollback = false;
+    }
+  });
+
+  it('validates an explicit GPS end for an immediate report and preserves the proof on acceptance', async () => {
+    configureUnrecordedTeacher();
+    mockDatabaseState.gpsSettings = [{
+      id: 4,
+      schoolId: 8,
+      isEnabled: true,
+      latitude: '6.1375',
+      longitude: '1.2123',
+      geofenceRadiusMeters: 200,
+      maxGpsAccuracyMeters: 500,
+    }];
+    const referenceStartedAt = new Date(Date.now() - 3_600_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 9,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'immediate_report',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt,
+      declaredStartedAt: null,
+      proposedEndedAt: null,
+      reason: 'GPS indisponible au début',
+      description: null,
+      incidentType: 'gps_unavailable',
+      technicalDetails: null,
+      gpsLatitude: null,
+      gpsLongitude: null,
+      gpsAccuracyMeters: null,
+      status: 'pending',
+      submittedByUserId: 501,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: referenceStartedAt,
+      updatedAt: referenceStartedAt,
+    }];
+
+    const app = createTestApp();
+    const challenge = await request(app)
+      .post('/api/teacher-control/gps-challenges')
+      .send({ action: 'end_session', regularizationRequestId: 9 });
+    expect(challenge.status).toBe(200);
+    expect(challenge.body.regularizationRequestId).toBe(9);
+    expect(challenge.body.sessionId).toBeNull();
+    expect(mockDatabaseState.challenges[0].resourceId).toBe(-9);
+
+    const submittedAt = Date.now();
+    const completion = await request(app)
+      .post('/api/teacher-control/regularizations/9/complete')
+      .send({
+        mode: 'gps',
+        reason: 'Position obtenue à la fin',
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 20,
+        gpsChallenge: challenge.body.challenge,
+      });
+    expect(completion.status).toBe(200);
+    expect(Date.parse(completion.body.proposedEndedAt)).toBeGreaterThanOrEqual(submittedAt);
+    expect(completion.body.technicalDetails).toMatchObject({
+      endSource: 'gps',
+      endReason: 'Position obtenue à la fin',
+      endGpsEvidence: {
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 20,
+        distanceMeters: 0,
+        geofenceRadiusMeters: 200,
+      },
+    });
+    const repeatedRegularizationCompletion = await request(app)
+      .post('/api/teacher-control/regularizations/9/complete')
+      .send({ mode: 'regularization', reason: 'Nouvelle tentative sans GPS' });
+    expect(repeatedRegularizationCompletion.status).toBe(409);
+    expect(mockDatabaseState.regularizationRequests[0].proposedEndedAt).toEqual(new Date(completion.body.proposedEndedAt));
+    expect(mockDatabaseState.regularizationRequests[0].technicalDetails).toMatchObject({
+      endSource: 'gps',
+      endGpsEvidence: { latitude: 6.1375, longitude: 1.2123 },
+    });
+    expect(mockDatabaseState.auditEvents).toHaveLength(1);
+
+    configureUnrecordedAdmin();
+    const decision = await request(app)
+      .post('/api/teacher-control/regularizations/9/decision')
+      .send({ decision: 'accepted' });
+    expect(decision.status).toBe(200);
+    expect(decision.body.session).toMatchObject({
+      status: 'completed',
+      startSource: 'regularization',
+      endSource: 'gps',
+      startDistanceMeters: null,
+      endDistanceMeters: 0,
+      endAccuracyMeters: 20,
+      endGeofenceRadiusMeters: 200,
+    });
+    expect(mockDatabaseState.auditEvents.some((event) => (
+      event.action === 'immediate_session_report_completed'
+      && event.reason === 'Position obtenue à la fin'
+    ))).toBe(true);
+  });
+
+  it('rejects mismatched GPS evidence and ignores stale proof for a regularized immediate-report end', async () => {
+    configureUnrecordedTeacher();
+    const referenceStartedAt = new Date(Date.now() - 3_600_000);
+    const proposedEndedAt = new Date(Date.now() - 1_800_000);
+    mockDatabaseState.regularizationRequests = [{
+      id: 11,
+      sessionId: null,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'immediate_report',
+      classId: 41,
+      classNameSnapshot: '6e A',
+      subjectId: 51,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt,
+      declaredStartedAt: null,
+      proposedEndedAt,
+      reason: 'GPS indisponible au début',
+      description: null,
+      incidentType: 'gps_unavailable',
+      technicalDetails: {
+        endSource: 'gps',
+        endGpsEvidence: {
+          latitude: 6.1375,
+          longitude: 1.2123,
+          accuracyMeters: 20,
+          distanceMeters: 0,
+          geofenceRadiusMeters: 200,
+          validatedAt: new Date(proposedEndedAt.getTime() - 1_000).toISOString(),
+        },
+      },
+      status: 'pending',
+      submittedByUserId: 501,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: referenceStartedAt,
+      updatedAt: proposedEndedAt,
+    }];
+
+    configureUnrecordedAdmin();
+    const app = createTestApp();
+    const invalidGpsDecision = await request(app)
+      .post('/api/teacher-control/regularizations/11/decision')
+      .send({ decision: 'accepted' });
+    expect(invalidGpsDecision.status).toBe(409);
+    expect(mockDatabaseState.sessions).toHaveLength(0);
+
+    mockDatabaseState.regularizationRequests[0].technicalDetails = {
+      endSource: 'regularization',
+      endReason: 'GPS indisponible à la fin',
+      endGpsEvidence: {
+        latitude: 6.1375,
+        longitude: 1.2123,
+        accuracyMeters: 20,
+        distanceMeters: 0,
+        geofenceRadiusMeters: 200,
+        validatedAt: new Date(proposedEndedAt.getTime() - 1_000).toISOString(),
+      },
+    };
+    const regularizedDecision = await request(app)
+      .post('/api/teacher-control/regularizations/11/decision')
+      .send({ decision: 'accepted' });
+    expect(regularizedDecision.status).toBe(200);
+    expect(regularizedDecision.body.session).toMatchObject({
+      endSource: 'regularization',
+      endDistanceMeters: null,
+      endAccuracyMeters: null,
+      endGeofenceRadiusMeters: null,
+    });
+    expect(mockDatabaseState.regularizationRequests[0].technicalDetails).toHaveProperty('endGpsEvidence');
+    expect(mockDatabaseState.auditEvents.some((event) => event.action === 'session_created_by_regularization')).toBe(true);
+  });
+
+  it('corrects completed session times with audit history and recalculated compensation', async () => {
+    configureCompletedSessionForCorrection();
+    const originalStart = '2026-10-31T10:00:00.000Z';
+    const originalEnd = '2026-10-31T12:00:00.000Z';
+    const firstCorrection = await request(createTestApp())
+      .post('/api/teacher-control/sessions/91/correction')
+      .send({
+        endedAt: '2026-10-31T11:00:00.000Z',
+        expectedStartedAt: originalStart,
+        expectedEndedAt: originalEnd,
+        reason: 'L’enseignant a terminé à 11 h',
+      });
+    expect(firstCorrection.status).toBe(200);
+    expect(firstCorrection.body.startedAt).toBe(originalStart);
+    expect(firstCorrection.body.validatedEndedAt).toBe('2026-10-31T11:00:00.000Z');
+    expect(firstCorrection.body.durationMilliseconds).toBe(3_600_000);
+    expect(firstCorrection.body.estimatedAmountXof).toBe(500);
+    expect(firstCorrection.body).toMatchObject({
+      startSource: 'gps',
+      startDistanceMeters: 10,
+      endSource: 'gps',
+      endDistanceMeters: 12,
+    });
+    expect(mockDatabaseState.auditEvents[0]).toMatchObject({
+      action: 'session_times_corrected',
+      reason: 'L’enseignant a terminé à 11 h',
+      beforeValues: {
+        startedAt: new Date(originalStart),
+        validatedEndedAt: new Date(originalEnd),
+        startDistanceMeters: 10,
+        endDistanceMeters: 12,
+      },
+      afterValues: {
+        startedAt: new Date(originalStart),
+        validatedEndedAt: new Date('2026-10-31T11:00:00.000Z'),
+        startDistanceMeters: 10,
+        endDistanceMeters: 12,
+      },
+    });
+
+    const secondCorrection = await request(createTestApp())
+      .post('/api/teacher-control/sessions/91/correction')
+      .send({
+        startedAt: '2026-10-31T10:15:00.000Z',
+        expectedStartedAt: originalStart,
+        expectedEndedAt: '2026-10-31T11:00:00.000Z',
+        reason: 'Début révisé après vérification',
+      });
+    expect(secondCorrection.status).toBe(200);
+    expect(secondCorrection.body.durationMilliseconds).toBe(2_700_000);
+    expect(secondCorrection.body.estimatedAmountXof).toBe(375);
+    expect(mockDatabaseState.auditEvents).toHaveLength(2);
+    expect(mockDatabaseState.auditEvents[1]).toMatchObject({
+      beforeValues: {
+        startedAt: new Date(originalStart),
+        validatedEndedAt: new Date('2026-10-31T11:00:00.000Z'),
+      },
+      afterValues: {
+        startedAt: new Date('2026-10-31T10:15:00.000Z'),
+        validatedEndedAt: new Date('2026-10-31T11:00:00.000Z'),
+      },
+    });
+    const listedSessions = await request(createTestApp()).get('/api/teacher-control/sessions?limit=50');
+    expect(listedSessions.status).toBe(200);
+    expect(listedSessions.body.items[0]).toMatchObject({
+      startedAt: '2026-10-31T10:15:00.000Z',
+      validatedEndedAt: '2026-10-31T11:00:00.000Z',
+      durationMilliseconds: 45 * 60_000,
+      estimatedAmountXof: 375,
+    });
+  });
+
+  it('rejects stale, overlapping, future, cross-school and Super Admin session corrections', async () => {
+    configureCompletedSessionForCorrection();
+    const app = createTestApp();
+    const body = {
+      endedAt: '2026-10-31T11:00:00.000Z',
+      expectedStartedAt: '2026-10-31T10:00:00.000Z',
+      expectedEndedAt: '2026-10-31T12:00:00.000Z',
+      reason: 'Correction test',
+    };
+    const stale = await request(app)
+      .post('/api/teacher-control/sessions/91/correction')
+      .send({ ...body, expectedEndedAt: '2026-10-31T11:30:00.000Z' });
+    expect(stale.status).toBe(409);
+
+    mockDatabaseState.sessions.push({
+      ...mockDatabaseState.sessions[0],
+      id: 92,
+      startedAt: new Date('2026-10-31T10:30:00.000Z'),
+      validatedEndedAt: new Date('2026-10-31T13:00:00.000Z'),
+    });
+    const overlapping = await request(app)
+      .post('/api/teacher-control/sessions/91/correction')
+      .send(body);
+    expect(overlapping.status).toBe(409);
+
+    const future = await request(app)
+      .post('/api/teacher-control/sessions/91/correction')
+      .send({ ...body, endedAt: new Date(Date.now() + 60_000).toISOString() });
+    expect(future.status).toBe(400);
+
+    mockDatabaseState.sessions.push({
+      ...mockDatabaseState.sessions[0],
+      id: 93,
+      schoolId: 9,
+    });
+    const crossSchool = await request(app)
+      .post('/api/teacher-control/sessions/93/correction')
+      .send(body);
+    expect(crossSchool.status).toBe(404);
+
+    mockActor.role = 'super_admin';
+    const forbidden = await request(app)
+      .post('/api/teacher-control/sessions/91/correction')
+      .send(body);
+    expect(forbidden.status).toBe(403);
   });
 
   it('validates a late declaration and creates an administratively accepted session without GPS values', async () => {
@@ -1511,7 +1978,7 @@ describe('teacher control API authorization and input validation', () => {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const completion = await request(createTestApp())
           .post(`/api/teacher-control/regularizations/${createResponse.body.id}/complete`)
-          .send({ proposedEndedAt: new Date().toISOString() });
+          .send({ mode: 'regularization', reason: 'Fin GPS impossible' });
         expect(completion.status).toBe(200);
         expect(completion.body.referenceStartedAt).toBe(createResponse.body.referenceStartedAt);
       }
@@ -1685,6 +2152,75 @@ describe('teacher control API authorization and input validation', () => {
     expect(sessions.body.items).toHaveLength(1);
     const duration = retainedEndedAt.getTime() - retainedStartedAt.getTime();
     expect(sessions.body.items[0].durationMilliseconds).toBe(duration);
+  });
+
+  it('lets an administrator correct both times of a pending GPS end request and preserves start evidence', async () => {
+    configureUnrecordedAdmin();
+    const originalStartedAt = new Date(Date.now() - 3_600_000);
+    const proposedEndedAt = new Date(Date.now() - 1_800_000);
+    const correctedStartedAt = new Date(originalStartedAt.getTime() - 15 * 60_000);
+    const correctedEndedAt = new Date(proposedEndedAt.getTime() - 10 * 60_000);
+    mockDatabaseState.sessions = [{
+      id: 605,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherUserId: 601,
+      teacherNameSnapshot: 'Teacher One',
+      status: 'open',
+      startedAt: originalStartedAt,
+      validatedEndedAt: null,
+      startSource: 'gps',
+      startDistanceMeters: 14,
+      startAccuracyMeters: 22,
+      startGeofenceRadiusMeters: 200,
+      closedAt: null,
+    }];
+    mockDatabaseState.regularizationRequests = [{
+      id: 19,
+      sessionId: 605,
+      schoolId: 8,
+      schoolNameSnapshot: 'School Eight',
+      teacherId: 21,
+      teacherNameSnapshot: 'Teacher One',
+      requestType: 'incomplete_session',
+      proposedEndedAt,
+      reason: 'GPS de fin indisponible',
+      status: 'pending',
+      submittedByUserId: 601,
+      submittedByNameSnapshot: 'Teacher One',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const response = await request(createTestApp())
+      .post('/api/teacher-control/regularizations/19/decision')
+      .send({
+        decision: 'modified_accepted',
+        proposedStartedAt: correctedStartedAt.toISOString(),
+        proposedEndedAt: correctedEndedAt.toISOString(),
+        reason: 'Heures vérifiées avec le registre',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.session).toMatchObject({
+      status: 'completed',
+      startedAt: correctedStartedAt.toISOString(),
+      validatedEndedAt: correctedEndedAt.toISOString(),
+      startSource: 'gps',
+      startDistanceMeters: 14,
+      startAccuracyMeters: 22,
+      startGeofenceRadiusMeters: 200,
+      endSource: 'regularization',
+    });
+    expect(response.body.decision).toMatchObject({
+      decision: 'modified_accepted',
+      previousProposedStartedAt: originalStartedAt.toISOString(),
+      previousProposedEndedAt: proposedEndedAt.toISOString(),
+      decidedStartedAt: correctedStartedAt.toISOString(),
+      decidedEndedAt: correctedEndedAt.toISOString(),
+      reason: 'Heures vérifiées avec le registre',
+    });
   });
 
   it.each(['immediate_report', 'late_declaration'] as const)(

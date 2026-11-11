@@ -151,6 +151,23 @@ describe('teacher hours reports', () => {
     expect(report.durationMilliseconds).toBe(225 * 60_000);
   });
 
+  it('exports the corrected validated interval instead of the original end time', async () => {
+    const report = buildTeacherHoursReport([{
+      ...sessions[0],
+      validatedEndedAt: '2026-10-31T11:00:00.000Z',
+    }], {
+      periodLabel: 'Du 2026-10-31 au 2026-10-31 (UTC)',
+      scopeLabel: 'École A',
+    });
+    expect(report.durationMilliseconds).toBe(60 * 60_000);
+
+    const bytes = await createTeacherHoursExcel(report);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(bytes));
+    expect(excelDurationMilliseconds(workbook.getWorksheet('Synthèse générale')?.getCell('B7').value))
+      .toBeCloseTo(60 * 60_000, 5);
+  });
+
   it('includes an explicit zero-session individual report and rejects invalid intervals', () => {
     const empty = buildTeacherHoursReport([], {
       periodLabel: 'Toute la période',

@@ -1122,7 +1122,7 @@ describe('TeacherControlView', () => {
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
   });
 
-  it('allows a super admin to review a regularization within the selected school scope', async () => {
+  it('allows a super admin to consult but not decide a regularization', async () => {
     const onSchoolChange = vi.fn();
     let pendingCount = 1;
     let requestStatus = 'pending';
@@ -1202,16 +1202,8 @@ describe('TeacherControlView', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Régularisations' }));
     expect(await screen.findByText(/Afi Mensah · Demande #7/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Accepter l’heure proposée' }));
-    await waitFor(() => {
-      const decisionCall = superApi.mock.calls.find(([url]) => url.includes('/regularizations/7/decision'));
-      expect(decisionCall).toBeTruthy();
-      expect(JSON.parse((decisionCall?.[1] as RequestInit)?.body as string)).toEqual({
-        decision: 'accepted',
-        schoolId: 8,
-      });
-    });
-    expect(await screen.findByText('Acceptée')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Accepter l’heure proposée' })).toBeNull();
+    expect(superApi.mock.calls.some(([url]) => url.includes('/regularizations/7/decision'))).toBe(false);
   });
 
   it('keeps a teacher request history visible and refreshes its real status on focus', async () => {
@@ -1513,9 +1505,9 @@ describe('TeacherControlView', () => {
       expectedEnd: '2026-10-31T09:15:00.000Z',
     },
   ])('allows an administrator to modify only the declared $label time', async ({
+    label,
     changedLabel,
     changedValue,
-    expectedStart,
     expectedEnd,
   }) => {
     let decisionPayload: Record<string, unknown> | null = null;
@@ -1577,9 +1569,13 @@ describe('TeacherControlView', () => {
     expect(decisionPayload).toMatchObject({
       decision: 'modified_accepted',
       reason: 'Correction après vérification',
-      proposedStartedAt: expectedStart,
       proposedEndedAt: expectedEnd,
     });
+    if (label === 'start') {
+      expect(decisionPayload).toHaveProperty('proposedStartedAt');
+    } else {
+      expect(decisionPayload).not.toHaveProperty('proposedStartedAt');
+    }
   });
 
   it('lets a super administrator capture school coordinates and edit them before saving', async () => {
