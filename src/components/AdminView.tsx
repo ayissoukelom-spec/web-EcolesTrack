@@ -440,7 +440,7 @@ interface AdminViewProps {
   importResult?: any | null;
   onClearImportResult?: () => void;
   onCreateUser?: (data: { uid?: string; email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; password?: string; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
-  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
+  onUpdateUser?: (id: number, data: { email: string; name: string; role: string; schoolId?: number; academicYearId?: number; phone?: string; specialization?: string | string[]; subjectIds?: number[]; gender?: string; address?: string; studentId?: number; classIds?: number[]; classSelectionScopeIds?: number[]; teachingAssignments?: Array<{ classId: number; subjectId: number }>; teachingAssignmentScope?: Array<{ classId: number; subjectId: number }> }) => Promise<any>;
   onSetPassword?: (userId: number) => Promise<{ temporaryPassword?: string }>;
   onDeleteUser?: (id: number) => Promise<void>;
   onReactivateUser?: (id: number) => Promise<void>;
@@ -2479,10 +2479,13 @@ export default function AdminView({
     studentId: string;
     assignedClassIds: number[];
     teachingAssignments?: TeachingAssignmentDraft[];
+    teachingAssignmentScope?: Array<{ classId: number; subjectId: number }>;
     lastName?: string;
     firstNames?: string;
-  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [] });
+  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [], teachingAssignmentScope: [] });
   const [userParentPhonePrefix, setUserParentPhonePrefix] = useState('');
+  const selectableTeacherClassIds = new Set((editTeacherClasses ?? []).map((klass) => klass.id));
+  const unavailableTeacherClassIds = userForm.assignedClassIds.filter((classId) => !selectableTeacherClassIds.has(classId));
 
   useEffect(() => {
     const schoolId = userForm.role === 'teacher' && userForm.schoolId ? Number(userForm.schoolId) : null;
@@ -3648,8 +3651,25 @@ export default function AdminView({
                         ))}
                       </div>
                     )}
+                    {!editTeacherClassesLoading && editTeacherClasses && !editTeacherClassesError && unavailableTeacherClassIds.length > 0 && (
+                        <div
+                          data-testid="teacher-unavailable-historical-classes"
+                          className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800"
+                        >
+                          <strong>Affectations historiques non disponibles (conservées, non modifiables ici) :</strong>{' '}
+                          {unavailableTeacherClassIds.map((classId) => {
+                            const historicalClass = classesList.find((klass) => (
+                              klass.id === classId
+                              && (klass.schoolId == null || klass.schoolId === Number(userForm.schoolId))
+                            ));
+                            return historicalClass
+                              ? `${historicalClass.name} (#${classId})`
+                              : `Classe #${classId}`;
+                          }).join(', ')}
+                        </div>
+                    )}
                     {userForm.assignedClassIds.length > 0 && (
-                      <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded border border-slate-200">
+                        <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded border border-slate-200">
                         <strong>Classes sélectionnées :</strong>{' '}
                         {(editTeacherClasses || [])
                           .filter((cls) => userForm.assignedClassIds.includes(cls.id))
@@ -3814,6 +3834,11 @@ export default function AdminView({
                       setEditUserError(null);
                       const email = String(userForm.email ?? '').trim();
                       const isTeacher = userToEdit.role === 'teacher';
+                      if (isTeacher && (editTeacherClassesLoading || editTeacherClasses == null || editTeacherClassesError)) {
+                        setEditUserError('Attendez le chargement réussi des classes autorisées avant d’enregistrer.');
+                        return;
+                      }
+                      const editableTeacherClasses = editTeacherClasses ?? [];
                       const lastName = String(userForm.lastName ?? '').trim();
                       const firstNames = String(userForm.firstNames ?? '').trim();
                       const name = isTeacher
@@ -3876,8 +3901,14 @@ export default function AdminView({
                           : undefined,
                         address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
                         studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
-                        classIds: updatedRole === 'teacher' ? userForm.assignedClassIds : undefined,
+                        classIds: updatedRole === 'teacher'
+                          ? userForm.assignedClassIds.filter((classId) => selectableTeacherClassIds.has(classId))
+                          : undefined,
+                        classSelectionScopeIds: updatedRole === 'teacher'
+                          ? editableTeacherClasses.map((klass) => klass.id)
+                          : undefined,
                         teachingAssignments: updatedRole === 'teacher' ? teachingAssignments : undefined,
+                        teachingAssignmentScope: updatedRole === 'teacher' ? userForm.teachingAssignmentScope ?? [] : undefined,
                       });
                       setEditUserOpen(false);
                       setUserToEdit(null);
@@ -6163,6 +6194,9 @@ export default function AdminView({
                                 const user = usersList.find((u) => u.id === tc.userId);
                                 if (!user) return;
                                 const assignedClassIds = getTeacherAssignedClassIds(tc);
+                                const teachingAssignments = (tc.teachingAssignments ?? [])
+                                  .filter((assignment) => assignment.isActive)
+                                  .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId }));
                                 setUserToEdit(user);
                                 setUserForm({
                                   email: user.email ?? '',
@@ -6186,9 +6220,8 @@ export default function AdminView({
                                   address: '',
                                   studentId: '',
                                   assignedClassIds,
-                                  teachingAssignments: (tc.teachingAssignments ?? [])
-                                    .filter((assignment) => assignment.isActive)
-                                    .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId })),
+                                  teachingAssignments,
+                                  teachingAssignmentScope: teachingAssignments,
                                 });
                                 setEditUserOpen(true);
                               }}
@@ -6861,6 +6894,9 @@ export default function AdminView({
                           onClick={() => {
                             const teacherProfile = getTeacherProfileForUser(user.id);
                             const assignedClassIds = teacherProfile ? getTeacherAssignedClassIds(teacherProfile) : [];
+                            const teachingAssignments = (teacherProfile?.teachingAssignments ?? [])
+                              .filter((assignment) => assignment.isActive)
+                              .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId }));
                             const rawPhone = user.role === 'parent'
                               ? getParentProfileForUser(user.id)?.phone ?? (user as any).phone
                               : (user as any).phone;
@@ -6888,9 +6924,8 @@ export default function AdminView({
                               address: '',
                               studentId: '',
                               assignedClassIds,
-                              teachingAssignments: (teacherProfile?.teachingAssignments ?? [])
-                                .filter((assignment) => assignment.isActive)
-                                .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId })),
+                              teachingAssignments,
+                              teachingAssignmentScope: teachingAssignments,
                             });
                             setEditUserOpen(true);
                           }}

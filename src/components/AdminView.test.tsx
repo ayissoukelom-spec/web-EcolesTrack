@@ -1206,7 +1206,9 @@ describe('AdminView create-user teacher form', () => {
       phone: user.phone,
       classIds: [],
     };
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
+      new Response(JSON.stringify([]), { status: 200 })
+    ));
 
     try {
       renderWithAuth(
@@ -1237,6 +1239,7 @@ describe('AdminView create-user teacher form', () => {
 
       const editDialog = screen.getByRole('dialog');
       fireEvent.change(within(editDialog).getByPlaceholderText('Nom de famille'), { target: { value: 'KANGNI-SOUKPE' } });
+      await waitFor(() => expect(within(editDialog).getByText('Aucune classe disponible pour cette école.')).toBeInTheDocument());
       fireEvent.click(within(editDialog).getByRole('button', { name: 'Enregistrer' }));
 
       await waitFor(() => {
@@ -1333,7 +1336,10 @@ describe('AdminView create-user teacher form', () => {
       await waitFor(() => {
         expect(onUpdateUser).toHaveBeenCalledWith(703, expect.objectContaining({
           classIds: [11, 12, 13],
+          classSelectionScopeIds: [11, 12, 13],
           subjectIds: [5, 6],
+          teachingAssignments: [{ classId: 11, subjectId: 6 }],
+          teachingAssignmentScope: [{ classId: 11, subjectId: 6 }],
         }));
       });
 
@@ -1347,9 +1353,104 @@ describe('AdminView create-user teacher form', () => {
       await waitFor(() => {
         expect(onUpdateUser).toHaveBeenLastCalledWith(703, expect.objectContaining({
           classIds: [11, 12],
+          classSelectionScopeIds: [11, 12, 13],
           subjectIds: [5, 6],
+          teachingAssignments: [{ classId: 11, subjectId: 6 }],
+          teachingAssignmentScope: [{ classId: 11, subjectId: 6 }],
         }));
       });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('keeps unavailable historical classes out of selections and distinguishes them in teacher details and edit', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const user: User = {
+      id: 704,
+      uid: 'teacher_704',
+      email: 'legacy-teacher@example.test',
+      name: 'Ada Lovelace',
+      lastName: 'Lovelace',
+      firstNames: 'Ada',
+      role: 'teacher',
+      schoolId: 1,
+      phone: '+22890000000',
+    };
+    const teacher: Teacher = {
+      id: 34,
+      userId: 704,
+      email: user.email!,
+      name: user.name,
+      lastName: user.lastName,
+      firstNames: user.firstNames,
+      schoolId: 1,
+      phone: user.phone,
+      classIds: [11],
+      teachingClassIds: [11],
+      administrativeClassIds: [11, 99],
+      assignedSubjects: [{ id: 5, name: 'Math' }],
+      teachingAssignments: [{ id: 4, classId: 11, subjectId: 5, schoolId: 1, isActive: true }],
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify([
+      { id: 11, schoolId: 1, name: 'Class A' },
+      { id: 12, schoolId: 1, name: 'Class B' },
+    ]), { status: 200 }));
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[
+            { id: 11, schoolId: 1, academicYearId: 1, name: 'Class A' },
+            { id: 12, schoolId: 1, academicYearId: 1, name: 'Class B' },
+            { id: 99, schoolId: null, academicYearId: 1, name: 'Ancienne classe rejetée' },
+          ]}
+          teachersList={[teacher]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[user]}
+          approvedSubjectsList={[{ id: 5, schoolId: 1, name: 'Math' }]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onUpdateUser={onUpdateUser}
+          currentSchoolId={1}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Voir' }));
+      const details = screen.getByRole('dialog', { name: "Détails de l'enseignant" });
+      expect(within(details).getByText(/Rattachements administratifs:/).parentElement)
+        .toHaveTextContent('Ancienne classe rejetée');
+      fireEvent.click(within(details).getAllByRole('button', { name: 'Fermer' })[0]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      const editDialog = screen.getByRole('dialog');
+      await waitFor(() => expect(within(editDialog).getByRole('checkbox', { name: 'Class A' })).toBeInTheDocument());
+      expect(within(editDialog).queryByRole('checkbox', { name: 'Ancienne classe rejetée' })).toBeNull();
+      expect(within(editDialog).getByTestId('teacher-unavailable-historical-classes'))
+        .toHaveTextContent('Ancienne classe rejetée (#99)');
+      expect((within(editDialog).getByRole('checkbox', { name: 'Class A' }) as HTMLInputElement).checked).toBe(true);
+
+      fireEvent.click(within(editDialog).getByRole('checkbox', { name: 'Class B' }));
+      fireEvent.click(within(editDialog).getByRole('button', { name: 'Enregistrer' }));
+
+      await waitFor(() => expect(onUpdateUser).toHaveBeenCalledWith(704, expect.objectContaining({
+        classIds: [11, 12],
+        classSelectionScopeIds: [11, 12],
+        teachingAssignments: [{ classId: 11, subjectId: 5 }],
+        teachingAssignmentScope: [{ classId: 11, subjectId: 5 }],
+      })));
+      expect(JSON.stringify(onUpdateUser.mock.calls[0][1])).not.toContain('99');
     } finally {
       fetchSpy.mockRestore();
     }

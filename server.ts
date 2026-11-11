@@ -51,7 +51,11 @@ import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import { registerClassSubjectPivotRoute } from './src/lib/classSubjectPivotApi.ts';
 import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAdminWhatsAppApi.ts';
 import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
-import { planTeacherTeachingAssignmentSync } from './src/lib/teacherTeachingAssignments.ts';
+import {
+  normalizeTeacherClassIds as normalizeTeacherClassIdSelection,
+  planTeacherClassMembershipSync,
+  planTeacherTeachingAssignmentSync,
+} from './src/lib/teacherTeachingAssignments.ts';
 import {
   lateArrivalJustificationNotificationKey,
   planLateArrivalJustificationTransition,
@@ -1226,15 +1230,10 @@ async function normalizeTeacherClassIds(schoolId: number, requested: unknown, fa
     : Array.isArray(fallbackAssignments)
       ? fallbackAssignments.map((assignment) => (assignment as any)?.classId)
       : null;
-  if (requestedIds == null) return null;
-
-  const classIds = new Set<number>();
-  for (const value of requestedIds) {
-    const classId = parsePositiveInteger(value);
-    if (classId == null || !(await isApprovedClassForSchool(classId, schoolId))) return null;
-    classIds.add(classId);
-  }
-  return Array.from(classIds);
+  return normalizeTeacherClassIdSelection(
+    requestedIds,
+    (classId) => isApprovedClassForSchool(classId, schoolId),
+  );
 }
 
 async function validateTeacherSubjectIds(schoolId: number, requested: unknown) {
@@ -1266,13 +1265,14 @@ async function syncTeacherClassSubjectAssignments(
   schoolId: number,
   assignments: Array<{ classId: number; subjectId: number }>,
   executor: TeacherCreationDatabaseExecutor = db,
+  managedAssignments?: Array<{ classId: number; subjectId: number }>,
 ) {
   const now = new Date();
   const existingAssignments = await executor.select().from(teacherClassSubjects).where(and(
     eq(teacherClassSubjects.teacherId, teacherId),
     eq(teacherClassSubjects.schoolId, schoolId),
   ));
-  const changes = planTeacherTeachingAssignmentSync(existingAssignments, assignments);
+  const changes = planTeacherTeachingAssignmentSync(existingAssignments, assignments, managedAssignments);
   for (const change of changes) {
     if (change.kind === 'deactivate' || change.kind === 'activate') {
       await executor.update(teacherClassSubjects)
@@ -1296,25 +1296,21 @@ async function syncTeacherClassMemberships(
   schoolId: number,
   classIds: number[],
   executor: TeacherCreationDatabaseExecutor = db,
+  managedClassIds?: number[],
 ) {
   const existingAssignments = await executor.select().from(classTeachers).where(and(
     eq(classTeachers.teacherId, teacherId),
     eq(classTeachers.schoolId, schoolId),
   ));
-  const desiredClassIds = new Set(classIds);
-  const existingClassIds = new Set(existingAssignments.map((assignment) => assignment.classId));
-
-  for (const assignment of existingAssignments) {
-    if (!desiredClassIds.has(assignment.classId)) {
-      await executor.delete(classTeachers).where(and(
-        eq(classTeachers.teacherId, teacherId),
-        eq(classTeachers.schoolId, schoolId),
-        eq(classTeachers.classId, assignment.classId),
-      ));
-    }
+  const plan = planTeacherClassMembershipSync(existingAssignments, classIds, managedClassIds);
+  for (const classId of plan.remove) {
+    await executor.delete(classTeachers).where(and(
+      eq(classTeachers.teacherId, teacherId),
+      eq(classTeachers.schoolId, schoolId),
+      eq(classTeachers.classId, classId),
+    ));
   }
-  for (const classId of classIds) {
-    if (existingClassIds.has(classId)) continue;
+  for (const classId of plan.add) {
     await executor.insert(classTeachers).values({ classId, teacherId, schoolId });
   }
 }
@@ -2942,7 +2938,7 @@ export async function createApp() {
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const id = parseInt(req.params.id);
-      const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, globalSubjectIds, gender, classIds, teachingAssignments, teachingAssignmentOverrides, studentId } = req.body;
+      const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, globalSubjectIds, gender, classIds, classSelectionScopeIds, teachingAssignments, teachingAssignmentScope, teachingAssignmentOverrides, studentId } = req.body;
       // Only set parsedSchoolId when provided in the request. If omitted, preserve existing DB values.
       const parsedSchoolId = incomingSchoolId != null && incomingSchoolId !== '' ? parseInt(incomingSchoolId, 10) : undefined;
       if (role === 'parent' && incomingSchoolId != null && incomingSchoolId !== ''
@@ -3041,9 +3037,16 @@ export async function createApp() {
         ? actor.schoolId
         : teacherProfileSchoolId ?? targetUser.schoolId;
       const teacherSelectionsProvided = role === 'teacher'
-        && (teachingAssignments !== undefined || Array.isArray(classIds) || Array.isArray(subjectIds) || Array.isArray(globalSubjectIds));
+        && (teachingAssignments !== undefined
+          || teachingAssignmentScope !== undefined
+          || Array.isArray(classIds)
+          || classSelectionScopeIds !== undefined
+          || Array.isArray(subjectIds)
+          || Array.isArray(globalSubjectIds));
       let effectiveClassIds: number[] | undefined;
       let normalizedTeachingAssignments: Array<{ classId: number; subjectId: number }> | null = null;
+      let normalizedTeachingAssignmentScope: Array<{ classId: number; subjectId: number }> | null = null;
+      let normalizedClassSelectionScope: number[] | null = null;
       let effectiveSubjectIds: number[] | undefined;
       if (role === 'teacher' && teachingAssignmentSchoolId != null) {
         const existingTeacherSubjects = existingTeacherForUpdate
@@ -3088,6 +3091,12 @@ export async function createApp() {
           if (exactAssignmentsProvided && requestedTeachingAssignments == null) {
             return res.status(400).json({ error: 'Invalid teacher class and subject assignment' });
           }
+          normalizedTeachingAssignmentScope = teachingAssignmentScope !== undefined
+            ? await validateTeacherClassSubjectAssignments(teachingAssignmentSchoolId, teachingAssignmentScope)
+            : null;
+          if (teachingAssignmentScope !== undefined && normalizedTeachingAssignmentScope == null) {
+            return res.status(400).json({ error: 'Invalid teacher class and subject assignment scope' });
+          }
           const requestedClassIds = Array.isArray(classIds)
             ? classIds
             : Array.from(new Set([
@@ -3097,6 +3106,18 @@ export async function createApp() {
           const normalizedClassIds = await normalizeTeacherClassIds(teachingAssignmentSchoolId, requestedClassIds, undefined);
           if (normalizedClassIds == null) {
             return res.status(400).json({ error: 'Invalid teacher class selection' });
+          }
+          normalizedClassSelectionScope = classSelectionScopeIds !== undefined
+            ? await normalizeTeacherClassIds(teachingAssignmentSchoolId, classSelectionScopeIds, undefined)
+            : null;
+          if (classSelectionScopeIds !== undefined && normalizedClassSelectionScope == null) {
+            return res.status(400).json({ error: 'Invalid teacher class selection scope' });
+          }
+          if (normalizedClassSelectionScope != null) {
+            const selectableClassIds = new Set(normalizedClassSelectionScope);
+            if (normalizedClassIds.some((classId) => !selectableClassIds.has(classId))) {
+              return res.status(400).json({ error: 'Invalid teacher class selection' });
+            }
           }
           normalizedTeachingAssignments = requestedTeachingAssignments;
           effectiveClassIds = Array.from(new Set([
@@ -3414,14 +3435,26 @@ export async function createApp() {
 
         const assignmentSchoolId = teacherProfileSchoolId;
         if (teacherProfileId != null && assignmentSchoolId != null && normalizedTeachingAssignments) {
-          await syncTeacherClassSubjectAssignments(teacherProfileId, assignmentSchoolId, normalizedTeachingAssignments);
+          await syncTeacherClassSubjectAssignments(
+            teacherProfileId,
+            assignmentSchoolId,
+            normalizedTeachingAssignments,
+            db,
+            normalizedTeachingAssignmentScope ?? undefined,
+          );
         }
         if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(effectiveSubjectIds)) {
           await syncTeacherSubjectAssignments(teacherProfileId, assignmentSchoolId, effectiveSubjectIds);
         }
 
         if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(effectiveClassIds)) {
-          await syncTeacherClassMemberships(teacherProfileId, assignmentSchoolId, effectiveClassIds);
+          await syncTeacherClassMemberships(
+            teacherProfileId,
+            assignmentSchoolId,
+            effectiveClassIds,
+            db,
+            normalizedClassSelectionScope ?? undefined,
+          );
         }
       } else if (!isAddingFunction && role === 'parent') {
         const parentValues: any = {

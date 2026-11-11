@@ -7251,6 +7251,7 @@ describe('E2E security: auth & privilege checks', () => {
         specialization: 'Science',
         classIds: [1],
         subjectIds: [902],
+        teachingAssignments: [{ classId: 1, subjectId: 902 }],
       });
 
     expect(createRes.status).toBe(201);
@@ -7282,7 +7283,7 @@ describe('E2E security: auth & privilege checks', () => {
     expect(createRes.body.classIds).toContain(1);
   });
 
-  it('creates class-subject assignments from every selected class and subject', async () => {
+  it('creates only explicitly selected class-subject assignments', async () => {
     FIXTURES.subjects.push(
       { id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any,
       { id: 903, schoolId: 10, name: 'Math', subjectTypeId: 12, status: 'approved' } as any,
@@ -7301,6 +7302,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+22890000030',
         subjectIds: [902],
         classIds: [3],
+        teachingAssignments: [{ classId: 3, subjectId: 902 }],
       });
     expect(isolatedSchoolResponse.status).toBe(400);
     expect(FIXTURES.users.some((user) => user.uid === 'teacher-cross-school-assignment')).toBe(false);
@@ -7312,6 +7314,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+22890000031',
         classIds: [1],
         subjectIds: [902],
+        teachingAssignments: [{ classId: 1, subjectId: 902 }],
         expected: [{ classId: 1, subjectId: 902 }],
       },
       {
@@ -7320,7 +7323,8 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+22890000032',
         classIds: [1, 2],
         subjectIds: [902],
-        expected: [{ classId: 1, subjectId: 902 }, { classId: 2, subjectId: 902 }],
+        teachingAssignments: [{ classId: 2, subjectId: 902 }],
+        expected: [{ classId: 2, subjectId: 902 }],
       },
       {
         uid: 'teacher-matrix-multiple',
@@ -7328,10 +7332,12 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+22890000033',
         classIds: [1, 2],
         subjectIds: [902, 903],
+        teachingAssignments: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 903 },
+        ],
         expected: [
           { classId: 1, subjectId: 902 },
-          { classId: 1, subjectId: 903 },
-          { classId: 2, subjectId: 902 },
           { classId: 2, subjectId: 903 },
         ],
       },
@@ -7341,6 +7347,7 @@ describe('E2E security: auth & privilege checks', () => {
         phone: '+22890000035',
         classIds: [1],
         subjectIds: [],
+        teachingAssignments: [],
         expected: [],
       },
     ];
@@ -7394,6 +7401,7 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [1, 2],
         subjectIds: [902],
+        teachingAssignments: [{ classId: 2, subjectId: 902 }],
       });
     expect(publicCreate.status).toBe(201);
     expect(FIXTURES.classTeachers.filter((row) => row.teacherId === publicCreate.body.teacherId)
@@ -7401,7 +7409,7 @@ describe('E2E security: auth & privilege checks', () => {
     expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === publicCreate.body.teacherId && row.isActive)
       .map(({ classId, subjectId }) => ({ classId, subjectId }))
       .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
-      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 2, subjectId: 902 }]);
+      .toEqual([{ classId: 2, subjectId: 902 }]);
 
     const readback = await request(app)
       .get('/api/teachers?schoolId=10')
@@ -7420,7 +7428,7 @@ describe('E2E security: auth & privilege checks', () => {
     }
   });
 
-  it('reopens selected classes and subjects and applies the cartesian product when adding a class', async () => {
+  it('reopens selected classes and subjects without inferring new class-subject pairs', async () => {
     FIXTURES.subjects.push(
       { id: 902, schoolId: 10, name: 'Global Science', subjectTypeId: 12, status: 'approved' } as any,
       { id: 903, schoolId: 10, name: 'Specific Math', subjectTypeId: 12, status: 'approved' } as any,
@@ -7446,6 +7454,7 @@ describe('E2E security: auth & privilege checks', () => {
         specialization: 'Global Science, Specific Math',
         subjectIds: [902, 903],
         classIds: [1],
+        teachingAssignments: [{ classId: 1, subjectId: 902 }],
       });
 
     expect(created.status).toBe(201);
@@ -7460,14 +7469,14 @@ describe('E2E security: auth & privilege checks', () => {
       .filter((assignment) => assignment.teacherId === created.body.teacherId && assignment.isActive)
       .map(({ classId, subjectId }) => ({ classId, subjectId }))
       .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
-      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 1, subjectId: 903 }]);
+      .toEqual([{ classId: 1, subjectId: 902 }]);
     expect(FIXTURES.teacherSubjects.filter((assignment) => assignment.teacherId === created.body.teacherId)
       .map((assignment) => assignment.subjectId).sort()).toEqual([902, 903]);
     expect(profile.teachingAssignments
       .filter((assignment: any) => assignment.isActive)
       .map(({ classId, subjectId }: any) => ({ classId, subjectId }))
       .sort((left: any, right: any) => left.classId - right.classId || left.subjectId - right.subjectId))
-      .toEqual([{ classId: 1, subjectId: 902 }, { classId: 1, subjectId: 903 }]);
+      .toEqual([{ classId: 1, subjectId: 902 }]);
 
     const addedClass = await request(app)
       .put(`/api/admin/users/${profile.userId}`)
@@ -7480,6 +7489,10 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         subjectIds: [902, 903],
         classIds: [1, 2],
+        teachingAssignments: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 903 },
+        ],
       });
     expect(addedClass.status).toBe(200);
     expect(FIXTURES.teacherClassSubjects
@@ -7487,8 +7500,6 @@ describe('E2E security: auth & privilege checks', () => {
       .map(({ classId, subjectId }) => ({ classId, subjectId })))
       .toEqual([
         { classId: 1, subjectId: 902 },
-        { classId: 1, subjectId: 903 },
-        { classId: 2, subjectId: 902 },
         { classId: 2, subjectId: 903 },
       ]);
     expect(FIXTURES.classTeachers.some((assignment) => assignment.teacherId === profile.teacherId && assignment.classId === 2)).toBe(true);
@@ -7496,7 +7507,7 @@ describe('E2E security: auth & privilege checks', () => {
       .map((assignment) => assignment.subjectId).sort()).toEqual([902, 903]);
   });
 
-  it('preserves a no-op matrix and synchronizes intentional class and subject changes', async () => {
+  it('preserves a no-op exact assignment set and synchronizes intentional class and subject changes', async () => {
     FIXTURES.subjects.push(
       { id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any,
       { id: 903, schoolId: 10, name: 'Math', subjectTypeId: 12, status: 'approved' } as any,
@@ -7548,6 +7559,10 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [1],
         subjectIds: [902, 903],
+        teachingAssignments: [
+          { classId: 1, subjectId: 903 },
+          { classId: 1, subjectId: 902 },
+        ],
       });
 
     expect(noOp.status, JSON.stringify(noOp.body)).toBe(200);
@@ -7596,6 +7611,11 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [1, 2],
         subjectIds: [902, 903],
+        teachingAssignments: [
+          { classId: 1, subjectId: 903 },
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 903 },
+        ],
       });
 
     expect(addClass.status).toBe(200);
@@ -7605,7 +7625,6 @@ describe('E2E security: auth & privilege checks', () => {
       .toEqual([
         { classId: 1, subjectId: 902 },
         { classId: 1, subjectId: 903 },
-        { classId: 2, subjectId: 902 },
         { classId: 2, subjectId: 903 },
       ]);
     expect(FIXTURES.classTeachers.some((row) => row.teacherId === 77 && row.classId === 2)).toBe(true);
@@ -7621,6 +7640,10 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [1, 2],
         subjectIds: [903],
+        teachingAssignments: [
+          { classId: 1, subjectId: 903 },
+          { classId: 2, subjectId: 903 },
+        ],
       });
     expect(addSubject.status).toBe(200);
     expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.isActive)
@@ -7642,6 +7665,7 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [2],
         subjectIds: [903],
+        teachingAssignments: [{ classId: 2, subjectId: 903 }],
       });
     expect(removeClass.status).toBe(200);
     expect(FIXTURES.classTeachers.some((row) => row.teacherId === 77 && row.classId === 1)).toBe(false);
@@ -7658,6 +7682,7 @@ describe('E2E security: auth & privilege checks', () => {
         schoolId: 10,
         classIds: [2],
         subjectIds: [],
+        teachingAssignments: [],
       });
     expect(removeSubject.status).toBe(200);
     expect(FIXTURES.teacherClassSubjects.some((row) => row.teacherId === 77 && row.classId === 2 && row.isActive)).toBe(false);
@@ -7689,7 +7714,7 @@ describe('E2E security: auth & privilege checks', () => {
     expect(FIXTURES.teacherClassSubjects.find((row) => row.teacherId === 177 && row.schoolId === 20))
       .toMatchObject({ classId: 3, subjectId: 902, isActive: true });
 
-    const explicitAddition = await request(app)
+    const independentSelectionUpdate = await request(app)
       .put('/api/admin/users/3')
       .set('x-simulated-role', 'super_admin')
       .set('x-simulated-uid', 'super-uid')
@@ -7701,12 +7726,161 @@ describe('E2E security: auth & privilege checks', () => {
         classIds: [2],
         subjectIds: [903],
       });
-    expect(explicitAddition.status).toBe(409);
+    expect(independentSelectionUpdate.status).toBe(200);
     expect(FIXTURES.teacherClassSubjects.filter((row) => row.teacherId === 77 && row.schoolId === 10 && row.isActive)
       .map(({ classId, subjectId }) => ({ classId, subjectId })))
       .toEqual([]);
+    expect(FIXTURES.teacherSubjects.filter((row) => row.teacherId === 77 && row.schoolId === 10)
+      .map((row) => row.subjectId)).toEqual([903]);
     expect(FIXTURES.teacherClassSubjects.find((row) => row.teacherId === 177 && row.schoolId === 20))
       .toMatchObject({ classId: 3, subjectId: 902, isActive: true });
+  });
+
+  it('updates teacher selections over HTTP without deleting historical or other-school assignments', async () => {
+    FIXTURES.subjects.push({ id: 902, schoolId: 10, name: 'Science', subjectTypeId: 12, status: 'approved' } as any);
+    FIXTURES.classes.push({
+      id: 6,
+      name: 'Unshared Other School Class',
+      schoolId: 20,
+      academicYearId: 1,
+      teacherId: null,
+    } as any);
+    FIXTURES.userSchools.push(
+      { userId: 3, schoolId: 10, role: 'parent', isActive: true },
+      { userId: 3, schoolId: 20, role: 'teacher', isActive: true },
+    );
+    FIXTURES.parents.push({ id: 20, userId: 3, studentId: null, schoolId: 10 } as any);
+    FIXTURES.teachers.push({ id: 177, userId: 3, schoolId: 20, phone: '+22890000038', specialization: 'Other school' } as any);
+    FIXTURES.classTeachers.push(
+      { classId: 5, teacherId: 77, schoolId: 10 },
+      { classId: 3, teacherId: 177, schoolId: 20 },
+    );
+    FIXTURES.teacherClassSubjects.push(
+      { id: 901, teacherId: 77, schoolId: 10, classId: 5, subjectId: 902, isActive: true },
+      { id: 902, teacherId: 177, schoolId: 20, classId: 3, subjectId: 901, isActive: true },
+    );
+
+    const schoolAdminHeaders = {
+      'x-simulated-role': 'school_admin',
+      'x-simulated-uid': 'school-uid',
+      'x-simulated-email': 'admin@school.test',
+      'x-simulated-school-id': '10',
+    };
+    const originalParent = structuredClone(FIXTURES.parents.find((profile: any) => profile.userId === 3));
+    const otherSchoolAssignments = structuredClone({
+      classLinks: FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === 177),
+      teachingPairs: FIXTURES.teacherClassSubjects.filter((assignment) => assignment.teacherId === 177),
+    });
+
+    const invalidSelection = await request(app)
+      .put('/api/admin/users/3')
+      .set(schoolAdminHeaders)
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [6],
+        classSelectionScopeIds: [1, 2],
+        subjectIds: [902],
+        teachingAssignments: [],
+        teachingAssignmentScope: [],
+      });
+
+    expect(invalidSelection.status).toBe(400);
+    expect(invalidSelection.body.error).toBe('Invalid teacher class selection');
+    expect(FIXTURES.classTeachers.some((assignment) => assignment.teacherId === 77 && assignment.classId === 5)).toBe(true);
+
+    const crossSchoolUpdate = await request(app)
+      .put('/api/admin/users/3')
+      .set(schoolAdminHeaders)
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 20,
+        classIds: [1, 2],
+        classSelectionScopeIds: [1, 2],
+        subjectIds: [902],
+        teachingAssignments: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 902 },
+        ],
+        teachingAssignmentScope: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 902 },
+        ],
+      });
+
+    expect(crossSchoolUpdate.status).toBe(403);
+    expect(crossSchoolUpdate.body.error).toBe('Forbidden: cannot move user to another school');
+
+    const saveAvailableSelections = await request(app)
+      .put('/api/admin/users/3')
+      .set(schoolAdminHeaders)
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [1, 2],
+        classSelectionScopeIds: [1, 2],
+        subjectIds: [902],
+        teachingAssignments: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 902 },
+        ],
+        teachingAssignmentScope: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 902 },
+        ],
+      });
+
+    expect(saveAvailableSelections.status, JSON.stringify(saveAvailableSelections.body)).toBe(200);
+    expect(FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === 77).map((assignment) => assignment.classId).sort())
+      .toEqual([1, 2, 5]);
+    expect(FIXTURES.teacherClassSubjects.filter((assignment) => assignment.teacherId === 77 && assignment.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([
+        { classId: 1, subjectId: 902 },
+        { classId: 2, subjectId: 902 },
+        { classId: 5, subjectId: 902 },
+      ]);
+    expect(FIXTURES.parents.find((profile: any) => profile.userId === 3)).toEqual(originalParent);
+    expect({
+      classLinks: FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === 177),
+      teachingPairs: FIXTURES.teacherClassSubjects.filter((assignment) => assignment.teacherId === 177),
+    }).toEqual(otherSchoolAssignments);
+
+    const removeAvailableClass = await request(app)
+      .put('/api/admin/users/3')
+      .set(schoolAdminHeaders)
+      .send({
+        name: 'Teacher',
+        role: 'teacher',
+        schoolId: 10,
+        classIds: [2],
+        classSelectionScopeIds: [1, 2],
+        subjectIds: [902],
+        teachingAssignments: [{ classId: 2, subjectId: 902 }],
+        teachingAssignmentScope: [
+          { classId: 1, subjectId: 902 },
+          { classId: 2, subjectId: 902 },
+        ],
+      });
+
+    expect(removeAvailableClass.status, JSON.stringify(removeAvailableClass.body)).toBe(200);
+    expect(FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === 77).map((assignment) => assignment.classId).sort())
+      .toEqual([2, 5]);
+    expect(FIXTURES.teacherClassSubjects.filter((assignment) => assignment.teacherId === 77 && assignment.isActive)
+      .map(({ classId, subjectId }) => ({ classId, subjectId }))
+      .sort((left, right) => left.classId - right.classId || left.subjectId - right.subjectId))
+      .toEqual([
+        { classId: 2, subjectId: 902 },
+        { classId: 5, subjectId: 902 },
+      ]);
+    expect({
+      classLinks: FIXTURES.classTeachers.filter((assignment) => assignment.teacherId === 177),
+      teachingPairs: FIXTURES.teacherClassSubjects.filter((assignment) => assignment.teacherId === 177),
+    }).toEqual(otherSchoolAssignments);
   });
 
   it('rolls back a teacher account when a pedagogical assignment fails during creation', async () => {

@@ -8,6 +8,8 @@ import { useAuth } from '../contexts/AuthContext.tsx';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
+import type { TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
 
 interface SimulatorHeaderProps {
   currentRole: string;
@@ -295,6 +297,7 @@ export default function SimulatorHeader({
   const [createParentSchoolId, setCreateParentSchoolId] = useState('');
   const [createSpecializations, setCreateSpecializations] = useState<string[]>([]);
   const [createAssignedClassIds, setCreateAssignedClassIds] = useState<number[]>([]);
+  const [createTeachingAssignments, setCreateTeachingAssignments] = useState<TeachingAssignmentDraft[]>([]);
   const [schoolTeacherSubjects, setSchoolTeacherSubjects] = useState<{
     schoolId: number;
     subjects: Array<{ id: number; name: string }>;
@@ -329,7 +332,9 @@ export default function SimulatorHeader({
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const createTeacherSchoolId = createRole === 'teacher'
-    ? (currentRole === 'school_admin' ? Number(simUser?.schoolId) : (Number(createSchoolId) || undefined))
+    ? (currentRole === 'school_admin'
+      ? Number(simUser?.schoolId) > 0 ? Number(simUser?.schoolId) : undefined
+      : Number(createSchoolId) > 0 ? Number(createSchoolId) : undefined)
     : undefined;
   const [teacherSchoolClasses, setTeacherSchoolClasses] = useState<Class[] | null>(null);
 
@@ -407,7 +412,14 @@ export default function SimulatorHeader({
 
   const availableTeacherClasses = createTeacherSchoolId
     ? (teacherSchoolClasses ?? [])
-    : (classesList || []);
+    : [];
+  const availableTeacherSubjects = currentRole === 'super_admin'
+    ? schoolTeacherSubjects != null && schoolTeacherSubjects.schoolId === createTeacherSchoolId
+      ? schoolTeacherSubjects.subjects
+      : []
+    : (approvedSubjectsList || [])
+      .map((subject) => ({ id: Number(subject.id), name: String(subject.name || '').trim() }))
+      .filter((subject) => Number.isInteger(subject.id) && subject.id > 0 && subject.name);
 
   const teacherSpecializations = currentRole === 'super_admin'
     ? schoolTeacherSubjects != null && schoolTeacherSubjects.schoolId === createTeacherSchoolId
@@ -969,6 +981,9 @@ export default function SimulatorHeader({
                     if (selectedRole !== 'teacher' && selectedRole !== 'surveillant') {
                       setCreateAssignedClassIds([]);
                     }
+                    if (selectedRole !== 'teacher') {
+                      setCreateTeachingAssignments([]);
+                    }
                     setCreateGender('');
                     if (selectedRole !== 'parent') {
                       setCreateParentSchoolId('');
@@ -1169,6 +1184,7 @@ export default function SimulatorHeader({
                         onChange={(e) => {
                           setCreateSchoolId(e.target.value);
                           setCreateAssignedClassIds([]);
+                          setCreateTeachingAssignments([]);
                         }}
                       >
                         <option value="">-- Choisir une école --</option>
@@ -1181,7 +1197,7 @@ export default function SimulatorHeader({
 
                   {createRole === 'teacher' && <div>
                     <label className="block text-xs">
-                      <RequiredLabel label="Classes assignées" required />
+                      <RequiredLabel label="Rattachements administratifs aux classes" required />
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 text-sm">
                       {availableTeacherClasses
@@ -1206,7 +1222,7 @@ export default function SimulatorHeader({
                         <div className="text-slate-500">Sélectionnez d'abord une école pour afficher les classes disponibles.</div>
                       )}
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">Les classes sont prises en compte immédiatement à chaque sélection.</p>
+                    <p className="mt-2 text-xs text-slate-500">Ce rattachement administratif est distinct des affectations pédagogiques exactes ci-dessous.</p>
                     {createAssignedClassIds.length > 0 && (
                       <div className="mt-2 text-xs text-slate-700 bg-slate-100 p-2 rounded-lg border border-slate-200">
                         <strong>Classes sélectionnées :</strong>{' '}
@@ -1220,8 +1236,9 @@ export default function SimulatorHeader({
 
                   {createRole === 'teacher' && <div>
                     <label className="block text-xs">
-                      <RequiredLabel label="Spécialisation" required />
+                      <RequiredLabel label="Matières de spécialisation du profil" required />
                     </label>
+                    <p className="mb-2 text-xs text-slate-500">Cette sélection décrit le profil de l’enseignant ; elle ne crée pas à elle seule une affectation dans une classe.</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border border-slate-200 rounded-lg p-2 bg-slate-50 max-h-56 overflow-auto">
                         {teacherSpecializations.map((subject) => {
                           const selectionValue = currentRole === 'super_admin' ? subject.id : subject.name;
@@ -1251,6 +1268,53 @@ export default function SimulatorHeader({
                         )}
                     </div>
                   </div>}
+                  {createRole === 'teacher' && (
+                    <div className="sm:col-span-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-900">
+                      Affectations pédagogiques exactes classe–matière
+                    </label>
+                    <p className="mb-3 text-xs text-indigo-800">
+                      Choisissez explicitement chaque couple. Les classes et matières sélectionnées séparément plus haut ne génèrent aucune combinaison automatiquement.
+                    </p>
+                    <TeachingAssignmentsEditor
+                      classes={availableTeacherClasses.map((cls) => ({ id: cls.id, name: cls.name }))}
+                      subjects={availableTeacherSubjects}
+                      value={createTeachingAssignments}
+                      onChange={setCreateTeachingAssignments}
+                    />
+                    {createTeachingAssignments.length === 0 ? (
+                      <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" role="status">
+                        Aucune affectation pédagogique exacte n’est définie. L’enseignant sera créé sans couple classe–matière et devra être affecté ultérieurement.
+                      </div>
+                    ) : createTeachingAssignments.every((assignment) => (
+                      assignment.classId != null && assignment.subjectId != null
+                    )) ? (
+                      <div className="mt-3 rounded border border-indigo-200 bg-white p-2 text-xs text-slate-700">
+                        <strong>Affectations retenues :</strong>
+                        <ul className="mt-1 list-disc pl-5">
+                          {Array.from(new Map<string, { classId: number; subjectId: number }>(createTeachingAssignments
+                            .filter((assignment): assignment is { classId: number; subjectId: number } => (
+                              assignment.classId != null && assignment.subjectId != null
+                            ))
+                            .map((assignment) => [
+                              `${assignment.classId}:${assignment.subjectId}`,
+                              assignment,
+                            ] as const)).values()).map((assignment) => (
+                            <li key={`${assignment.classId}:${assignment.subjectId}`}>
+                              {availableTeacherClasses.find((cls) => cls.id === assignment.classId)?.name || `Classe #${assignment.classId}`}
+                              {' — '}
+                              {availableTeacherSubjects.find((subject) => subject.id === assignment.subjectId)?.name || `Matière #${assignment.subjectId}`}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" role="status">
+                        Complétez ou supprimez les affectations incomplètes avant de continuer.
+                      </div>
+                    )}
+                    </div>
+                  )}
                 </>
               )}
 
@@ -1329,6 +1393,21 @@ export default function SimulatorHeader({
                       setCreateError('Veuillez sélectionner au moins une classe pour l\'enseignant');
                       return;
                     }
+                    const availableClassIds = new Set(availableTeacherClasses.map((cls) => cls.id));
+                    if (createAssignedClassIds.some((classId) => !availableClassIds.has(classId))) {
+                      setCreateError('Une classe sélectionnée n’est plus disponible dans cette école');
+                      return;
+                    }
+                    const availableSubjectIds = new Set(availableTeacherSubjects.map((subject) => subject.id));
+                    if (createTeachingAssignments.some((assignment) => (
+                      assignment.classId == null
+                      || assignment.subjectId == null
+                      || !availableClassIds.has(assignment.classId)
+                      || !availableSubjectIds.has(assignment.subjectId)
+                    ))) {
+                      setCreateError('Complétez ou supprimez chaque affectation pédagogique et vérifiez qu’elle appartient à l’école sélectionnée');
+                      return;
+                    }
                   }
                   setIsCreating(true);
                   const normalizedLastName = createRole === 'teacher' ? createLastName.trim().toUpperCase() : createLastName.trim();
@@ -1351,6 +1430,16 @@ export default function SimulatorHeader({
                         .filter((subject) => createSpecializations.includes(String(subject.id)))
                         .map((subject) => String(subject.name || '').trim())
                     : createSpecializations;
+                  const teachingAssignments = Array.from(new Map<string, { classId: number; subjectId: number }>(
+                    createTeachingAssignments
+                      .filter((assignment): assignment is { classId: number; subjectId: number } => (
+                        assignment.classId != null && assignment.subjectId != null
+                      ))
+                      .map((assignment) => [
+                        `${assignment.classId}:${assignment.subjectId}`,
+                        { classId: assignment.classId, subjectId: assignment.subjectId },
+                      ] as const),
+                  ).values());
                   const payload: any = {
                     email: createRole === 'parent' ? createEmail.trim() || null : createEmail,
                     name,
@@ -1358,6 +1447,7 @@ export default function SimulatorHeader({
                     phone: `${createPhonePrefix}${createPhone}`,
                     specialization: createRole === 'teacher' ? specialization : undefined,
                     subjectIds: createRole === 'teacher' ? subjectIds : undefined,
+                    teachingAssignments: createRole === 'teacher' ? teachingAssignments : undefined,
                     ...(createRole === 'teacher'
                       ? {
                           lastName: normalizedLastName,
@@ -1418,6 +1508,7 @@ export default function SimulatorHeader({
                   setCreateParentSchoolId('');
                   setCreateSpecializations([]);
                   setCreateAssignedClassIds([]);
+                  setCreateTeachingAssignments([]);
                   setCreateGender('');
                   try {
                     await onRefreshData();

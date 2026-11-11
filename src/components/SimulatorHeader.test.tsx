@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SimulatorHeader from './SimulatorHeader';
 
 const mockAuthState = vi.hoisted(() => ({
-  user: { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' },
+  user: { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' } as {
+    id: number;
+    uid: string;
+    email: string;
+    name: string;
+    schoolId?: number;
+  },
   role: 'super_admin',
   token: 'access-token' as string | null,
   activeSchoolId: null as number | null,
@@ -37,14 +43,20 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function mockApi(subjectRows: Record<string, any[]> = subjectsBySchool) {
+function mockApi(
+  subjectRows: Record<string, any[]> = subjectsBySchool,
+  classRowsBySchool: Record<string, any[]> = {},
+) {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.origin);
     requests.push({ url: url.toString(), init });
 
     if (url.pathname === '/api/classes') {
-      return jsonResponse([{ id: 53, name: 'Classe de test', schoolId: Number(url.searchParams.get('schoolId')) }]);
+      const schoolId = url.searchParams.get('schoolId') || '';
+      return jsonResponse(classRowsBySchool[schoolId] || [
+        { id: 53, name: 'Classe de test', schoolId: Number(schoolId) },
+      ]);
     }
     if (url.pathname === '/api/subjects') {
       return jsonResponse(subjectRows[url.searchParams.get('schoolId') || ''] || []);
@@ -67,10 +79,15 @@ function mockApi(subjectRows: Record<string, any[]> = subjectsBySchool) {
   return requests;
 }
 
-function renderHeader(props: { onRefreshData?: () => void | Promise<void>; onLogout?: () => void } = {}) {
+function renderHeader(props: {
+  onRefreshData?: () => void | Promise<void>;
+  onLogout?: () => void;
+  approvedSubjectsList?: Array<{ id: number; name: string; status?: string }>;
+  currentRole?: string;
+} = {}) {
   return render(
     <SimulatorHeader
-      currentRole="super_admin"
+      currentRole={props.currentRole || 'super_admin'}
       schoolsList={schools as any}
       classesList={[]}
       teachersList={[]}
@@ -78,7 +95,7 @@ function renderHeader(props: { onRefreshData?: () => void | Promise<void>; onLog
       studentsList={[]}
       parentsList={[]}
       yearsList={[]}
-      approvedSubjectsList={[]}
+      approvedSubjectsList={props.approvedSubjectsList || []}
       onRoleChange={() => undefined}
       onRefreshData={props.onRefreshData || (() => undefined)}
       isSyncing={false}
@@ -242,13 +259,135 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
     selectSchool(25);
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
     await selectTestClass();
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter une affectation' }));
+    fireEvent.change(screen.getByLabelText('Classe de l’affectation 1'), { target: { value: '53' } });
+    fireEvent.change(screen.getByLabelText('Matière de l’affectation 1'), { target: { value: '501' } });
+    expect(screen.getByText('Affectations retenues :')).toBeTruthy();
+    expect(screen.getByText('Classe de test — Mathématiques')).toBeTruthy();
     fillRequiredTeacherFields();
     fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
 
     await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
     const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
     const payload = JSON.parse(String(createRequest?.init?.body));
-    expect(payload).toMatchObject({ role: 'teacher', schoolId: 25, subjectIds: [501] });
+    expect(payload).toMatchObject({
+      role: 'teacher',
+      schoolId: 25,
+      subjectIds: [501],
+      teachingAssignments: [{ classId: 53, subjectId: 501 }],
+    });
+  });
+
+  it('creates several explicitly selected class-subject pairs without inferring combinations', async () => {
+    const requests = mockApi(subjectsBySchool, {
+      '25': [
+        { id: 53, name: 'Classe A', schoolId: 25 },
+        { id: 54, name: 'Classe B', schoolId: 25 },
+      ],
+    });
+    renderHeader();
+    openCreateAccount();
+    selectSchool(25);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
+    await screen.findByRole('checkbox', { name: 'Classe A' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Classe A' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Classe B' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter une affectation' }));
+    fireEvent.change(screen.getByLabelText('Classe de l’affectation 1'), { target: { value: '53' } });
+    fireEvent.change(screen.getByLabelText('Matière de l’affectation 1'), { target: { value: '501' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter une affectation' }));
+    fireEvent.change(screen.getByLabelText('Classe de l’affectation 2'), { target: { value: '54' } });
+    fireEvent.change(screen.getByLabelText('Matière de l’affectation 2'), { target: { value: '502' } });
+    fillRequiredTeacherFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload.teachingAssignments).toEqual([
+      { classId: 53, subjectId: 501 },
+      { classId: 54, subjectId: 502 },
+    ]);
+  });
+
+  it('allows creating a teacher without exact assignments and warns explicitly', async () => {
+    const requests = mockApi();
+    renderHeader();
+    openCreateAccount();
+    selectSchool(25);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mathématiques' }));
+    await selectTestClass();
+    expect(screen.getByRole('status')).toHaveTextContent(/Aucune affectation pédagogique exacte n’est définie/i);
+    fillRequiredTeacherFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload.teachingAssignments).toEqual([]);
+  });
+
+  it('limits the editor to the selected school classes and subjects and clears stale pairs', async () => {
+    const requests = mockApi({
+      '25': [{ id: 501, name: 'Mathématiques', schoolId: 25, status: 'approved' }],
+      '26': [{ id: 503, name: 'Physique', schoolId: 26, status: 'approved' }],
+    }, {
+      '25': [{ id: 53, name: 'Classe A', schoolId: 25 }],
+      '26': [{ id: 54, name: 'Classe B', schoolId: 26 }],
+    });
+    renderHeader();
+    openCreateAccount();
+    selectSchool(25);
+    await screen.findByRole('checkbox', { name: 'Classe A' });
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter une affectation' }));
+    fireEvent.change(screen.getByLabelText('Classe de l’affectation 1'), { target: { value: '53' } });
+    fireEvent.change(screen.getByLabelText('Matière de l’affectation 1'), { target: { value: '501' } });
+
+    selectSchool(26);
+    await screen.findByRole('checkbox', { name: 'Classe B' });
+    await screen.findByRole('checkbox', { name: 'Physique' });
+    expect(screen.queryByRole('checkbox', { name: 'Classe A' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Mathématiques' })).toBeNull();
+    expect(screen.queryByLabelText('Classe de l’affectation 1')).toBeNull();
+    expect(requests.some(({ url }) => url.includes('/api/classes?schoolId=25'))).toBe(true);
+    expect(requests.some(({ url }) => url.includes('/api/classes?schoolId=26'))).toBe(true);
+  });
+
+  it('uses stable approved subject IDs for a school-admin teacher assignment', async () => {
+    mockAuthState.user = {
+      id: 2,
+      uid: 'school-admin',
+      email: 'admin@example.test',
+      name: 'School Admin',
+      schoolId: 25,
+    };
+    mockAuthState.role = 'school_admin';
+    const requests = mockApi(subjectsBySchool, {
+      '25': [{ id: 53, name: 'Classe A', schoolId: 25 }],
+    });
+    renderHeader({
+      currentRole: 'school_admin',
+      approvedSubjectsList: [
+        { id: 501, name: 'Mathématiques', status: 'approved' },
+        { id: 502, name: 'Français', status: 'approved' },
+      ],
+    });
+    openCreateAccount();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Classe A' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mathématiques' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter une affectation' }));
+    fireEvent.change(screen.getByLabelText('Classe de l’affectation 1'), { target: { value: '53' } });
+    fireEvent.change(screen.getByLabelText('Matière de l’affectation 1'), { target: { value: '501' } });
+    fillRequiredTeacherFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Créer' }));
+    await waitFor(() => expect(requests.some(({ url }) => url.includes('/api/admin/users'))).toBe(true));
+    const createRequest = requests.find(({ url }) => url.includes('/api/admin/users'));
+    const payload = JSON.parse(String(createRequest?.init?.body));
+    expect(payload).toMatchObject({
+      schoolId: 25,
+      teachingAssignments: [{ classId: 53, subjectId: 501 }],
+    });
   });
 
   it('shows and copies the generated temporary password after profile teacher creation', async () => {
