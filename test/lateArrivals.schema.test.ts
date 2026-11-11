@@ -57,4 +57,19 @@ describe('late arrivals schema', () => {
     expect(creationRoute).toContain("category: 'absence'");
     expect(creationRoute.indexOf("await db.insert(lateArrivals).values")).toBeLessThan(creationRoute.indexOf('const notificationTitle'));
   });
+
+  it('declares isolated justification, append-only history, and attachment storage', () => {
+    const schemaText = fs.readFileSync(path.resolve('src/db/schema.ts'), 'utf8');
+    const migrationText = fs.readFileSync(path.resolve('drizzle/0146_late_arrival_justifications.sql'), 'utf8');
+
+    expect(schemaText).toContain("pgTable('late_arrival_justifications'");
+    expect(schemaText).toContain("pgTable('late_arrival_justification_events'");
+    expect(schemaText).toContain("pgTable('late_arrival_justification_files'");
+    expect(migrationText).toContain('ON DELETE RESTRICT');
+    expect(migrationText).toContain('UNIQUE ("justification_id", "revision")');
+    expect(migrationText).toContain('BEFORE UPDATE OR DELETE ON "late_arrival_justification_events"');
+    expect(migrationText).toContain('BEFORE TRUNCATE ON "late_arrival_justification_events"');
+    expect(migrationText).not.toMatch(/\bUPDATE\s+"?late_arrivals"?/i);
+    expect(migrationText).not.toMatch(/\bDELETE\s+FROM\s+"?late_arrivals"?/i);
+  });
 });

@@ -3,6 +3,10 @@ import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '
 import { sortClasses } from '../lib/classOrdering';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown, LoaderCircle } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
+import type {
+  LateArrivalJustificationDetail,
+  LateArrivalJustificationListItem,
+} from '../lib/api.ts';
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
@@ -23,6 +27,8 @@ interface LateArrivalEntry {
   updatedAt?: string;
 }
 
+type LateArrivalJustification = LateArrivalJustificationListItem['justification'];
+
 type PresenceEvent =
   | (Absence & { kind: 'absence' })
   | (LateArrivalEntry & {
@@ -31,6 +37,7 @@ type PresenceEvent =
       className: string;
       subjectName: string;
       isJustified: false;
+      justification?: LateArrivalJustification;
     });
 
 interface AbsenceViewProps {
@@ -38,6 +45,7 @@ interface AbsenceViewProps {
   absencesList: Absence[];
   absenceDeclarationsList?: AbsenceDeclaration[];
   lateArrivalsList?: LateArrivalEntry[];
+  lateArrivalJustificationsList?: LateArrivalJustificationListItem[];
   studentsList: Student[];
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
@@ -51,6 +59,11 @@ interface AbsenceViewProps {
   onAddAbsence: (data: { studentId: number; classId: number; date: string; subjectId?: number; startTime: string; endTime: string; isJustified: boolean }) => Promise<void>;
   onAddLateArrival?: (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; subjectId?: number; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => Promise<void>;
   onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+  onSubmitLateArrivalJustification?: (id: number, reason: string, files: File[]) => Promise<void>;
+  onReviewLateArrivalJustification?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
+  onReexamineLateArrivalJustification?: (id: number) => Promise<void>;
+  onLoadLateArrivalJustification?: (id: number) => Promise<LateArrivalJustificationDetail>;
+  onDownloadLateArrivalJustificationFile?: (id: number, fileId: number) => Promise<Blob>;
   onReexamineAbsenceJustification?: (id: number) => Promise<void>;
   onCreateAbsenceDeclaration?: (data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
   onUpdateAbsenceDeclaration?: (id: number, data: { studentId: number; date: string; startTime: string; endTime: string; reason: string }) => Promise<void>;
@@ -66,6 +79,7 @@ export default function AbsenceView({
   absencesList,
   absenceDeclarationsList = [],
   lateArrivalsList = [],
+  lateArrivalJustificationsList = [],
   studentsList,
   classesList,
   schoolsList,
@@ -78,6 +92,11 @@ export default function AbsenceView({
   onAddAbsence,
   onAddLateArrival,
   onReviewAbsence,
+  onSubmitLateArrivalJustification,
+  onReviewLateArrivalJustification,
+  onReexamineLateArrivalJustification,
+  onLoadLateArrivalJustification,
+  onDownloadLateArrivalJustificationFile,
   onReexamineAbsenceJustification,
   onCreateAbsenceDeclaration,
   onUpdateAbsenceDeclaration,
@@ -117,11 +136,24 @@ export default function AbsenceView({
   const [filterStatus, setFilterStatus] = useState('');
   const [downloadingJustificationIds, setDownloadingJustificationIds] = useState<Set<number>>(() => new Set());
   const downloadingJustificationIdsRef = useRef(new Set<number>());
+  const loadingLateJustificationIdsRef = useRef(new Set<number>());
+  const downloadingLateJustificationFileIdsRef = useRef(new Set<number>());
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showJustifyModal, setShowJustifyModal] = useState<Absence | null>(null);
+  const [showJustifyLateModal, setShowJustifyLateModal] = useState<LateArrivalEntry | null>(null);
   const [justificationText, setJustificationText] = useState('');
+  const [lateJustificationText, setLateJustificationText] = useState('');
   const [selectedJustificationFiles, setSelectedJustificationFiles] = useState<File[]>([]);
   const [justificationUploadError, setJustificationUploadError] = useState<string | null>(null);
+  const [lateJustificationError, setLateJustificationError] = useState<string | null>(null);
+  const [lateJustificationNotice, setLateJustificationNotice] = useState<string | null>(null);
+  const [submittingLateJustificationId, setSubmittingLateJustificationId] = useState<number | null>(null);
+  const [reviewingLateArrival, setReviewingLateArrival] = useState<LateArrivalEntry | null>(null);
+  const [reviewingLateArrivalId, setReviewingLateArrivalId] = useState<number | null>(null);
+  const [reexaminingLateArrivalId, setReexaminingLateArrivalId] = useState<number | null>(null);
+  const [lateJustificationDetails, setLateJustificationDetails] = useState<Record<number, LateArrivalJustificationDetail>>({});
+  const [loadingLateJustificationIds, setLoadingLateJustificationIds] = useState<Set<number>>(() => new Set());
+  const [downloadingLateJustificationFileIds, setDownloadingLateJustificationFileIds] = useState<Set<number>>(() => new Set());
   const [absenceControlError, setAbsenceControlError] = useState<string | null>(null);
   const [attendanceStatus, setAttendanceStatus] = useState<'present' | 'late' | 'absent'>('absent');
   const [lateArrivalError, setLateArrivalError] = useState<string | null>(null);
@@ -610,9 +642,133 @@ export default function AbsenceView({
     resetJustificationForm();
   };
 
+  const handleLateJustificationSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!showJustifyLateModal || !onSubmitLateArrivalJustification) return;
+    const reason = lateJustificationText.trim();
+    if (justificationUploadError) return;
+    if (!reason || reason.length > 2000) {
+      setLateJustificationError('Un motif est obligatoire (2000 caractères maximum).');
+      return;
+    }
+
+    setLateJustificationError(null);
+    setSubmittingLateJustificationId(showJustifyLateModal.id);
+    try {
+      await onSubmitLateArrivalJustification(showJustifyLateModal.id, reason, selectedJustificationFiles);
+      setLateJustificationNotice('Justification de retard envoyée. Elle est en attente de validation.');
+      setShowJustifyLateModal(null);
+      setLateJustificationText('');
+      resetJustificationForm();
+    } catch (error: any) {
+      setLateJustificationError(error?.message || 'Impossible d’envoyer la justification de retard.');
+    } finally {
+      setSubmittingLateJustificationId(null);
+    }
+  };
+
+  const submitLateArrivalReview = async (status: 'APPROVED' | 'REJECTED') => {
+    if (!reviewingLateArrival || !onReviewLateArrivalJustification) return;
+    const reason = rejectionReason.trim();
+    if (status === 'REJECTED' && (!reason || reason.length > 2000)) {
+      setReviewError('Le motif du rejet est obligatoire (2000 caractères maximum).');
+      return;
+    }
+    setReviewingLateArrivalId(reviewingLateArrival.id);
+    setReviewError(null);
+    try {
+      await onReviewLateArrivalJustification(
+        reviewingLateArrival.id,
+        status,
+        status === 'REJECTED' ? reason : undefined,
+      );
+      setLateJustificationNotice(
+        status === 'APPROVED' ? 'Justification de retard acceptée.' : 'Justification de retard refusée.',
+      );
+      setReviewingLateArrival(null);
+      setRejectionReason('');
+    } catch (error: any) {
+      setReviewError(error?.message || 'Impossible de traiter la justification de retard.');
+    } finally {
+      setReviewingLateArrivalId(null);
+    }
+  };
+
+  const approveLateArrivalJustification = async (lateArrival: LateArrivalEntry) => {
+    if (!onReviewLateArrivalJustification) return;
+    setReviewingLateArrivalId(lateArrival.id);
+    setLateJustificationError(null);
+    try {
+      await onReviewLateArrivalJustification(lateArrival.id, 'APPROVED');
+      setLateJustificationNotice('Justification de retard acceptée.');
+    } catch (error: any) {
+      setLateJustificationError(error?.message || 'Impossible d’accepter la justification de retard.');
+    } finally {
+      setReviewingLateArrivalId(null);
+    }
+  };
+
+  const reexamineLateArrivalJustification = async (lateArrival: LateArrivalEntry) => {
+    if (!onReexamineLateArrivalJustification || reexaminingLateArrivalId !== null) return;
+    const confirmed = window.confirm(
+      `Confirmez-vous avoir vérifié les justificatifs présentés pour le retard de ${lateArrival.studentName} ? Cette décision acceptera définitivement la justification.`,
+    );
+    if (!confirmed) return;
+    setReexaminingLateArrivalId(lateArrival.id);
+    setLateJustificationError(null);
+    try {
+      await onReexamineLateArrivalJustification(lateArrival.id);
+      setLateJustificationNotice('Justification de retard acceptée après réexamen.');
+    } catch (error: any) {
+      setLateJustificationError(error?.message || 'Impossible de réexaminer la justification de retard.');
+    } finally {
+      setReexaminingLateArrivalId(null);
+    }
+  };
+
+  const loadLateArrivalJustificationDetails = async (lateArrivalId: number) => {
+    if (!onLoadLateArrivalJustification || loadingLateJustificationIdsRef.current.has(lateArrivalId)) return;
+    loadingLateJustificationIdsRef.current.add(lateArrivalId);
+    setLoadingLateJustificationIds(new Set(loadingLateJustificationIdsRef.current));
+    setLateJustificationError(null);
+    try {
+      const details = await onLoadLateArrivalJustification(lateArrivalId);
+      setLateJustificationDetails((previous) => ({ ...previous, [lateArrivalId]: details }));
+    } catch (error: any) {
+      setLateJustificationError(error?.message || 'Impossible de charger les pièces justificatives.');
+    } finally {
+      loadingLateJustificationIdsRef.current.delete(lateArrivalId);
+      setLoadingLateJustificationIds(new Set(loadingLateJustificationIdsRef.current));
+    }
+  };
+
+  const downloadLateArrivalJustificationFile = async (lateArrivalId: number, fileId: number, fileName: string) => {
+    if (!onDownloadLateArrivalJustificationFile || downloadingLateJustificationFileIdsRef.current.has(fileId)) return;
+    downloadingLateJustificationFileIdsRef.current.add(fileId);
+    setDownloadingLateJustificationFileIds(new Set(downloadingLateJustificationFileIdsRef.current));
+    setLateJustificationError(null);
+    try {
+      const blob = await onDownloadLateArrivalJustificationFile(lateArrivalId, fileId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName || 'justificatif';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      setLateJustificationError(error?.message || 'Impossible de télécharger le justificatif.');
+    } finally {
+      downloadingLateJustificationFileIdsRef.current.delete(fileId);
+      setDownloadingLateJustificationFileIds(new Set(downloadingLateJustificationFileIdsRef.current));
+    }
+  };
+
   const canReviewJustification = ['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(userRole);
   const canReexamineJustification = ['school_admin', 'surveillant', 'super_admin'].includes(userRole);
   const getJustificationStatus = (absence: Absence) => absence.justificationStatus || (absence.isJustified ? 'APPROVED' : null);
+  const canReviewLateArrivalJustification = ['teacher', 'school_admin', 'surveillant'].includes(userRole);
+  const canReexamineLateArrivalJustification = ['school_admin', 'surveillant'].includes(userRole);
+
 
   const submitReview = async (status: 'APPROVED' | 'REJECTED') => {
     if (!reviewingAbsence || !onReviewAbsence) return;
@@ -678,6 +834,9 @@ export default function AbsenceView({
     new Set(absencesList.map((abs) => abs.date || '').filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
 
+  const lateJustificationByArrivalId = new Map(
+    lateArrivalJustificationsList.map((item) => [item.lateArrival.id, item.justification]),
+  );
   const mergedPresenceEvents: PresenceEvent[] = [
     ...absencesList.map((abs) => ({ ...abs, kind: 'absence' as const })),
     ...lateArrivalsList.map((late) => ({
@@ -687,11 +846,16 @@ export default function AbsenceView({
       className: late.className || classesList.find((klass) => klass.id === late.classId)?.name || 'Classe',
       subjectName: 'Retard',
       isJustified: false as const,
+      justification: lateJustificationByArrivalId.get(late.id),
     })),
   ];
 
   const filteredAbsences = mergedPresenceEvents.filter((event) => {
-    if (pendingReviewOnly && (event.kind !== 'absence' || event.justificationStatus !== 'PENDING')) return false;
+    if (pendingReviewOnly && (
+      event.kind === 'absence'
+        ? event.justificationStatus !== 'PENDING'
+        : event.justification?.status !== 'PENDING'
+    )) return false;
     if (filterStatus === 'late' && event.kind !== 'late') return false;
     if (filterStatus === 'absent' && event.kind !== 'absence') return false;
 
@@ -711,7 +875,9 @@ export default function AbsenceView({
 
       if (filterSubject && String(event.subjectName || '') !== filterSubject) return false;
       if (filterDate && String(event.date || '') !== filterDate) return false;
-      if (filterJustification) return false;
+      if (filterJustification === 'justified' && event.justification?.status !== 'APPROVED') return false;
+      if (filterJustification === 'unjustified' && event.justification?.status === 'APPROVED') return false;
+      if (filterJustification === 'declared') return false;
       return true;
     }
 
@@ -1431,6 +1597,17 @@ export default function AbsenceView({
         </div>
       </div>
 
+      {lateJustificationNotice && (
+        <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+          {lateJustificationNotice}
+        </div>
+      )}
+      {lateJustificationError && !showJustifyLateModal && !reviewingLateArrival && (
+        <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+          {lateJustificationError}
+        </p>
+      )}
+
       {/* ABSENCES LIST */}
       <div className="bg-white border border-slate-50 rounded-2xl shadow-sm overflow-visible" id="absences-table-container">
         <div className="overflow-x-auto">
@@ -1475,9 +1652,30 @@ export default function AbsenceView({
                   </td>
                   <td className="px-6 py-4">
                     {abs.kind === 'late' ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-100">
-                        Retard
-                      </span>
+                      <>
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-full border ${
+                          abs.justification?.status === 'APPROVED'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                            : abs.justification?.status === 'REJECTED'
+                              ? 'bg-rose-50 text-rose-700 border-rose-100'
+                              : abs.justification?.status === 'PENDING'
+                                ? 'bg-amber-50 text-amber-700 border-amber-100'
+                                : 'bg-slate-50 text-slate-600 border-slate-200'
+                        }`}>
+                          {abs.justification?.status === 'APPROVED'
+                            ? 'Justification acceptée'
+                            : abs.justification?.status === 'REJECTED'
+                              ? 'Justification refusée'
+                              : abs.justification?.status === 'PENDING'
+                                ? 'En attente de validation'
+                                : userRole === 'parent' ? 'À justifier' : 'Aucune justification'}
+                        </span>
+                        {userRole === 'parent' && abs.justification?.status === 'REJECTED' && (
+                          <p className="mt-2 max-w-xs text-xs font-medium text-rose-700">
+                            Veuillez vous présenter à l’établissement avec les justificatifs nécessaires.
+                          </p>
+                        )}
+                      </>
                     ) : abs.declarationId && !abs.justificationStatus && !abs.isJustified ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-50 text-sky-700 text-xs font-bold rounded-full border border-sky-100">
                         Déclaration parentale associée
@@ -1507,7 +1705,50 @@ export default function AbsenceView({
                   </td>
                   <td className="px-6 py-4 text-slate-700 text-sm max-w-xs whitespace-normal break-words space-y-1">
                     {abs.kind === 'late' ? (
-                      <div className="font-bold">{abs.reason || '— Aucun motif renseigné'}</div>
+                      <>
+                        <div className="font-bold">
+                          {abs.justification?.justificationReason || abs.reason || '— Aucun motif renseigné'}
+                        </div>
+                        {abs.justification?.status === 'REJECTED' && (
+                          <div className="text-xs text-rose-700">
+                            Motif du refus : {abs.justification.rejectionReason || 'Non précisé'}
+                          </div>
+                        )}
+                        {abs.justification && onLoadLateArrivalJustification && (
+                          <div className="pt-1">
+                            {lateJustificationDetails[abs.id] ? (
+                              lateJustificationDetails[abs.id].files.length > 0 ? (
+                                <ul className="space-y-1">
+                                  {lateJustificationDetails[abs.id].files.map((file) => (
+                                    <li key={file.id}>
+                                      <button
+                                        type="button"
+                                        onClick={() => void downloadLateArrivalJustificationFile(abs.id, file.id, file.fileName)}
+                                        disabled={downloadingLateJustificationFileIds.has(file.id)}
+                                        className="text-xs font-semibold text-indigo-700 underline disabled:opacity-60"
+                                      >
+                                        {downloadingLateJustificationFileIds.has(file.id) ? 'Téléchargement…' : `Télécharger ${file.fileName}`}
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <span className="text-xs text-slate-400">Aucune pièce jointe</span>
+                              )
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void loadLateArrivalJustificationDetails(abs.id)}
+                                disabled={loadingLateJustificationIds.has(abs.id)}
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 underline disabled:opacity-60"
+                              >
+                                {loadingLateJustificationIds.has(abs.id) && <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                                {loadingLateJustificationIds.has(abs.id) ? 'Chargement des pièces…' : 'Voir les pièces justificatives'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <>
                         <div className="font-bold">
@@ -1526,6 +1767,58 @@ export default function AbsenceView({
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">
+                    {abs.kind === 'late' && userRole === 'parent' && !abs.justification && onSubmitLateArrivalJustification && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          resetJustificationForm();
+                          setLateJustificationText('');
+                          setLateJustificationError(null);
+                          setLateJustificationNotice(null);
+                          setShowJustifyLateModal(abs);
+                        }}
+                        className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-600 hover:bg-indigo-100/80 rounded-lg text-xs font-bold transition-all"
+                        aria-label={`Justifier le retard de ${abs.studentName}`}
+                      >
+                        Justifier
+                      </button>
+                    )}
+                    {abs.kind === 'late' && canReviewLateArrivalJustification && abs.justification?.status === 'PENDING' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void approveLateArrivalJustification(abs)}
+                          disabled={reviewingLateArrivalId !== null}
+                          className="p-1.5 px-3 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100/80 disabled:opacity-60 rounded-lg text-xs font-bold transition-all cursor-pointer mr-2"
+                        >
+                          {reviewingLateArrivalId === abs.id ? 'Validation…' : 'Accepter'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReviewingLateArrival(abs);
+                            setRejectionReason('');
+                            setReviewError(null);
+                          }}
+                          disabled={reviewingLateArrivalId !== null}
+                          className="p-1.5 px-3 bg-rose-50 border border-rose-100 text-rose-700 hover:bg-rose-100/80 disabled:opacity-60 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Rejeter
+                        </button>
+                      </>
+                    )}
+                    {abs.kind === 'late' && canReexamineLateArrivalJustification
+                      && abs.justification?.status === 'REJECTED'
+                      && onReexamineLateArrivalJustification && (
+                      <button
+                        type="button"
+                        onClick={() => void reexamineLateArrivalJustification(abs)}
+                        disabled={reexaminingLateArrivalId !== null}
+                        className="p-1.5 px-3 bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100/80 disabled:opacity-60 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                      >
+                        {reexaminingLateArrivalId === abs.id ? 'Validation en cours…' : 'Réexaminer et accepter'}
+                      </button>
+                    )}
                     {/* Only specific roles or Parent themselves can justify absences */}
                     {abs.kind === 'absence' && abs.justificationFileName ? (
                     <button
@@ -1598,6 +1891,129 @@ export default function AbsenceView({
           </table>
         </div>
       </div>
+
+      {showJustifyLateModal && (
+        <ModalSurface
+          isOpen={!!showJustifyLateModal}
+          onClose={() => {
+            if (submittingLateJustificationId == null) setShowJustifyLateModal(null);
+          }}
+          ariaLabel="Justifier le retard"
+          contentClassName="bg-white rounded-2xl w-full max-w-md max-h-[90vh] shadow-2xl overflow-hidden border border-slate-100"
+          overlayClassName="bg-slate-900/50 backdrop-blur-sm"
+        >
+          <div className="bg-indigo-600 px-6 py-5 text-white">
+            <h3 className="font-bold text-sm sm:text-base">Justifier le retard de {showJustifyLateModal.studentName}</h3>
+          </div>
+          <form onSubmit={handleLateJustificationSubmit} className="flex flex-col min-h-0">
+            <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
+              <div className="rounded-xl bg-slate-50 p-3 text-xs">
+                <p className="font-semibold text-slate-700">Date : {showJustifyLateModal.date}</p>
+                <p className="text-slate-600">Classe : {showJustifyLateModal.className || '—'}</p>
+                <p className="text-slate-600">Durée : {formatLateDuration(showJustifyLateModal.lateMinutes ?? null)}</p>
+              </div>
+              <label className="block text-xs font-bold text-slate-600">
+                <RequiredLabel label="Motif du retard" required />
+                <textarea
+                  required
+                  maxLength={2000}
+                  rows={4}
+                  value={lateJustificationText}
+                  onChange={(event) => setLateJustificationText(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal"
+                  placeholder="Expliquez le motif du retard"
+                />
+              </label>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-2">Pièces justificatives (facultatif)</label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,image/jpeg,image/png"
+                  multiple
+                  onChange={handleJustificationInputChange}
+                  aria-label="Ajouter des pièces justificatives"
+                  className="block w-full text-xs text-slate-600"
+                />
+                <p className="mt-1 text-[10px] text-slate-400">PDF, JPG ou PNG — 5 fichiers maximum, 5 Mo par fichier.</p>
+                {selectedJustificationFiles.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                    {selectedJustificationFiles.map((file, index) => (
+                      <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{file.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJustificationFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index))}
+                          className="shrink-0 text-rose-700 underline"
+                        >
+                          Retirer
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {(lateJustificationError || justificationUploadError) && (
+                <p role="alert" className="text-xs font-semibold text-rose-600">
+                  {lateJustificationError || justificationUploadError}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setShowJustifyLateModal(null)}
+                disabled={submittingLateJustificationId != null}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600 disabled:opacity-60"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={submittingLateJustificationId != null}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {submittingLateJustificationId === showJustifyLateModal.id ? 'Envoi en cours…' : 'Envoyer la justification'}
+              </button>
+            </div>
+          </form>
+        </ModalSurface>
+      )}
+
+      {reviewingLateArrival && (
+        <ModalSurface
+          isOpen={!!reviewingLateArrival}
+          onClose={() => setReviewingLateArrival(null)}
+          ariaLabel="Refuser la justification de retard"
+          contentClassName="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-100"
+          overlayClassName="bg-slate-900/50 backdrop-blur-sm"
+        >
+          <div className="bg-rose-600 px-6 py-5 text-white">
+            <h3 className="font-bold text-sm sm:text-base">Refuser la justification du retard</h3>
+          </div>
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-slate-600">Élève : {reviewingLateArrival.studentName}</p>
+            <textarea
+              required
+              maxLength={2000}
+              rows={4}
+              value={rejectionReason}
+              onChange={(event) => setRejectionReason(event.target.value)}
+              placeholder="Motif obligatoire du rejet"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+            />
+            {reviewError && <p role="alert" className="text-xs font-semibold text-rose-600">{reviewError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setReviewingLateArrival(null)} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
+                Annuler
+              </button>
+              <button type="button" onClick={() => void submitLateArrivalReview('REJECTED')} className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white">
+                Confirmer le rejet
+              </button>
+            </div>
+          </div>
+        </ModalSurface>
+      )}
 
       {/* JUSTIFICATION MODAL */}
       {showJustifyModal && (

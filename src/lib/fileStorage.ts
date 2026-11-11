@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-export type FileStorageKind = 'absence-justifications' | 'notification-attachments' | 'school-logos';
+export type FileStorageKind = 'absence-justifications' | 'late-arrival-justifications' | 'notification-attachments' | 'school-logos';
 
 export interface FileStorageConfig {
   mode: 'local' | 's3';

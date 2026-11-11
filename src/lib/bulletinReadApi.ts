@@ -21,6 +21,7 @@ import {
   teachers,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
+import { unjustifiedLateArrivalCondition } from './bulletinAttendance';
 
 export interface BulletinReadActor {
   id?: number | null;
@@ -324,6 +325,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
           eq(lateArrivals.classId, header.classId),
           sql`${lateArrivals.date} >= ${header.termStartDate}`,
           sql`${lateArrivals.date} <= ${header.termEndDate}`,
+          unjustifiedLateArrivalCondition(),
         ));
       lateMinutesTotal = Number(lateSummary?.total ?? 0);
     }

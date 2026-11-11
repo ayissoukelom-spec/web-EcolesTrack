@@ -7,7 +7,8 @@ export interface GroupedPushDeliveryRecord {
   userId: number;
   title: string;
   body: string;
-  publicationId: number;
+  publicationId: number | null;
+  dedupeKey: string | null;
 }
 
 export interface ClaimedGroupedPushDelivery extends GroupedPushDeliveryRecord {
@@ -37,9 +38,52 @@ export interface GroupedPushDeliveryOptions {
   maxRetryDelayMs?: number;
 }
 
+export interface GroupedPushNotificationPayload {
+  parentId: string;
+  title: string;
+  message: string;
+  category: 'evaluation';
+  metadata: {
+    target: 'homework' | 'absence';
+    notificationId: number;
+    publicationId: number;
+  };
+  dedupeKey: string;
+  groupedDelivery: true;
+}
+
 export function isGroupedPushDeliveryEnabled(environment: Record<string, string | undefined>): boolean {
   return environment.GROUPED_EVALUATION_PUBLICATIONS_ENABLED === 'true'
     && environment.GROUPED_EVALUATION_PUSH_ENABLED === 'true';
+}
+
+export function getGroupedPushDeliveryIdempotencyKey(delivery: GroupedPushDeliveryRecord): string | null {
+  if (delivery.publicationId != null) {
+    return `grouped-publication-${delivery.publicationId}-notification-${delivery.notificationId}`;
+  }
+  return delivery.dedupeKey?.startsWith('late-arrival-justification-')
+    ? delivery.dedupeKey
+    : null;
+}
+
+export function buildGroupedPushNotificationPayload(
+  delivery: GroupedPushDeliveryRecord,
+  idempotencyKey: string,
+): GroupedPushNotificationPayload {
+  const isLateArrivalJustification = delivery.publicationId == null;
+  return {
+    parentId: String(delivery.userId),
+    title: delivery.title,
+    message: delivery.body,
+    category: 'evaluation',
+    metadata: {
+      target: isLateArrivalJustification ? 'absence' : 'homework',
+      notificationId: delivery.notificationId,
+      publicationId: delivery.publicationId ?? delivery.notificationId,
+    },
+    dedupeKey: idempotencyKey,
+    groupedDelivery: true,
+  };
 }
 
 const errorText = (message: string | undefined, fallback: string) =>
@@ -64,7 +108,18 @@ export async function processGroupedPushOutboxBatch(
   const summary = { claimed: claimed.length, sent: 0, retrying: 0, failed: 0, uncertain: 0 };
 
   for (const delivery of claimed) {
-    const idempotencyKey = `grouped-publication-${delivery.publicationId}-notification-${delivery.notificationId}`;
+    const idempotencyKey = getGroupedPushDeliveryIdempotencyKey(delivery);
+    if (!idempotencyKey) {
+      await repository.markFailed(
+        delivery.id,
+        delivery.attemptCount,
+        'Outbox record is not a supported grouped publication or late-arrival justification notification.',
+        now(),
+      );
+      summary.failed += 1;
+      continue;
+    }
+
     let result: Awaited<ReturnType<GroupedPushDeliveryTransport['send']>>;
     try {
       result = await transport.send(delivery, idempotencyKey);

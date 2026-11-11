@@ -66,6 +66,7 @@ import { selectPreferredClassExamConfiguration } from './classExamConfiguration'
 import { readStoredFile } from './fileStorage';
 import { normalizeClassNameForDisplay } from './classDisplay';
 import { getParentChildStudentIds } from './parentStudentAccess.ts';
+import { unjustifiedLateArrivalCondition } from './bulletinAttendance';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -1391,6 +1392,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
           eq(lateArrivals.classId, header.classId),
           sql`${lateArrivals.date} >= ${header.termStartDate}`,
           sql`${lateArrivals.date} <= ${header.termEndDate}`,
+          unjustifiedLateArrivalCondition(),
         ));
       lateMinutesTotal = Number(lateRows[0]?.total ?? 0);
     }

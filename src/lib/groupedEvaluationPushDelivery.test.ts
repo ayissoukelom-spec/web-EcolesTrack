@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  buildGroupedPushNotificationPayload,
+  getGroupedPushDeliveryIdempotencyKey,
   groupedPushRetryDelayMs,
   isGroupedPushDeliveryEnabled,
   processGroupedPushOutboxBatch,
@@ -16,6 +18,7 @@ const row: ClaimedGroupedPushDelivery = {
   title: 'Nouveau programme',
   body: 'Programme annoncé',
   publicationId: 3,
+  dedupeKey: 'grouped-publication-3-notification-20',
 };
 
 class FakeRepository implements GroupedPushDeliveryRepository {
@@ -65,6 +68,57 @@ class FakeRepository implements GroupedPushDeliveryRepository {
 }
 
 describe('grouped push outbox processor', () => {
+  it('keeps publication deliveries on their existing route and idempotency key', () => {
+    expect(getGroupedPushDeliveryIdempotencyKey(row)).toBe('grouped-publication-3-notification-20');
+    expect(buildGroupedPushNotificationPayload(row, 'grouped-publication-3-notification-20')).toMatchObject({
+      category: 'evaluation',
+      metadata: { target: 'homework', notificationId: 20, publicationId: 3 },
+      groupedDelivery: true,
+    });
+  });
+
+  it('supports late-arrival justification rows without a publication id using push-only routing', () => {
+    const justificationDelivery: ClaimedGroupedPushDelivery = {
+      ...row,
+      publicationId: null,
+      dedupeKey: 'late-arrival-justification-42-revision-3',
+    };
+    const idempotencyKey = getGroupedPushDeliveryIdempotencyKey(justificationDelivery);
+
+    expect(idempotencyKey).toBe('late-arrival-justification-42-revision-3');
+    expect(buildGroupedPushNotificationPayload(justificationDelivery, idempotencyKey!)).toEqual({
+      parentId: '7',
+      title: 'Nouveau programme',
+      message: 'Programme annoncé',
+      category: 'evaluation',
+      metadata: { target: 'absence', notificationId: 20, publicationId: 20 },
+      dedupeKey: 'late-arrival-justification-42-revision-3',
+      groupedDelivery: true,
+    });
+  });
+
+  it('fails unsupported non-publication outbox rows closed without dispatching', async () => {
+    const repository = new FakeRepository();
+    const unsupportedDelivery: ClaimedGroupedPushDelivery = {
+      ...row,
+      publicationId: null,
+      dedupeKey: 'unrelated-notification',
+    };
+    vi.spyOn(repository, 'claimDue').mockImplementation(async () => {
+      repository.status = 'sending';
+      repository.attemptCount = 1;
+      return [unsupportedDelivery];
+    });
+    const send = vi.fn(async () => ({ outcome: 'sent' as const }));
+
+    await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
+      claimed: 1,
+      failed: 1,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(repository.status).toBe('failed');
+  });
+
   it('remains disabled unless both grouped publication and push flags are explicitly enabled', () => {
     expect(isGroupedPushDeliveryEnabled({})).toBe(false);
     expect(isGroupedPushDeliveryEnabled({ GROUPED_EVALUATION_PUBLICATIONS_ENABLED: 'true' })).toBe(false);

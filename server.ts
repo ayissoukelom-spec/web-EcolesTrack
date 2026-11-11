@@ -53,6 +53,10 @@ import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAd
 import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
 import { planTeacherTeachingAssignmentSync } from './src/lib/teacherTeachingAssignments.ts';
 import {
+  lateArrivalJustificationNotificationKey,
+  planLateArrivalJustificationTransition,
+} from './src/lib/lateArrivalJustification.ts';
+import {
   schools,
   teacherControlGpsSettings,
   academicYears,
@@ -87,6 +91,9 @@ import {
   lateArrivals,
   absenceJustifications,
   absenceControls,
+  lateArrivalJustifications,
+  lateArrivalJustificationEvents,
+  lateArrivalJustificationFiles,
   notificationAttachments,
   notifications,
   auditEvents,
@@ -106,7 +113,7 @@ import {
   notificationDeliveryOutbox,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, like } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -126,6 +133,7 @@ import {
   type GroupedPublicationContext,
 } from './src/lib/groupedEvaluationPublicationService.ts';
 import {
+  buildGroupedPushNotificationPayload,
   isGroupedPushDeliveryEnabled,
   processGroupedPushOutboxBatch,
   type ClaimedGroupedPushDelivery,
@@ -386,13 +394,20 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
         title: notifications.title,
         body: notifications.body,
         publicationId: notifications.publicationId,
+        dedupeKey: notifications.dedupeKey,
       }).from(notificationDeliveryOutbox)
         .innerJoin(notifications, eq(notifications.id, notificationDeliveryOutbox.notificationId))
         .where(and(
           eq(notificationDeliveryOutbox.channel, 'push'),
           eq(notificationDeliveryOutbox.status, 'pending'),
           lte(notificationDeliveryOutbox.nextAttemptAt, now),
-          isNotNull(notifications.publicationId),
+          or(
+            isNotNull(notifications.publicationId),
+            and(
+              isNull(notifications.publicationId),
+              like(notifications.dedupeKey, 'late-arrival-justification-%'),
+            ),
+          ),
         ))
         .orderBy(notificationDeliveryOutbox.nextAttemptAt, notificationDeliveryOutbox.id)
         .limit(limit);
@@ -415,10 +430,9 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
             id: notificationDeliveryOutbox.id,
             attemptCount: notificationDeliveryOutbox.attemptCount,
           });
-        if (!claim || candidate.publicationId == null) continue;
+        if (!claim) continue;
         claimed.push({
           ...candidate,
-          publicationId: candidate.publicationId,
           attemptCount: claim.attemptCount,
         });
       }
@@ -479,19 +493,7 @@ const groupedPushDeliveryTransport: GroupedPushDeliveryTransport = {
       return { outcome: 'permanent_failure', error: 'API_URL is not configured for push delivery.' };
     }
 
-    const payload = {
-      parentId: String(delivery.userId),
-      title: delivery.title,
-      message: delivery.body,
-      category: 'evaluation',
-      metadata: {
-        target: 'homework',
-        notificationId: delivery.notificationId,
-        publicationId: delivery.publicationId,
-      },
-      dedupeKey: idempotencyKey,
-      groupedDelivery: true,
-    };
+    const payload = buildGroupedPushNotificationPayload(delivery, idempotencyKey);
 
     let signed: { signature: string; timestamp: string };
     try {
@@ -1638,7 +1640,7 @@ export async function createApp() {
     },
   });
 
-  const persistFilesToConfiguredStorage = async (files: any[], kind: 'absence-justifications' | 'notification-attachments') => {
+  const persistFilesToConfiguredStorage = async (files: any[], kind: 'absence-justifications' | 'late-arrival-justifications' | 'notification-attachments') => {
     if (getFileStorageConfig().mode !== 's3') {
       return files;
     }
@@ -1717,6 +1719,44 @@ export async function createApp() {
 
       console.error('❌ Multer error for absence justification upload:', err);
       return res.status(400).json({ error: err.message || 'Invalid file upload' });
+    });
+  };
+
+  const lateArrivalJustificationStorageDir = path.join(storageConfig.localRoot, 'late-arrival-justifications');
+  await fsPromises.mkdir(lateArrivalJustificationStorageDir, { recursive: true });
+  const lateArrivalJustificationUpload = multer({
+    storage: multer.diskStorage({
+      destination: lateArrivalJustificationStorageDir,
+      filename: (_req, file, cb) => {
+        const randomSuffix = crypto.randomBytes(16).toString('hex');
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${randomSuffix}-${safeName}`);
+      },
+    }),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.mimetype)) {
+        return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+  const handleLateArrivalJustificationUpload = (req: any, res: any, next: any) => {
+    lateArrivalJustificationUpload.array('files', 5)(req, res, async (error: any) => {
+      if (error) return res.status(400).json({ error: error.message || 'Invalid file upload' });
+      const files = Array.isArray(req.files) ? req.files : [];
+      try {
+        req.lateArrivalJustificationFiles = await persistFilesToConfiguredStorage(files, 'late-arrival-justifications');
+        return next();
+      } catch (storageError) {
+        await Promise.all(files.map((file: any) => file?.path
+          ? fsPromises.rm(file.path, { force: true }).catch((cleanupError) => {
+            console.error('Failed to clean late-arrival upload after storage failure:', cleanupError);
+          })
+          : Promise.resolve()));
+        console.error('Failed to persist late-arrival justification upload:', storageError);
+        return res.status(503).json({ error: 'File storage is temporarily unavailable' });
+      }
     });
   };
 
@@ -10760,10 +10800,15 @@ export async function createApp() {
           createdAt: lateArrivals.createdAt,
           updatedAt: lateArrivals.updatedAt,
           schoolId: students.schoolId,
+          justificationId: lateArrivalJustifications.id,
+          justificationStatus: lateArrivalJustifications.status,
+          justificationReason: lateArrivalJustifications.justificationReason,
+          justificationRejectionReason: lateArrivalJustifications.rejectionReason,
         })
         .from(lateArrivals)
         .innerJoin(students, eq(lateArrivals.studentId, students.id))
-        .innerJoin(classes, eq(lateArrivals.classId, classes.id));
+        .innerJoin(classes, eq(lateArrivals.classId, classes.id))
+        .leftJoin(lateArrivalJustifications, eq(lateArrivalJustifications.lateArrivalId, lateArrivals.id));
 
       if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
@@ -11028,6 +11073,9 @@ export async function createApp() {
 
       const [existing] = await db.select().from(lateArrivals).where(eq(lateArrivals.id, id));
       if (!existing) return res.status(404).json({ error: 'Late arrival not found' });
+      const [existingJustification] = await db.select({ id: lateArrivalJustifications.id })
+        .from(lateArrivalJustifications)
+        .where(eq(lateArrivalJustifications.lateArrivalId, id));
       if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
         return res.status(403).json({ error: 'Cannot delete a late arrival outside the actor scope' });
       }
@@ -11037,12 +11085,595 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot delete a late arrival outside your active teaching assignment or homeroom class' });
         }
       }
+      if (existingJustification) {
+        return res.status(409).json({ error: 'A late arrival with a justification history cannot be deleted' });
+      }
 
       await db.delete(lateArrivals).where(eq(lateArrivals.id, id));
       return res.status(204).send();
     } catch (error: any) {
       console.error('❌ DELETE /api/late-arrivals/:id ERROR:', error);
       return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  type LateArrivalJustificationContext = {
+    lateArrival: typeof lateArrivals.$inferSelect;
+    student: typeof students.$inferSelect;
+    classRecord: typeof classes.$inferSelect;
+  };
+
+  const loadLateArrivalJustificationContext = async (id: number): Promise<LateArrivalJustificationContext | null> => {
+    const [lateArrival] = await db.select().from(lateArrivals).where(eq(lateArrivals.id, id));
+    if (!lateArrival) return null;
+    const [student] = await db.select().from(students).where(eq(students.id, lateArrival.studentId));
+    const [classRecord] = await db.select().from(classes).where(eq(classes.id, lateArrival.classId));
+    if (!student || !classRecord || student.classId !== lateArrival.classId) return null;
+    return { lateArrival, student, classRecord };
+  };
+
+  const createLateArrivalJustificationAccessChecker = async (
+    actor: ResolvedActor,
+    allowSuperAdminRead = false,
+  ): Promise<(context: LateArrivalJustificationContext) => Promise<boolean>> => {
+    if (actor.role === 'parent') {
+      const studentIds = new Set(await getParentChildStudentIds(actor.id, actor.schoolId));
+      return async ({ lateArrival, student }) => studentIds.has(lateArrival.studentId)
+        && student.schoolId === actor.schoolId;
+    }
+
+    if (actor.role === 'teacher') {
+      const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
+      if (!assignmentContext) return async () => false;
+      return async ({ lateArrival, student, classRecord }) => {
+        if (student.isActive !== true || student.schoolId !== assignmentContext.schoolId
+          || lateArrival.classId !== classRecord.id) return false;
+        if (lateArrival.teachingAssignmentId != null) {
+          return assignmentContext.assignments.some((assignment) =>
+            assignment.id === lateArrival.teachingAssignmentId
+              && assignment.classId === lateArrival.classId
+              && assignment.schoolId === assignmentContext.schoolId,
+          );
+        }
+        return assignmentContext.homeroomClassIds.has(lateArrival.classId);
+      };
+    }
+
+    if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+      if (actor.schoolId == null
+        || !await getActiveUserSchoolMembership(actor.id, actor.schoolId, actor.role)) {
+        return async () => false;
+      }
+      return async ({ lateArrival, student, classRecord }) => (
+        student.isActive === true
+        && student.schoolId === actor.schoolId
+        && lateArrival.classId === classRecord.id
+        && (classRecord.schoolId === actor.schoolId
+          || await isApprovedClassForSchool(lateArrival.classId, actor.schoolId))
+      );
+    }
+
+    if (allowSuperAdminRead && actor.role === 'super_admin') return async () => true;
+    return async () => false;
+  };
+
+  const requireParentLateArrivalJustificationActor = async (req: AuthRequest, res: any, next: any) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+    try {
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role !== 'parent') {
+        return res.status(403).json({ error: 'Only parents may submit late-arrival justifications' });
+      }
+      (req as any).lateArrivalJustificationActor = actor;
+      return next();
+    } catch (error) {
+      console.error('Failed to authorize late-arrival justification submission:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  };
+
+  const cleanupLateArrivalUploads = async (files: any[]) => {
+    await Promise.all(files.map(async (file: any) => {
+      const reference = file?.storageReference || file?.filename;
+      if (reference) {
+        try {
+          await deleteStoredFile(reference, 'late-arrival-justifications');
+          return;
+        } catch (error) {
+          console.error('Failed to remove late-arrival justification upload:', error);
+          return;
+        }
+      }
+      if (file?.path) {
+        await fsPromises.rm(file.path, { force: true }).catch((error) => {
+          console.error('Failed to remove temporary late-arrival upload:', error);
+        });
+      }
+    }));
+  };
+
+  app.post(
+    '/api/late-arrivals/:id/justification',
+    requireAuth,
+    requireParentLateArrivalJustificationActor,
+    handleLateArrivalJustificationUpload,
+    async (req: AuthRequest, res) => {
+      const uploadedFiles = Array.isArray((req as any).lateArrivalJustificationFiles)
+        ? (req as any).lateArrivalJustificationFiles as any[]
+        : [];
+      let filesCommitted = false;
+      try {
+        const lateArrivalId = Number(req.params.id);
+        if (!Number.isInteger(lateArrivalId) || lateArrivalId <= 0) {
+          return res.status(400).json({ error: 'Invalid late-arrival id' });
+        }
+        const reason = typeof req.body?.justificationReason === 'string'
+          ? req.body.justificationReason.trim()
+          : '';
+        if (!reason || reason.length > 2000) {
+          return res.status(400).json({ error: 'A justification reason of at most 2000 characters is required' });
+        }
+
+        const actor = (req as any).lateArrivalJustificationActor as ResolvedActor;
+        const context = await loadLateArrivalJustificationContext(lateArrivalId);
+        if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+        const canAccess = await createLateArrivalJustificationAccessChecker(actor);
+        if (!await canAccess(context)) {
+          return res.status(403).json({ error: 'Cannot justify a late arrival for a student you do not represent' });
+        }
+
+        const result = await db.transaction(async (tx) => {
+          const [lockedLateArrival] = await tx.select().from(lateArrivals)
+            .where(eq(lateArrivals.id, lateArrivalId))
+            .for('update');
+          if (!lockedLateArrival) return { kind: 'not_found' as const };
+
+          const [existing] = await tx.select().from(lateArrivalJustifications)
+            .where(eq(lateArrivalJustifications.lateArrivalId, lateArrivalId))
+            .for('update');
+          if (existing) return { kind: 'already_submitted' as const };
+
+          const [justification] = await tx.insert(lateArrivalJustifications).values({
+            lateArrivalId,
+            submittedBy: actor.id ?? null,
+            justificationReason: reason,
+            status: 'PENDING',
+            revision: 1,
+          }).returning();
+          await tx.insert(lateArrivalJustificationEvents).values({
+            justificationId: justification.id,
+            revision: 1,
+            action: 'SUBMITTED',
+            fromStatus: null,
+            toStatus: 'PENDING',
+            reason,
+            actorUserId: actor.id ?? null,
+            actorRole: actor.role,
+            actorEmail: actor.email ?? null,
+            actorName: actor.name ?? null,
+          });
+          if (uploadedFiles.length > 0) {
+            await tx.insert(lateArrivalJustificationFiles).values(uploadedFiles.map((file: any) => ({
+              justificationId: justification.id,
+              fileName: String(file.originalname || 'justificatif'),
+              filePath: String(file.storageReference || file.filename),
+              mimeType: String(file.mimetype || 'application/octet-stream'),
+              fileSize: Number(file.size || 0),
+              uploadedBy: actor.id ?? null,
+            })));
+          }
+          await tx.insert(auditEvents).values({
+            actorUserId: actor.id ?? null,
+            actorRole: actor.role,
+            actorEmail: actor.email ?? null,
+            actorName: actor.name ?? null,
+            action: 'submit_late_arrival_justification',
+            resourceType: 'late_arrival_justification',
+            resourceId: lateArrivalId,
+            schoolId: context.student.schoolId ?? null,
+            description: `Parent submitted a late-arrival justification (revision 1)`,
+          });
+          return { kind: 'created' as const, justification };
+        });
+
+        if (result.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
+        if (result.kind === 'already_submitted') {
+          return res.status(409).json({ error: 'A justification has already been submitted for this late arrival' });
+        }
+        filesCommitted = true;
+        return res.status(201).json({
+          ...result.justification,
+          files: uploadedFiles.map((file: any, index: number) => ({
+            fileName: file.originalname,
+            fileSize: file.size,
+            mimeType: file.mimetype,
+            index,
+          })),
+        });
+      } catch (error) {
+        console.error('Failed to submit late-arrival justification:', error);
+        return res.status(500).json({ error: 'Failed to submit late-arrival justification' });
+      } finally {
+        if (!filesCommitted) await cleanupLateArrivalUploads(uploadedFiles);
+      }
+    },
+  );
+
+  app.get('/api/late-arrival-justifications', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const status = typeof req.query.status === 'string' ? req.query.status.trim().toUpperCase() : '';
+      if (status && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid justification status filter' });
+      }
+      const limitValue = Number(req.query.limit ?? 100);
+      const offsetValue = Number(req.query.offset ?? 0);
+      if (!Number.isInteger(limitValue) || limitValue < 1 || !Number.isInteger(offsetValue) || offsetValue < 0) {
+        return res.status(400).json({ error: 'Invalid pagination parameters' });
+      }
+
+      const accessCheck = await createLateArrivalJustificationAccessChecker(actor, true);
+      const conditions: any[] = [];
+      if (status) conditions.push(eq(lateArrivalJustifications.status, status as 'PENDING' | 'APPROVED' | 'REJECTED'));
+      if (actor.role === 'parent') {
+        const studentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        if (studentIds.length === 0) return res.json([]);
+        conditions.push(inArray(lateArrivals.studentId, studentIds));
+      } else if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+        if (actor.schoolId == null) return res.json([]);
+        conditions.push(eq(students.schoolId, actor.schoolId));
+      } else if (actor.role === 'teacher') {
+        const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
+        if (!assignmentContext) return res.json([]);
+        const assignmentIds = assignmentContext.assignments.map((assignment) => assignment.id);
+        const homeroomClassIds = Array.from(assignmentContext.homeroomClassIds);
+        if (assignmentIds.length === 0 && homeroomClassIds.length === 0) return res.json([]);
+        conditions.push(eq(students.schoolId, assignmentContext.schoolId));
+        conditions.push(or(
+          ...(assignmentIds.length > 0 ? [inArray(lateArrivals.teachingAssignmentId, assignmentIds)] : []),
+          ...(homeroomClassIds.length > 0 ? [and(
+            inArray(lateArrivals.classId, homeroomClassIds),
+            isNull(lateArrivals.teachingAssignmentId),
+          )] : []),
+        )!);
+      } else if (actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Not authorized to view late-arrival justifications' });
+      }
+
+      let query = db.select({
+        justification: lateArrivalJustifications,
+        lateArrival: lateArrivals,
+        student: {
+          id: students.id,
+          schoolId: students.schoolId,
+          classId: students.classId,
+          parentId: students.parentId,
+          isActive: students.isActive,
+          firstName: students.firstName,
+          lastName: students.lastName,
+        },
+        classRecord: { id: classes.id, schoolId: classes.schoolId, name: classes.name },
+      }).from(lateArrivalJustifications)
+        .innerJoin(lateArrivals, eq(lateArrivalJustifications.lateArrivalId, lateArrivals.id))
+        .innerJoin(students, eq(lateArrivals.studentId, students.id))
+        .innerJoin(classes, eq(lateArrivals.classId, classes.id))
+        .orderBy(desc(lateArrivalJustifications.createdAt))
+        .limit(Math.min(limitValue, 200))
+        .offset(offsetValue);
+      if (conditions.length > 0) query = query.where(and(...conditions)) as typeof query;
+      const rows = await query;
+      const visible = [];
+      for (const row of rows) {
+        if (await accessCheck({
+          lateArrival: row.lateArrival,
+          student: row.student as typeof students.$inferSelect,
+          classRecord: row.classRecord as typeof classes.$inferSelect,
+        })) visible.push(row);
+      }
+      return res.json(visible);
+    } catch (error) {
+      console.error('Failed to list late-arrival justifications:', error);
+      return res.status(500).json({ error: 'Failed to list late-arrival justifications' });
+    }
+  });
+
+  app.get('/api/late-arrivals/:id/justification', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid late-arrival id' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const context = await loadLateArrivalJustificationContext(id);
+      if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+      const canAccess = await createLateArrivalJustificationAccessChecker(actor, true);
+      if (!await canAccess(context)) return res.status(403).json({ error: 'Not authorized to view this justification' });
+      const [justification] = await db.select().from(lateArrivalJustifications)
+        .where(eq(lateArrivalJustifications.lateArrivalId, id));
+      if (!justification) return res.status(404).json({ error: 'Late-arrival justification not found' });
+      const events = await db.select().from(lateArrivalJustificationEvents)
+        .where(eq(lateArrivalJustificationEvents.justificationId, justification.id))
+        .orderBy(lateArrivalJustificationEvents.revision);
+      const files = await db.select({
+        id: lateArrivalJustificationFiles.id,
+        fileName: lateArrivalJustificationFiles.fileName,
+        mimeType: lateArrivalJustificationFiles.mimeType,
+        fileSize: lateArrivalJustificationFiles.fileSize,
+        uploadedAt: lateArrivalJustificationFiles.uploadedAt,
+      }).from(lateArrivalJustificationFiles)
+        .where(eq(lateArrivalJustificationFiles.justificationId, justification.id));
+      return res.json({ ...justification, events, files });
+    } catch (error) {
+      console.error('Failed to load late-arrival justification:', error);
+      return res.status(500).json({ error: 'Failed to load late-arrival justification' });
+    }
+  });
+
+  app.get('/api/late-arrivals/:id/justification/files/:fileId/download', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      const fileId = Number(req.params.fileId);
+      if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(fileId) || fileId <= 0) {
+        return res.status(400).json({ error: 'Invalid late-arrival justification file id' });
+      }
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      const context = await loadLateArrivalJustificationContext(id);
+      if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+      const canAccess = await createLateArrivalJustificationAccessChecker(actor, true);
+      if (!await canAccess(context)) return res.status(403).json({ error: 'Not authorized to download this justification file' });
+      const [justification] = await db.select({ id: lateArrivalJustifications.id })
+        .from(lateArrivalJustifications)
+        .where(eq(lateArrivalJustifications.lateArrivalId, id));
+      if (!justification) return res.status(404).json({ error: 'Late-arrival justification not found' });
+      const [file] = await db.select().from(lateArrivalJustificationFiles).where(and(
+        eq(lateArrivalJustificationFiles.id, fileId),
+        eq(lateArrivalJustificationFiles.justificationId, justification.id),
+      ));
+      if (!file) return res.status(404).json({ error: 'Justification file not found' });
+      const sent = await streamStoredFileToResponse(
+        file.filePath,
+        'late-arrival-justifications',
+        file.fileName,
+        file.mimeType,
+        res as any,
+      );
+      if (!sent) return res.status(404).json({ error: 'Justification file is unavailable' });
+      return undefined;
+    } catch (error) {
+      console.error('Failed to download late-arrival justification file:', error);
+      return res.status(500).json({ error: 'Failed to download late-arrival justification file' });
+    }
+  });
+
+  const createLateArrivalDecisionNotification = async (
+    tx: any,
+    context: LateArrivalJustificationContext,
+    justification: typeof lateArrivalJustifications.$inferSelect,
+    eventRevision: number,
+    decision: 'APPROVED' | 'REJECTED' | 'REEXAMINED_APPROVED',
+  ) => {
+    if (context.student.parentId == null) return;
+    const [parent] = await tx.select({ userId: parents.userId }).from(parents)
+      .where(eq(parents.id, context.student.parentId));
+    if (parent?.userId == null) return;
+
+    const studentName = context.student.firstName || "l'élève";
+    const title = decision === 'REJECTED'
+      ? 'Justification de retard refusée'
+      : decision === 'REEXAMINED_APPROVED'
+        ? 'Justification de retard acceptée après réexamen'
+        : 'Justification de retard acceptée';
+    const body = decision === 'REJECTED'
+      ? `La justification du retard de ${studentName} a été refusée. Veuillez vous présenter à l’établissement avec vos justificatifs nécessaires. Motif : ${justification.rejectionReason || 'Non précisé'}.`
+      : decision === 'REEXAMINED_APPROVED'
+        ? `La justification du retard de ${studentName} a été acceptée après réexamen par l’établissement.`
+        : `La justification du retard de ${studentName} a été acceptée par l’établissement.`;
+    const dedupeKey = lateArrivalJustificationNotificationKey(justification.id, eventRevision);
+    const [notification] = await tx.insert(notifications).values({
+      userId: parent.userId,
+      title,
+      body,
+      type: 'absence',
+      dedupeKey,
+    }).onConflictDoNothing().returning({ id: notifications.id });
+    if (notification) {
+      await tx.insert(notificationDeliveryOutbox).values({
+        notificationId: notification.id,
+        channel: 'push',
+        status: 'pending',
+        attemptCount: 0,
+      });
+    }
+  };
+
+  const createLateArrivalReviewAudit = async (
+    tx: any,
+    actor: ResolvedActor,
+    context: LateArrivalJustificationContext,
+    action: string,
+    description: string,
+  ) => tx.insert(auditEvents).values({
+    actorUserId: actor.id ?? null,
+    actorRole: actor.role,
+    actorEmail: actor.email ?? null,
+    actorName: actor.name ?? null,
+    action,
+    resourceType: 'late_arrival_justification',
+    resourceId: context.lateArrival.id,
+    schoolId: context.student.schoolId ?? null,
+    description,
+  });
+
+  app.put('/api/late-arrivals/:id/justification/review', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid late-arrival id' });
+      const status = typeof req.body?.status === 'string' ? req.body.status.trim().toUpperCase() : '';
+      const rejectionReason = typeof req.body?.rejectionReason === 'string' ? req.body.rejectionReason.trim() : '';
+      if (!['APPROVED', 'REJECTED'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid justification review status' });
+      }
+      if (status === 'REJECTED' && (!rejectionReason || rejectionReason.length > 2000)) {
+        return res.status(400).json({ error: 'A rejection reason of at most 2000 characters is required' });
+      }
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['teacher', 'school_admin', 'surveillant'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Not authorized to review late-arrival justifications' });
+      }
+      const context = await loadLateArrivalJustificationContext(id);
+      if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+      const canAccess = await createLateArrivalJustificationAccessChecker(actor);
+      if (!await canAccess(context)) return res.status(403).json({ error: 'Not authorized to review this justification' });
+
+      const result = await db.transaction(async (tx) => {
+        const [lockedLateArrival] = await tx.select().from(lateArrivals)
+          .where(eq(lateArrivals.id, id))
+          .for('update');
+        if (!lockedLateArrival) return { kind: 'not_found' as const };
+        const [justification] = await tx.select().from(lateArrivalJustifications)
+          .where(eq(lateArrivalJustifications.lateArrivalId, id))
+          .for('update');
+        if (!justification) return { kind: 'no_justification' as const };
+        const transition = planLateArrivalJustificationTransition({
+          currentStatus: justification.status,
+          decision: status as 'APPROVED' | 'REJECTED',
+          actorRole: actor.role,
+          rejectionReason,
+        });
+        if (!transition) return { kind: 'not_pending' as const };
+
+        const reviewedAt = new Date();
+        const revision = justification.revision + 1;
+        const [updated] = await tx.update(lateArrivalJustifications).set({
+          status: transition.toStatus,
+          rejectionReason: transition.rejectionReason,
+          reviewedBy: actor.id ?? null,
+          reviewedAt,
+          revision,
+          updatedAt: reviewedAt,
+        }).where(and(
+          eq(lateArrivalJustifications.id, justification.id),
+          eq(lateArrivalJustifications.status, 'PENDING'),
+          eq(lateArrivalJustifications.revision, justification.revision),
+        )).returning();
+        if (!updated) return { kind: 'not_pending' as const };
+
+        await tx.insert(lateArrivalJustificationEvents).values({
+          justificationId: justification.id,
+          revision,
+          action: transition.action,
+          fromStatus: transition.fromStatus,
+          toStatus: transition.toStatus,
+          reason: transition.rejectionReason,
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name ?? null,
+          occurredAt: reviewedAt,
+        });
+        await createLateArrivalReviewAudit(
+          tx,
+          actor,
+          context,
+          status === 'APPROVED' ? 'approve_late_arrival_justification' : 'reject_late_arrival_justification',
+          `Late-arrival justification ${status.toLowerCase()} at revision ${revision}${status === 'REJECTED' ? `: ${rejectionReason}` : ''}`,
+        );
+        await createLateArrivalDecisionNotification(tx, context, updated, revision, transition.action);
+        return { kind: 'updated' as const, justification: updated };
+      });
+      if (result.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
+      if (result.kind === 'no_justification') return res.status(404).json({ error: 'Late-arrival justification not found' });
+      if (result.kind === 'not_pending') return res.status(409).json({ error: 'Only a pending justification can receive an initial decision' });
+      return res.json(result.justification);
+    } catch (error) {
+      console.error('Failed to review late-arrival justification:', error);
+      return res.status(500).json({ error: 'Failed to review late-arrival justification' });
+    }
+  });
+
+  app.put('/api/late-arrivals/:id/justification/reexamine', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid late-arrival id' });
+      const actor = await resolveActor(req);
+      if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['school_admin', 'surveillant'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Only an authorized school administrator or surveillant may reexamine a justification' });
+      }
+      const context = await loadLateArrivalJustificationContext(id);
+      if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+      const canAccess = await createLateArrivalJustificationAccessChecker(actor);
+      if (!await canAccess(context)) return res.status(403).json({ error: 'Not authorized to reexamine this justification' });
+
+      const result = await db.transaction(async (tx) => {
+        const [lockedLateArrival] = await tx.select().from(lateArrivals)
+          .where(eq(lateArrivals.id, id))
+          .for('update');
+        if (!lockedLateArrival) return { kind: 'not_found' as const };
+        const [justification] = await tx.select().from(lateArrivalJustifications)
+          .where(eq(lateArrivalJustifications.lateArrivalId, id))
+          .for('update');
+        if (!justification) return { kind: 'no_justification' as const };
+        const transition = planLateArrivalJustificationTransition({
+          currentStatus: justification.status,
+          decision: 'REEXAMINE',
+          actorRole: actor.role,
+        });
+        if (!transition) return { kind: 'not_rejected' as const };
+
+        const reviewedAt = new Date();
+        const revision = justification.revision + 1;
+        const [updated] = await tx.update(lateArrivalJustifications).set({
+          status: transition.toStatus,
+          reviewedBy: actor.id ?? null,
+          reviewedAt,
+          revision,
+          updatedAt: reviewedAt,
+        }).where(and(
+          eq(lateArrivalJustifications.id, justification.id),
+          eq(lateArrivalJustifications.status, 'REJECTED'),
+          eq(lateArrivalJustifications.revision, justification.revision),
+        )).returning();
+        if (!updated) return { kind: 'not_rejected' as const };
+
+        await tx.insert(lateArrivalJustificationEvents).values({
+          justificationId: justification.id,
+          revision,
+          action: transition.action,
+          fromStatus: transition.fromStatus,
+          toStatus: transition.toStatus,
+          reason: justification.rejectionReason,
+          actorUserId: actor.id ?? null,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name ?? null,
+          occurredAt: reviewedAt,
+        });
+        await createLateArrivalReviewAudit(
+          tx,
+          actor,
+          context,
+          'reexamine_late_arrival_justification',
+          `Rejected late-arrival justification accepted after reexamination at revision ${revision}; original rejection reason: ${justification.rejectionReason || 'not specified'}`,
+        );
+        await createLateArrivalDecisionNotification(tx, context, updated, revision, 'REEXAMINED_APPROVED');
+        return { kind: 'updated' as const, justification: updated };
+      });
+      if (result.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
+      if (result.kind === 'no_justification') return res.status(404).json({ error: 'Late-arrival justification not found' });
+      if (result.kind === 'not_rejected') return res.status(409).json({ error: 'Only a rejected justification can be reexamined' });
+      return res.json(result.justification);
+    } catch (error) {
+      console.error('Failed to reexamine late-arrival justification:', error);
+      return res.status(500).json({ error: 'Failed to reexamine late-arrival justification' });
     }
   });
 

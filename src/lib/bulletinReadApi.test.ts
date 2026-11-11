@@ -321,4 +321,71 @@ describe('bulletin absence classification', () => {
       selectSpy.mockRestore();
     }
   });
+
+  it('excludes approved late-arrival justifications through a correlated anti-join', async () => {
+    let lateArrivalCondition: any;
+    const header = {
+      id: 1,
+      studentId: 10,
+      studentFirstName: 'Alice',
+      studentLastName: 'Dupont',
+      studentMatricule: null,
+      studentGender: null,
+      studentStatus: null,
+      classId: 3,
+      className: '3ème A',
+      schoolYearId: 100,
+      schoolYearName: '2025-2026',
+      termId: 7,
+      termName: 'Trimestre 1',
+      termStartDate: '2026-01-01',
+      termEndDate: '2026-06-30',
+      average: 14.5,
+      totalPoints: 58,
+      totalCoefficients: 4,
+      rank: 2,
+      mention: 'Bien',
+      appreciation: null,
+      generatedAt: null,
+      createdAt: null,
+      updatedAt: null,
+    };
+    const selectSpy = vi.spyOn(db, 'select').mockImplementation((() => {
+      let table: any;
+      const query: any = {
+        from(value: any) { table = value; return query; },
+        innerJoin() { return query; },
+        where(condition: any) {
+          if (table === lateArrivals) lateArrivalCondition = condition;
+          return query;
+        },
+        orderBy() { return query; },
+        limit() { return query; },
+        offset() { return query; },
+        then(resolve: (value: any) => void, reject: (reason?: any) => void) {
+          const rows = table === bulletins ? [header]
+            : table === lateArrivals ? [{ total: 15 }]
+              : table === bulletinLines ? [] : [];
+          return Promise.resolve(rows).then(resolve, reject);
+        },
+      };
+      return query;
+    }) as any);
+
+    try {
+      const result = await createDbBulletinReadService().getById({ role: 'super_admin' }, 1);
+      const generated = new PgDialect().sqlToQuery(lateArrivalCondition);
+      const generatedSql = generated.sql.toLowerCase();
+
+      expect(result?.retards).toBe(15);
+      expect(generatedSql).toContain('not exists');
+      expect(generatedSql).toContain('late_arrival_justifications');
+      expect(generatedSql).toContain('late_arrival_id');
+      expect(generatedSql).toContain('status in');
+      expect(generated.params).toContain('APPROVED');
+      expect(generatedSql).not.toContain('late_arrival_justification_events');
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
 });

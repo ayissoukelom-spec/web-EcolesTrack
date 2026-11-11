@@ -5,6 +5,7 @@ import path from 'node:path';
 const serverText = fs.readFileSync(path.resolve('src/lib/bulletinPdfApi.ts'), 'utf8');
 const readText = fs.readFileSync(path.resolve('src/lib/bulletinReadApi.ts'), 'utf8');
 const detailText = fs.readFileSync(path.resolve('src/components/bulletins/BulletinDetail.tsx'), 'utf8');
+const attendanceText = fs.readFileSync(path.resolve('src/lib/bulletinAttendance.ts'), 'utf8');
 
 describe('bulletin attendance summary contract', () => {
   it('renders zero values in the requested French format', () => {
@@ -20,6 +21,29 @@ describe('bulletin attendance summary contract', () => {
     expect(serverText).toContain('eq(lateArrivals.classId, header.classId)');
     expect(serverText).toContain('${lateArrivals.date} >= ${header.termStartDate}');
     expect(serverText).toContain('${lateArrivals.date} <= ${header.termEndDate}');
+    expect(serverText).toContain('unjustifiedLateArrivalCondition()');
+    expect(readText).toContain('unjustifiedLateArrivalCondition()');
+    expect(attendanceText).toContain('NOT EXISTS');
+    expect(attendanceText).toContain('laj.late_arrival_id = ${lateArrivals.id}');
+    expect(attendanceText).toContain('laj.status IN');
+    expect(attendanceText).toContain("'APPROVED'");
+    expect(attendanceText).not.toContain('late_arrival_justification_events');
+  });
+
+  it.each([
+    ['no justification', null, true],
+    ['pending justification', 'PENDING', true],
+    ['rejected justification', 'REJECTED', true],
+    ['approved justification', 'APPROVED', false],
+    ['rejected then approved after review', 'APPROVED', false],
+  ] as const)('counts %s according to its current status', async (_label, status, expected) => {
+    const { isLateArrivalCountedInBulletin } = await import('../src/lib/bulletinAttendance.ts');
+    expect(isLateArrivalCountedInBulletin(status)).toBe(expected);
+  });
+
+  it('uses a correlated exclusion instead of a join that could multiply late rows', () => {
+    expect(attendanceText).toContain('NOT EXISTS');
+    expect(attendanceText).not.toContain('JOIN late_arrival_justifications');
   });
 
   it('counts only the workflow-defined unjustified absences in the term', () => {

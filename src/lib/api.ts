@@ -568,6 +568,90 @@ export async function downloadAbsenceJustification(absenceId: number): Promise<B
   });
 }
 
+export interface LateArrivalJustificationListItem {
+  justification: {
+    id: number;
+    lateArrivalId: number;
+    justificationReason: string;
+    status: 'PENDING' | 'APPROVED' | 'REJECTED';
+    rejectionReason: string | null;
+    revision: number;
+    createdAt: string | null;
+    reviewedAt: string | null;
+  };
+  lateArrival: { id: number };
+}
+
+export interface LateArrivalJustificationDetail {
+  id: number;
+  lateArrivalId: number;
+  justificationReason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  rejectionReason: string | null;
+  revision: number;
+  files: Array<{
+    id: number;
+    fileName: string;
+    mimeType: string;
+    fileSize: number;
+    uploadedAt: string | null;
+  }>;
+}
+
+export async function fetchLateArrivalJustifications(): Promise<LateArrivalJustificationListItem[]> {
+  const pageSize = 200;
+  const justifications: LateArrivalJustificationListItem[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await apiFetch(`/api/late-arrival-justifications?limit=${pageSize}&offset=${offset}`);
+    if (!Array.isArray(page)) throw new Error('Réponse invalide lors du chargement des justifications de retard.');
+    justifications.push(...page);
+    if (page.length < pageSize) return justifications;
+    offset += pageSize;
+  }
+}
+
+export async function submitLateArrivalJustification(
+  lateArrivalId: number,
+  justificationReason: string,
+  files: File[] = [],
+): Promise<void> {
+  const formData = new FormData();
+  formData.append('justificationReason', justificationReason);
+  files.forEach((file) => formData.append('files', file));
+  await apiFetch(`/api/late-arrivals/${lateArrivalId}/justification`, {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export async function reviewLateArrivalJustification(
+  lateArrivalId: number,
+  status: 'APPROVED' | 'REJECTED',
+  rejectionReason?: string,
+): Promise<void> {
+  await apiFetch(`/api/late-arrivals/${lateArrivalId}/justification/review`, {
+    method: 'PUT',
+    body: JSON.stringify({ status, ...(status === 'REJECTED' ? { rejectionReason } : {}) }),
+  });
+}
+
+export async function reexamineLateArrivalJustification(lateArrivalId: number): Promise<void> {
+  await apiFetch(`/api/late-arrivals/${lateArrivalId}/justification/reexamine`, {
+    method: 'PUT',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchLateArrivalJustificationDetail(lateArrivalId: number): Promise<LateArrivalJustificationDetail> {
+  return apiFetch(`/api/late-arrivals/${lateArrivalId}/justification`);
+}
+
+export async function downloadLateArrivalJustificationFile(lateArrivalId: number, fileId: number): Promise<Blob> {
+  return apiFetchBlob(`/api/late-arrivals/${lateArrivalId}/justification/files/${fileId}/download`);
+}
+
 export async function fetchBulletinsList(filters: BulletinListFilters): Promise<BulletinListResponse> {
   const params = new URLSearchParams();
   params.set('page', String(filters.page));

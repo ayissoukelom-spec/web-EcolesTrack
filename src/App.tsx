@@ -23,6 +23,14 @@ import {
   setSimulatedUser,
   setActiveSchoolId,
   findTeacherProfileFromSimulatedUser,
+  fetchLateArrivalJustifications,
+  submitLateArrivalJustification,
+  reviewLateArrivalJustification,
+  reexamineLateArrivalJustification,
+  fetchLateArrivalJustificationDetail,
+  downloadLateArrivalJustificationFile,
+  type LateArrivalJustificationListItem,
+  type LateArrivalJustificationDetail,
   type HomeroomClassSummary,
 } from './lib/api.ts';
 import { useAuth } from './contexts/AuthContext.tsx';
@@ -258,6 +266,7 @@ export default function App() {
       setHomeroomClassesList([]);
       setAbsencesList([]);
       setAbsenceDeclarationsList([]);
+      setLateArrivalJustificationsList([]);
       setAbsenceControlsList([]);
       setSummaryRecentAbsences([]);
       setEvaluationsList([]);
@@ -349,10 +358,13 @@ export default function App() {
   const [absencesList, setAbsencesList] = useState<any[]>([]);
   const absenceRefreshSequenceRef = useRef(createAbsenceRefreshSequence());
   const [absenceDeclarationsList, setAbsenceDeclarationsList] = useState<AbsenceDeclaration[]>([]);
+  const [lateArrivalJustificationsList, setLateArrivalJustificationsList] = useState<LateArrivalJustificationListItem[]>([]);
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
   const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified && (!absence.declarationId || absence.justificationStatus === 'REJECTED')).length;
   const pendingAbsenceValidationsCount = Math.max(0, Number(stats.absenceStatusCounts.pending) || 0);
+  const pendingAttendanceJustificationsCount = pendingAbsenceValidationsCount
+    + lateArrivalJustificationsList.filter(({ justification }) => justification.status === 'PENDING').length;
   const pendingAbsenceDeclarationsCount = absenceDeclarationsList.filter((declaration) => declaration.status === 'RECEIVED').length;
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
@@ -546,7 +558,13 @@ export default function App() {
       ];
 
       const promises = endpoints.map(e => apiFetch(e).catch((err) => ({ __error: true, error: err })));
-      const results = await Promise.all(promises);
+      const canLoadLateArrivalJustifications = ['parent', 'teacher', 'surveillant', 'school_admin', 'super_admin'].includes(currentRole);
+      const [results, lateArrivalJustifications] = await Promise.all([
+        Promise.all(promises),
+        canLoadLateArrivalJustifications
+          ? fetchLateArrivalJustifications().catch((err) => ({ __error: true, error: err }))
+          : Promise.resolve([] as LateArrivalJustificationListItem[]),
+      ]);
 
       const map = Object.fromEntries(endpoints.map((e, i) => [e, results[i]]));
       logTeachersPayload('RAW_API_RESPONSE_/api/teachers', results[endpoints.indexOf('/api/teachers')]);
@@ -575,6 +593,14 @@ export default function App() {
       }
       if (Array.isArray(map['/api/absence-declarations'])) setAbsenceDeclarationsList(map['/api/absence-declarations']);
       if (Array.isArray(map['/api/late-arrivals'])) setLateArrivals(map['/api/late-arrivals']);
+      if (Array.isArray(lateArrivalJustifications)) setLateArrivalJustificationsList(lateArrivalJustifications);
+      else if (lateArrivalJustifications?.__error) {
+        console.error('Failed to load late-arrival justifications:', lateArrivalJustifications.error);
+        setErrorMsg(getUiErrorMessage(
+          lateArrivalJustifications.error,
+          'Impossible de charger les justifications de retard.',
+        ));
+      }
       if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
       if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
       if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
@@ -1243,6 +1269,33 @@ export default function App() {
     await fetchAllData(false);
   };
 
+  const handleSubmitLateArrivalJustification = async (id: number, reason: string, files: File[]) => {
+    await submitLateArrivalJustification(id, reason, files);
+    await fetchAllData(false);
+  };
+
+  const handleReviewLateArrivalJustification = async (
+    id: number,
+    status: 'APPROVED' | 'REJECTED',
+    rejectionReason?: string,
+  ) => {
+    await reviewLateArrivalJustification(id, status, rejectionReason);
+    await fetchAllData(false);
+  };
+
+  const handleReexamineLateArrivalJustification = async (id: number) => {
+    await reexamineLateArrivalJustification(id);
+    await fetchAllData(false);
+  };
+
+  const handleLoadLateArrivalJustification = async (id: number): Promise<LateArrivalJustificationDetail> => (
+    fetchLateArrivalJustificationDetail(id)
+  );
+
+  const handleDownloadLateArrivalJustificationFile = async (id: number, fileId: number): Promise<Blob> => (
+    downloadLateArrivalJustificationFile(id, fileId)
+  );
+
   const handleReviewAbsence = async (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => {
     await apiFetch(`/api/absences/${id}/justification/review`, {
       method: 'PUT',
@@ -1744,11 +1797,11 @@ export default function App() {
                     data-nav-child="true"
                   >
                     <SidebarNavigationIcon><ClipboardCheck className="h-4 w-4" /></SidebarNavigationIcon>
-                    <span className="min-w-0 flex-1 text-left">Validation des absences à traiter</span>
+                    <span className="min-w-0 flex-1 text-left">Justifications à traiter</span>
                     <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
                       activeTab === 'absence-validations' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white'
                     }`}>
-                      {pendingAbsenceValidationsCount > 99 ? '99+' : pendingAbsenceValidationsCount}
+                      {pendingAttendanceJustificationsCount > 99 ? '99+' : pendingAttendanceJustificationsCount}
                     </span>
                   </button>
                 )}
@@ -2080,6 +2133,7 @@ export default function App() {
                   absencesList={absencesList}
                   absenceDeclarationsList={absenceDeclarationsList}
                   lateArrivalsList={lateArrivalsList}
+                  lateArrivalJustificationsList={lateArrivalJustificationsList}
                   studentsList={studentsList}
                   classesList={classesList}
                   schoolsList={schoolsList}
@@ -2091,6 +2145,11 @@ export default function App() {
                   onAddAbsence={handleAddAbsence}
                   onAddLateArrival={handleAddLateArrival}
                   onReviewAbsence={handleReviewAbsence}
+                  onSubmitLateArrivalJustification={handleSubmitLateArrivalJustification}
+                  onReviewLateArrivalJustification={handleReviewLateArrivalJustification}
+                  onReexamineLateArrivalJustification={handleReexamineLateArrivalJustification}
+                  onLoadLateArrivalJustification={handleLoadLateArrivalJustification}
+                  onDownloadLateArrivalJustificationFile={handleDownloadLateArrivalJustificationFile}
                   onReexamineAbsenceJustification={handleReexamineAbsenceJustification}
                   onCreateAbsenceDeclaration={handleCreateAbsenceDeclaration}
                   onUpdateAbsenceDeclaration={handleUpdateAbsenceDeclaration}

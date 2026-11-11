@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AbsenceView from './AbsenceView';
+import type { LateArrivalJustificationListItem } from '../lib/api.ts';
 
 const { downloadAbsenceJustificationMock } = vi.hoisted(() => ({
   downloadAbsenceJustificationMock: vi.fn(),
@@ -963,5 +964,195 @@ describe('AbsenceView teacher teaching assignment payload', () => {
       subjectId: 5,
     })));
     expect(onAddAbsence.mock.calls[0][0]).not.toHaveProperty('teachingAssignmentId');
+  });
+});
+
+describe('justifications de retard dans le registre Web', () => {
+  const lateArrival = {
+    id: 501,
+    studentId: 50,
+    studentName: 'Élève Retard',
+    classId: 10,
+    className: '6e A',
+    date: '2026-09-02',
+    period: 'morning' as const,
+    expectedStartTime: '08:00',
+    arrivalTime: '08:15',
+    lateMinutes: 15,
+    reason: 'Trafic',
+  };
+  const justification = (
+    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+    rejectionReason: string | null = null,
+  ): LateArrivalJustificationListItem[] => [{
+    justification: {
+      id: 900,
+      lateArrivalId: lateArrival.id,
+      justificationReason: 'Rendez-vous médical',
+      status,
+      rejectionReason,
+      revision: 1,
+      createdAt: null,
+      reviewedAt: null,
+    },
+    lateArrival: { id: lateArrival.id },
+  }];
+  const renderLateArrival = (props: Record<string, any> = {}) => render(
+    <AbsenceView
+      userRole="parent"
+      absencesList={[]}
+      lateArrivalsList={[lateArrival]}
+      classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+      studentsList={[]}
+      schoolsList={[]}
+      teachersList={[]}
+      approvedSubjectsList={[]}
+      onAddAbsence={vi.fn()}
+      onJustifyAbsence={vi.fn()}
+      {...props}
+    />,
+  );
+
+  it('lets a parent submit a reason and attached document for an unsubmitted late arrival', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const file = new File(['certificate'], 'certificat.pdf', { type: 'application/pdf' });
+    renderLateArrival({ onSubmitLateArrivalJustification: onSubmit });
+
+    expect(screen.getByText('À justifier')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Justifier le retard de Élève Retard' }));
+    fireEvent.change(screen.getByPlaceholderText('Expliquez le motif du retard'), {
+      target: { value: 'Rendez-vous médical' },
+    });
+    fireEvent.change(screen.getByLabelText('Ajouter des pièces justificatives'), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Envoyer la justification' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(lateArrival.id, 'Rendez-vous médical', [file]));
+    expect(await screen.findByRole('status')).toHaveTextContent('en attente de validation');
+  });
+
+  it.each([
+    ['PENDING', 'En attente de validation'],
+    ['APPROVED', 'Justification acceptée'],
+    ['REJECTED', 'Justification refusée'],
+  ] as const)('shows current %s status and never lets the parent resubmit', (status, label) => {
+    renderLateArrival({
+      lateArrivalJustificationsList: justification(status, status === 'REJECTED' ? 'Pièce illisible' : null),
+      onSubmitLateArrivalJustification: vi.fn(),
+    });
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Justifier le retard/ })).toBeNull();
+    if (status === 'REJECTED') {
+      expect(screen.getByText('Motif du refus : Pièce illisible')).toBeInTheDocument();
+      expect(screen.getByText(/Veuillez vous présenter à l’établissement/)).toBeInTheDocument();
+    }
+  });
+
+  it('allows a responsible teacher to make an initial decision on a pending justification', async () => {
+    const onReview = vi.fn().mockResolvedValue(undefined);
+    renderLateArrival({
+      userRole: 'teacher',
+      lateArrivalJustificationsList: justification('PENDING'),
+      onReviewLateArrivalJustification: onReview,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accepter' }));
+    await waitFor(() => expect(onReview).toHaveBeenCalledWith(lateArrival.id, 'APPROVED'));
+  });
+
+  it.each(['school_admin', 'surveillant'] as const)('%s can reject a pending justification with a required reason', async (userRole) => {
+    const onReview = vi.fn().mockResolvedValue(undefined);
+    renderLateArrival({
+      userRole,
+      lateArrivalJustificationsList: justification('PENDING'),
+      onReviewLateArrivalJustification: onReview,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rejeter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer le rejet' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('obligatoire');
+    fireEvent.change(screen.getByPlaceholderText('Motif obligatoire du rejet'), {
+      target: { value: 'Justificatif non conforme' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer le rejet' }));
+
+    await waitFor(() => expect(onReview).toHaveBeenCalledWith(
+      lateArrival.id,
+      'REJECTED',
+      'Justificatif non conforme',
+    ));
+    expect(await screen.findByRole('status')).toHaveTextContent('refusée');
+  });
+
+  it.each(['school_admin', 'surveillant'] as const)('%s may reexamine a rejected justification', async (userRole) => {
+    const onReexamine = vi.fn().mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderLateArrival({
+      userRole,
+      lateArrivalJustificationsList: justification('REJECTED', 'Pièce illisible'),
+      onReexamineLateArrivalJustification: onReexamine,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Réexaminer et accepter' }));
+    await waitFor(() => expect(onReexamine).toHaveBeenCalledWith(lateArrival.id));
+    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByRole('status')).toHaveTextContent('acceptée après réexamen');
+  });
+
+  it('does not expose reexamination to a teacher', () => {
+    renderLateArrival({
+      userRole: 'teacher',
+      lateArrivalJustificationsList: justification('REJECTED'),
+      onReexamineLateArrivalJustification: vi.fn(),
+    });
+    expect(screen.queryByRole('button', { name: 'Réexaminer et accepter' })).toBeNull();
+  });
+
+  it('loads and downloads justification files only through the authorized callbacks', async () => {
+    const onLoad = vi.fn().mockResolvedValue({
+      id: 900,
+      lateArrivalId: lateArrival.id,
+      justificationReason: 'Rendez-vous médical',
+      status: 'PENDING',
+      rejectionReason: null,
+      revision: 1,
+      files: [{ id: 31, fileName: 'certificat.pdf', mimeType: 'application/pdf', fileSize: 10, uploadedAt: null }],
+    });
+    const onDownload = vi.fn().mockResolvedValue(new Blob(['document']));
+    const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:late-justification') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    try {
+      renderLateArrival({
+        lateArrivalJustificationsList: justification('PENDING'),
+        onLoadLateArrivalJustification: onLoad,
+        onDownloadLateArrivalJustificationFile: onDownload,
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Voir les pièces justificatives' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Télécharger certificat.pdf' }));
+
+      await waitFor(() => expect(onDownload).toHaveBeenCalledWith(lateArrival.id, 31));
+      expect(anchorClick).toHaveBeenCalled();
+    } finally {
+      if (createObjectUrlDescriptor) Object.defineProperty(URL, 'createObjectURL', createObjectUrlDescriptor);
+      else delete (URL as typeof URL & { createObjectURL?: typeof URL.createObjectURL }).createObjectURL;
+      if (revokeObjectUrlDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrlDescriptor);
+      else delete (URL as typeof URL & { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
+    }
+  });
+
+  it('includes pending late-arrival justifications in the review-only view', () => {
+    renderLateArrival({
+      userRole: 'school_admin',
+      pendingReviewOnly: true,
+      lateArrivalJustificationsList: justification('PENDING'),
+      onReviewLateArrivalJustification: vi.fn(),
+    });
+    expect(screen.getByText('Élève Retard')).toBeInTheDocument();
+    expect(screen.getByText('En attente de validation')).toBeInTheDocument();
   });
 });

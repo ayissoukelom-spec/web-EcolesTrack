@@ -636,6 +636,75 @@ export const lateArrivals = pgTable('late_arrivals', {
   lateArrivalTeachingAssignmentIdx: index('late_arrivals_teaching_assignment_id_idx').on(table.teachingAssignmentId),
 }));
 
+export const lateArrivalJustifications = pgTable('late_arrival_justifications', {
+  id: serial('id').primaryKey(),
+  lateArrivalId: integer('late_arrival_id')
+    .references(() => lateArrivals.id, { onDelete: 'restrict' })
+    .notNull(),
+  submittedBy: integer('submitted_by').references(() => users.id, { onDelete: 'set null' }),
+  justificationReason: text('justification_reason').notNull(),
+  status: text('status').$type<'PENDING' | 'APPROVED' | 'REJECTED'>().default('PENDING').notNull(),
+  rejectionReason: text('rejection_reason'),
+  reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  revision: integer('revision').default(1).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  lateArrivalUniqueIdx: uniqueIndex('late_arrival_justifications_late_arrival_id_unique').on(table.lateArrivalId),
+  statusCreatedIdx: index('late_arrival_justifications_status_created_idx').on(table.status, table.createdAt),
+  statusCheck: check('late_arrival_justifications_status_check', sql`${table.status} IN ('PENDING', 'APPROVED', 'REJECTED')`),
+  revisionCheck: check('late_arrival_justifications_revision_check', sql`${table.revision} > 0`),
+}));
+
+export const lateArrivalJustificationEvents = pgTable('late_arrival_justification_events', {
+  id: serial('id').primaryKey(),
+  justificationId: integer('justification_id')
+    .references(() => lateArrivalJustifications.id, { onDelete: 'restrict' })
+    .notNull(),
+  revision: integer('revision').notNull(),
+  action: text('action').$type<'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'REEXAMINED_APPROVED'>().notNull(),
+  fromStatus: text('from_status').$type<'PENDING' | 'APPROVED' | 'REJECTED' | null>(),
+  toStatus: text('to_status').$type<'PENDING' | 'APPROVED' | 'REJECTED'>().notNull(),
+  reason: text('reason'),
+  actorUserId: integer('actor_user_id'),
+  actorRole: text('actor_role').notNull(),
+  actorEmail: text('actor_email'),
+  actorName: text('actor_name'),
+  occurredAt: timestamp('occurred_at').defaultNow().notNull(),
+}, (table) => ({
+  justificationRevisionUniqueIdx: uniqueIndex('late_arrival_justification_events_revision_unique')
+    .on(table.justificationId, table.revision),
+  actionCheck: check(
+    'late_arrival_justification_events_action_check',
+    sql`${table.action} IN ('SUBMITTED', 'APPROVED', 'REJECTED', 'REEXAMINED_APPROVED')`,
+  ),
+  fromStatusCheck: check(
+    'late_arrival_justification_events_from_status_check',
+    sql`${table.fromStatus} IS NULL OR ${table.fromStatus} IN ('PENDING', 'APPROVED', 'REJECTED')`,
+  ),
+  toStatusCheck: check(
+    'late_arrival_justification_events_to_status_check',
+    sql`${table.toStatus} IN ('PENDING', 'APPROVED', 'REJECTED')`,
+  ),
+  revisionCheck: check('late_arrival_justification_events_revision_check', sql`${table.revision} > 0`),
+}));
+
+export const lateArrivalJustificationFiles = pgTable('late_arrival_justification_files', {
+  id: serial('id').primaryKey(),
+  justificationId: integer('justification_id')
+    .references(() => lateArrivalJustifications.id, { onDelete: 'cascade' })
+    .notNull(),
+  fileName: text('file_name').notNull(),
+  filePath: text('file_path').notNull(),
+  mimeType: text('mime_type').notNull(),
+  fileSize: integer('file_size').notNull(),
+  uploadedBy: integer('uploaded_by').references(() => users.id, { onDelete: 'set null' }),
+  uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
+}, (table) => ({
+  justificationIdx: index('late_arrival_justification_files_justification_idx').on(table.justificationId),
+}));
+
 // 11b. Absence Justifications
 export const absenceJustifications = pgTable('absence_justifications', {
   id: serial('id').primaryKey(),
@@ -1650,6 +1719,49 @@ export const lateArrivalsRelations = relations(lateArrivals, ({ one }) => ({
   }),
   creator: one(users, {
     fields: [lateArrivals.createdBy],
+    references: [users.id],
+  }),
+  justification: one(lateArrivalJustifications, {
+    fields: [lateArrivals.id],
+    references: [lateArrivalJustifications.lateArrivalId],
+  }),
+}));
+
+export const lateArrivalJustificationsRelations = relations(lateArrivalJustifications, ({ one, many }) => ({
+  lateArrival: one(lateArrivals, {
+    fields: [lateArrivalJustifications.lateArrivalId],
+    references: [lateArrivals.id],
+  }),
+  submitter: one(users, {
+    fields: [lateArrivalJustifications.submittedBy],
+    references: [users.id],
+  }),
+  reviewer: one(users, {
+    fields: [lateArrivalJustifications.reviewedBy],
+    references: [users.id],
+  }),
+  events: many(lateArrivalJustificationEvents),
+  files: many(lateArrivalJustificationFiles),
+}));
+
+export const lateArrivalJustificationEventsRelations = relations(lateArrivalJustificationEvents, ({ one }) => ({
+  justification: one(lateArrivalJustifications, {
+    fields: [lateArrivalJustificationEvents.justificationId],
+    references: [lateArrivalJustifications.id],
+  }),
+  actor: one(users, {
+    fields: [lateArrivalJustificationEvents.actorUserId],
+    references: [users.id],
+  }),
+}));
+
+export const lateArrivalJustificationFilesRelations = relations(lateArrivalJustificationFiles, ({ one }) => ({
+  justification: one(lateArrivalJustifications, {
+    fields: [lateArrivalJustificationFiles.justificationId],
+    references: [lateArrivalJustifications.id],
+  }),
+  uploader: one(users, {
+    fields: [lateArrivalJustificationFiles.uploadedBy],
     references: [users.id],
   }),
 }));
