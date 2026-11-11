@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiFetchBlob, findTeacherProfileFromSimulatedUser, getSimulationHeaders, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
+import { apiFetch, apiFetchBlob, findTeacherProfileFromSimulatedUser, getSimulationHeaders, getUiErrorMessage, isUnauthorizedError, setActiveSchoolId, setSimulatedRole, setSimulatedUser, validateClientNames } from './api';
 
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -178,6 +178,91 @@ describe('apiFetch', () => {
     expect(replaceMock).toHaveBeenCalledWith('/login');
   });
 
+  it('ignores a late 401 from an older token without logging out the current session or showing a stale alert', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'old-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'parent');
+    let resolveResponse!: (response: unknown) => void;
+    (globalThis.fetch as unknown as vi.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }));
+
+    const request = apiFetch('/api/test').catch((error) => error);
+    localStorage.setItem('ecoletrack_jwt_access', 'current-token');
+    resolveResponse({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ error: 'Unauthorized: Invalid token' }),
+    });
+    const error = await request;
+
+    expect(error).toMatchObject({ status: 401, isUnauthorized: true, code: 'STALE_AUTH_RESPONSE' });
+    expect(getUiErrorMessage(error, 'fallback')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('current-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('parent');
+    expect(localStorage.getItem('ecoletrack_session_expired_message')).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let a late disabled-account response log out a newer session', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'old-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'teacher');
+    let resolveResponse!: (response: unknown) => void;
+    (globalThis.fetch as unknown as vi.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }));
+
+    const request = apiFetch('/api/test').catch((error) => error);
+    localStorage.setItem('ecoletrack_jwt_access', 'new-token');
+    resolveResponse({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({
+        code: 'ACCOUNT_DISABLED',
+        error: 'Ce compte est désactivé. Contactez votre administrateur.',
+      }),
+    });
+    const error = await request;
+
+    expect(error).toMatchObject({ status: 401, code: 'STALE_AUTH_RESPONSE' });
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('new-token');
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBe('teacher');
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('logs out the current session when its token is revoked', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'revoked-token');
+    localStorage.setItem('ecoletrack_simulated_role', 'teacher');
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ error: 'Unauthorized: Token revoked' }),
+    } as any);
+
+    await expect(apiFetch('/api/test')).rejects.toMatchObject({
+      status: 401,
+      isUnauthorized: true,
+    });
+
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBeNull();
+    expect(localStorage.getItem('ecoletrack_simulated_role')).toBeNull();
+    expect(replaceMock).toHaveBeenCalledWith('/login');
+  });
+
   it('clears the session and preserves the disabled-account message on 401 ACCOUNT_DISABLED', async () => {
     const replaceMock = vi.fn();
     Object.defineProperty(globalThis, 'location', {
@@ -261,6 +346,32 @@ describe('apiFetch', () => {
     );
     expect(replaceMock).toHaveBeenCalledTimes(1);
     expect(replaceMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('ignores a late blob 401 after the stored token changes', async () => {
+    const replaceMock = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', pathname: '/', replace: replaceMock },
+    });
+    localStorage.setItem('ecoletrack_jwt_access', 'old-blob-token');
+    let resolveResponse!: (response: unknown) => void;
+    (globalThis.fetch as unknown as vi.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }));
+
+    const request = apiFetchBlob('/api/export.pdf').catch((error) => error);
+    localStorage.setItem('ecoletrack_jwt_access', 'current-blob-token');
+    resolveResponse({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ error: 'Unauthorized: Invalid token' }),
+    });
+    const error = await request;
+
+    expect(error).toMatchObject({ status: 401, code: 'STALE_AUTH_RESPONSE' });
+    expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('current-blob-token');
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it('does not log out on 403 permission errors', async () => {

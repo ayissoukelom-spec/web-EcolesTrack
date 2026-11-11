@@ -443,6 +443,8 @@ export default function App() {
 
   // Authenticate & Fetch data on load and whenever simulation role changes
   const fetchAllData = async (showSpinner = true) => {
+    if (!role || (role !== 'super_admin' && activeSchoolId == null)) return;
+
     const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
     if (showSpinner) setIsSyncing(true);
     setErrorMsg(null);
@@ -640,7 +642,6 @@ export default function App() {
     if (role !== 'super_admin') {
       setSuperAdminSchoolFilterId(null);
     }
-    if (role) fetchAllData();
   }, [role]);
 
   useEffect(() => {

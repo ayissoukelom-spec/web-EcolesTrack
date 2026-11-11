@@ -104,7 +104,17 @@ function isSuppressedSystemError(message: string): boolean {
   return /Unauthorized:\s*Missing token/i.test(message);
 }
 
+function isStaleAuthenticationResponse(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'STALE_AUTH_RESPONSE',
+  );
+}
+
 export function getUiErrorMessage(error: unknown, fallback?: string): string | null {
+  if (isStaleAuthenticationResponse(error)) return null;
   if (error == null) return fallback ?? null;
 
   if (typeof error === 'string') {
@@ -136,10 +146,19 @@ export function isUnauthorizedError(error: unknown): boolean {
   );
 }
 
-function isTokenSessionError(errorMessage: string | null): boolean {
+function isTokenSessionError(errorMessage: string | null, errorCode: unknown): boolean {
+  const sessionErrorCodes = new Set([
+    'ACCESS_TOKEN_INVALID',
+    'ACCESS_SESSION_NOT_FOUND',
+    'ACCESS_SESSION_INVALID',
+    'ACCESS_SESSION_EXPIRED',
+    'ACCESS_SESSION_REVOKED',
+    'ACCESS_SESSION_IDENTITY_MISMATCH',
+  ]);
+  if (typeof errorCode === 'string' && sessionErrorCodes.has(errorCode)) return true;
   if (!errorMessage) return false;
   const normalized = errorMessage.trim();
-  return /^(Unauthorized: Missing token|Unauthorized: Invalid token|Unauthenticated)$/i.test(normalized);
+  return /^(Unauthorized: Missing token|Unauthorized: Invalid token|Unauthorized: Token revoked|Unauthorized: Access session not found|Unauthorized: Access session invalid|Unauthenticated)$/i.test(normalized);
 }
 
 export function getSimulatedRole(): string | null {
@@ -217,12 +236,21 @@ export function clearSessionExpiredMessage() {
   localStorage.removeItem(SESSION_EXPIRED_MESSAGE_KEY);
 }
 
-function handleUnauthorizedResponse(status: number, errorBody: { code?: unknown; error?: unknown }) {
-  if (status !== 401) return;
+function handleUnauthorizedResponse(
+  status: number,
+  errorBody: { code?: unknown; error?: unknown },
+  requestAccessToken: string | null,
+): boolean {
+  if (status !== 401) return false;
+
+  const currentAccessToken = typeof localStorage === 'undefined'
+    ? null
+    : localStorage.getItem(LOCAL_STORAGE_ACCESS_TOKEN_KEY);
+  if (requestAccessToken !== currentAccessToken) return true;
 
   const isDisabledAccount = errorBody.code === 'ACCOUNT_DISABLED';
   const errorMessage = typeof errorBody.error === 'string' ? errorBody.error : String(errorBody.error ?? '');
-  if (!isDisabledAccount && !isTokenSessionError(errorMessage)) return;
+  if (!isDisabledAccount && !isTokenSessionError(errorMessage, errorBody.code)) return false;
 
   clearAuthSession();
   markSessionExpired(
@@ -233,11 +261,18 @@ function handleUnauthorizedResponse(status: number, errorBody: { code?: unknown;
         : SESSION_EXPIRED_MESSAGE,
   );
 
-  if (typeof window === 'undefined' || window.location.pathname === '/login') return;
-  if (redirectedLocations.has(window.location)) return;
+  if (typeof window === 'undefined' || window.location.pathname === '/login') return false;
+  if (redirectedLocations.has(window.location)) return false;
 
   redirectedLocations.add(window.location);
   window.location.replace('/login');
+  return false;
+}
+
+function getRequestAccessToken(headers: Record<string, string>): string | null {
+  const authorizationHeader = headers.Authorization ?? headers.authorization;
+  if (typeof authorizationHeader !== 'string') return null;
+  return /^Bearer\s+(.+)$/i.exec(authorizationHeader)?.[1] ?? null;
 }
 
 export function getActiveSchoolId(): number | null {
@@ -402,6 +437,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     ...headers,
     ...(options.headers || {}),
   } as Record<string, string>;
+  const requestAccessToken = getRequestAccessToken(mergedHeaders);
   const isFormDataBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
   if (isFormDataBody) {
     delete mergedHeaders['Content-Type'];
@@ -457,7 +493,10 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
-      handleUnauthorizedResponse(response.status, errBody);
+      if (handleUnauthorizedResponse(response.status, errBody, requestAccessToken)) {
+        error.message = 'La réponse d’authentification concerne une session précédente.';
+        (error as any).code = 'STALE_AUTH_RESPONSE';
+      }
     }
     throw error;
   }
@@ -490,6 +529,7 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     ...headers,
     ...(options.headers || {}),
   } as Record<string, string>;
+  const requestAccessToken = getRequestAccessToken(mergedHeaders);
 
   if (mergedHeaders['Content-Type']) {
     delete mergedHeaders['Content-Type'];
@@ -511,7 +551,10 @@ export async function apiFetchBlob(endpoint: string, options: RequestInit = {}):
     }
     if (response.status === 401) {
       (error as any).isUnauthorized = true;
-      handleUnauthorizedResponse(response.status, errBody);
+      if (handleUnauthorizedResponse(response.status, errBody, requestAccessToken)) {
+        error.message = 'La réponse d’authentification concerne une session précédente.';
+        (error as any).code = 'STALE_AUTH_RESPONSE';
+      }
     }
     throw error;
   }

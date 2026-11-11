@@ -192,6 +192,7 @@ describe('App navigation', () => {
     mockSetSimulatedRole.mockReset();
     mockSetActiveSchoolId.mockReset();
     mockSetSimulatedUser.mockReset();
+    mockGetActiveSchoolId.mockReturnValue(1);
     mockCountOverdueEvaluations.mockReturnValue(0);
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/auth/register-or-login') return Promise.resolve({});
@@ -218,6 +219,7 @@ describe('App navigation', () => {
       role: 'teacher',
       id: 41,
     });
+
     localStorageMock.setItem('ecoletrack_jwt_access', 'old-school-token');
     localStorageMock.setItem('ecoletrack_active_school_id', '10');
     const tokenAtRequest: Array<{ url: string; token: string | null }> = [];
@@ -282,6 +284,36 @@ describe('App navigation', () => {
     expect(contextIndex).toBeGreaterThanOrEqual(0);
     expect(postTransitionSync?.token).toBe('new-school-parent-token');
     expect(tokenAtRequest.slice(contextIndex + 1).every(({ token }) => token !== 'old-school-token')).toBe(true);
+  });
+
+  it('does not start business-data requests for a local role before an active school context is restored', async () => {
+    mockGetSimulatedRole.mockReturnValue('school_admin');
+    mockGetActiveSchoolId.mockReturnValue(null);
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'school-admin-without-context',
+      email: 'admin@example.test',
+      name: 'Admin',
+      schoolId: null,
+      role: 'school_admin',
+      id: 41,
+    });
+    localStorageMock.removeItem('ecoletrack_active_school_id');
+
+    render(<AuthProvider><App /></AuthProvider>);
+    await act(async () => Promise.resolve());
+
+    expect(mockApiFetch).not.toHaveBeenCalled();
+    expect(screen.getByText('LoginView')).toBeTruthy();
+
+    mockGetActiveSchoolId.mockReturnValue(10);
+    localStorageMock.setItem('ecoletrack_active_school_id', '10');
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('simulatedUserChanged'));
+    });
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/dashboard/summary');
+    });
   });
 
   it('keeps the parent WhatsApp contact available while navigating between parent pages', async () => {
