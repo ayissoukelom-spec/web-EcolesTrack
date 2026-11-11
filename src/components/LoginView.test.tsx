@@ -45,6 +45,14 @@ describe('LoginView', () => {
     localStorageMock.clear();
   });
 
+  it('explains which account types can sign in with a phone number', () => {
+    render(<LoginView onLogin={mockOnLogin} />);
+
+    expect(screen.getByText(
+      'Le numéro de téléphone est réservé à la connexion des parents. Pour les autres comptes (enseignant, administrateur, surveillant), utilisez votre adresse e-mail.',
+    )).toBeTruthy();
+  });
+
   it('stores JWT token from local-login response', async () => {
     window.fetch = createFetchMock([
       { id: 1, uid: 'user_1', email: 'test@example.com', name: 'Test User', role: 'parent', token: 'jwt-token', mustReset: false },

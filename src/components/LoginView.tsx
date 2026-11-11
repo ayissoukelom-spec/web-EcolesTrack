@@ -337,6 +337,9 @@ export default function LoginView({ onLogin }: Props) {
             <input aria-label="Email ou numéro de téléphone" className="min-w-0 flex-1 p-2 border border-slate-700 rounded bg-slate-800 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={identifier} onChange={(e) => setIdentifier(e.target.value)} type="text" autoComplete="username" required />
           </div>
         </label>
+        <p className="-mt-1 mb-4 text-xs leading-relaxed text-slate-400">
+          Le numéro de téléphone est réservé à la connexion des parents. Pour les autres comptes (enseignant, administrateur, surveillant), utilisez votre adresse e-mail.
+        </p>
         <label className="block text-sm mb-4">
           <RequiredLabel label="Mot de passe" required className="!text-slate-200" />
           <div className="relative mt-1">
