@@ -136,9 +136,19 @@ export default function NotesView({
   const [newEvalSubject, setNewEvalSubject] = useState('');
   const [newEvalSubjectId, setNewEvalSubjectId] = useState<number | null>(null);
   const [newEvalType, setNewEvalType] = useState('');
-  const [newEvalCoefficient, setNewEvalCoefficient] = useState(1);
+  const [newEvalCoefficient, setNewEvalCoefficient] = useState('');
+  const [newEvalCoefficientError, setNewEvalCoefficientError] = useState('');
   const [newEvalMaxScore, setNewEvalMaxScore] = useState(20);
   const [newEvalDate, setNewEvalDate] = useState(formatLocalDatetime());
+  const [pendingEvaluation, setPendingEvaluation] = useState<{
+    classId: number;
+    subject: string;
+    subjectId?: number;
+    type: string;
+    coefficient: number;
+    maxScore: number;
+    date: string;
+  } | null>(null);
 
   const evaluationTypes = [
     { value: 'interrogation', label: 'Interrogation' },
@@ -177,6 +187,12 @@ export default function NotesView({
   const handleCreateEvaluation = (e: React.FormEvent) => {
     e.preventDefault();
     console.debug('NotesView: creating evaluation with subject', newEvalSubject, 'and type', newEvalType);
+    const coefficient = Number(newEvalCoefficient);
+    if (!newEvalCoefficient || !Number.isInteger(coefficient) || coefficient < 1 || coefficient > 9) {
+      setNewEvalCoefficientError('Saisissez un coefficient entier compris entre 1 et 9.');
+      return;
+    }
+    setNewEvalCoefficientError('');
     if (!newEvalClassId) {
       console.warn('NotesView: missing classId for evaluation');
       return;
@@ -196,24 +212,33 @@ export default function NotesView({
       return;
     }
 
-    onAddEvaluation({
+    setPendingEvaluation({
       classId: parseInt(newEvalClassId),
       subject: newEvalSubject,
       ...(newEvalSubjectId != null ? { subjectId: newEvalSubjectId } : {}),
       type: newEvalType,
-      coefficient: Number(newEvalCoefficient),
+      coefficient,
       maxScore: Number(newEvalMaxScore),
       date: newEvalDate,
     });
+  };
+
+  const handleConfirmCreateEvaluation = () => {
+    if (!pendingEvaluation) return;
+    onAddEvaluation(pendingEvaluation);
+    setPendingEvaluation(null);
     setIsNewEvalFormOpen(false);
     setNewEvalClassId('');
     setNewEvalSubject('');
     setNewEvalSubjectId(null);
     setNewEvalType('');
-    setNewEvalCoefficient(1);
+    setNewEvalCoefficient('');
+    setNewEvalCoefficientError('');
     setNewEvalMaxScore(20);
     setNewEvalDate(formatLocalDatetime());
   };
+
+  const handleReturnToEvaluationForm = () => setPendingEvaluation(null);
 
   const handleSaveStudentGrade = async (studentId: number) => {
     if (!selectedEvalId) return;
@@ -740,7 +765,8 @@ export default function NotesView({
                 setNewEvalSubject('');
                 setNewEvalSubjectId(null);
                 setNewEvalType('');
-                setNewEvalCoefficient(1);
+                setNewEvalCoefficient('');
+                setNewEvalCoefficientError('');
                 setNewEvalMaxScore(20);
                 setNewEvalDate(formatLocalDatetime());
                 setIsNewEvalFormOpen(!isNewEvalFormOpen);
@@ -904,15 +930,28 @@ export default function NotesView({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Coefficient</label>
+              <label htmlFor="new-evaluation-coefficient" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Coefficient</label>
               <input
+                id="new-evaluation-coefficient"
                 type="number"
                 min="1"
-                max="5"
+                max="9"
+                step="1"
+                required
                 value={newEvalCoefficient}
-                onChange={(e) => setNewEvalCoefficient(parseInt(e.target.value) || 1)}
+                onChange={(e) => {
+                  setNewEvalCoefficient(e.target.value);
+                  setNewEvalCoefficientError('');
+                }}
+                aria-invalid={Boolean(newEvalCoefficientError)}
+                aria-describedby={newEvalCoefficientError ? 'new-evaluation-coefficient-error' : undefined}
                 className="w-full px-3 py-2 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:outline-none"
               />
+              {newEvalCoefficientError && (
+                <p id="new-evaluation-coefficient-error" role="alert" className="mt-1 text-xs text-red-600">
+                  {newEvalCoefficientError}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Note maximale</label>
@@ -948,6 +987,43 @@ export default function NotesView({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {pendingEvaluation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="evaluation-publication-confirmation-title"
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <h2 id="evaluation-publication-confirmation-title" className="text-lg font-bold text-slate-900">
+              Confirmer la publication
+            </h2>
+            <dl className="mt-4 space-y-2 text-sm text-slate-700">
+              <div><dt className="inline font-semibold">Classe : </dt><dd className="inline">{classesList.find((item) => item.id === pendingEvaluation.classId)?.name ?? pendingEvaluation.classId}</dd></div>
+              <div><dt className="inline font-semibold">Matière : </dt><dd className="inline">{pendingEvaluation.subject}</dd></div>
+              <div><dt className="inline font-semibold">Type d’évaluation : </dt><dd className="inline">{evaluationTypes.find((item) => item.value === pendingEvaluation.type)?.label ?? pendingEvaluation.type}</dd></div>
+              <div><dt className="inline font-semibold">Coefficient : </dt><dd className="inline">{pendingEvaluation.coefficient}</dd></div>
+            </dl>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleReturnToEvaluationForm}
+                className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300"
+              >
+                Retour à la modification
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCreateEvaluation}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+              >
+                Confirmer la publication
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

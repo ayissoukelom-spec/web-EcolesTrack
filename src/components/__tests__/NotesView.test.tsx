@@ -411,17 +411,78 @@ test('allows creating an evaluation with the monthly evaluation type', () => {
   fireEvent.change(classSelect, { target: { value: '85' } });
   fireEvent.change(subjectSelect, { target: { value: 'Math' } });
   fireEvent.change(typeSelect, { target: { value: 'evaluation_mensuelle' } });
+  fireEvent.change(screen.getByLabelText('Coefficient'), { target: { value: '9' } });
   expect(within(typeSelect).getByRole('option', { name: 'Évaluation mensuelle' })).toBeDefined();
   fireEvent.click(screen.getByRole('button', { name: 'Publier le Devoir' }));
+
+  expect(onAddEvaluation).not.toHaveBeenCalled();
+  const confirmation = screen.getByRole('dialog');
+  expect(confirmation.textContent).toContain('6ème A');
+  expect(confirmation.textContent).toContain('Math');
+  expect(confirmation.textContent).toContain('Évaluation mensuelle');
+  expect(confirmation.textContent).toContain('Coefficient : 9');
+  fireEvent.click(screen.getByRole('button', { name: 'Confirmer la publication' }));
 
   expect(onAddEvaluation).toHaveBeenCalledWith(expect.objectContaining({
     classId: 85,
     subject: 'Math',
     subjectId: 10,
     type: 'evaluation_mensuelle',
-    coefficient: 1,
+    coefficient: 9,
     maxScore: 20,
   }));
+});
+
+test('requires an explicitly entered coefficient and leaves it empty initially', () => {
+  const onAddEvaluation = vi.fn();
+  renderWithAuth(
+    <NotesView {...baseProps} approvedSubjectsList={[{ id: 10, name: 'Math' }]} onAddEvaluation={onAddEvaluation} /> as any,
+    'school_admin',
+    1,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
+
+  const coefficient = screen.getByLabelText('Coefficient') as HTMLInputElement;
+  expect(coefficient.value).toBe('');
+  expect(coefficient.max).toBe('9');
+  fireEvent.change(coefficient, { target: { value: '' } });
+  fireEvent.submit(document.querySelector('#box-eval-form form')!);
+  expect(screen.getByRole('alert').textContent).toContain('entre 1 et 9');
+  expect(onAddEvaluation).not.toHaveBeenCalled();
+
+  fireEvent.change(coefficient, { target: { value: '10' } });
+  fireEvent.submit(document.querySelector('#box-eval-form form')!);
+  expect(screen.getByRole('alert').textContent).toContain('entre 1 et 9');
+  expect(onAddEvaluation).not.toHaveBeenCalled();
+
+  fireEvent.change(coefficient, { target: { value: '2.5' } });
+  fireEvent.submit(document.querySelector('#box-eval-form form')!);
+  expect(screen.getByRole('alert').textContent).toContain('entre 1 et 9');
+  expect(onAddEvaluation).not.toHaveBeenCalled();
+});
+
+test('keeps entered evaluation data when returning from publication confirmation', () => {
+  const onAddEvaluation = vi.fn();
+  renderWithAuth(
+    <NotesView {...baseProps} approvedSubjectsList={[{ id: 10, name: 'Math' }]} onAddEvaluation={onAddEvaluation} /> as any,
+    'school_admin',
+    1,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Créer un Devoir \/ Évaluation/i }));
+  const [classSelect, subjectSelect, typeSelect] = Array.from(document.querySelectorAll('#box-eval-form select'));
+  if (!classSelect || !subjectSelect || !typeSelect) throw new Error('Could not locate evaluation form selectors');
+  fireEvent.change(classSelect, { target: { value: '85' } });
+  fireEvent.change(subjectSelect, { target: { value: 'Math' } });
+  fireEvent.change(typeSelect, { target: { value: 'devoir' } });
+  fireEvent.change(screen.getByLabelText('Coefficient'), { target: { value: '3' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Publier le Devoir' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Retour à la modification' }));
+
+  expect((screen.getByLabelText('Coefficient') as HTMLInputElement).value).toBe('3');
+  expect((classSelect as HTMLSelectElement).value).toBe('85');
+  expect((subjectSelect as HTMLSelectElement).value).toBe('Math');
+  expect((typeSelect as HTMLSelectElement).value).toBe('devoir');
+  expect(onAddEvaluation).not.toHaveBeenCalled();
 });
 
 test('sorts students in the grade-entry table by family name and first name', () => {

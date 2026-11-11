@@ -13108,6 +13108,12 @@ export async function createApp() {
       if (!validTypes.includes(normalizedType)) {
         return res.status(400).json({ error: `Invalid evaluation type. Must be one of: ${validTypes.join(', ')}` });
       }
+      const coefficientProvided = typeof coefficient === 'number'
+        || (typeof coefficient === 'string' && coefficient.trim() !== '');
+      const parsedCoefficient = coefficientProvided ? Number(coefficient) : Number.NaN;
+      if (!Number.isInteger(parsedCoefficient) || parsedCoefficient < 1 || parsedCoefficient > 9) {
+        return res.status(400).json({ error: 'Coefficient must be an integer between 1 and 9' });
+      }
 
       // Load the class to check its school
       const [classRecord] = await db.select().from(classes).where(eq(classes.id, parseInt(classId)));
@@ -13351,7 +13357,7 @@ export async function createApp() {
           type: normalizedType,
           sequenceNumber,
           generatedName,
-          coefficient: coefficient ? parseInt(coefficient) : 1,
+          coefficient: parsedCoefficient,
           maxScore: maxScore ? parseInt(maxScore) : 20,
           countInBulletin: false,
           date,

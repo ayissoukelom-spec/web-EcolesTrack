@@ -610,6 +610,51 @@ beforeAll(async () => {
 });
 
 describe('POST /api/evaluations security', () => {
+  it('rejects evaluation creation when coefficient is missing or outside the 1–9 integer range', async () => {
+    const requestBase = {
+      classId: '100',
+      subjectId: 2,
+      subject: 'Science',
+      type: 'devoir',
+      date: '2026-09-15',
+    };
+    const headers = {
+      'x-simulated-role': 'teacher',
+      'x-simulated-uid': 'teacher-uid',
+      'x-simulated-user-id': '3',
+      'x-simulated-school-id': '10',
+    };
+
+    for (const coefficient of [undefined, 0, 10, 2.5, '']) {
+      const body = coefficient === undefined ? requestBase : { ...requestBase, coefficient };
+      const res = await request(app).post('/api/evaluations').set(headers).send(body);
+      expect(res.status).toBe(400);
+      expect(String(res.body.error)).toContain('Coefficient');
+    }
+  });
+
+  it.each([1, 5, 9])('accepts coefficient %i and stores the selected value', async (coefficient) => {
+    const res = await request(app)
+      .post('/api/evaluations')
+      .set('x-simulated-role', 'school_admin')
+      .set('x-simulated-uid', 'school-uid')
+      .set('x-simulated-user-id', '2')
+      .set('x-simulated-school-id', '10')
+      .send({
+        classId: '100',
+        subjectId: 2,
+        subject: 'Science',
+        type: 'devoir',
+        date: '2026-09-16',
+        coefficient,
+        maxScore: 20,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.coefficient).toBe(coefficient);
+    expect(FIXTURES.evaluations.at(-1)).toMatchObject({ coefficient });
+  });
+
   it('rejects school_admin without schoolId', async () => {
     FIXTURES.users.push({ id: 20, uid: 'school-sim', email: 'school-sim@x.test', name: 'School Admin Without School', role: 'school_admin', schoolId: null, isDeleted: false });
 
