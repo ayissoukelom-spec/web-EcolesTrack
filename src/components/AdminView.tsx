@@ -510,9 +510,15 @@ export default function AdminView({
   onRefreshClasses,
   currentSchoolId,
 }: AdminViewProps) {
-  const approvedTeacherSpecializations = (approvedSubjectsList || [])
-    .map((subject: any) => ({ id: String(subject.id), name: String(subject.name || '').trim() }))
-    .filter((subject) => subject.name);
+  const approvedTeacherSpecializationsById = new Map<string, any>();
+  (approvedSubjectsList || []).forEach((subject: any) => {
+    const id = Number(subject.id);
+    const name = String(subject.name || '').trim();
+    if (Number.isInteger(id) && id > 0 && name && !approvedTeacherSpecializationsById.has(String(id))) {
+      approvedTeacherSpecializationsById.set(String(id), { ...subject, id: String(id), name });
+    }
+  });
+  const approvedTeacherSpecializations = Array.from(approvedTeacherSpecializationsById.values());
   const getSubjectIdsByNames = (selectedNames: string[], subjectCatalog: any[]) => Array.from(new Set(
     subjectCatalog
       .filter((subject) => selectedNames.includes(String(subject.name || '').trim()))
@@ -532,16 +538,25 @@ export default function AdminView({
       .filter((assignment: any) => assignment.isActive === true)
       .map((assignment: any) => Number(assignment.classId)),
   ].filter((classId): classId is number => Number.isInteger(classId) && classId > 0)));
-  const getTeacherAssignedSubjectNames = (teacherProfile: any) => {
-    const subjectIds = new Set<number>([
-      ...(teacherProfile?.assignedSubjects ?? []).map((subject: any) => Number(subject.id)),
+  const getTeacherAssignedSubjectIds = (teacherProfile: any) => {
+    const schoolId = Number(teacherProfile?.schoolId);
+    const isInProfileSchool = (assignment: any) => (
+      assignment.schoolId == null || Number(assignment.schoolId) === schoolId
+    );
+    return Array.from(new Set([
+      ...(teacherProfile?.assignedSubjects ?? [])
+        .filter(isInProfileSchool)
+        .map((subject: any) => Number(subject.id)),
       ...(teacherProfile?.teachingAssignments ?? [])
-        .filter((assignment: any) => assignment.isActive === true)
+        .filter((assignment: any) => assignment.isActive === true && isInProfileSchool(assignment))
         .map((assignment: any) => Number(assignment.subjectId)),
-    ].filter((subjectId) => Number.isInteger(subjectId) && subjectId > 0));
-    return approvedSubjectsList
+    ].filter((subjectId): subjectId is number => Number.isInteger(subjectId) && subjectId > 0)));
+  };
+  const getTeacherAssignedSubjectNames = (teacherProfile: any) => {
+    const subjectIds = new Set(getTeacherAssignedSubjectIds(teacherProfile));
+    return approvedTeacherSpecializations
       .filter((subject: any) => subjectIds.has(Number(subject.id)))
-      .map((subject: any) => String(subject.name || '').trim())
+      .map((subject: any) => subject.name)
       .filter(Boolean);
   };
   const getDefaultTab = () => {
@@ -2474,6 +2489,8 @@ export default function AdminView({
     academicYearId: string;
     phone: string;
     specialization: string | string[];
+    specializationSubjectIds?: number[];
+    specializationSubjectIdsTouched?: boolean;
     gender: string;
     address: string;
     studentId: string;
@@ -2482,7 +2499,7 @@ export default function AdminView({
     teachingAssignmentScope?: Array<{ classId: number; subjectId: number }>;
     lastName?: string;
     firstNames?: string;
-  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [], teachingAssignmentScope: [] });
+  }>({ email: '', name: '', role: 'teacher', schoolId: '', schoolSearch: '', academicYearId: '', phone: '', specialization: '', specializationSubjectIds: [], specializationSubjectIdsTouched: false, gender: '', address: '', studentId: '', assignedClassIds: [], teachingAssignments: [], teachingAssignmentScope: [] });
   const [userParentPhonePrefix, setUserParentPhonePrefix] = useState('');
   const selectableTeacherClassIds = new Set((editTeacherClasses ?? []).map((klass) => klass.id));
   const unavailableTeacherClassIds = userForm.assignedClassIds.filter((classId) => !selectableTeacherClassIds.has(classId));
@@ -3772,22 +3789,24 @@ export default function AdminView({
                   <div className="space-y-2">
                     <div className="text-xs font-bold text-slate-500 uppercase mb-2">Matières enseignées dans toutes les classes sélectionnées</div>
                     <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3">
-                      {(approvedSubjectsList || []).map((subject: any) => {
-                        const subjectName = String(subject.name || '').trim();
-                        const selectedValues = Array.isArray(userForm.specialization)
-                          ? userForm.specialization
-                          : String(userForm.specialization || '').split(',').map((value) => value.trim()).filter(Boolean);
-                        const isSelected = selectedValues.includes(subjectName);
+                      {approvedTeacherSpecializations.map((subject) => {
+                        const subjectId = Number(subject.id);
+                        const selectedSubjectIds = userForm.specializationSubjectIds ?? [];
+                        const isSelected = selectedSubjectIds.includes(subjectId);
                         return (
                           <label key={subject.id} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer">
                             <input
                               type="checkbox"
                               checked={isSelected}
                               onChange={(e) => {
-                                const nextValues = e.target.checked
-                                  ? [...selectedValues, subjectName]
-                                  : selectedValues.filter((value) => value !== subjectName);
-                                setUserForm({ ...userForm, specialization: nextValues });
+                                const nextSubjectIds = e.target.checked
+                                  ? [...selectedSubjectIds, subjectId]
+                                  : selectedSubjectIds.filter((id) => id !== subjectId);
+                                setUserForm({
+                                  ...userForm,
+                                  specializationSubjectIds: nextSubjectIds,
+                                  specializationSubjectIdsTouched: true,
+                                });
                               }}
                               className="h-4 w-4 text-indigo-600 border-slate-300 rounded"
                             />
@@ -3877,9 +3896,6 @@ export default function AdminView({
                         return;
                       }
                       const updatedRole = userToEdit.role === 'teacher' ? 'teacher' : userForm.role;
-                      const selectedSpecializations = Array.isArray(userForm.specialization)
-                        ? userForm.specialization
-                        : String(userForm.specialization || '').split(',').map((value) => value.trim()).filter(Boolean);
                       const teachingAssignments = getCompleteTeachingAssignments(userForm.teachingAssignments);
                       if (isTeacher && hasIncompleteTeachingAssignments(userForm.teachingAssignments)) {
                         setEditUserError('Complétez ou supprimez chaque ligne d’affectation classe–matière.');
@@ -3897,7 +3913,8 @@ export default function AdminView({
                           : `+228${normalizedPhoneDigits}`) : undefined,
                         specialization: userForm.specialization,
                         subjectIds: updatedRole === 'teacher'
-                          ? getSubjectIdsByNames(selectedSpecializations, approvedSubjectsList)
+                          && (userForm.specializationSubjectIdsTouched || (userForm.specializationSubjectIds?.length ?? 0) > 0)
+                          ? userForm.specializationSubjectIds
                           : undefined,
                         address: updatedRole === 'parent' ? String(userForm.address || '').trim() : undefined,
                         studentId: updatedRole === 'parent' && userForm.studentId ? parseInt(userForm.studentId) : undefined,
@@ -6197,6 +6214,7 @@ export default function AdminView({
                                 const teachingAssignments = (tc.teachingAssignments ?? [])
                                   .filter((assignment) => assignment.isActive)
                                   .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId }));
+                                const specializationSubjectIds = getTeacherAssignedSubjectIds(tc);
                                 setUserToEdit(user);
                                 setUserForm({
                                   email: user.email ?? '',
@@ -6208,14 +6226,11 @@ export default function AdminView({
                                   schoolSearch: '',
                                   academicYearId: '',
                                   phone: (user as any).phone || '',
-                                  specialization: Array.isArray((tc as any).assignedSubjects)
+                                  specialization: specializationSubjectIds.length > 0
                                     ? getTeacherAssignedSubjectNames(tc)
-                                    : Array.isArray((user as any).specialization)
-                                      ? (user as any).specialization
-                                      : String((user as any).specialization || '')
-                                        .split(',')
-                                        .map((s) => s.trim())
-                                        .filter(Boolean),
+                                    : (user as any).specialization || '',
+                                  specializationSubjectIds,
+                                  specializationSubjectIdsTouched: false,
                                   gender: (user as any).gender || '',
                                   address: '',
                                   studentId: '',
@@ -6894,6 +6909,9 @@ export default function AdminView({
                           onClick={() => {
                             const teacherProfile = getTeacherProfileForUser(user.id);
                             const assignedClassIds = teacherProfile ? getTeacherAssignedClassIds(teacherProfile) : [];
+                            const specializationSubjectIds = user.role === 'teacher' && teacherProfile
+                              ? getTeacherAssignedSubjectIds(teacherProfile)
+                              : [];
                             const teachingAssignments = (teacherProfile?.teachingAssignments ?? [])
                               .filter((assignment) => assignment.isActive)
                               .map((assignment) => ({ classId: assignment.classId, subjectId: assignment.subjectId }));
@@ -6917,9 +6935,11 @@ export default function AdminView({
                               schoolSearch: '',
                               academicYearId: (user as any).academicYearId ? String((user as any).academicYearId) : '',
                               phone: parentPhoneParts.phone,
-                              specialization: user.role === 'teacher' && Array.isArray((teacherProfile as any)?.assignedSubjects)
+                              specialization: specializationSubjectIds.length > 0 && teacherProfile
                                 ? getTeacherAssignedSubjectNames(teacherProfile)
                                 : (user as any).specialization || '',
+                              specializationSubjectIds,
+                              specializationSubjectIdsTouched: false,
                               gender: (user as any).gender || '',
                               address: '',
                               studentId: '',

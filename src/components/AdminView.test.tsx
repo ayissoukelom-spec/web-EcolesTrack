@@ -1254,7 +1254,7 @@ describe('AdminView create-user teacher form', () => {
     }
   });
 
-  it('reopens the selected classes and subjects and submits the simple teacher selection', async () => {
+  it('deduplicates repeated subject IDs and selects same-name subjects independently by ID', async () => {
     const onUpdateUser = vi.fn().mockResolvedValue({});
     const user: User = {
       id: 703,
@@ -1278,7 +1278,11 @@ describe('AdminView create-user teacher form', () => {
       phone: user.phone,
       classIds: [11],
       administrativeClassIds: [11, 12],
-      assignedSubjects: [{ id: 5, name: 'Math' }, { id: 6, name: 'Science' }],
+      assignedSubjects: [
+        { id: 5, name: 'Math', schoolId: 1 },
+        { id: 6, name: 'Math', schoolId: 1 },
+        { id: 7, name: 'Physics', schoolId: 2 },
+      ],
       teachingAssignments: [
         { id: 1, classId: 11, subjectId: 6, schoolId: 1, isActive: true },
         { id: 2, classId: 12, subjectId: 5, schoolId: 1, isActive: false },
@@ -1306,7 +1310,12 @@ describe('AdminView create-user teacher form', () => {
           parentsList={[]}
           usersList={[user]}
           subjectsList={[{ id: 5, schoolId: 1, name: 'Math' }, { id: 6, schoolId: 1, name: 'Science' }]}
-          approvedSubjectsList={[{ id: 5, schoolId: 1, name: 'Math' }, { id: 6, schoolId: 1, name: 'Science' }]}
+          approvedSubjectsList={[
+            { id: 5, schoolId: 1, name: 'Math' },
+            { id: 5, schoolId: 2, name: 'Math' },
+            { id: 6, schoolId: 1, name: 'Math' },
+            { id: 7, schoolId: 2, name: 'Physics' },
+          ]}
           onAddSchool={async () => ({})}
           onAddYear={() => undefined}
           onAddClass={async () => undefined}
@@ -1324,8 +1333,16 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
 
       const dialog = screen.getByRole('dialog');
-      expect((within(dialog).getByRole('checkbox', { name: 'Math' }) as HTMLInputElement).checked).toBe(true);
-      expect((within(dialog).getByRole('checkbox', { name: 'Science' }) as HTMLInputElement).checked).toBe(true);
+      const mathCheckboxes = within(dialog).getAllByRole('checkbox', { name: 'Math' });
+      expect(mathCheckboxes).toHaveLength(2);
+      expect(mathCheckboxes.map((checkbox) => (checkbox as HTMLInputElement).checked)).toEqual([true, true]);
+      const subjectSelect = within(dialog).getByRole('combobox', { name: 'Matière de l’affectation 1' });
+      expect(within(subjectSelect).getAllByRole('option', { name: 'Math' })).toHaveLength(2);
+      fireEvent.click(mathCheckboxes[0]);
+      expect((mathCheckboxes[0] as HTMLInputElement).checked).toBe(false);
+      expect((mathCheckboxes[1] as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(mathCheckboxes[1]);
+      expect(mathCheckboxes.map((checkbox) => (checkbox as HTMLInputElement).checked)).toEqual([false, false]);
       await waitFor(() => expect(within(dialog).getByRole('checkbox', { name: 'Class A' })).toBeInTheDocument());
       expect((within(dialog).getByRole('checkbox', { name: 'Class A' }) as HTMLInputElement).checked).toBe(true);
       expect((within(dialog).getByRole('checkbox', { name: 'Class B' }) as HTMLInputElement).checked).toBe(true);
@@ -1337,7 +1354,7 @@ describe('AdminView create-user teacher form', () => {
         expect(onUpdateUser).toHaveBeenCalledWith(703, expect.objectContaining({
           classIds: [11, 12, 13],
           classSelectionScopeIds: [11, 12, 13],
-          subjectIds: [5, 6],
+          subjectIds: [],
           teachingAssignments: [{ classId: 11, subjectId: 6 }],
           teachingAssignmentScope: [{ classId: 11, subjectId: 6 }],
         }));
@@ -1347,8 +1364,10 @@ describe('AdminView create-user teacher form', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
       const accountDialog = screen.getByRole('dialog');
       await waitFor(() => expect(within(accountDialog).getByRole('checkbox', { name: 'Class A' })).toBeInTheDocument());
-      expect((within(accountDialog).getByRole('checkbox', { name: 'Math' }) as HTMLInputElement).checked).toBe(true);
-      expect((within(accountDialog).getByRole('checkbox', { name: 'Science' }) as HTMLInputElement).checked).toBe(true);
+      expect(within(accountDialog).getAllByRole('checkbox', { name: 'Math' }))
+        .toHaveLength(2);
+      expect(within(accountDialog).getAllByRole('checkbox', { name: 'Math' })
+        .map((checkbox) => (checkbox as HTMLInputElement).checked)).toEqual([true, true]);
       fireEvent.click(within(accountDialog).getByRole('button', { name: 'Enregistrer' }));
       await waitFor(() => {
         expect(onUpdateUser).toHaveBeenLastCalledWith(703, expect.objectContaining({
@@ -1358,6 +1377,64 @@ describe('AdminView create-user teacher form', () => {
           teachingAssignments: [{ classId: 11, subjectId: 6 }],
           teachingAssignmentScope: [{ classId: 11, subjectId: 6 }],
         }));
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('preserves a legacy specialization name without inferring subject IDs', async () => {
+    const onUpdateUser = vi.fn().mockResolvedValue({});
+    const user: User = {
+      id: 705,
+      uid: 'teacher_705',
+      email: 'legacy-specialization@example.test',
+      name: 'Ada Lovelace',
+      lastName: 'Lovelace',
+      firstNames: 'Ada',
+      role: 'teacher',
+      schoolId: 1,
+      phone: '+22890000000',
+      specialization: 'Mathématiques',
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('[]', { status: 200 }));
+
+    try {
+      renderWithAuth(
+        <AdminView
+          userRole="super_admin"
+          schoolsList={[{ id: 1, name: 'École du Lac', address: '', phone: '' }]}
+          yearsList={[]}
+          classesList={[]}
+          teachersList={[]}
+          studentsList={[]}
+          parentsList={[]}
+          usersList={[user]}
+          approvedSubjectsList={[{ id: 5, schoolId: 1, name: 'Mathématiques' }]}
+          onAddSchool={async () => ({})}
+          onAddYear={() => undefined}
+          onAddClass={async () => undefined}
+          onAddTeacher={async () => ({})}
+          onAddParent={async () => ({})}
+          onAddStudent={() => undefined}
+          onDeleteClass={() => undefined}
+          onDeleteSchool={() => undefined}
+          onUpdateUser={onUpdateUser}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comptes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+      const dialog = screen.getByRole('dialog');
+      expect((within(dialog).getByRole('checkbox', { name: 'Mathématiques' }) as HTMLInputElement).checked).toBe(false);
+      await waitFor(() => expect(within(dialog).getByText('Aucune classe disponible pour cette école.')).toBeTruthy());
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enregistrer' }));
+
+      await waitFor(() => {
+        expect(onUpdateUser).toHaveBeenCalledWith(705, expect.objectContaining({
+          specialization: 'Mathématiques',
+        }));
+        expect(onUpdateUser.mock.calls[0][1].subjectIds).toBeUndefined();
       });
     } finally {
       fetchSpy.mockRestore();
