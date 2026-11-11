@@ -1358,10 +1358,12 @@ export default function TeacherControlView({
   ) => {
     const reason = regularizationReasons[request.id]?.trim() ?? '';
     const proposedEndedAt = decision === 'modified_accepted'
-      ? parseLomeInput(regularizationEndTimes[request.id] ?? '')
+      ? parseLomeInput(regularizationEndTimes[request.id]
+        ?? (request.proposedEndedAt ? formatLomeInput(new Date(request.proposedEndedAt)) : ''))
       : null;
     const proposedStartedAt = decision === 'modified_accepted' && request.requestType !== 'incomplete_session'
-      ? parseLomeInput(regularizationStartTimes[request.id] ?? '')
+      ? parseLomeInput(regularizationStartTimes[request.id]
+        ?? formatLomeInput(new Date(request.referenceStartedAt ?? request.declaredStartedAt ?? request.createdAt)))
       : null;
     if ((decision === 'rejected' || decision === 'modified_accepted') && !reason) {
       setError('Un motif est obligatoire pour cette décision.');

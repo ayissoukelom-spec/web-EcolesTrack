@@ -1502,12 +1502,16 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       const decidedStartedAt = decision === 'rejected'
         ? null
         : decision === 'modified_accepted' && !isExistingSessionRequest
-          ? parseDate(body.proposedStartedAt)
+          ? body.proposedStartedAt === undefined
+            ? proposedStartedAt
+            : parseDate(body.proposedStartedAt)
           : proposedStartedAt;
       const decidedEndedAt = decision === 'rejected'
         ? null
         : decision === 'modified_accepted'
-          ? parseDate(body.proposedEndedAt)
+          ? body.proposedEndedAt === undefined
+            ? requestRow.proposedEndedAt
+            : parseDate(body.proposedEndedAt)
           : requestRow.proposedEndedAt;
       if (decision !== 'rejected' && (!decidedStartedAt || !decidedEndedAt)) {
         throw new TeacherControlApiError(400, 'Valid accepted start and end times are required');

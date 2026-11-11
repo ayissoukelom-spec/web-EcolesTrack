@@ -1497,6 +1497,91 @@ describe('TeacherControlView', () => {
     expect(await screen.findByText('Refusée')).toBeTruthy();
   });
 
+  it.each([
+    {
+      label: 'start',
+      changedLabel: 'Heure de début retenue · heure de Lomé',
+      changedValue: '2026-10-31T07:45',
+      expectedStart: '2026-10-31T07:45:00.000Z',
+      expectedEnd: '2026-10-31T09:00:00.000Z',
+    },
+    {
+      label: 'end',
+      changedLabel: 'Heure de fin modifiée (facultative sauf acceptation après modification)',
+      changedValue: '2026-10-31T09:15',
+      expectedStart: '2026-10-31T08:00:00.000Z',
+      expectedEnd: '2026-10-31T09:15:00.000Z',
+    },
+  ])('allows an administrator to modify only the declared $label time', async ({
+    changedLabel,
+    changedValue,
+    expectedStart,
+    expectedEnd,
+  }) => {
+    let decisionPayload: Record<string, unknown> | null = null;
+    const requestRow = {
+      id: 7,
+      schoolId: 8,
+      sessionId: null,
+      requestType: 'late_declaration',
+      schoolNameSnapshot: 'École A',
+      classId: 30,
+      classNameSnapshot: '6e A',
+      subjectId: 40,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: null,
+      declaredStartedAt: '2026-10-31T08:00:00.000Z',
+      teacherNameSnapshot: 'Afi Mensah',
+      proposedEndedAt: '2026-10-31T09:00:00.000Z',
+      reason: 'Oubli de saisie',
+      description: null,
+      incidentType: null,
+      technicalDetails: null,
+      gpsLatitude: null,
+      gpsLongitude: null,
+      gpsAccuracyMeters: null,
+      status: 'pending',
+      createdAt: '2026-10-31T09:10:00.000Z',
+    };
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return { totalSessions: 0, openSessions: 0, pendingRegularizations: 1 };
+      }
+      if (url === '/api/teacher-control/regularizations/7/decision' && options?.method === 'POST') {
+        decisionPayload = JSON.parse(options.body as string) as Record<string, unknown>;
+        return { request: {}, decision: {}, session: {} };
+      }
+      if (url.startsWith('/api/teacher-control/regularizations')) {
+        return [{ request: requestRow, decisions: [] }];
+      }
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      return {};
+    });
+
+    render(
+      <TeacherControlView
+        {...defaultProps}
+        userRole="school_admin"
+        viewMode="regularizations"
+        initialTab="requests"
+      />,
+    );
+    expect(await screen.findByRole('button', { name: 'Modifier et accepter' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(changedLabel), { target: { value: changedValue } });
+    fireEvent.change(screen.getByLabelText('Motif (obligatoire pour refus ou modification)'), {
+      target: { value: 'Correction après vérification' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier et accepter' }));
+
+    await waitFor(() => expect(decisionPayload).not.toBeNull());
+    expect(decisionPayload).toMatchObject({
+      decision: 'modified_accepted',
+      reason: 'Correction après vérification',
+      proposedStartedAt: expectedStart,
+      proposedEndedAt: expectedEnd,
+    });
+  });
+
   it('lets a super administrator capture school coordinates and edit them before saving', async () => {
     configureAdminGpsApi();
     const getCurrentPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {

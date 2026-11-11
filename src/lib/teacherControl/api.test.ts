@@ -1605,7 +1605,14 @@ describe('teacher control API authorization and input validation', () => {
     }
   });
 
-  it('records both declared and administrator-retained times when correcting a late declaration', async () => {
+  it.each([
+    { label: 'only the start time', changedStart: true, changedEnd: false },
+    { label: 'only the end time', changedStart: false, changedEnd: true },
+    { label: 'both times', changedStart: true, changedEnd: true },
+  ])('records declared and administrator-retained times when correcting a late declaration ($label)', async ({
+    changedStart,
+    changedEnd,
+  }) => {
     mockActor.role = 'school_admin';
     mockActor.schoolId = 8;
     mockDatabaseState.memberships = [{ userId: 501, schoolId: 8, role: 'school_admin', isActive: true }];
@@ -1621,8 +1628,12 @@ describe('teacher control API authorization and input validation', () => {
     }];
     const declaredStartedAt = new Date(Date.now() - 3_600_000);
     const declaredEndedAt = new Date(Date.now() - 1_800_000);
-    const retainedStartedAt = new Date(declaredStartedAt.getTime() - 15 * 60_000);
-    const retainedEndedAt = new Date(declaredEndedAt.getTime() + 10 * 60_000);
+    const retainedStartedAt = changedStart
+      ? new Date(declaredStartedAt.getTime() - 15 * 60_000)
+      : declaredStartedAt;
+    const retainedEndedAt = changedEnd
+      ? new Date(declaredEndedAt.getTime() + 10 * 60_000)
+      : declaredEndedAt;
     mockDatabaseState.regularizationRequests = [{
       id: 17,
       sessionId: null,
@@ -1653,8 +1664,8 @@ describe('teacher control API authorization and input validation', () => {
       .send({
         decision: 'modified_accepted',
         reason: 'Heures corrigées après vérification',
-        proposedStartedAt: retainedStartedAt.toISOString(),
-        proposedEndedAt: retainedEndedAt.toISOString(),
+        ...(changedStart ? { proposedStartedAt: retainedStartedAt.toISOString() } : {}),
+        ...(changedEnd ? { proposedEndedAt: retainedEndedAt.toISOString() } : {}),
       });
 
     expect(response.status).toBe(200);
@@ -1668,6 +1679,12 @@ describe('teacher control API authorization and input validation', () => {
       decidedEndedAt: retainedEndedAt.toISOString(),
     });
     expect(mockDatabaseState.regularizationDecisions).toHaveLength(1);
+
+    const sessions = await request(createTestApp()).get('/api/teacher-control/sessions?limit=50');
+    expect(sessions.status).toBe(200);
+    expect(sessions.body.items).toHaveLength(1);
+    const duration = retainedEndedAt.getTime() - retainedStartedAt.getTime();
+    expect(sessions.body.items[0].durationMilliseconds).toBe(duration);
   });
 
   it.each(['immediate_report', 'late_declaration'] as const)(
