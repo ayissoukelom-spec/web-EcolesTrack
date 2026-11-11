@@ -59,6 +59,11 @@ export default function SimulatorHeader({
     schoolName?: string;
     role: string;
   }>>([]);
+  const [activeSchoolMemberships, setActiveSchoolMemberships] = useState<{
+    token: string;
+    schoolId: number;
+    roles: string[];
+  } | null>(null);
   const [profileFirstName, setProfileFirstName] = useState(simUser?.firstName || '');
   const [profileLastName, setProfileLastName] = useState(simUser?.lastName || '');
   const [profilePhone, setProfilePhone] = useState(simUser?.phone || '');
@@ -157,6 +162,43 @@ export default function SimulatorHeader({
       ? `${simUser.firstName || ''} ${simUser.lastName || ''}`.trim()
       : (simUser.name || simUser.email || 'Utilisateur'))
     : 'Profil';
+  useEffect(() => {
+    if (!token || activeSchoolId == null) {
+      setActiveSchoolMemberships(null);
+      return;
+    }
+
+    let active = true;
+    setActiveSchoolMemberships(null);
+    void apiFetch('/api/auth/schools')
+      .then((data) => {
+        if (!active) return;
+        const roles = [...new Set<string>(
+          (data.memberships || [])
+            .filter((membership: { schoolId: number; role: string; isActive?: boolean | null }) => (
+              membership.schoolId === activeSchoolId
+              && membership.isActive !== false
+              && typeof membership.role === 'string'
+            ))
+            .map((membership: { role: string }) => membership.role),
+        )];
+        setActiveSchoolMemberships({ token, schoolId: activeSchoolId, roles });
+      })
+      .catch((error) => {
+        console.warn('Impossible de vérifier les fonctions autorisées de l’établissement actif.', error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [activeSchoolId, token]);
+  const canChangeAccessContext = Boolean(
+    token
+    && activeSchoolId != null
+    && activeSchoolMemberships?.token === token
+    && activeSchoolMemberships.schoolId === activeSchoolId
+    && activeSchoolMemberships.roles.length > 1,
+  );
   const openAccessSwitcher = async () => {
     setAccessSwitcherError(null);
     setAccessSwitcherLoading(true);
@@ -165,12 +207,14 @@ export default function SimulatorHeader({
       const schoolNames = new Map<number, string>(
         (data.schools || []).map((school: { id: number; name: string }) => [school.id, school.name]),
       );
-      const choices: typeof accessChoices = (data.memberships || []).map((membership: { schoolId: number; role: string }) => ({
-        kind: 'local' as const,
-        schoolId: membership.schoolId,
-        schoolName: schoolNames.get(membership.schoolId) || `Établissement ${membership.schoolId}`,
-        role: membership.role,
-      }));
+      const choices: typeof accessChoices = (data.memberships || [])
+        .filter((membership: { isActive?: boolean | null }) => membership.isActive !== false)
+        .map((membership: { schoolId: number; role: string }) => ({
+          kind: 'local' as const,
+          schoolId: membership.schoolId,
+          schoolName: schoolNames.get(membership.schoolId) || `Établissement ${membership.schoolId}`,
+          role: membership.role,
+        }));
       if (data.isSuperAdmin) {
         choices.unshift({ kind: 'global', role: 'super_admin' });
       }
@@ -1473,7 +1517,7 @@ export default function SimulatorHeader({
                   <div className="text-xs text-slate-500">{simUser ? (simUser.email || '') : ''}</div>
                 </div>
                 <div className="p-2 flex flex-col gap-1">
-                  {token && (
+                  {canChangeAccessContext && (
                     <button
                       type="button"
                       disabled={accessSwitcherLoading}

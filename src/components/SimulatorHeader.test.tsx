@@ -3,13 +3,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SimulatorHeader from './SimulatorHeader';
 
+const mockAuthState = vi.hoisted(() => ({
+  user: { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' },
+  role: 'super_admin',
+  token: 'access-token' as string | null,
+  activeSchoolId: null as number | null,
+}));
+
 vi.mock('../contexts/AuthContext.tsx', () => ({
-  useAuth: () => ({
-    user: { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' },
-    role: 'super_admin',
-    token: 'access-token',
-    activeSchoolId: null,
-  }),
+  useAuth: () => mockAuthState,
 }));
 
 const schools = [
@@ -85,6 +87,44 @@ function renderHeader(props: { onRefreshData?: () => void | Promise<void>; onLog
   );
 }
 
+function mockAuthorizedMemberships(memberships: Array<{
+  schoolId: number;
+  role: string;
+  isActive?: boolean | null;
+}>) {
+  const requests: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), window.location.origin);
+    requests.push(url.pathname);
+    if (url.pathname === '/api/auth/schools') {
+      return jsonResponse({
+        schools,
+        memberships,
+        isSuperAdmin: mockAuthState.role === 'super_admin',
+      });
+    }
+    return jsonResponse([]);
+  });
+  return requests;
+}
+
+function openProfileMenu() {
+  fireEvent.click(document.getElementById('btn-sim-profile')!);
+}
+
+function renderLocalRoleHeader(activeSchoolId: number | null) {
+  mockAuthState.user = {
+    id: 1,
+    uid: 'teacher-user',
+    email: 'teacher@example.test',
+    name: 'Teacher',
+  };
+  mockAuthState.role = 'teacher';
+  mockAuthState.token = 'access-token';
+  mockAuthState.activeSchoolId = activeSchoolId;
+  return renderHeader();
+}
+
 function openCreateAccount() {
   const profileButton = document.getElementById('btn-sim-profile');
   if (!profileButton) throw new Error('Bouton profil absent');
@@ -128,6 +168,10 @@ function fillRequiredTeacherFields() {
 
 describe('SimulatorHeader Super Admin teacher account subjects', () => {
   beforeEach(() => {
+    mockAuthState.user = { id: 1, uid: 'super-admin', email: 'super@example.test', name: 'Super Admin' };
+    mockAuthState.role = 'super_admin';
+    mockAuthState.token = 'access-token';
+    mockAuthState.activeSchoolId = null;
     Object.defineProperty(window, 'localStorage', {
       value: {
         getItem: vi.fn(() => null),
@@ -335,13 +379,24 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
   it('switches an authenticated account to an assigned local function without logging out', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const onLogout = vi.fn();
+    mockAuthState.user = {
+      id: 1,
+      uid: 'teacher-user',
+      email: 'teacher@example.test',
+      name: 'Teacher',
+    };
+    mockAuthState.role = 'teacher';
+    mockAuthState.activeSchoolId = 25;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), window.location.origin);
       requests.push({ url: url.toString(), init });
       if (url.pathname === '/api/auth/schools') {
         return jsonResponse({
           schools: [{ id: 25, name: 'École A', isSuspended: false }],
-          memberships: [{ membershipId: 7, schoolId: 25, role: 'teacher', isActive: true }],
+          memberships: [
+            { membershipId: 7, schoolId: 25, role: 'teacher', isActive: true },
+            { membershipId: 8, schoolId: 25, role: 'school_admin', isActive: true },
+          ],
           isSuperAdmin: false,
         });
       }
@@ -353,7 +408,7 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
 
     renderHeader({ onLogout });
     fireEvent.click(document.getElementById('btn-sim-profile')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Changer d’espace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Changer d’espace' }));
 
     const teacherChoice = await screen.findByRole('button', { name: /teacher.*École A/i });
     fireEvent.click(teacherChoice);
@@ -370,5 +425,119 @@ describe('SimulatorHeader Super Admin teacher account subjects', () => {
       .filter(({ init }) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(init?.method || 'GET'))
       .map(({ url }) => new URL(url).pathname))
       .toEqual(['/api/auth/context/active']);
+  });
+
+  it('hides the access switcher when the active school has one function, regardless of other schools', async () => {
+    const requests = mockAuthorizedMemberships([
+      { schoolId: 25, role: 'teacher', isActive: true },
+      { schoolId: 26, role: 'parent', isActive: true },
+    ]);
+    renderLocalRoleHeader(25);
+    await waitFor(() => expect(requests).toContain('/api/auth/schools'));
+
+    openProfileMenu();
+    expect(screen.queryByRole('button', { name: 'Changer d’espace' })).toBeNull();
+  });
+
+  it.each([
+    ['two active functions', ['teacher', 'school_admin']],
+    ['several active functions', ['teacher', 'school_admin', 'surveillant']],
+  ])('shows the access switcher with %s', async (_description, roles) => {
+    const requests = mockAuthorizedMemberships(roles.map((role) => ({
+      schoolId: 25,
+      role,
+      isActive: true,
+    })));
+    renderLocalRoleHeader(25);
+    await waitFor(() => expect(requests).toContain('/api/auth/schools'));
+
+    openProfileMenu();
+    expect(screen.getByRole('button', { name: 'Changer d’espace' })).toBeTruthy();
+  });
+
+  it('counts distinct roles rather than duplicate memberships', async () => {
+    const requests = mockAuthorizedMemberships([
+      { schoolId: 25, role: 'teacher', isActive: true },
+      { schoolId: 25, role: 'teacher', isActive: true },
+    ]);
+    renderLocalRoleHeader(25);
+    await waitFor(() => expect(requests).toContain('/api/auth/schools'));
+
+    openProfileMenu();
+    expect(screen.queryByRole('button', { name: 'Changer d’espace' })).toBeNull();
+  });
+
+  it('does not count inactive or removed functions when deciding switcher visibility', async () => {
+    const requests = mockAuthorizedMemberships([
+      { schoolId: 25, role: 'teacher', isActive: true },
+      { schoolId: 25, role: 'school_admin', isActive: false },
+      { schoolId: 25, role: 'parent', isActive: false },
+    ]);
+    renderLocalRoleHeader(25);
+    await waitFor(() => expect(requests).toContain('/api/auth/schools'));
+
+    openProfileMenu();
+    expect(screen.queryByRole('button', { name: 'Changer d’espace' })).toBeNull();
+  });
+
+  it('recalculates visibility when the active school changes', async () => {
+    const requests = mockAuthorizedMemberships([
+      { schoolId: 25, role: 'teacher', isActive: true },
+      { schoolId: 25, role: 'school_admin', isActive: true },
+      { schoolId: 26, role: 'parent', isActive: true },
+    ]);
+    const view = renderLocalRoleHeader(25);
+    await waitFor(() => expect(requests.filter((path) => path === '/api/auth/schools')).toHaveLength(1));
+    openProfileMenu();
+    expect(await screen.findByRole('button', { name: 'Changer d’espace' })).toBeTruthy();
+
+    mockAuthState.activeSchoolId = 26;
+    view.rerender(
+      <SimulatorHeader
+        currentRole="teacher"
+        schoolsList={schools as any}
+        classesList={[]}
+        teachersList={[]}
+        usersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        yearsList={[]}
+        approvedSubjectsList={[]}
+        onRoleChange={() => undefined}
+        onRefreshData={() => undefined}
+        isSyncing={false}
+      />,
+    );
+
+    await waitFor(() => expect(requests.filter((path) => path === '/api/auth/schools')).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: 'Changer d’espace' })).toBeNull();
+  });
+
+  it('keeps the switcher hidden while active-school permissions are loading', async () => {
+    const requests: string[] = [];
+    let resolveMemberships!: (response: Response) => void;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(String(input), window.location.origin);
+      requests.push(url.pathname);
+      if (url.pathname !== '/api/auth/schools') return Promise.resolve(jsonResponse([]));
+      return new Promise((resolve) => {
+        resolveMemberships = resolve;
+      });
+    });
+    renderLocalRoleHeader(25);
+
+    await waitFor(() => expect(requests).toContain('/api/auth/schools'));
+    openProfileMenu();
+    expect(screen.queryByRole('button', { name: 'Changer d’espace' })).toBeNull();
+    resolveMemberships(jsonResponse({
+      schools,
+      memberships: [
+        { schoolId: 25, role: 'teacher', isActive: true },
+        { schoolId: 25, role: 'school_admin', isActive: true },
+      ],
+      isSuperAdmin: false,
+    }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Changer d’espace' })).toBeTruthy());
   });
 });
