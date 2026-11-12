@@ -9,6 +9,7 @@ export interface GroupedEvaluationPublicationRequest {
   classIds: number[];
   subjectIds: number[];
   idempotencyKey: string;
+  coefficientsByPair?: Record<string, number>;
 }
 
 export interface ApprovedTeachingPair {
@@ -38,6 +39,7 @@ export type GroupedEvaluationValidationErrorCode =
   | 'invalid_period'
   | 'invalid_selection'
   | 'invalid_idempotency_key'
+  | 'invalid_coefficient'
   | 'class_not_approved'
   | 'subject_not_approved'
   | 'invalid_class_subject_pairs'
@@ -104,6 +106,20 @@ const isPositiveIntegerList = (values: number[]): boolean =>
   && values.every((value) => Number.isInteger(value) && value > 0)
   && new Set(values).size === values.length;
 
+const MAX_EVALUATION_COEFFICIENT = 2_147_483_647;
+const coefficientPairKey = (classId: number, subjectId: number): string => `${classId}:${subjectId}`;
+
+export function getGroupedEvaluationCoefficient(
+  request: GroupedEvaluationPublicationRequest,
+  classId: number,
+  subjectId: number,
+): number {
+  const value = request.coefficientsByPair?.[coefficientPairKey(classId, subjectId)];
+  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= MAX_EVALUATION_COEFFICIENT
+    ? Number(value)
+    : 1;
+}
+
 export function validateGroupedEvaluationPublicationRequest(
   request: GroupedEvaluationPublicationRequest,
 ): GroupedEvaluationValidationError | null {
@@ -134,6 +150,34 @@ export function validateGroupedEvaluationPublicationRequest(
       code: 'invalid_idempotency_key',
       message: 'La clé de soumission doit contenir entre 8 et 128 caractères.',
     };
+  }
+  if (request.coefficientsByPair != null) {
+    if (typeof request.coefficientsByPair !== 'object' || Array.isArray(request.coefficientsByPair)) {
+      return {
+        code: 'invalid_coefficient',
+        message: 'Les coefficients doivent être renseignés sous forme de paires classe–matière valides.',
+      };
+    }
+    const selectedPairs = new Set(request.classIds.flatMap((classId) =>
+      request.subjectIds.map((subjectId) => coefficientPairKey(classId, subjectId)),
+    ));
+    const invalid = Object.entries(request.coefficientsByPair).find(([pairKey, value]) => {
+      const [classIdText, subjectIdText] = pairKey.split(':');
+      if (!/^\d+:\d+$/.test(pairKey) || !Number.isInteger(Number(classIdText)) || !Number.isInteger(Number(subjectIdText))) {
+        return true;
+      }
+      return !selectedPairs.has(pairKey)
+        || !Number.isInteger(value)
+        || Number(value) <= 0
+        || Number(value) > MAX_EVALUATION_COEFFICIENT
+        || (request.kind === 'examen' && Number(value) !== 1);
+    });
+    if (invalid) {
+      return {
+        code: 'invalid_coefficient',
+        message: 'Chaque coefficient doit être un entier strictement positif.',
+      };
+    }
   }
   return null;
 }

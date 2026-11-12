@@ -88,6 +88,7 @@ export const submitGroupedEvaluationPublication = (
     endDate: publication.endDate,
     classIds: publication.classIds,
     subjectIds: publication.subjectIds,
+    coefficientsByPair: publication.coefficientsByPair ?? {},
     idempotencyKey,
   }),
 });

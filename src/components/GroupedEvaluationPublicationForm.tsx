@@ -51,6 +51,7 @@ export default function GroupedEvaluationPublicationForm({
   const [endDate, setEndDate] = useState('');
   const [classIds, setClassIds] = useState<number[]>([]);
   const [subjectIds, setSubjectIds] = useState<number[]>([]);
+  const [coefficientsByPair, setCoefficientsByPair] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const idempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -95,6 +96,23 @@ export default function GroupedEvaluationPublicationForm({
 
   const classes = options?.classes ?? [];
   const subjects = options?.subjects ?? [];
+  const pairKey = (classId: number, subjectId: number) => `${classId}:${subjectId}`;
+  const selectedCoefficientPairs = useMemo(() => classIds.flatMap((classId) =>
+    subjectIds.map((subjectId) => ({ classId, subjectId, key: pairKey(classId, subjectId) })),
+  ), [classIds, subjectIds]);
+  const effectiveCoefficientsByPair = useMemo(() => {
+    const normalized = { ...coefficientsByPair };
+    for (const { classId, subjectId, key } of selectedCoefficientPairs) {
+      normalized[key] = Number.isInteger(normalized[key]) && Number(normalized[key]) > 0 ? Number(normalized[key]) : 1;
+    }
+    return normalized;
+  }, [coefficientsByPair, selectedCoefficientPairs]);
+  const selectedCoefficientsByPair = useMemo(() => Object.fromEntries(
+    selectedCoefficientPairs.map(({ key }) => [
+      key,
+      kind === 'devoir' ? effectiveCoefficientsByPair[key] ?? 1 : 1,
+    ]),
+  ), [kind, selectedCoefficientPairs, effectiveCoefficientsByPair]);
   const activePairs = useMemo(() => new Set(
     (options?.activeTeachingPairs ?? []).map(({ classId, subjectId }) => `${classId}:${subjectId}`),
   ), [options]);
@@ -118,9 +136,10 @@ export default function GroupedEvaluationPublicationForm({
       classIds,
       subjectIds,
       idempotencyKey: 'grouped-publication-local-check',
+      coefficientsByPair: selectedCoefficientsByPair,
     };
     return validateGroupedEvaluationPublication(request, getGroupedEvaluationValidationContext(options));
-  }, [options, kind, startDate, endDate, classIds, subjectIds]);
+  }, [options, kind, startDate, endDate, classIds, subjectIds, selectedCoefficientsByPair]);
   const previewSubjects = subjectIds.map((id) =>
     subjects.find((subject) => subject.id === id)?.name ?? '',
   );
@@ -141,6 +160,18 @@ export default function GroupedEvaluationPublicationForm({
     update(selected.includes(value)
       ? selected.filter((item) => item !== value)
       : [...selected, value].sort((a, b) => a - b));
+    setSuccess(null);
+    setValidationMessage('');
+  };
+
+  const updateCoefficient = (classId: number, subjectId: number, nextValue: string) => {
+    const trimmed = nextValue.trim();
+    const parsed = trimmed === '' ? 1 : Number(trimmed);
+    const normalized = Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+    setCoefficientsByPair((previous) => ({
+      ...previous,
+      [pairKey(classId, subjectId)]: normalized,
+    }));
     setSuccess(null);
     setValidationMessage('');
   };
@@ -172,6 +203,7 @@ export default function GroupedEvaluationPublicationForm({
       endDate,
       classIds: [...classIds].sort((a, b) => a - b),
       subjectIds: [...subjectIds].sort((a, b) => a - b),
+      coefficientsByPair: selectedCoefficientsByPair,
     });
     if (!idempotencyRef.current || idempotencyRef.current.fingerprint !== fingerprint) {
       const stored = sessionStorage.getItem(idempotencyStorageKey);
@@ -202,6 +234,7 @@ export default function GroupedEvaluationPublicationForm({
         endDate,
         classIds,
         subjectIds,
+        coefficientsByPair: selectedCoefficientsByPair,
         idempotencyKey: idempotencyRef.current.key,
       };
       const result = role === 'super_admin'
@@ -398,16 +431,40 @@ export default function GroupedEvaluationPublicationForm({
                 const className = classes.find((item) => item.id === classId)?.name ?? `Classe ${classId}`;
                 const subjectName = subjects.find((item) => item.id === subjectId)?.name ?? `Matière ${subjectId}`;
                 const valid = activePairs.has(`${classId}:${subjectId}`);
+                const coefficient = kind === 'devoir'
+                  ? effectiveCoefficientsByPair[pairKey(classId, subjectId)] ?? 1
+                  : 1;
                 return (
                   <li
                     key={`${classId}:${subjectId}`}
                     className={valid ? 'text-emerald-700' : 'font-semibold text-rose-700'}
                   >
-                    {className} — {subjectName}{valid ? '' : ' (affectation active manquante)'}
+                    {className} — {subjectName}{valid ? ` (coeff. ${coefficient})` : ' (affectation active manquante)'}
                   </li>
                 );
               }))}
             </ul>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {kind === 'devoir' && classIds.flatMap((classId) => subjectIds.map((subjectId) => {
+                const className = classes.find((item) => item.id === classId)?.name ?? `Classe ${classId}`;
+                const subjectName = subjects.find((item) => item.id === subjectId)?.name ?? `Matière ${subjectId}`;
+                const valid = activePairs.has(`${classId}:${subjectId}`);
+                return valid ? (
+                  <label key={`coefficient-${classId}-${subjectId}`} className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Coefficient — {className} — {subjectName}
+                    <input
+                      type="number"
+                      min={1}
+                      max={2147483647}
+                      step={1}
+                      value={effectiveCoefficientsByPair[pairKey(classId, subjectId)] ?? 1}
+                      onChange={(event) => updateCoefficient(classId, subjectId, event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800"
+                    />
+                  </label>
+                ) : null;
+              }))}
+            </div>
             {previewMessage && <p className="mt-3 text-xs text-slate-600">{previewMessage}</p>}
             {validation && 'error' in validation && (
               <p className="mt-2 text-xs text-rose-700">{validation.error.message}</p>

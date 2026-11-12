@@ -95,6 +95,29 @@ describe('bulletinService', () => {
     expect(result.totalWeightedScore).toBeCloseTo(36, 5);
   });
 
+  it('pondère les devoirs groupés notés et exclut ceux qui n’ont pas encore de note', () => {
+    const evaluations: Evaluation[] = [
+      { id: 1, classId: 10, teacherId: null, termId: 7, subject: 'Math', title: 'Devoir groupé 1', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true, date: '2026-11-12' },
+      { id: 2, classId: 10, teacherId: null, termId: 7, subject: 'Math', title: 'Devoir groupé 2', type: 'devoir', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-11-13' },
+      { id: 3, classId: 10, teacherId: null, termId: 7, subject: 'Math', title: 'Devoir groupé sans note', type: 'devoir', coefficient: 5, maxScore: 20, countInBulletin: true, date: '2026-11-14' },
+    ];
+    const grades: Grade[] = [
+      { id: 1, evaluationId: 1, studentId: 1, score: '10' },
+      { id: 2, evaluationId: 2, studentId: 1, score: '20' },
+    ];
+
+    const result = calculateStudentTermAverage({ term, student, evaluations, grades });
+
+    expect(result.average).toBeCloseTo(40 / 3, 5);
+    expect(result.totalCoefficient).toBe(3);
+    expect(result.totalWeightedScore).toBe(40);
+    expect(result.snapshots[2]).toMatchObject({
+      coefficient: 5,
+      countedInAverage: false,
+      excludedReason: 'missing-grade',
+    });
+  });
+
   it('normalise des barèmes différents', () => {
     const evaluations: Evaluation[] = [
       { id: 1, classId: 10, teacherId: 2, termId: 7, subject: 'Math', title: 'DS 1', coefficient: 1, maxScore: 20, countInBulletin: true, date: '2026-06-10' },

@@ -878,9 +878,9 @@ function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublic
               type: input.type,
               sequenceNumber: input.sequenceNumber,
               generatedName: input.generatedName,
-              coefficient: 1,
+              coefficient: input.coefficient,
               maxScore: 20,
-              countInBulletin: false,
+              countInBulletin: input.countInBulletin,
               date: input.date,
             }).returning({ id: evaluations.id });
             if (!created) throw new Error('Evaluation insert did not return an id.');
@@ -13753,6 +13753,7 @@ export async function createApp() {
             endDate: body.endDate,
             classIds: body.classIds,
             subjectIds: body.subjectIds,
+            coefficientsByPair: body.coefficientsByPair,
             idempotencyKey,
           },
         },

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   formatGroupedEvaluationParentMessage,
   validateGroupedEvaluationPublication,
+  getGroupedEvaluationCoefficient,
   validateGroupedEvaluationPublicationRequest,
   type GroupedEvaluationPeriodType,
   type GroupedEvaluationPublicationRequest,
@@ -54,6 +55,8 @@ export interface GroupedEvaluationPublicationTransaction {
     subject: string;
     termId: number;
     type: 'devoir' | 'composition';
+    coefficient: number;
+    countInBulletin: boolean;
     date: string;
     sequenceNumber: number;
     generatedName: string;
@@ -155,12 +158,23 @@ export function resolveGroupedPublicationSchoolId(
 export function hashGroupedEvaluationRequest(
   request: GroupedEvaluationPublicationRequest,
 ): string {
+  const customCoefficientsByPair = Object.fromEntries(
+    [...request.classIds].sort((a, b) => a - b).flatMap((classId) =>
+      [...request.subjectIds].sort((a, b) => a - b).map((subjectId) => [
+        `${classId}:${subjectId}`,
+        request.kind === 'devoir' ? getGroupedEvaluationCoefficient(request, classId, subjectId) : 1,
+      ] as const),
+    ).filter(([, coefficient]) => coefficient !== 1),
+  );
   const canonicalRequest = {
     kind: request.kind,
     startDate: request.startDate,
     endDate: request.endDate,
     classIds: [...request.classIds].sort((a, b) => a - b),
     subjectIds: [...request.subjectIds].sort((a, b) => a - b),
+    ...(Object.keys(customCoefficientsByPair).length > 0
+      ? { coefficientsByPair: customCoefficientsByPair }
+      : {}),
   };
   return createHash('sha256').update(JSON.stringify(canonicalRequest)).digest('hex');
 }
@@ -290,6 +304,9 @@ export async function publishGroupedEvaluations(
             { subjectIds: [subjectId] },
           );
         }
+        const coefficient = value.kind === 'devoir'
+          ? getGroupedEvaluationCoefficient(request, classId, subjectId)
+          : 1;
         const evaluation = await tx.createEvaluation({
           publicationId: publication.id,
           schoolId,
@@ -298,6 +315,8 @@ export async function publishGroupedEvaluations(
           subject: subjectName,
           termId,
           type: value.evaluationType,
+          coefficient,
+          countInBulletin: value.evaluationType === 'devoir',
           date: value.evaluationDate,
           sequenceNumber,
           generatedName: `${value.evaluationType === 'composition' ? 'Composition' : 'Devoir'} ${context.periodType === 'trimester' ? 'T' : 'S'}${context.periodOrderIndex}.${sequenceNumber}`,

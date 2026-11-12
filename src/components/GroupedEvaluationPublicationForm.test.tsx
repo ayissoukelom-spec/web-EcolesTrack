@@ -135,6 +135,41 @@ describe('GroupedEvaluationPublicationForm', () => {
     expect(api.submit).not.toHaveBeenCalled();
   });
 
+  it('sets and previews a distinct coefficient for each selected class-subject pair', async () => {
+    api.getAvailability.mockResolvedValue({ available: true });
+    api.getOptions.mockResolvedValue(options);
+    api.submit.mockResolvedValue(successfulResponse);
+    render(<GroupedEvaluationPublicationForm role="school_admin" />);
+
+    await screen.findByTestId('grouped-evaluation-publication-form');
+    fireEvent.change(screen.getByLabelText('Date de début'), { target: { value: '2026-11-12' } });
+    fireEvent.change(screen.getByLabelText('Date de fin'), { target: { value: '2026-11-15' } });
+    fireEvent.click(screen.getByLabelText(/6ème A/));
+    fireEvent.click(screen.getByLabelText('Mathématiques'));
+    fireEvent.click(screen.getByLabelText('Français'));
+
+    const mathCoefficient = screen.getByLabelText('Coefficient — 6ème A — Mathématiques') as HTMLInputElement;
+    const frenchCoefficient = screen.getByLabelText('Coefficient — 6ème A — Français') as HTMLInputElement;
+    expect(mathCoefficient.value).toBe('1');
+    expect(frenchCoefficient.value).toBe('1');
+    fireEvent.change(mathCoefficient, { target: { value: '2' } });
+    fireEvent.change(frenchCoefficient, { target: { value: '3' } });
+
+    expect(screen.getByText('6ème A — Mathématiques (coeff. 2)')).toBeTruthy();
+    expect(screen.getByText('6ème A — Français (coeff. 3)')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Vérifier et publier/i }));
+
+    await screen.findByText(/Programme enregistré/);
+    expect(api.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classIds: [1],
+        subjectIds: [10, 11],
+        coefficientsByPair: { '1:10': 2, '1:11': 3 },
+      }),
+      expect.any(String),
+    );
+  });
+
   it('shows semester periods and allows an eligible lycée class and its assigned subjects', async () => {
     api.getAvailability.mockResolvedValue({ available: true });
     api.getOptions.mockResolvedValue(optionsWithSemester);

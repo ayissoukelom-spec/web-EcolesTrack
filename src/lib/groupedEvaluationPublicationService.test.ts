@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   GroupedEvaluationIdempotencyConflictError,
+  hashGroupedEvaluationRequest,
   isAuthorizedGroupedPublicationActor,
   publishGroupedEvaluations,
   resolveGroupedPublicationSchoolId,
@@ -60,6 +62,8 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
     classId: number;
     subjectId: number;
     sequenceNumber: number;
+    coefficient: number;
+    countInBulletin: boolean;
     date: string;
     type: string;
     generatedName: string;
@@ -105,6 +109,8 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
             classId: input.classId,
             subjectId: input.subjectId,
             sequenceNumber: input.sequenceNumber,
+            coefficient: input.coefficient,
+            countInBulletin: input.countInBulletin,
             date: input.date,
             type: input.type,
             generatedName: input.generatedName,
@@ -141,6 +147,25 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
 }
 
 describe('grouped evaluation publication service', () => {
+  it('preserves legacy idempotency hashes for default coefficients', () => {
+    const legacyCanonicalRequest = {
+      kind: request.kind,
+      startDate: request.startDate,
+      endDate: request.endDate,
+      classIds: [...request.classIds].sort((a, b) => a - b),
+      subjectIds: [...request.subjectIds].sort((a, b) => a - b),
+    };
+    const legacyHash = createHash('sha256')
+      .update(JSON.stringify(legacyCanonicalRequest))
+      .digest('hex');
+
+    expect(hashGroupedEvaluationRequest(request)).toBe(legacyHash);
+    expect(hashGroupedEvaluationRequest({
+      ...request,
+      coefficientsByPair: { '10:20': 1, '10:21': 1, '11:20': 1, '11:21': 1 },
+    })).toBe(legacyHash);
+  });
+
   it('requires an active school-admin membership matching the verified actor context', () => {
     const actor = { id: 8, role: 'school_admin', schoolId: 4 };
     const membership = { userId: 8, schoolId: 4, role: 'school_admin', isActive: true };
@@ -186,6 +211,8 @@ describe('grouped evaluation publication service', () => {
       '10:20', '10:21', '11:20', '11:21',
     ]);
     expect(repository.evaluations.map((evaluation) => evaluation.type)).toEqual(Array(4).fill('composition'));
+    expect(repository.evaluations.map((evaluation) => evaluation.coefficient)).toEqual(Array(4).fill(1));
+    expect(repository.evaluations.map((evaluation) => evaluation.countInBulletin)).toEqual(Array(4).fill(false));
     expect(repository.evaluations.map((evaluation) => evaluation.date)).toEqual(Array(4).fill(request.startDate));
     expect(repository.evaluations.map((evaluation) => evaluation.generatedName)).toEqual([
       'Composition T1.1',
@@ -195,6 +222,67 @@ describe('grouped evaluation publication service', () => {
     ]);
     expect(result.notification.push).toBe('pending');
     expect(result.notification.recipientCount).toBe(2);
+  });
+
+  it('uses the default coefficient of 1 and keeps grouped devoirs in the bulletin', async () => {
+    const repository = new FakeRepository();
+    const result = await publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: { ...request, kind: 'devoir', classIds: [10], subjectIds: [20] },
+    });
+
+    expect(result.evaluationCount).toBe(1);
+    expect(repository.evaluations[0].coefficient).toBe(1);
+    expect(repository.evaluations[0].countInBulletin).toBe(true);
+  });
+
+  it('persists per class-subject coefficients and rejects invalid values', async () => {
+    const repository = new FakeRepository();
+    const result = await publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: {
+        ...request,
+        classIds: [10],
+        subjectIds: [20, 21],
+        coefficientsByPair: {
+          '10:20': 2,
+          '10:21': 3,
+        },
+      },
+    });
+
+    expect(result.evaluationCount).toBe(2);
+    expect(repository.evaluations.map((evaluation) => evaluation.coefficient)).toEqual([2, 3]);
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: {
+        ...request,
+        classIds: [10],
+        subjectIds: [20],
+        coefficientsByPair: { '10:20': 0 },
+      },
+    })).rejects.toMatchObject({ code: 'invalid_coefficient' });
+  });
+
+  it('rejects custom coefficients for compositions to preserve their prior behavior', async () => {
+    const repository = new FakeRepository();
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: {
+        ...request,
+        kind: 'examen',
+        classIds: [10],
+        subjectIds: [20],
+        coefficientsByPair: { '10:20': 2 },
+      },
+    })).rejects.toMatchObject({ code: 'invalid_coefficient' });
+    expect(repository.evaluations).toHaveLength(0);
   });
 
   it('publishes lycée evaluations in the approved semester and names them S1', async () => {
@@ -403,6 +491,11 @@ describe('grouped evaluation publication service', () => {
       schoolId: 4,
       authorUserId: 8,
       request: { ...request, endDate: '2026-11-16' },
+    })).rejects.toBeInstanceOf(GroupedEvaluationIdempotencyConflictError);
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: { ...request, coefficientsByPair: { '10:20': 2 } },
     })).rejects.toBeInstanceOf(GroupedEvaluationIdempotencyConflictError);
   });
 
