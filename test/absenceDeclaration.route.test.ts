@@ -206,6 +206,18 @@ describe('parent absence declaration routes', () => {
     reason: 'Rendez-vous médical',
   });
 
+  const postInternalDeclaration = (payload: Record<string, unknown>) => {
+    const timestamp = Date.now().toString();
+    const signature = crypto.createHmac('sha256', 'absence-declaration-test-secret')
+      .update(`${JSON.stringify(payload)}${timestamp}`)
+      .digest('hex');
+    return request(app)
+      .post('/api/internal/absence-declarations')
+      .set('X-Internal-Timestamp', timestamp)
+      .set('X-Internal-Signature', signature)
+      .send(payload);
+  };
+
   it('accepts today and future for the parent’s child, rejects past dates and unrelated children', async () => {
     const today = await request(app).post('/api/absence-declarations').send(declarationInput(20)).expect(201);
     expect(today.body.status).toBe('RECEIVED');
@@ -312,7 +324,7 @@ describe('parent absence declaration routes', () => {
         parentUserId: 7,
         schoolId: 1,
         action: 'create',
-        input: { ...declarationInput(20), reason: '   ' },
+        input: declarationInput(20),
       };
       const timestamp = Date.now().toString();
       const signature = crypto.createHmac('sha256', 'absence-declaration-test-secret')
@@ -326,6 +338,54 @@ describe('parent absence declaration routes', () => {
         .send(payload)
         .expect(403);
     }
+    expect(mockState.declarations).toHaveLength(0);
+  });
+
+  it('derives each declaration school from its authorized child and lists all parent schools', async () => {
+    mockState.schools.push({ id: 2 });
+    mockState.parents.push({ id: 3, userId: 7, studentId: 21, schoolId: 2 });
+    mockState.students.push({ id: 21, schoolId: 2, classId: 20, firstName: 'Binta', lastName: 'Test', parentId: 3, isActive: true });
+    mockState.userSchools.push({ userId: 7, schoolId: 2, role: 'parent', isActive: true });
+
+    await postInternalDeclaration({
+      parentUserId: 7,
+      action: 'create',
+      input: declarationInput(20, isoDay(1)),
+    }).expect(201);
+    const secondSchoolDeclaration = await postInternalDeclaration({
+      parentUserId: 7,
+      action: 'create',
+      input: declarationInput(21, isoDay(2)),
+    }).expect(201);
+
+    expect(secondSchoolDeclaration.body.studentId).toBe(21);
+    expect(secondSchoolDeclaration.body.parentId).toBe(3);
+    expect(mockState.declarations).toHaveLength(2);
+
+    const declarations = await postInternalDeclaration({
+      parentUserId: 7,
+      action: 'list',
+      input: {},
+    }).expect(200);
+    expect(declarations.body.map((declaration: any) => declaration.studentId).sort()).toEqual([20, 21]);
+  });
+
+  it('rejects an asserted school that does not match the selected child and unlinked children', async () => {
+    mockState.schools.push({ id: 2 });
+    mockState.parents.push({ id: 3, userId: 7, studentId: 21, schoolId: 2 });
+    mockState.students.push({ id: 21, schoolId: 2, classId: 20, firstName: 'Binta', lastName: 'Test', parentId: 3, isActive: true });
+    mockState.userSchools.push({ userId: 7, schoolId: 2, role: 'parent', isActive: true });
+
+    await postInternalDeclaration({
+      parentUserId: 7,
+      action: 'create',
+      input: { ...declarationInput(21), schoolId: 1 },
+    }).expect(403);
+    await postInternalDeclaration({
+      parentUserId: 7,
+      action: 'create',
+      input: declarationInput(999),
+    }).expect(403);
     expect(mockState.declarations).toHaveLength(0);
   });
 

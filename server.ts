@@ -147,8 +147,9 @@ import {
 } from './src/lib/evaluationNotificationDelivery.ts';
 import {
   buildGroupedPushNotificationPayload,
-  isGroupedPushDeliveryEnabled,
+  getInternalNotificationDispatchOutcome,
   processGroupedPushOutboxBatch,
+  resolveMobileApiBaseUrl,
   type ClaimedGroupedPushDelivery,
   type GroupedPushDeliveryRepository,
   type GroupedPushDeliveryTransport,
@@ -481,6 +482,16 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
         eq(notificationDeliveryOutbox.attemptCount, attemptCount),
       ));
     },
+    markAwaitingConfirmation: async (id, attemptCount, detail, updatedAt) => {
+      await db.update(notificationDeliveryOutbox).set({
+        lastError: detail,
+        updatedAt,
+      }).where(and(
+        eq(notificationDeliveryOutbox.id, id),
+        eq(notificationDeliveryOutbox.status, 'sending'),
+        eq(notificationDeliveryOutbox.attemptCount, attemptCount),
+      ));
+    },
     markUncertain: async (id, attemptCount, error, updatedAt) => {
       await db.update(notificationDeliveryOutbox).set({
         lastError: error,
@@ -496,9 +507,14 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
 
 const groupedPushDeliveryTransport: GroupedPushDeliveryTransport = {
   send: async (delivery, idempotencyKey) => {
-    const apiBaseUrl = process.env.API_URL?.trim().replace(/\/+$/, '');
-    if (!apiBaseUrl) {
-      return { outcome: 'permanent_failure', error: 'API_URL is not configured for push delivery.' };
+    let apiBaseUrl: string;
+    try {
+      apiBaseUrl = resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV);
+    } catch (error) {
+      return {
+        outcome: 'permanent_failure',
+        error: error instanceof Error ? error.message : 'Mobile API URL is not configured.',
+      };
     }
 
     const payload = buildGroupedPushNotificationPayload(delivery, idempotencyKey);
@@ -515,7 +531,7 @@ const groupedPushDeliveryTransport: GroupedPushDeliveryTransport = {
 
     let response: Response;
     try {
-      response = await fetch(`${apiBaseUrl}/api/internal/evaluation-notification`, {
+      response = await fetch(`${apiBaseUrl}/api/internal/absence-notification`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -533,30 +549,12 @@ const groupedPushDeliveryTransport: GroupedPushDeliveryTransport = {
 
     if (!response.ok) {
       const error = `Push API returned HTTP ${response.status}.`;
-      return response.status === 429 || response.status >= 500
-        ? { outcome: 'retryable_failure', error }
-        : { outcome: 'permanent_failure', error };
+      if (response.status === 429) return { outcome: 'retryable_failure', error };
+      if (response.status >= 500) throw new Error(`${error} Dispatch outcome is unknown.`);
+      return { outcome: 'permanent_failure', error };
     }
 
-    const result = await response.json() as {
-      success?: boolean;
-      delivery?: { outcome?: string; error?: string };
-    };
-    if (result.success !== true || !result.delivery) {
-      throw new Error('Push API response did not contain a provider delivery result.');
-    }
-    if (
-      result.delivery.outcome !== 'sent'
-      && result.delivery.outcome !== 'retryable_failure'
-      && result.delivery.outcome !== 'permanent_failure'
-      && result.delivery.outcome !== 'no_subscription'
-    ) {
-      throw new Error('Push API returned an unrecognized provider delivery result.');
-    }
-    return {
-      outcome: result.delivery.outcome,
-      error: result.delivery.error,
-    };
+    return getInternalNotificationDispatchOutcome(await response.json());
   },
 };
 
@@ -1478,7 +1476,7 @@ function signInternalPayload(payload: any): { signature: string; timestamp: stri
 function sendInternalEvaluationNotification(payload: object) {
   return sendEvaluationNotification(
     payload,
-    process.env.API_URL || 'http://localhost:3001',
+    resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV),
     signInternalPayload,
     fetch,
   );
@@ -1529,6 +1527,73 @@ function verifyInternalJustificationAuth(req: any, res: any, next: any) {
     return res.status(401).json({ error: 'Invalid internal authentication' });
   }
 
+  return next();
+}
+
+function verifyInternalSignedPayload(req: any, res: any, payload: object): boolean {
+  const signature = req.headers['x-internal-signature'];
+  const timestamp = req.headers['x-internal-timestamp'];
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!internalSecret || !internalSecret.trim() || typeof signature !== 'string' || typeof timestamp !== 'string') {
+    res.status(401).json({ error: 'Invalid internal authentication' });
+    return false;
+  }
+
+  const requestTime = Number(timestamp);
+  if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
+    res.status(401).json({ error: 'Expired internal authentication' });
+    return false;
+  }
+
+  const hmac = crypto.createHmac('sha256', internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  const expectedSignature = hmac.digest('hex');
+  if (signature.length !== expectedSignature.length
+    || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    res.status(401).json({ error: 'Invalid internal authentication' });
+    return false;
+  }
+  return true;
+}
+
+function verifyInternalLateArrivalJustificationAuth(req: any, res: any, next: any) {
+  const files = Array.isArray(req.files) ? req.files : [];
+  let submittedFiles: any[];
+  try {
+    submittedFiles = JSON.parse(String(req.body?.filesMetadata ?? ''));
+  } catch {
+    return res.status(401).json({ error: 'Invalid internal payload' });
+  }
+  if (!Array.isArray(submittedFiles) || submittedFiles.length !== files.length) {
+    return res.status(401).json({ error: 'Invalid internal payload' });
+  }
+
+  const normalizedFiles = submittedFiles.map((file) => ({
+    fileName: String(file?.fileName ?? ''),
+    fileMimeType: String(file?.fileMimeType ?? ''),
+    fileSize: String(file?.fileSize ?? ''),
+    fileSha256: String(file?.fileSha256 ?? ''),
+  }));
+  for (const [index, file] of files.entries()) {
+    const metadata = normalizedFiles[index];
+    const actualHash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+    if (
+      metadata.fileName !== file.originalname
+      || metadata.fileMimeType !== file.mimetype
+      || metadata.fileSize !== String(file.size)
+      || metadata.fileSha256 !== actualHash
+    ) {
+      return res.status(401).json({ error: 'Invalid internal payload' });
+    }
+  }
+
+  const payload = {
+    lateArrivalId: String(req.body?.lateArrivalId ?? ''),
+    parentId: String(req.body?.parentId ?? ''),
+    justificationReason: String(req.body?.justificationReason ?? ''),
+    files: normalizedFiles,
+  };
+  if (!verifyInternalSignedPayload(req, res, payload)) return;
   return next();
 }
 
@@ -1777,6 +1842,23 @@ export async function createApp() {
       if (err) {
         return res.status(400).json({ error: err.message || 'Invalid file upload' });
       }
+      return next();
+    });
+  };
+
+  const internalLateArrivalJustificationUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 5 },
+    fileFilter: (_req, file, cb) => {
+      if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.mimetype)) {
+        return cb(new Error('Unsupported file type'));
+      }
+      cb(null, true);
+    },
+  });
+  const handleInternalLateArrivalJustificationUpload = (req: any, res: any, next: any) => {
+    internalLateArrivalJustificationUpload.array('files', 5)(req, res, (err: any) => {
+      if (err) return res.status(400).json({ error: err.message || 'Invalid file upload' });
       return next();
     });
   };
@@ -2144,7 +2226,7 @@ export async function createApp() {
     isApprovedClassForSchool,
     dispatchPaymentNotification: async (payload) => {
       const { signature, timestamp } = signInternalPayload(payload);
-      const response = await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/info-notification`, {
+      const response = await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/info-notification`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -10173,7 +10255,7 @@ export async function createApp() {
         dedupeKey: `absence-declaration-${String(metadata.declarationId)}-${String(metadata.status || 'received')}-${Date.now()}`,
       };
       const { signature, timestamp } = signInternalPayload(payload);
-      await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+      await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -10482,12 +10564,82 @@ export async function createApp() {
     try {
       const parentUserId = Number(req.body?.parentUserId);
       if (!Number.isInteger(parentUserId) || parentUserId <= 0) return res.status(400).json({ error: 'Invalid parent identity' });
-      const schoolId = Number(req.body?.schoolId);
-      if (!Number.isInteger(schoolId) || schoolId <= 0) return res.status(400).json({ error: 'Valid schoolId is required' });
-      const parentMembership = await getActiveUserSchoolMembership(parentUserId, schoolId, 'parent');
-      if (!parentMembership) return res.status(403).json({ error: 'Active parent membership required' });
       const action = String(req.body?.action || '');
-      const result: any = await runParentDeclarationAction(parentUserId, schoolId, action, req.body?.input || {});
+      const input = req.body?.input && typeof req.body.input === 'object' && !Array.isArray(req.body.input)
+        ? req.body.input
+        : {};
+      const suppliedSchoolId = req.body?.schoolId ?? input.schoolId;
+
+      if (action === 'list') {
+        const [parentProfiles, parentMemberships] = await Promise.all([
+          db.select({ schoolId: parents.schoolId }).from(parents).where(eq(parents.userId, parentUserId)),
+          db.select({ schoolId: userSchools.schoolId }).from(userSchools).where(and(
+            eq(userSchools.userId, parentUserId),
+            eq(userSchools.role, 'parent'),
+            sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+          )),
+        ]);
+        const membershipSchoolIds = new Set(parentMemberships.map((membership) => membership.schoolId));
+        let schoolIds = Array.from(new Set(parentProfiles
+          .map((profile) => profile.schoolId)
+          .filter((schoolId): schoolId is number => schoolId != null && membershipSchoolIds.has(schoolId))));
+
+        if (suppliedSchoolId != null) {
+          const requestedSchoolId = Number(suppliedSchoolId);
+          if (!Number.isInteger(requestedSchoolId) || requestedSchoolId <= 0 || !schoolIds.includes(requestedSchoolId)) {
+            return res.status(403).json({ error: 'Active parent membership required' });
+          }
+          schoolIds = [requestedSchoolId];
+        }
+
+        const results = await Promise.all(schoolIds.map((schoolId) => (
+          runParentDeclarationAction(parentUserId, schoolId, 'list', {})
+        )));
+        const failedResult = results.find((result) => result.status !== 200);
+        if (failedResult) return res.status(failedResult.status).json(failedResult.body);
+        const declarations = results.flatMap((result) => result.body)
+          .sort((left, right) => right.date.localeCompare(left.date));
+        return res.json(declarations);
+      }
+
+      let schoolId: number;
+      if (action === 'create' || action === 'update') {
+        const studentId = Number(input.studentId);
+        if (!Number.isInteger(studentId) || studentId <= 0) {
+          return res.status(400).json({ error: 'Invalid absence declaration details' });
+        }
+        const [student] = await db.select({ schoolId: students.schoolId })
+          .from(students).where(eq(students.id, studentId));
+        if (!student || student.schoolId == null) {
+          return res.status(403).json({ error: 'Cannot declare an absence for a student you do not represent' });
+        }
+        schoolId = student.schoolId;
+      } else if (action === 'cancel') {
+        const declarationId = Number(input.id);
+        if (!Number.isInteger(declarationId) || declarationId <= 0) {
+          return res.status(400).json({ error: 'Invalid declaration id' });
+        }
+        const [declaration] = await db.select({ studentId: absenceDeclarations.studentId })
+          .from(absenceDeclarations).where(eq(absenceDeclarations.id, declarationId));
+        if (!declaration) return res.status(404).json({ error: 'Declaration not found' });
+        const [student] = await db.select({ schoolId: students.schoolId })
+          .from(students).where(eq(students.id, declaration.studentId));
+        if (!student || student.schoolId == null) {
+          return res.status(403).json({ error: 'Declaration student is no longer currently linked to this parent' });
+        }
+        schoolId = student.schoolId;
+      } else {
+        return res.status(400).json({ error: 'Unsupported declaration action' });
+      }
+
+      if (suppliedSchoolId != null) {
+        const assertedSchoolId = Number(suppliedSchoolId);
+        if (!Number.isInteger(assertedSchoolId) || assertedSchoolId !== schoolId) {
+          return res.status(403).json({ error: 'School context does not match the selected child' });
+        }
+      }
+
+      const result: any = await runParentDeclarationAction(parentUserId, schoolId, action, input);
       if (action === 'create' && result.status === 201) {
         await notifyAbsenceDeclarationParent(parentUserId, 'Déclaration d’absence reçue', 'Votre déclaration d’absence a été transmise à l’établissement.', {
           declarationId: result.body.id,
@@ -11023,7 +11175,7 @@ export async function createApp() {
           };
 
           const { signature, timestamp } = signInternalPayload(notificationPayload);
-          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+          await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -11228,6 +11380,66 @@ export async function createApp() {
     }));
   };
 
+  const createLateArrivalJustificationSubmission = async (
+    lateArrivalId: number,
+    reason: string,
+    actor: ResolvedActor,
+    context: LateArrivalJustificationContext,
+    uploadedFiles: any[],
+  ) => db.transaction(async (tx) => {
+    const [lockedLateArrival] = await tx.select().from(lateArrivals)
+      .where(eq(lateArrivals.id, lateArrivalId))
+      .for('update');
+    if (!lockedLateArrival) return { kind: 'not_found' as const };
+
+    const [existing] = await tx.select().from(lateArrivalJustifications)
+      .where(eq(lateArrivalJustifications.lateArrivalId, lateArrivalId))
+      .for('update');
+    if (existing) return { kind: 'already_submitted' as const };
+
+    const [justification] = await tx.insert(lateArrivalJustifications).values({
+      lateArrivalId,
+      submittedBy: actor.id ?? null,
+      justificationReason: reason,
+      status: 'PENDING',
+      revision: 1,
+    }).returning();
+    await tx.insert(lateArrivalJustificationEvents).values({
+      justificationId: justification.id,
+      revision: 1,
+      action: 'SUBMITTED',
+      fromStatus: null,
+      toStatus: 'PENDING',
+      reason,
+      actorUserId: actor.id ?? null,
+      actorRole: actor.role,
+      actorEmail: actor.email ?? null,
+      actorName: actor.name ?? null,
+    });
+    if (uploadedFiles.length > 0) {
+      await tx.insert(lateArrivalJustificationFiles).values(uploadedFiles.map((file: any) => ({
+        justificationId: justification.id,
+        fileName: String(file.originalname || 'justificatif'),
+        filePath: String(file.storageReference || file.filename),
+        mimeType: String(file.mimetype || 'application/octet-stream'),
+        fileSize: Number(file.size || 0),
+        uploadedBy: actor.id ?? null,
+      })));
+    }
+    await tx.insert(auditEvents).values({
+      actorUserId: actor.id ?? null,
+      actorRole: actor.role,
+      actorEmail: actor.email ?? null,
+      actorName: actor.name ?? null,
+      action: 'submit_late_arrival_justification',
+      resourceType: 'late_arrival_justification',
+      resourceId: lateArrivalId,
+      schoolId: context.student.schoolId ?? null,
+      description: 'Parent submitted a late-arrival justification (revision 1)',
+    });
+    return { kind: 'created' as const, justification };
+  });
+
   app.post(
     '/api/late-arrivals/:id/justification',
     requireAuth,
@@ -11258,59 +11470,13 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot justify a late arrival for a student you do not represent' });
         }
 
-        const result = await db.transaction(async (tx) => {
-          const [lockedLateArrival] = await tx.select().from(lateArrivals)
-            .where(eq(lateArrivals.id, lateArrivalId))
-            .for('update');
-          if (!lockedLateArrival) return { kind: 'not_found' as const };
-
-          const [existing] = await tx.select().from(lateArrivalJustifications)
-            .where(eq(lateArrivalJustifications.lateArrivalId, lateArrivalId))
-            .for('update');
-          if (existing) return { kind: 'already_submitted' as const };
-
-          const [justification] = await tx.insert(lateArrivalJustifications).values({
-            lateArrivalId,
-            submittedBy: actor.id ?? null,
-            justificationReason: reason,
-            status: 'PENDING',
-            revision: 1,
-          }).returning();
-          await tx.insert(lateArrivalJustificationEvents).values({
-            justificationId: justification.id,
-            revision: 1,
-            action: 'SUBMITTED',
-            fromStatus: null,
-            toStatus: 'PENDING',
-            reason,
-            actorUserId: actor.id ?? null,
-            actorRole: actor.role,
-            actorEmail: actor.email ?? null,
-            actorName: actor.name ?? null,
-          });
-          if (uploadedFiles.length > 0) {
-            await tx.insert(lateArrivalJustificationFiles).values(uploadedFiles.map((file: any) => ({
-              justificationId: justification.id,
-              fileName: String(file.originalname || 'justificatif'),
-              filePath: String(file.storageReference || file.filename),
-              mimeType: String(file.mimetype || 'application/octet-stream'),
-              fileSize: Number(file.size || 0),
-              uploadedBy: actor.id ?? null,
-            })));
-          }
-          await tx.insert(auditEvents).values({
-            actorUserId: actor.id ?? null,
-            actorRole: actor.role,
-            actorEmail: actor.email ?? null,
-            actorName: actor.name ?? null,
-            action: 'submit_late_arrival_justification',
-            resourceType: 'late_arrival_justification',
-            resourceId: lateArrivalId,
-            schoolId: context.student.schoolId ?? null,
-            description: `Parent submitted a late-arrival justification (revision 1)`,
-          });
-          return { kind: 'created' as const, justification };
-        });
+        const result = await createLateArrivalJustificationSubmission(
+          lateArrivalId,
+          reason,
+          actor,
+          context,
+          uploadedFiles,
+        );
 
         if (result.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
         if (result.kind === 'already_submitted') {
@@ -12016,7 +12182,7 @@ export async function createApp() {
           type: 'absence',
         });
 
-        const notificationUrl = `${process.env.API_URL || "http://localhost:3001"}/api/internal/absence-notification`;
+        const notificationUrl = `${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`;
         const notificationPayload = {
           parentId: parentRecord.userId,
           title: `Nouvelle absence pour ${student.firstName}`,
@@ -12283,7 +12449,7 @@ export async function createApp() {
           };
 
           const { signature, timestamp } = signInternalPayload(notificationPayload);
-          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+          await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -12451,7 +12617,7 @@ export async function createApp() {
             dedupeKey: `absence-justification-reexamination-${result.absence.id}`,
           };
           const { signature, timestamp } = signInternalPayload(notificationPayload);
-          await fetch(`${process.env.API_URL || 'http://localhost:3001'}/api/internal/absence-notification`, {
+          await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -12475,6 +12641,158 @@ export async function createApp() {
       }
       console.error('Failed to reexamine absence justification:', error);
       return res.status(500).json({ error: 'Failed to reexamine absence justification' });
+    }
+  });
+
+  app.post(
+    '/api/internal/late-arrival-justification',
+    handleInternalLateArrivalJustificationUpload,
+    verifyInternalLateArrivalJustificationAuth,
+    async (req: any, res) => {
+      const lateArrivalId = Number(req.body?.lateArrivalId);
+      const parentId = Number(req.body?.parentId);
+      const reason = typeof req.body?.justificationReason === 'string'
+        ? req.body.justificationReason.trim()
+        : '';
+      const uploadedFiles = Array.isArray(req.files) ? req.files as any[] : [];
+      if (!Number.isInteger(lateArrivalId) || lateArrivalId <= 0
+        || !Number.isInteger(parentId) || parentId <= 0
+        || !reason || reason.length > 2000) {
+        return res.status(400).json({ error: 'Invalid internal late-arrival justification request' });
+      }
+
+      let persistedFiles: any[] = [];
+      let filesCommitted = false;
+      try {
+        const [parent] = await db.select().from(users).where(and(
+          eq(users.id, parentId),
+          eq(users.isDeleted, false),
+        ));
+        if (!parent || parent.role !== 'parent') {
+          return res.status(403).json({ error: 'Invalid parent identity' });
+        }
+
+        const context = await loadLateArrivalJustificationContext(lateArrivalId);
+        if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+        const actor: ResolvedActor = {
+          id: parent.id,
+          uid: parent.uid,
+          email: parent.email,
+          name: parent.name,
+          role: 'parent',
+          schoolId: context.student.schoolId,
+        };
+        const canAccess = await createLateArrivalJustificationAccessChecker(actor);
+        if (!await canAccess(context)) {
+          return res.status(403).json({ error: 'Cannot justify a late arrival for a student you do not represent' });
+        }
+
+        for (const file of uploadedFiles) {
+          const persisted = await persistUploadedFile({
+            originalname: file.originalname,
+            filename: file.originalname,
+            buffer: file.buffer,
+            mimetype: file.mimetype,
+            size: file.size,
+          }, 'late-arrival-justifications');
+          persistedFiles.push({
+            ...file,
+            filename: persisted.storedReference,
+            storageReference: persisted.storedReference,
+            path: persisted.localPath || file.path,
+          });
+        }
+
+        const result = await createLateArrivalJustificationSubmission(
+          lateArrivalId,
+          reason,
+          actor,
+          context,
+          persistedFiles,
+        );
+        if (result.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
+        if (result.kind === 'already_submitted') {
+          return res.status(409).json({ error: 'A justification has already been submitted for this late arrival' });
+        }
+
+        filesCommitted = true;
+        return res.status(201).json({
+          ...result.justification,
+          files: persistedFiles.map((file, index) => ({
+            fileName: file.originalname,
+            fileSize: file.size,
+            mimeType: file.mimetype,
+            index,
+          })),
+        });
+      } catch (error) {
+        console.error('Failed to receive internal late-arrival justification:', error);
+        return res.status(500).json({ error: 'Failed to submit late-arrival justification' });
+      } finally {
+        if (!filesCommitted) await cleanupLateArrivalUploads(persistedFiles);
+      }
+    },
+  );
+
+  app.post('/api/internal/late-arrival-justification-file', async (req: any, res) => {
+    const payload = {
+      lateArrivalId: String(req.body?.lateArrivalId ?? ''),
+      parentId: String(req.body?.parentId ?? ''),
+      fileId: String(req.body?.fileId ?? ''),
+    };
+    if (!verifyInternalSignedPayload(req, res, payload)) return;
+
+    const lateArrivalId = Number(payload.lateArrivalId);
+    const parentId = Number(payload.parentId);
+    const fileId = Number(payload.fileId);
+    if (![lateArrivalId, parentId, fileId].every((id) => Number.isInteger(id) && id > 0)) {
+      return res.status(400).json({ error: 'Invalid internal late-arrival file request' });
+    }
+
+    try {
+      const [parent] = await db.select().from(users).where(and(
+        eq(users.id, parentId),
+        eq(users.isDeleted, false),
+      ));
+      if (!parent || parent.role !== 'parent') return res.status(403).json({ error: 'Invalid parent identity' });
+
+      const context = await loadLateArrivalJustificationContext(lateArrivalId);
+      if (!context) return res.status(404).json({ error: 'Late arrival not found' });
+      const actor: ResolvedActor = {
+        id: parent.id,
+        uid: parent.uid,
+        email: parent.email,
+        name: parent.name,
+        role: 'parent',
+        schoolId: context.student.schoolId,
+      };
+      const canAccess = await createLateArrivalJustificationAccessChecker(actor, true);
+      if (!await canAccess(context)) {
+        return res.status(403).json({ error: 'Not authorized to download this justification file' });
+      }
+
+      const [justification] = await db.select({ id: lateArrivalJustifications.id })
+        .from(lateArrivalJustifications)
+        .where(eq(lateArrivalJustifications.lateArrivalId, lateArrivalId));
+      if (!justification) return res.status(404).json({ error: 'Late-arrival justification not found' });
+      const [file] = await db.select().from(lateArrivalJustificationFiles).where(and(
+        eq(lateArrivalJustificationFiles.id, fileId),
+        eq(lateArrivalJustificationFiles.justificationId, justification.id),
+      ));
+      if (!file) return res.status(404).json({ error: 'Justification file not found' });
+
+      const sent = await streamStoredFileToResponse(
+        file.filePath,
+        'late-arrival-justifications',
+        file.fileName,
+        file.mimeType,
+        res as any,
+      );
+      if (!sent) return res.status(404).json({ error: 'Justification file is unavailable' });
+      return undefined;
+    } catch (error) {
+      console.error('Failed to relay late-arrival justification file:', error);
+      return res.status(500).json({ error: 'Failed to download late-arrival justification file' });
     }
   });
 
@@ -14294,16 +14612,7 @@ if (uniqueParentIds.length > 0) {
       },
       dedupeKey: `evaluation-${createdEvaluation.id}-${parentUserId}`,
     };
-    const { signature, timestamp } = signInternalPayload(evaluationNotificationPayload);
-    await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/evaluation-notification`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Signature": signature,
-        "X-Internal-Timestamp": timestamp,
-      },
-      body: JSON.stringify(evaluationNotificationPayload),
-    });
+    await sendInternalEvaluationNotification(evaluationNotificationPayload);
   } catch {
     console.error('Evaluation notification delivery failed');
   }
@@ -14656,7 +14965,7 @@ if (uniqueParentIds.length > 0) {
               dedupeKey: getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0),
             };
             const { signature, timestamp } = signInternalPayload(gradeNotificationPayload);
-            const response = await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/grade-notification`, {
+            const response = await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/grade-notification`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -15571,7 +15880,7 @@ if (uniqueParentIds.length > 0) {
             dedupeKey: `info-${Date.now()}-${id}`,
           };
           const { signature, timestamp } = signInternalPayload(infoNotificationPayload);
-          const pushDispatchResponse = await fetch(`${process.env.API_URL || "http://localhost:3001"}/api/internal/info-notification`, {
+          const pushDispatchResponse = await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/info-notification`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -15734,33 +16043,31 @@ export async function startServer() {
     }
     console.log(`Server starting on http://localhost:${PORT}`);
 
-    if (isGroupedPushDeliveryEnabled(process.env)) {
-      void (async () => {
-        try {
-          await db.select({ id: notificationDeliveryOutbox.id })
-            .from(notificationDeliveryOutbox)
-            .limit(1);
-        } catch (error) {
-          console.error('Grouped push worker disabled: outbox schema is unavailable.', error);
-          return;
-        }
+    void (async () => {
+      try {
+        await db.select({ id: notificationDeliveryOutbox.id })
+          .from(notificationDeliveryOutbox)
+          .limit(1);
+      } catch (error) {
+        console.error('Late-arrival justification push worker disabled: outbox schema is unavailable.', error);
+        return;
+      }
 
-        const runBatch = async () => {
-          try {
-            const result = await processGroupedPushOutboxBatch(
-              createGroupedPushDeliveryRepository(),
-              groupedPushDeliveryTransport,
-            );
-            if (result.claimed > 0) console.info('Grouped push outbox batch completed:', result);
-          } catch (error) {
-            console.error('Grouped push outbox batch failed:', error);
-          }
-        };
-        void runBatch();
-        const timer = setInterval(() => { void runBatch(); }, 15_000);
-        timer.unref();
-      })();
-    }
+      const runBatch = async () => {
+        try {
+          const result = await processGroupedPushOutboxBatch(
+            createGroupedPushDeliveryRepository(),
+            groupedPushDeliveryTransport,
+          );
+          if (result.claimed > 0) console.info('Late-arrival justification push outbox batch completed:', result);
+        } catch (error) {
+          console.error('Late-arrival justification push outbox batch failed:', error);
+        }
+      };
+      void runBatch();
+      const timer = setInterval(() => { void runBatch(); }, 15_000);
+      timer.unref();
+    })();
   });
 }
 

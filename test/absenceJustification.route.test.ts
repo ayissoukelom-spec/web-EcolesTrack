@@ -32,6 +32,7 @@ const mockState = {
   auditEvents: [] as any[],
   notifications: [] as any[],
   rowLocks: [] as string[],
+  failAbsenceUpdate: false,
 };
 
 const createSelectBuilder = () => {
@@ -107,6 +108,9 @@ const mockDb = {
     set: (values: Record<string, any>) => ({
       where: (condition: any) => ({
         returning: async () => {
+          if (table === absences && mockState.failAbsenceUpdate) {
+            throw new Error('Simulated absence persistence failure');
+          }
           const query = condition ? new PgDialect().sqlToQuery(condition) : { sql: '', params: [] };
           const conditions = Array.from(query.sql.matchAll(/"[^"]+"\."([^"]+)"\s*=\s*\$(\d+)/g), (match: any) => ({
             key: match[1].replace(/_([a-z])/g, (_: string, letter: string) => letter.toUpperCase()),
@@ -239,6 +243,7 @@ describe('absence justification routes', () => {
     mockState.auditEvents = [];
     mockState.notifications = [];
     mockState.rowLocks = [];
+    mockState.failAbsenceUpdate = false;
     vi.mocked(globalThis.fetch).mockClear();
   });
 
@@ -414,6 +419,29 @@ describe('absence justification routes', () => {
       metadata: { absenceId: 30, status: 'APPROVED', reexamined: true },
       dedupeKey: 'absence-justification-reexamination-30',
     });
+  });
+
+  it('does not notify the parent when reexamination approval persistence fails', async () => {
+    mockState.absence = {
+      ...mockState.absence,
+      justificationStatus: 'REJECTED',
+      rejectionReason: 'Document illisible',
+      isJustified: false,
+    };
+    mockState.failAbsenceUpdate = true;
+    vi.mocked(globalThis.fetch).mockClear();
+
+    await request(app)
+      .put('/api/absences/30/justification/reexamine')
+      .set('x-test-role', 'school_admin')
+      .send({})
+      .expect(500);
+
+    expect(mockState.absence.justificationStatus).toBe('REJECTED');
+    expect(mockState.absence.isJustified).toBe(false);
+    expect(mockState.auditEvents).toHaveLength(0);
+    expect(mockState.notifications).toHaveLength(0);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('sends the App reexamination request through apiFetch to the registered route', async () => {

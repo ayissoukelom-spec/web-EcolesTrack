@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildGroupedPushNotificationPayload,
+  getInternalNotificationDispatchOutcome,
   getGroupedPushDeliveryIdempotencyKey,
   groupedPushRetryDelayMs,
-  isGroupedPushDeliveryEnabled,
   processGroupedPushOutboxBatch,
+  resolveMobileApiBaseUrl,
   type ClaimedGroupedPushDelivery,
   type GroupedPushDeliveryRepository,
   type GroupedPushDeliveryTransport,
@@ -62,6 +63,10 @@ class FakeRepository implements GroupedPushDeliveryRepository {
     }
   }
 
+  async markAwaitingConfirmation(_id: number, attemptCount: number, detail: string) {
+    if (this.status === 'sending' && this.attemptCount === attemptCount) this.lastError = detail;
+  }
+
   async markUncertain(_id: number, attemptCount: number, error: string) {
     if (this.status === 'sending' && this.attemptCount === attemptCount) this.lastError = error;
   }
@@ -103,10 +108,9 @@ describe('grouped push outbox processor', () => {
       parentId: '7',
       title: 'Nouveau programme',
       message: 'Programme annoncé',
-      category: 'evaluation',
-      metadata: { target: 'absence', notificationId: 20, publicationId: 20 },
+      category: 'absence',
+      metadata: { target: 'absence', notificationId: 20 },
       dedupeKey: 'late-arrival-justification-42-revision-3',
-      groupedDelivery: true,
     });
   });
 
@@ -132,13 +136,65 @@ describe('grouped push outbox processor', () => {
     expect(repository.status).toBe('failed');
   });
 
-  it('remains disabled unless both grouped publication and push flags are explicitly enabled', () => {
-    expect(isGroupedPushDeliveryEnabled({})).toBe(false);
-    expect(isGroupedPushDeliveryEnabled({ GROUPED_EVALUATION_PUBLICATIONS_ENABLED: 'true' })).toBe(false);
-    expect(isGroupedPushDeliveryEnabled({
-      GROUPED_EVALUATION_PUBLICATIONS_ENABLED: 'true',
-      GROUPED_EVALUATION_PUSH_ENABLED: 'true',
-    })).toBe(true);
+  it('accepts the response contract returned by the existing absence notification API', () => {
+    expect(getInternalNotificationDispatchOutcome({
+      success: true,
+      result: { success: true, channels: ['push'], jobs: ['queued-1'] },
+    })).toEqual({
+      outcome: 'queued',
+      error: 'Push API accepted job(s) queued-1; FCM completion was not reported.',
+    });
+
+    expect(getInternalNotificationDispatchOutcome({
+      success: true,
+      result: { success: true, channels: [], jobs: [] },
+    })).toMatchObject({ outcome: 'no_subscription' });
+  });
+
+  it('keeps accepted jobs unconfirmed and does not submit them a second time', async () => {
+    const repository = new FakeRepository();
+    const send = vi.fn(async () => ({
+      outcome: 'queued' as const,
+      error: 'API accepted job-1; awaiting FCM result',
+    }));
+
+    await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
+      claimed: 1,
+      queued: 1,
+      sent: 0,
+    });
+    expect(repository.status).toBe('sending');
+    expect(repository.lastError).toContain('awaiting FCM result');
+
+    await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
+      claimed: 0,
+      queued: 0,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the configured API URL and only defaults localhost in local or test mode', () => {
+    expect(resolveMobileApiBaseUrl(undefined, 'development')).toBe('http://localhost:3001');
+    expect(resolveMobileApiBaseUrl(undefined, 'test')).toBe('http://localhost:3001');
+    expect(resolveMobileApiBaseUrl('https://staging-api.example.test/', 'production'))
+      .toBe('https://staging-api.example.test');
+    expect(resolveMobileApiBaseUrl('https://production-api.example.test', 'production'))
+      .toBe('https://production-api.example.test');
+    expect(() => resolveMobileApiBaseUrl(undefined, 'production')).toThrow('API_URL must be configured');
+    expect(() => resolveMobileApiBaseUrl(undefined, 'staging')).toThrow('API_URL must be configured');
+    expect(() => resolveMobileApiBaseUrl('http://localhost:3001', 'production'))
+      .toThrow('API_URL cannot target localhost');
+    expect(() => resolveMobileApiBaseUrl('http://127.0.0.2:3001', 'production'))
+      .toThrow('API_URL cannot target localhost');
+    expect(() => getInternalNotificationDispatchOutcome({
+      success: true,
+      result: { success: true, channels: ['push'], jobs: [] },
+    })).toThrow('Push API reported a push channel without valid accepted job identifiers.');
+
+    expect(() => getInternalNotificationDispatchOutcome({
+      success: false,
+      result: { success: false, channels: [], jobs: [] },
+    })).toThrow('Push API did not accept the notification dispatch.');
   });
 
   it('marks sent only after the transport confirms provider success', async () => {
@@ -233,5 +289,17 @@ describe('grouped push outbox processor', () => {
 
     expect(repository.status).toBe('sending');
     expect(repository.lastError).toContain('Socket closed');
+  });
+
+  it('does not dispatch when a failed transaction produced no committed outbox row', async () => {
+    const repository = new FakeRepository();
+    vi.spyOn(repository, 'claimDue').mockResolvedValue([]);
+    const send = vi.fn(async () => ({ outcome: 'sent' as const }));
+
+    await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
+      claimed: 0,
+      sent: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 });

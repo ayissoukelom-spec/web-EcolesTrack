@@ -232,7 +232,7 @@ describe('GroupedEvaluationPublicationForm', () => {
     await screen.findByRole('alert');
     fireEvent.click(screen.getByRole('button', { name: /Vérifier et publier/i }));
 
-    await screen.findByText(/Programme enregistré : 1 évaluation créée/);
+    await screen.findByText('Programme enregistré : 1 évaluation créée.');
     expect(api.submit).toHaveBeenCalledTimes(2);
     const [firstRequest, firstKey] = api.submit.mock.calls[0];
     const [retryRequest, retryKey] = api.submit.mock.calls[1];
@@ -246,6 +246,6 @@ describe('GroupedEvaluationPublicationForm', () => {
     });
     expect(retryRequest).toEqual(firstRequest);
     expect(retryKey).toBe(firstKey);
-    expect(screen.getByText(/Push : en attente de traitement, non confirmé envoyé/)).toBeTruthy();
+    expect(screen.queryByText(/Notifications locales|Push :/)).toBeNull();
   });
 });

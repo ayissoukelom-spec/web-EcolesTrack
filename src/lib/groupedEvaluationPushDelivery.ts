@@ -1,4 +1,4 @@
-export type GroupedPushOutcome = 'sent' | 'retryable_failure' | 'permanent_failure' | 'no_subscription';
+export type GroupedPushOutcome = 'sent' | 'queued' | 'retryable_failure' | 'permanent_failure' | 'no_subscription';
 
 export interface GroupedPushDeliveryRecord {
   id: number;
@@ -20,6 +20,7 @@ export interface GroupedPushDeliveryRepository {
   markSent(id: number, attemptCount: number, sentAt: Date): Promise<void>;
   markFailed(id: number, attemptCount: number, error: string, updatedAt: Date): Promise<void>;
   scheduleRetry(id: number, attemptCount: number, error: string, nextAttemptAt: Date, updatedAt: Date): Promise<void>;
+  markAwaitingConfirmation(id: number, attemptCount: number, detail: string, updatedAt: Date): Promise<void>;
   markUncertain(id: number, attemptCount: number, error: string, updatedAt: Date): Promise<void>;
 }
 
@@ -42,19 +43,46 @@ export interface GroupedPushNotificationPayload {
   parentId: string;
   title: string;
   message: string;
-  category: 'evaluation';
+  category: 'absence';
   metadata: {
     target: 'absence';
     notificationId: number;
-    publicationId: number;
   };
   dedupeKey: string;
-  groupedDelivery: true;
 }
 
-export function isGroupedPushDeliveryEnabled(environment: Record<string, string | undefined>): boolean {
-  return environment.GROUPED_EVALUATION_PUBLICATIONS_ENABLED === 'true'
-    && environment.GROUPED_EVALUATION_PUSH_ENABLED === 'true';
+export function resolveMobileApiBaseUrl(apiUrl: string | undefined, nodeEnv: string | undefined): string {
+  const configuredUrl = apiUrl?.trim();
+  const baseUrl = configuredUrl || (
+    nodeEnv === 'development' || nodeEnv === 'test'
+      ? 'http://localhost:3001'
+      : ''
+  );
+  if (!baseUrl) {
+    throw new Error('API_URL must be configured outside local development.');
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(baseUrl);
+  } catch {
+    throw new Error('API_URL must be an absolute HTTP or HTTPS URL.');
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error('API_URL must use HTTP or HTTPS.');
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const isLoopback = hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === 'localhost.'
+    || hostname === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  if (isLoopback && nodeEnv !== 'development' && nodeEnv !== 'test') {
+    throw new Error('API_URL cannot target localhost outside local development.');
+  }
+
+  return baseUrl.replace(/\/+$/, '');
 }
 
 export function getGroupedPushDeliveryIdempotencyKey(delivery: GroupedPushDeliveryRecord): string | null {
@@ -71,14 +99,53 @@ export function buildGroupedPushNotificationPayload(
     parentId: String(delivery.userId),
     title: delivery.title,
     message: delivery.body,
-    category: 'evaluation',
+    category: 'absence',
     metadata: {
       target: 'absence',
       notificationId: delivery.notificationId,
-      publicationId: delivery.notificationId,
     },
     dedupeKey: idempotencyKey,
-    groupedDelivery: true,
+  };
+}
+
+export function getInternalNotificationDispatchOutcome(response: unknown): {
+  outcome: GroupedPushOutcome;
+  error?: string;
+} {
+  if (!response || typeof response !== 'object') {
+    throw new Error('Push API response did not contain a notification dispatch result.');
+  }
+
+  const body = response as {
+    success?: unknown;
+    result?: {
+      success?: unknown;
+      channels?: unknown;
+      jobs?: unknown;
+    } | null;
+  };
+  if (body.success !== true || body.result?.success !== true) {
+    throw new Error('Push API did not accept the notification dispatch.');
+  }
+
+  if (!Array.isArray(body.result.channels) || !Array.isArray(body.result.jobs)) {
+    throw new Error('Push API response did not contain valid channels and job identifiers.');
+  }
+  if (!body.result.channels.includes('push')) {
+    return {
+      outcome: 'no_subscription',
+      error: 'The parent has no enabled push channel or registered device.',
+    };
+  }
+
+  const jobIds = body.result.jobs.filter((job): job is string => typeof job === 'string');
+  if (jobIds.length === 0 || jobIds.length !== body.result.jobs.length) {
+    throw new Error('Push API reported a push channel without valid accepted job identifiers.');
+  }
+
+  return {
+    outcome: 'queued',
+    error: `Push API accepted job(s) ${jobIds.join(', ')}; FCM completion was not reported.`,
   };
 }
 
@@ -97,11 +164,11 @@ export async function processGroupedPushOutboxBatch(
   repository: GroupedPushDeliveryRepository,
   transport: GroupedPushDeliveryTransport,
   options: GroupedPushDeliveryOptions = {},
-): Promise<{ claimed: number; sent: number; retrying: number; failed: number; uncertain: number }> {
+): Promise<{ claimed: number; sent: number; queued: number; retrying: number; failed: number; uncertain: number }> {
   const now = options.now ?? (() => new Date());
   const maxAttempts = options.maxAttempts ?? 8;
   const claimed = await repository.claimDue(options.batchSize ?? 20, now());
-  const summary = { claimed: claimed.length, sent: 0, retrying: 0, failed: 0, uncertain: 0 };
+  const summary = { claimed: claimed.length, sent: 0, queued: 0, retrying: 0, failed: 0, uncertain: 0 };
 
   for (const delivery of claimed) {
     const idempotencyKey = getGroupedPushDeliveryIdempotencyKey(delivery);
@@ -133,6 +200,14 @@ export async function processGroupedPushOutboxBatch(
     if (result.outcome === 'sent') {
       await repository.markSent(delivery.id, delivery.attemptCount, now());
       summary.sent += 1;
+    } else if (result.outcome === 'queued') {
+      await repository.markAwaitingConfirmation(
+        delivery.id,
+        delivery.attemptCount,
+        errorText(result.error, 'Push API accepted the request; FCM completion is unconfirmed.'),
+        now(),
+      );
+      summary.queued += 1;
     } else if (result.outcome === 'permanent_failure' || result.outcome === 'no_subscription') {
       await repository.markFailed(
         delivery.id,

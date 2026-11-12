@@ -152,16 +152,6 @@ export default function GroupedEvaluationPublicationForm({
   const previewMessage = startDate && endDate
     ? formatGroupedEvaluationParentMessage({ kind, startDate, endDate, subjects: previewSubjects })
     : '';
-  const pushStatusLabel = success?.notification.push === 'pending'
-    ? 'en attente de traitement, non confirmé envoyé'
-    : success?.notification.push === 'sent'
-      ? 'confirmé envoyé'
-      : success?.notification.push === 'partial'
-        ? 'partiellement envoyé'
-        : success?.notification.push === 'failed'
-          ? 'échec de livraison'
-          : '';
-
   const toggleSelection = (selected: number[], value: number, update: (next: number[]) => void) => {
     update(selected.includes(value)
       ? selected.filter((item) => item !== value)
@@ -483,8 +473,6 @@ export default function GroupedEvaluationPublicationForm({
         {success && (
           <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
             Programme enregistré : {success.evaluationCount} évaluation{success.evaluationCount === 1 ? '' : 's'} créée{success.evaluationCount === 1 ? '' : 's'}.
-            {' '}Notifications locales : {success.notification.recipientCount}.
-            {' '}Push : {pushStatusLabel}.
           </div>
         )}
 
