@@ -396,6 +396,89 @@ describe('AbsenceView surveillant', () => {
     expect(screen.queryByText('Alan Justifie')).toBeNull();
   });
 
+  it('keeps the subject optional for a surveillant late arrival without changing ordinary absence validation', async () => {
+    const onAddAbsence = vi.fn();
+    const onAddLateArrival = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[]}
+        studentsList={[{ id: 1, classId: 10, firstName: 'Ada', lastName: 'Lovelace', schoolId: 7 } as any]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[{ id: 4, name: 'Mathématiques' }]}
+        onAddAbsence={onAddAbsence}
+        onAddLateArrival={onAddLateArrival}
+        onJustifyAbsence={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Signaler une absence/i }));
+    fireEvent.click(screen.getByRole('button', { name: /6e A/i }));
+    fireEvent.click(screen.getAllByText('6e A')[1]);
+
+    const studentFields = view.container.querySelectorAll('#box-absence-form select');
+    fireEvent.change(studentFields[0], { target: { value: 'Lovelace' } });
+    fireEvent.change(studentFields[1], { target: { value: 'Ada' } });
+    fireEvent.change(studentFields[2], { target: { value: '1' } });
+
+    const subjectRadio = screen.getByRole('radio', { name: 'Mathématiques' }) as HTMLInputElement;
+    expect(subjectRadio.required).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Retard$/i }));
+    expect(subjectRadio.required).toBe(false);
+    expect(screen.getByText('Matière (facultative)')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Heure prévue/), { target: { value: '08:00' } });
+    fireEvent.change(screen.getByLabelText(/Heure d'arrivée/), { target: { value: '08:15' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
+
+    await waitFor(() => expect(onAddLateArrival).toHaveBeenCalledWith(expect.objectContaining({
+      studentId: 1,
+      classId: 10,
+      expectedStartTime: '08:00',
+      arrivalTime: '08:15',
+    })));
+    expect(onAddLateArrival.mock.calls[0][0].subjectId).toBeUndefined();
+    expect(onAddAbsence).not.toHaveBeenCalled();
+  });
+
+  it('forwards an optional selected subject when a surveillant records multiple late arrivals', async () => {
+    const onAddLateArrival = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AbsenceView
+        userRole="surveillant"
+        absencesList={[]}
+        studentsList={[
+          { id: 1, classId: 10, firstName: 'Ada', lastName: 'Lovelace', schoolId: 7 } as any,
+          { id: 2, classId: 10, firstName: 'Grace', lastName: 'Hopper', schoolId: 7 } as any,
+        ]}
+        classesList={[{ id: 10, name: '6e A', schoolId: 7 } as any]}
+        schoolsList={[]}
+        teachersList={[]}
+        approvedSubjectsList={[{ id: 4, name: 'Mathématiques' }]}
+        onAddAbsence={vi.fn()}
+        onAddLateArrival={onAddLateArrival}
+        onJustifyAbsence={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Signaler une absence/i }));
+    fireEvent.click(screen.getByRole('button', { name: /6e A/i }));
+    fireEvent.click(screen.getAllByText('6e A')[1]);
+    fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    fireEvent.click(screen.getByRole('button', { name: /^Retard$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Mathématiques' }));
+    fireEvent.change(screen.getByLabelText(/Heure prévue/), { target: { value: '08:00' } });
+    fireEvent.change(screen.getByLabelText(/Heure d'arrivée/), { target: { value: '08:15' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enregistrer les retards sélectionnés/i }));
+
+    await waitFor(() => expect(onAddLateArrival).toHaveBeenCalledTimes(2));
+    expect(onAddLateArrival).toHaveBeenCalledWith(expect.objectContaining({ subjectId: 4 }));
+  });
+
   it('ordonne la liste par date, heure de début puis identifiant, y compris après filtrage', () => {
     const { container } = render(
       <AbsenceView

@@ -441,6 +441,8 @@ export default function AbsenceView({
       return classTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
     });
 
+  const isSurveillantLateArrival = userRole === 'surveillant' && attendanceStatus === 'late';
+
   const getTeacherSubjectError = () => {
     if (userRole !== 'teacher') return null;
     if (availableSubjects.length === 0) {
@@ -1321,7 +1323,10 @@ export default function AbsenceView({
             </div>
             <div className="md:col-span-4">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Matières concernées" required />
+                <RequiredLabel
+                  label={isSurveillantLateArrival ? 'Matière (facultative)' : 'Matières concernées'}
+                  required={!isSurveillantLateArrival}
+                />
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border border-slate-200 rounded-2xl bg-white max-h-56 overflow-y-auto">
                 {availableSubjects.length > 0 ? availableSubjects.map((subject) => (
@@ -1336,7 +1341,7 @@ export default function AbsenceView({
                         setNewAbsenceForm((prev) => ({ ...prev, subjectId }));
                         setLateArrivalError(null);
                       }}
-                      required={userRole !== 'teacher'}
+                      required={userRole !== 'teacher' && !isSurveillantLateArrival}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
                     <span>{subject.name}</span>

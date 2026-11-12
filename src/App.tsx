@@ -35,7 +35,7 @@ import {
 } from './lib/api.ts';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useAbsences } from './hooks/useAbsences.ts';
-import { useLateArrivals } from './hooks/useLateArrivals.ts';
+import { useLateArrivals, type LateArrivalInput } from './hooks/useLateArrivals.ts';
 import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import { reexamineAbsenceJustification } from './lib/absenceJustificationApi.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
@@ -1267,7 +1267,7 @@ export default function App() {
     await fetchAllData(false);
   };
 
-  const handleAddLateArrival = async (data: { studentId: number; classId: number; date: string; period: 'morning' | 'afternoon' | 'all_day'; expectedStartTime: string; arrivalTime: string; reason?: string | null }) => {
+  const handleAddLateArrival = async (data: LateArrivalInput) => {
     await addLateArrival(data);
     await fetchAllData(false);
   };

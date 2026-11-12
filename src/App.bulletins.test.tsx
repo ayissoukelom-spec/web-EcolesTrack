@@ -21,6 +21,7 @@ const mockSetSimulatedRole = vi.hoisted(() => vi.fn());
 const mockSetActiveSchoolId = vi.hoisted(() => vi.fn());
 const mockSetSimulatedUser = vi.hoisted(() => vi.fn());
 const mockUseRealNotesView = vi.hoisted(() => ({ value: false }));
+const mockExposeLateArrivalSubmit = vi.hoisted(() => ({ value: false }));
 const mockGroupedPublicationApi = vi.hoisted(() => ({
   getAvailability: vi.fn(),
   getOptions: vi.fn(),
@@ -112,15 +113,50 @@ vi.mock('./components/AdminView.tsx', () => ({
 }));
 vi.mock('./components/ErrorBoundary.tsx', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./components/AbsenceView.tsx', () => ({
-  default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence, onReexamineAbsenceJustification }: {
+  default: ({ absencesList = [], pendingReviewOnly, onReviewAbsence, onReexamineAbsenceJustification, onAddLateArrival }: {
     absencesList?: Array<{ id: number }>;
     pendingReviewOnly?: boolean;
     onReviewAbsence?: (id: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) => Promise<void>;
     onReexamineAbsenceJustification?: (id: number) => Promise<void>;
+    onAddLateArrival?: (data: {
+      studentId: number;
+      classId: number;
+      date: string;
+      period: 'morning';
+      subjectId: number;
+      expectedStartTime: string;
+      arrivalTime: string;
+    }) => Promise<void>;
   }) => (
     <>
       <div>{pendingReviewOnly ? 'PendingReviewView' : 'AbsenceView'}</div>
       <div data-testid="mock-absence-ids">{absencesList.map((absence) => absence.id).join(',')}</div>
+      {mockExposeLateArrivalSubmit.value && onAddLateArrival && (
+        <>
+          <button onClick={() => void onAddLateArrival({
+            studentId: 7,
+            classId: 2,
+            date: '2026-10-12',
+            period: 'morning',
+            subjectId: 5,
+            expectedStartTime: '08:00',
+            arrivalTime: '08:15',
+          })}>
+            Mock submit teacher late
+          </button>
+          <button onClick={() => void Promise.all([7, 8].map((studentId) => onAddLateArrival({
+            studentId,
+            classId: 2,
+            date: '2026-10-12',
+            period: 'morning',
+            subjectId: 5,
+            expectedStartTime: '08:00',
+            arrivalTime: '08:15',
+          })))}>
+            Mock submit grouped teacher lates
+          </button>
+        </>
+      )}
       {onReexamineAbsenceJustification && (
         <button onClick={() => onReexamineAbsenceJustification(30)}>Mock reexamine rejected</button>
       )}
@@ -194,6 +230,7 @@ describe('App navigation', () => {
     mockGroupedPublicationApi.getAvailability.mockReset();
     mockGroupedPublicationApi.getOptions.mockReset();
     mockGroupedPublicationApi.submit.mockReset();
+    mockExposeLateArrivalSubmit.value = false;
     mockSetSimulatedRole.mockReset();
     mockSetActiveSchoolId.mockReset();
     mockSetSimulatedUser.mockReset();
@@ -1483,6 +1520,65 @@ describe('App navigation', () => {
         '/api/absences/30/justification/reexamine',
         expect.objectContaining({ method: 'PUT', body: '{}' }),
       );
+    });
+  });
+
+  it('passes a teacher-selected late-arrival subject through App to the POST hook', async () => {
+    mockGetSimulatedRole.mockReturnValue('teacher');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-teacher',
+      email: 'teacher@example.test',
+      name: 'Teacher',
+      schoolId: 1,
+      role: 'teacher',
+      id: 41,
+    });
+    mockExposeLateArrivalSubmit.value = true;
+
+    render(<AuthProvider><App /></AuthProvider>);
+    fireEvent.click((await screen.findAllByTestId('sidebar-nav-absences'))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock submit teacher late' }));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/late-arrivals', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          studentId: 7,
+          classId: 2,
+          date: '2026-10-12',
+          period: 'morning',
+          subjectId: 5,
+          expectedStartTime: '08:00',
+          arrivalTime: '08:15',
+        }),
+      }));
+    });
+  });
+
+  it('passes the selected subject for each grouped teacher late-arrival POST', async () => {
+    mockGetSimulatedRole.mockReturnValue('teacher');
+    mockGetSimulatedUser.mockReturnValue({
+      uid: 'sim-teacher',
+      email: 'teacher@example.test',
+      name: 'Teacher',
+      schoolId: 1,
+      role: 'teacher',
+      id: 41,
+    });
+    mockExposeLateArrivalSubmit.value = true;
+
+    render(<AuthProvider><App /></AuthProvider>);
+    fireEvent.click((await screen.findAllByTestId('sidebar-nav-absences'))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock submit grouped teacher lates' }));
+
+    await waitFor(() => {
+      const lateArrivalPosts = mockApiFetch.mock.calls
+        .filter(([url, options]) => url === '/api/late-arrivals' && options?.method === 'POST')
+        .map(([, options]) => JSON.parse(String(options?.body)));
+      expect(lateArrivalPosts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ studentId: 7, subjectId: 5 }),
+        expect.objectContaining({ studentId: 8, subjectId: 5 }),
+      ]));
     });
   });
 });
