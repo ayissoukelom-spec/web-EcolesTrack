@@ -417,9 +417,6 @@ export default function AbsenceView({
       .replace(/\s+/g, ' ');
 
   const selectedClassIdNumber = newAbsenceForm.classId ? Number(newAbsenceForm.classId) : null;
-  const selectedClassIsHomeroom = userRole === 'teacher'
-    && selectedClassIdNumber != null
-    && teacherHomeroomClassIdSet.has(selectedClassIdNumber);
   const selectedClassTeachers = teachersList.filter((teacher) =>
     Array.isArray(teacher.classIds) && selectedClassIdNumber != null && teacher.classIds.includes(selectedClassIdNumber)
   );
@@ -444,6 +441,19 @@ export default function AbsenceView({
       return classTeacherSubjectNames.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subject.name));
     });
 
+  const getTeacherSubjectError = () => {
+    if (userRole !== 'teacher') return null;
+    if (availableSubjects.length === 0) {
+      return 'Aucune matière active n’est affectée à cet enseignant pour cette classe. Corrigez l’affectation pédagogique avant d’enregistrer.';
+    }
+
+    const selectedSubjectId = Number(newAbsenceForm.subjectId);
+    return Number.isInteger(selectedSubjectId)
+      && availableSubjects.some((subject) => Number(subject.id) === selectedSubjectId)
+      ? null
+      : 'Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.';
+  };
+
   const handleCreateAbsence = async (e: React.FormEvent) => {
     e.preventDefault();
     const student = studentsList.find((s) => s.id === parseInt(newAbsenceForm.studentId));
@@ -463,6 +473,12 @@ export default function AbsenceView({
         endTime: '09:30',
       });
       setLateReason('');
+      return;
+    }
+
+    const subjectError = getTeacherSubjectError();
+    if (subjectError) {
+      setLateArrivalError(subjectError);
       return;
     }
 
@@ -544,6 +560,11 @@ export default function AbsenceView({
 
   const handleCreateMultipleAbsences = async () => {
     if (selectedAbsentStudentIds.length === 0 || !newAbsenceForm.classId || isMultipleSaveInProgress) return;
+    const subjectError = getTeacherSubjectError();
+    if (subjectError) {
+      setLateArrivalError(subjectError);
+      return;
+    }
     const selectedSubjectId = newAbsenceForm.subjectId ? Number(newAbsenceForm.subjectId) : undefined;
 
     setIsMultipleSaveInProgress(true);
@@ -585,6 +606,11 @@ export default function AbsenceView({
     if (selectedAbsentStudentIds.length === 0 || !newAbsenceForm.classId || isMultipleSaveInProgress) return;
     if (!onAddLateArrival) {
       setLateArrivalError('Le module de retard n’est pas disponible.');
+      return;
+    }
+    const subjectError = getTeacherSubjectError();
+    if (subjectError) {
+      setLateArrivalError(subjectError);
       return;
     }
 
@@ -1159,6 +1185,7 @@ export default function AbsenceView({
                 onChange={(v) => {
                   setNewAbsenceForm((prev) => ({ ...prev, classId: v, lastName: '', firstName: '', studentId: '', subjectId: '' }));
                   setSelectedAbsentStudentIds([]);
+                  setLateArrivalError(null);
                 }}
                 placeholder="-- Choisissez une classe --"
                 required
@@ -1294,7 +1321,7 @@ export default function AbsenceView({
             </div>
             <div className="md:col-span-4">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                <RequiredLabel label="Matières concernées" required={!selectedClassIsHomeroom} />
+                <RequiredLabel label="Matières concernées" required />
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border border-slate-200 rounded-2xl bg-white max-h-56 overflow-y-auto">
                 {availableSubjects.length > 0 ? availableSubjects.map((subject) => (
@@ -1307,16 +1334,17 @@ export default function AbsenceView({
                       onChange={() => {
                         const subjectId = String(subject.id);
                         setNewAbsenceForm((prev) => ({ ...prev, subjectId }));
+                        setLateArrivalError(null);
                       }}
-                      required={!selectedClassIsHomeroom}
+                      required={userRole !== 'teacher'}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
                     <span>{subject.name}</span>
                   </label>
                 )) : (
                   <div className="text-slate-500 text-xs sm:text-sm">
-                    {selectedClassIsHomeroom
-                      ? 'Le titulaire peut enregistrer une présence pour sa classe sans attribuer de matière.'
+                    {userRole === 'teacher'
+                      ? 'Aucune matière active n’est affectée à cet enseignant pour cette classe. Corrigez l’affectation pédagogique avant d’enregistrer.'
                       : 'Aucune matière attribuée pour cette classe et cet enseignant.'}
                   </div>
                 )}

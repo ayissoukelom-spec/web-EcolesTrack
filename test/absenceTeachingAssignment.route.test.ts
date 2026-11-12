@@ -419,7 +419,7 @@ vi.mock('src/middleware/auth', async () => {
     expect(mockState.absences).toHaveLength(0);
   });
 
-  it('allows a homeroom teacher to read and record class attendance without a subject or teaching assignment', async () => {
+  it('preserves historical class-level absences but requires a subject for new teacher records', async () => {
     mockState.assignments = [];
     mockState.homeroomClassIds = [10];
     mockState.absences = [{
@@ -434,15 +434,20 @@ vi.mock('src/middleware/auth', async () => {
     const absenceList = await request(app).get('/api/absences').expect(200);
     expect(absenceList.body.map((absence: any) => absence.id)).toEqual([30]);
 
-    const absence = await request(app).post('/api/absences').send({
-      studentId: 20,
-      classId: 10,
-      date: '2026-10-01',
-      startTime: '09:00',
-      endTime: '10:00',
-    }).expect(201);
-    expect(absence.body).toMatchObject({ classId: 10, subjectId: null, teachingAssignmentId: null });
+    for (const subjectId of [undefined, null, '']) {
+      const response = await request(app).post('/api/absences').send({
+        studentId: 20,
+        classId: 10,
+        date: '2026-10-01',
+        ...(subjectId === undefined ? {} : { subjectId }),
+        startTime: '09:00',
+        endTime: '10:00',
+      }).expect(400);
+      expect(response.body.error).toBe('Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.');
+    }
+
     expect(mockState.assignments).toHaveLength(0);
+    expect(mockState.absences).toHaveLength(1);
   });
 
   it('limits homeroom reads to class-level absences, not another teacher subject entries', async () => {
@@ -687,21 +692,45 @@ vi.mock('src/middleware/auth', async () => {
     expect(mockState.assignments).toHaveLength(0);
   });
 
-  it('allows homeroom-only class attendance operations without granting subject access', async () => {
-    mockState.assignments = [];
-    mockState.teachingClassIds = [];
-    mockState.homeroomClassIds = [10];
-
+  it('persists the selected canonical assignment for a subject-specific late arrival', async () => {
     const response = await request(app).post('/api/late-arrivals').send({
       studentId: 20,
       classId: 10,
+      subjectId: 5,
       date: '2026-10-01',
       period: 'morning',
       expectedStartTime: '08:00',
       arrivalTime: '08:10',
     }).expect(201);
-    expect(response.body).toMatchObject({ classId: 10, teachingAssignmentId: null });
+
+    expect(response.body).toMatchObject({
+      studentId: 20,
+      classId: 10,
+      teachingAssignmentId: 101,
+      period: 'morning',
+    });
+  });
+
+  it('requires a subject for new teacher late arrivals while preserving updates to existing class-level records', async () => {
+    mockState.assignments = [];
+    mockState.teachingClassIds = [];
+    mockState.homeroomClassIds = [10];
+
+    for (const subjectId of [undefined, null, '']) {
+      const response = await request(app).post('/api/late-arrivals').send({
+        studentId: 20,
+        classId: 10,
+        date: '2026-10-01',
+        ...(subjectId === undefined ? {} : { subjectId }),
+        period: 'morning',
+        expectedStartTime: '08:00',
+        arrivalTime: '08:10',
+      }).expect(400);
+      expect(response.body.error).toBe('Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.');
+    }
+
     expect(mockState.assignments).toHaveLength(0);
+    expect(mockState.lateArrivals).toHaveLength(0);
 
     mockState.lateArrivals = [{
       id: 205,

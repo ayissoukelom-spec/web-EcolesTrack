@@ -867,7 +867,12 @@ describe('AbsenceView surveillant', () => {
 });
 
 describe('AbsenceView teacher teaching assignment payload', () => {
-  const renderTeacherAbsenceForm = (multiple: boolean, onAddAbsence = vi.fn()) => {
+  const renderTeacherAbsenceForm = (
+    multiple: boolean,
+    onAddAbsence = vi.fn(),
+    onAddLateArrival = vi.fn().mockResolvedValue(undefined),
+    selectSubject = true,
+  ) => {
     const view = render(
       <AbsenceView
         userRole="teacher"
@@ -880,6 +885,7 @@ describe('AbsenceView teacher teaching assignment payload', () => {
         teacherTeachingAssignments={[{ classId: 10, subjectId: 5, isActive: true }]}
         approvedSubjectsList={[{ id: 5, name: 'Mathématiques' }, { id: 6, name: 'Physique' }]}
         onAddAbsence={onAddAbsence}
+        onAddLateArrival={onAddLateArrival}
         onJustifyAbsence={vi.fn()}
       />,
     );
@@ -892,7 +898,9 @@ describe('AbsenceView teacher teaching assignment payload', () => {
       fireEvent.change(studentFields[1], { target: { value: 'Ada' } });
       fireEvent.change(studentFields[2], { target: { value: '1' } });
     }
-    fireEvent.click(screen.getByRole('radio', { name: 'Mathématiques' }));
+    if (selectSubject) {
+      fireEvent.click(screen.getByRole('radio', { name: 'Mathématiques' }));
+    }
     return onAddAbsence;
   };
 
@@ -902,7 +910,7 @@ describe('AbsenceView teacher teaching assignment payload', () => {
     expect(screen.queryByRole('radio', { name: 'Physique' })).toBeNull();
   });
 
-  it('allows a homeroom teacher to choose their class without implying a subject assignment', async () => {
+  it('blocks homeroom absence declarations when no subject is assigned to the class', async () => {
     const onAddAbsence = vi.fn().mockResolvedValue(undefined);
     render(
       <AbsenceView
@@ -924,7 +932,7 @@ describe('AbsenceView teacher teaching assignment payload', () => {
     fireEvent.click(document.querySelector('#box-absence-form [aria-haspopup="listbox"]') as HTMLButtonElement);
     fireEvent.click(within(screen.getByRole('listbox')).getByText('4e B'));
 
-    expect(screen.getByText('Le titulaire peut enregistrer une présence pour sa classe sans attribuer de matière.')).toBeTruthy();
+    expect(screen.getByText(/Aucune matière active n’est affectée à cet enseignant/)).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull();
 
     const studentFields = document.querySelectorAll('#box-absence-form select');
@@ -933,10 +941,41 @@ describe('AbsenceView teacher teaching assignment payload', () => {
     fireEvent.change(studentFields[2], { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
 
-    await waitFor(() => expect(onAddAbsence).toHaveBeenCalledWith(expect.objectContaining({
-      studentId: 2,
-      classId: 12,
-      subjectId: undefined,
+    expect(screen.getByRole('alert').textContent).toMatch(/Aucune matière active n’est affectée à cet enseignant/);
+    expect(onAddAbsence).not.toHaveBeenCalled();
+  });
+
+  it.each(['absence', 'retard'])('requires a subject before recording a teacher %s', async (kind) => {
+    const onAddAbsence = vi.fn().mockResolvedValue(undefined);
+    const onAddLateArrival = vi.fn().mockResolvedValue(undefined);
+    renderTeacherAbsenceForm(false, onAddAbsence, onAddLateArrival, false);
+
+    if (kind === 'retard') {
+      fireEvent.click(screen.getByRole('button', { name: /^Retard$/i }));
+      fireEvent.change(screen.getByLabelText(/Heure prévue/), { target: { value: '08:00' } });
+      fireEvent.change(screen.getByLabelText(/Heure d'arrivée/), { target: { value: '08:15' } });
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.',
+    );
+    expect(onAddAbsence).not.toHaveBeenCalled();
+    expect(onAddLateArrival).not.toHaveBeenCalled();
+  });
+
+  it('includes the selected subject when a teacher records a late arrival', async () => {
+    const onAddLateArrival = vi.fn().mockResolvedValue(undefined);
+    renderTeacherAbsenceForm(false, vi.fn(), onAddLateArrival);
+    fireEvent.click(screen.getByRole('button', { name: /^Retard$/i }));
+    fireEvent.change(screen.getByLabelText(/Heure prévue/), { target: { value: '08:00' } });
+    fireEvent.change(screen.getByLabelText(/Heure d'arrivée/), { target: { value: '08:15' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Enregistrer$/i }));
+    await waitFor(() => expect(onAddLateArrival).toHaveBeenCalledWith(expect.objectContaining({
+      studentId: 1,
+      classId: 10,
+      subjectId: 5,
     })));
   });
 

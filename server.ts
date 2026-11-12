@@ -10912,6 +10912,9 @@ export async function createApp() {
       if (!['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to record late arrivals' });
       }
+      if (actor.role === 'teacher' && !hasSubjectInput) {
+        return res.status(400).json({ error: 'Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.' });
+      }
       if (actor.role === 'teacher' && hasSubjectInput && (!Number.isInteger(parsedSubjectId) || parsedSubjectId! <= 0)) {
         return res.status(400).json({ error: 'A valid subject is required when a teacher records a subject-specific late arrival' });
       }
@@ -10929,17 +10932,12 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot record a late arrival outside the actor school scope' });
       }
 
-      const teacherScope = actor.role === 'teacher' ? await getTeacherAuthorizationScope(actor) : null;
       const canonicalTeachingAssignment = actor.role === 'teacher' && parsedSubjectId != null
         ? await ensureTeacherTeachingAssignment(actor, parsedClassId, parsedSubjectId)
         : null;
       if (actor.role === 'teacher' && parsedSubjectId != null && (!canonicalTeachingAssignment
         || canonicalTeachingAssignment.schoolId !== student.schoolId)) {
         return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
-      }
-      if (actor.role === 'teacher' && parsedSubjectId == null
-        && !teacherScope?.homeroomClassIds.has(parsedClassId)) {
-        return res.status(403).json({ error: 'Only the homeroom teacher can record a class-level late arrival without a subject' });
       }
 
       const existingDuplicate = await db.select().from(lateArrivals).where(and(
@@ -11866,6 +11864,9 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'teacher' && (subjectId == null || subjectId === '')) {
+        return res.status(400).json({ error: 'Veuillez sélectionner une matière avant d’enregistrer l’absence ou le retard.' });
+      }
       if (actor.role !== 'teacher' && normalizedSubjectIds.length === 0) {
         return res.status(400).json({ error: 'Missing mandatory absence parameters' });
       }
@@ -11908,7 +11909,6 @@ export async function createApp() {
       }
 
       if (actor.role === 'teacher') {
-        const teacherScope = await getTeacherAuthorizationScope(actor);
         const assignmentId = parsePositiveInteger(teachingAssignmentId);
         const requestedClassId = parsePositiveInteger(classId);
         const requestedSubjectId = normalizedSubjectIds.length === 1
@@ -11930,12 +11930,6 @@ export async function createApp() {
           || canonicalTeachingAssignment.schoolId !== student.schoolId
           || canonicalTeachingAssignment.classId !== requestedClassId)) {
           return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
-        }
-        if (requestedSubjectId == null && (
-          teachingAssignmentId != null
-          || !teacherScope?.homeroomClassIds.has(requestedClassId!)
-        )) {
-          return res.status(403).json({ error: 'Only the homeroom teacher can record a class-level absence without a subject' });
         }
       } else if (actor.role !== 'super_admin') {
         if (actor.schoolId && (student.schoolId !== actor.schoolId || !classBelongsToSchool)) {
