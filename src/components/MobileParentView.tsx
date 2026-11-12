@@ -4,6 +4,7 @@ import { apiFetch } from '../lib/api.ts';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import { getPublicationLabel } from '../lib/dateFormatting';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
+import { classifyParentNotification } from '../lib/parentNotificationCategory.ts';
 import {
   Smartphone,
   GraduationCap,
@@ -101,30 +102,6 @@ export default function MobileParentView({
   const childGrades = activeChild
     ? gradesList.filter((g) => g.studentId === activeChild.id)
     : [];
-
-  const normalizeNotifText = (value?: string) => (value || '').toLowerCase();
-  const normalizeForMatch = (value?: string) =>
-    normalizeNotifText(value)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim();
-
-  type ParentNotifCategory = 'notes' | 'homework' | 'absences' | 'info' | 'other';
-
-  const classifyParentNotification = (notif: SystemNotification): ParentNotifCategory => {
-    const notifType = normalizeForMatch(notif.type);
-    const payload = `${normalizeForMatch(notif.title)} ${normalizeForMatch(notif.body)}`;
-
-    const isHomeworkByType = notifType === 'assignment' || notifType === 'homework' || notifType === 'devoir';
-    const isHomeworkByKeyword = /\b(devoir|publie|assignment)\b/i.test(payload);
-    if (isHomeworkByType || isHomeworkByKeyword) return 'homework';
-
-    if (notifType === 'grade') return 'notes';
-    if (notifType === 'absence') return 'absences';
-    if (notifType === 'info') return 'info';
-
-    return 'other';
-  };
 
   const parentNotifBuckets = notificationsList.reduce(
     (acc, notif) => {

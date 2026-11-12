@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Class, Parent, Student, SystemNotification, User, UserRole } from '../types.ts';
 import { apiFetch, apiFetchBlob } from '../lib/api.ts';
+import { classifyParentNotification } from '../lib/parentNotificationCategory.ts';
 import { Bell, ShieldAlert, Sparkles, Send, CheckCircle2, Megaphone, Smartphone, RefreshCw, Mail, LoaderCircle } from 'lucide-react';
 import RequiredLabel from './RequiredLabel';
 import { getPublicationLabel } from '../lib/dateFormatting';
@@ -165,34 +166,6 @@ export default function NotificationView({
       downloadingAttachmentKeysRef.current.delete(key);
       setDownloadingAttachmentKeys(new Set(downloadingAttachmentKeysRef.current));
     }
-  };
-
-  const normalizeNotifText = (value?: string) => (value || '').toLowerCase();
-  const normalizeForMatch = (value?: string) =>
-    normalizeNotifText(value)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim();
-
-  type ParentNotifCategory = 'notes' | 'homework' | 'absences' | 'info' | 'other';
-
-  // Centralized classifier to keep parent tabs deterministic and avoid duplicates.
-  const classifyParentNotification = (notif: SystemNotification): ParentNotifCategory => {
-    const notifType = normalizeForMatch(notif.type);
-    const payload = `${normalizeForMatch(notif.title)} ${normalizeForMatch(notif.body)}`;
-
-    const isHomeworkByType = notifType === 'assignment' || notifType === 'homework' || notifType === 'devoir';
-    const isHomeworkByKeyword = /\b(devoir|publie|assignment)\b/i.test(payload);
-
-    // Priority rule: homework markers in type/message win over grade classification.
-    if (isHomeworkByType || isHomeworkByKeyword) return 'homework';
-
-    // Notes tab: strictly grade notifications only.
-    if (notifType === 'grade') return 'notes';
-    if (notifType === 'absence') return 'absences';
-    if (notifType === 'info') return 'info';
-
-    return 'other';
   };
 
   const parentNotificationsByCategory = useMemo(() => {

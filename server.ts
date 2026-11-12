@@ -137,6 +137,10 @@ import {
   type GroupedPublicationContext,
 } from './src/lib/groupedEvaluationPublicationService.ts';
 import {
+  buildGroupedEvaluationNotificationPayloads,
+  sendEvaluationNotification,
+} from './src/lib/evaluationNotificationDelivery.ts';
+import {
   buildGroupedPushNotificationPayload,
   isGroupedPushDeliveryEnabled,
   processGroupedPushOutboxBatch,
@@ -405,13 +409,8 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
           eq(notificationDeliveryOutbox.channel, 'push'),
           eq(notificationDeliveryOutbox.status, 'pending'),
           lte(notificationDeliveryOutbox.nextAttemptAt, now),
-          or(
-            isNotNull(notifications.publicationId),
-            and(
-              isNull(notifications.publicationId),
-              like(notifications.dedupeKey, 'late-arrival-justification-%'),
-            ),
-          ),
+          isNull(notifications.publicationId),
+          like(notifications.dedupeKey, 'late-arrival-justification-%'),
         ))
         .orderBy(notificationDeliveryOutbox.nextAttemptAt, notificationDeliveryOutbox.id)
         .limit(limit);
@@ -906,22 +905,13 @@ function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublic
               publicationId,
               title,
               body,
-              type: 'info',
+              type: 'grade',
               dedupeKey: `grouped-evaluation-publication-${publicationId}-${userId}`,
             }));
             const created = await executor.insert(notifications).values(rows)
               .onConflictDoNothing()
               .returning({ id: notifications.id });
             return created.map((row) => row.id);
-          },
-          createPushOutbox: async (notificationIds) => {
-            if (notificationIds.length === 0) return;
-            await executor.insert(notificationDeliveryOutbox).values(notificationIds.map((notificationId) => ({
-              notificationId,
-              channel: 'push' as const,
-              status: 'pending' as const,
-              attemptCount: 0,
-            })));
           },
         };
         return work(transaction);
@@ -1478,6 +1468,15 @@ function signInternalPayload(payload: any): { signature: string; timestamp: stri
   hmac.update(messageToSign);
   const signature = hmac.digest('hex');
   return { signature, timestamp };
+}
+
+function sendInternalEvaluationNotification(payload: object) {
+  return sendEvaluationNotification(
+    payload,
+    process.env.API_URL || 'http://localhost:3001',
+    signInternalPayload,
+    fetch,
+  );
 }
 
 function verifyInternalJustificationAuth(req: any, res: any, next: any) {
@@ -13756,6 +13755,27 @@ export async function createApp() {
             coefficientsByPair: body.coefficientsByPair,
             idempotencyKey,
           },
+        },
+        async (event) => {
+          const payloads = buildGroupedEvaluationNotificationPayloads(
+            event.publicationId,
+            event.evaluationIds,
+            event.recipientUserIds.map((userId) => ({
+              userId,
+              title: event.title,
+              body: event.body,
+            })),
+          );
+          for (const payload of payloads) {
+            try {
+              const response = await sendInternalEvaluationNotification(payload);
+              if (!response.ok) {
+                throw new Error(`Evaluation notification API returned HTTP ${response.status}.`);
+              }
+            } catch (error) {
+              console.error('Grouped evaluation notification delivery failed:', error);
+            }
+          }
         },
       );
       return res.status(200).json(result);

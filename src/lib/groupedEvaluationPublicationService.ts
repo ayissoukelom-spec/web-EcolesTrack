@@ -68,7 +68,6 @@ export interface GroupedEvaluationPublicationTransaction {
     title: string;
     body: string;
   }): Promise<number[]>;
-  createPushOutbox(notificationIds: number[]): Promise<void>;
   getPublication(
     schoolId: number,
     idempotencyKey: string,
@@ -79,6 +78,14 @@ export interface GroupedEvaluationPublicationRepository {
   transaction<T>(
     work: (transaction: GroupedEvaluationPublicationTransaction) => Promise<T>,
   ): Promise<T>;
+}
+
+export interface GroupedEvaluationNotificationEvent {
+  publicationId: number;
+  evaluationIds: number[];
+  recipientUserIds: number[];
+  title: string;
+  body: string;
 }
 
 export class GroupedEvaluationIdempotencyConflictError extends Error {
@@ -240,6 +247,7 @@ export async function publishGroupedEvaluations(
     authorUserId: number;
     request: GroupedEvaluationPublicationRequest;
   },
+  onPublished?: (event: GroupedEvaluationNotificationEvent) => Promise<void>,
 ): Promise<GroupedEvaluationPublicationResponse> {
   const { schoolId, authorUserId, request } = input;
   const requestError = validateGroupedEvaluationPublicationRequest(request);
@@ -252,11 +260,11 @@ export async function publishGroupedEvaluations(
   }
   const requestHash = hashGroupedEvaluationRequest(request);
 
-  return repository.transaction(async (tx) => {
+  const publicationResult = await repository.transaction(async (tx) => {
     const existing = await tx.findPublication(schoolId, request.idempotencyKey);
     if (existing) {
       if (existing.requestHash !== requestHash) throw new GroupedEvaluationIdempotencyConflictError();
-      return publicationResponse(existing);
+      return { response: publicationResponse(existing), notificationEvent: null };
     }
 
     const context = await tx.loadContext(schoolId, request);
@@ -288,7 +296,7 @@ export async function publishGroupedEvaluations(
       const conflicting = await tx.getPublication(schoolId, request.idempotencyKey);
       if (!conflicting) throw new Error('Idempotent publication conflict could not be resolved.');
       if (conflicting.requestHash !== requestHash) throw new GroupedEvaluationIdempotencyConflictError();
-      return publicationResponse(conflicting);
+      return { response: publicationResponse(conflicting), notificationEvent: null };
     }
 
     const evaluationIds: number[] = [];
@@ -324,23 +332,37 @@ export async function publishGroupedEvaluations(
     }
 
     const recipientUserIds = [...new Set(await tx.getParentUserIds(schoolId, value.classIds))];
-    const notificationIds = await tx.createLocalNotifications({
+    const title = value.kind === 'examen' ? 'Nouveau programme d’examens' : 'Nouveau programme de devoirs';
+    const body = formatGroupedEvaluationParentMessage({
+      kind: value.kind,
+      startDate: value.startDate,
+      endDate: value.endDate,
+      subjects: value.subjectIds.map((subjectId) => context.subjectNamesById[subjectId] ?? ''),
+    });
+    await tx.createLocalNotifications({
       publicationId: publication.id,
       recipientUserIds,
-      title: value.kind === 'examen' ? 'Nouveau programme d’examens' : 'Nouveau programme de devoirs',
-      body: formatGroupedEvaluationParentMessage({
-        kind: value.kind,
-        startDate: value.startDate,
-        endDate: value.endDate,
-        subjects: value.subjectIds.map((subjectId) => context.subjectNamesById[subjectId] ?? ''),
+      title,
+      body,
+    });
+    return {
+      response: publicationResponse({
+        id: publication.id,
+        evaluationIds,
+        recipientCount: recipientUserIds.length,
       }),
-    });
-    await tx.createPushOutbox(notificationIds);
-
-    return publicationResponse({
-      id: publication.id,
-      evaluationIds,
-      recipientCount: recipientUserIds.length,
-    });
+      notificationEvent: {
+        publicationId: publication.id,
+        evaluationIds,
+        recipientUserIds,
+        title,
+        body,
+      },
+    };
   });
+
+  if (publicationResult.notificationEvent) {
+    await onPublished?.(publicationResult.notificationEvent);
+  }
+  return publicationResult.response;
 }

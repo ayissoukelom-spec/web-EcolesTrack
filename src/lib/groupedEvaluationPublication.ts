@@ -324,11 +324,12 @@ export function formatGroupedEvaluationParentMessage(params: {
     year: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(`${date}T00:00:00.000Z`));
-  const label = params.kind === 'examen' ? 'examens' : 'devoirs';
+  const label = params.kind === 'examen' ? 'd’examens' : 'de devoirs';
   const period = params.startDate === params.endDate
     ? `le ${formatDate(params.startDate)}`
     : `du ${formatDate(params.startDate)} au ${formatDate(params.endDate)}`;
   const subjects = [...new Set(params.subjects.map((subject) => subject.trim()).filter(Boolean))];
   const subjectText = subjects.length > 0 ? subjects.join(', ') : 'matières communiquées par l’établissement';
-  return `Un programme de ${label} est prévu ${period}. Matières concernées : ${subjectText}.`;
+  const message = `Un programme ${label} est prévu ${period}. Matières concernées : ${subjectText}.`;
+  return `${message} Encouragez votre enfant à se préparer !`;
 }

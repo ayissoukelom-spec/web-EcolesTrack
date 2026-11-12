@@ -44,7 +44,7 @@ export interface GroupedPushNotificationPayload {
   message: string;
   category: 'evaluation';
   metadata: {
-    target: 'homework' | 'absence';
+    target: 'absence';
     notificationId: number;
     publicationId: number;
   };
@@ -58,10 +58,7 @@ export function isGroupedPushDeliveryEnabled(environment: Record<string, string 
 }
 
 export function getGroupedPushDeliveryIdempotencyKey(delivery: GroupedPushDeliveryRecord): string | null {
-  if (delivery.publicationId != null) {
-    return `grouped-publication-${delivery.publicationId}-notification-${delivery.notificationId}`;
-  }
-  return delivery.dedupeKey?.startsWith('late-arrival-justification-')
+  return delivery.publicationId == null && delivery.dedupeKey?.startsWith('late-arrival-justification-')
     ? delivery.dedupeKey
     : null;
 }
@@ -70,16 +67,15 @@ export function buildGroupedPushNotificationPayload(
   delivery: GroupedPushDeliveryRecord,
   idempotencyKey: string,
 ): GroupedPushNotificationPayload {
-  const isLateArrivalJustification = delivery.publicationId == null;
   return {
     parentId: String(delivery.userId),
     title: delivery.title,
     message: delivery.body,
     category: 'evaluation',
     metadata: {
-      target: isLateArrivalJustification ? 'absence' : 'homework',
+      target: 'absence',
       notificationId: delivery.notificationId,
-      publicationId: delivery.publicationId ?? delivery.notificationId,
+      publicationId: delivery.notificationId,
     },
     dedupeKey: idempotencyKey,
     groupedDelivery: true,
@@ -113,7 +109,7 @@ export async function processGroupedPushOutboxBatch(
       await repository.markFailed(
         delivery.id,
         delivery.attemptCount,
-        'Outbox record is not a supported grouped publication or late-arrival justification notification.',
+        'Outbox record is not a supported late-arrival justification notification.',
         now(),
       );
       summary.failed += 1;

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GroupedEvaluationIdempotencyConflictError,
   hashGroupedEvaluationRequest,
@@ -72,7 +72,8 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
   }> = [];
   context = context;
   notifications: Array<{ publicationId: number; userId: number }> = [];
-  outboxNotificationIds: number[] = [];
+  parentSelection: { schoolId: number; classIds: number[] } | null = null;
+  transactionActive = false;
   transactions = 0;
   failEvaluationAt: number | null = null;
   private nextId = 1;
@@ -84,13 +85,13 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
       records: new Map(this.records),
       evaluations: [...this.evaluations],
       notifications: [...this.notifications],
-      outboxNotificationIds: [...this.outboxNotificationIds],
       nextId: this.nextId,
     };
     const previousLock = this.lock;
     let release!: () => void;
     this.lock = new Promise<void>((resolve) => { release = resolve; });
     await previousLock;
+    this.transactionActive = true;
     try {
       const tx: GroupedEvaluationPublicationTransaction = {
         findPublication: async (_schoolId, key) => this.records.get(key) ?? null,
@@ -123,7 +124,10 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
           record.evaluationIds.push(id);
           return { id };
         },
-        getParentUserIds: async () => [501, 501, 502],
+        getParentUserIds: async (schoolId, classIds) => {
+          this.parentSelection = { schoolId, classIds };
+          return [501, 501, 502];
+        },
         createLocalNotifications: async ({ publicationId, recipientUserIds }) => {
           const ids = recipientUserIds.map((userId) => {
             this.notifications.push({ publicationId, userId });
@@ -133,7 +137,6 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
           record.recipientCount = recipientUserIds.length;
           return ids;
         },
-        createPushOutbox: async (ids) => { this.outboxNotificationIds.push(...ids); },
         getPublication: async (_schoolId, key) => this.records.get(key) ?? null,
       };
       return await work(tx);
@@ -141,10 +144,10 @@ class FakeRepository implements GroupedEvaluationPublicationRepository {
       this.records = snapshot.records;
       this.evaluations = snapshot.evaluations;
       this.notifications = snapshot.notifications;
-      this.outboxNotificationIds = snapshot.outboxNotificationIds;
       this.nextId = snapshot.nextId;
       throw error;
     } finally {
+      this.transactionActive = false;
       release();
     }
   }
@@ -483,7 +486,7 @@ describe('grouped evaluation publication service', () => {
     expect(repository.evaluations).toHaveLength(0);
   });
 
-  it('rolls back publication, evaluations, notifications, and outbox on a child insert failure', async () => {
+  it('rolls back publication, evaluations, and notifications on a child insert failure', async () => {
     const repository = new FakeRepository();
     repository.failEvaluationAt = 2;
     await expect(publishGroupedEvaluations(repository, {
@@ -494,16 +497,60 @@ describe('grouped evaluation publication service', () => {
     expect(repository.records.size).toBe(0);
     expect(repository.evaluations).toHaveLength(0);
     expect(repository.notifications).toHaveLength(0);
-    expect(repository.outboxNotificationIds).toHaveLength(0);
   });
 
-  it('deduplicates parent recipients and queues one push outbox item per local notification', async () => {
+  it('deduplicates parent recipients and creates one local notification per parent', async () => {
     const repository = new FakeRepository();
     await publishGroupedEvaluations(repository, { schoolId: 4, authorUserId: 8, request });
 
+    expect(repository.parentSelection).toEqual({ schoolId: 4, classIds: [10, 11] });
     expect(repository.notifications).toHaveLength(2);
-    expect(repository.outboxNotificationIds).toHaveLength(2);
     expect(new Set(repository.notifications.map(({ userId }) => userId)).size).toBe(2);
+  });
+
+  it.each([
+    ['devoir', 'Nouveau programme de devoirs'],
+    ['examen', 'Nouveau programme d’examens'],
+  ] as const)('dispatches one post-commit event for each distinct parent on a new %s publication', async (kind, title) => {
+    const repository = new FakeRepository();
+    const onPublished = vi.fn(async () => {
+      expect(repository.transactionActive).toBe(false);
+    });
+    const publicationRequest = { ...request, kind };
+
+    await publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: publicationRequest,
+    }, onPublished);
+    await publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: publicationRequest,
+    }, onPublished);
+
+    expect(onPublished).toHaveBeenCalledTimes(1);
+    expect(onPublished).toHaveBeenCalledWith({
+      publicationId: 1,
+      evaluationIds: [2, 3, 4, 5],
+      recipientUserIds: [501, 502],
+      title,
+      body: expect.stringContaining('Encouragez votre enfant à se préparer !'),
+    });
+  });
+
+  it('does not dispatch a grouped evaluation notification when publication fails', async () => {
+    const repository = new FakeRepository();
+    repository.failEvaluationAt = 0;
+    const onPublished = vi.fn(async () => {});
+
+    await expect(publishGroupedEvaluations(repository, {
+      schoolId: 4,
+      authorUserId: 8,
+      request: { ...request, kind: 'examen' },
+    }, onPublished)).rejects.toThrow();
+
+    expect(onPublished).not.toHaveBeenCalled();
   });
 
   it('returns the original result for the same key and rejects a different payload', async () => {

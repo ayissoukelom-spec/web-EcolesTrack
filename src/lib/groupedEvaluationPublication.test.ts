@@ -198,4 +198,24 @@ describe('grouped evaluation publication contracts', () => {
     expect(message).toContain('Mathématiques, Physique');
     expect(message).not.toMatch(/\b\d{1,2}:\d{2}\b/);
   });
+
+  it('adds the existing teacher encouragement to devoir and exam messages', () => {
+    const devoirMessage = formatGroupedEvaluationParentMessage({
+      kind: 'devoir',
+      startDate: '2026-11-12',
+      endDate: '2026-11-15',
+      subjects: ['Mathématiques'],
+    });
+    const examMessage = formatGroupedEvaluationParentMessage({
+      kind: 'examen',
+      startDate: '2026-11-12',
+      endDate: '2026-11-15',
+      subjects: ['Mathématiques'],
+    });
+
+    expect(devoirMessage).toContain('Matières concernées : Mathématiques.');
+    expect(devoirMessage.endsWith('Encouragez votre enfant à se préparer !')).toBe(true);
+    expect(examMessage).toContain('Un programme d’examens est prévu');
+    expect(examMessage.endsWith('Encouragez votre enfant à se préparer !')).toBe(true);
+  });
 });

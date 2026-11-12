@@ -17,8 +17,8 @@ const row: ClaimedGroupedPushDelivery = {
   userId: 7,
   title: 'Nouveau programme',
   body: 'Programme annoncé',
-  publicationId: 3,
-  dedupeKey: 'grouped-publication-3-notification-20',
+  publicationId: null,
+  dedupeKey: 'late-arrival-justification-42-revision-3',
 };
 
 class FakeRepository implements GroupedPushDeliveryRepository {
@@ -68,13 +68,26 @@ class FakeRepository implements GroupedPushDeliveryRepository {
 }
 
 describe('grouped push outbox processor', () => {
-  it('keeps publication deliveries on their existing route and idempotency key', () => {
-    expect(getGroupedPushDeliveryIdempotencyKey(row)).toBe('grouped-publication-3-notification-20');
-    expect(buildGroupedPushNotificationPayload(row, 'grouped-publication-3-notification-20')).toMatchObject({
-      category: 'evaluation',
-      metadata: { target: 'homework', notificationId: 20, publicationId: 3 },
-      groupedDelivery: true,
+  it('does not deliver grouped evaluation publications through the push outbox', async () => {
+    const repository = new FakeRepository();
+    const publicationDelivery: ClaimedGroupedPushDelivery = {
+      ...row,
+      publicationId: 3,
+      dedupeKey: 'grouped-publication-3-notification-20',
+    };
+    vi.spyOn(repository, 'claimDue').mockImplementation(async () => {
+      repository.status = 'sending';
+      repository.attemptCount = 1;
+      return [publicationDelivery];
     });
+    const send = vi.fn(async () => ({ outcome: 'sent' as const }));
+
+    expect(getGroupedPushDeliveryIdempotencyKey(publicationDelivery)).toBeNull();
+    await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
+      claimed: 1,
+      failed: 1,
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('supports late-arrival justification rows without a publication id using push-only routing', () => {
@@ -206,8 +219,8 @@ describe('grouped push outbox processor', () => {
     });
 
     expect(keys).toEqual([
-      'grouped-publication-3-notification-20',
-      'grouped-publication-3-notification-20',
+      'late-arrival-justification-42-revision-3',
+      'late-arrival-justification-42-revision-3',
     ]);
     expect(repository.status).toBe('sent');
   });
