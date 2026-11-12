@@ -37,6 +37,21 @@ describe('grouped evaluation publication contracts', () => {
     expect('value' in result && result.value.evaluationType).toBe('composition');
   });
 
+  it('accepts composition coefficients up to the individual-evaluation limit and rejects higher values', () => {
+    const withCoefficient = {
+      ...request,
+      kind: 'examen' as const,
+      coefficientsByPair: { '10:20': 3 },
+    };
+
+    expect(validateGroupedEvaluationPublication(withCoefficient, context))
+      .toMatchObject({ value: { coefficientsByPair: { '10:20': 3 }, evaluationType: 'composition' } });
+    expect(validateGroupedEvaluationPublication({
+      ...withCoefficient,
+      coefficientsByPair: { '10:20': 10 },
+    }, context)).toMatchObject({ error: { code: 'invalid_coefficient' } });
+  });
+
   it('accepts a date-only period fully contained in one term for each class', () => {
     const result = validateGroupedEvaluationPublication(request, context);
 

@@ -51,7 +51,7 @@ export default function GroupedEvaluationPublicationForm({
   const [endDate, setEndDate] = useState('');
   const [classIds, setClassIds] = useState<number[]>([]);
   const [subjectIds, setSubjectIds] = useState<number[]>([]);
-  const [coefficientsByPair, setCoefficientsByPair] = useState<Record<string, number>>({});
+  const [coefficientsByPair, setCoefficientsByPair] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const idempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -103,16 +103,22 @@ export default function GroupedEvaluationPublicationForm({
   const effectiveCoefficientsByPair = useMemo(() => {
     const normalized = { ...coefficientsByPair };
     for (const { classId, subjectId, key } of selectedCoefficientPairs) {
-      normalized[key] = Number.isInteger(normalized[key]) && Number(normalized[key]) > 0 ? Number(normalized[key]) : 1;
+      const current = normalized[key];
+      if (kind === 'examen') {
+        normalized[key] = current ?? '1';
+      } else {
+        const numeric = Number(current);
+        normalized[key] = Number.isInteger(numeric) && numeric > 0 ? String(numeric) : '1';
+      }
     }
     return normalized;
-  }, [coefficientsByPair, selectedCoefficientPairs]);
+  }, [coefficientsByPair, kind, selectedCoefficientPairs]);
   const selectedCoefficientsByPair = useMemo(() => Object.fromEntries(
     selectedCoefficientPairs.map(({ key }) => [
       key,
-      kind === 'devoir' ? effectiveCoefficientsByPair[key] ?? 1 : 1,
+      Number(effectiveCoefficientsByPair[key] ?? '1'),
     ]),
-  ), [kind, selectedCoefficientPairs, effectiveCoefficientsByPair]);
+  ), [selectedCoefficientPairs, effectiveCoefficientsByPair]);
   const activePairs = useMemo(() => new Set(
     (options?.activeTeachingPairs ?? []).map(({ classId, subjectId }) => `${classId}:${subjectId}`),
   ), [options]);
@@ -167,7 +173,9 @@ export default function GroupedEvaluationPublicationForm({
   const updateCoefficient = (classId: number, subjectId: number, nextValue: string) => {
     const trimmed = nextValue.trim();
     const parsed = trimmed === '' ? 1 : Number(trimmed);
-    const normalized = Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+    const normalized = kind === 'examen'
+      ? nextValue
+      : String(Number.isInteger(parsed) && parsed > 0 ? parsed : 1);
     setCoefficientsByPair((previous) => ({
       ...previous,
       [pairKey(classId, subjectId)]: normalized,
@@ -431,9 +439,7 @@ export default function GroupedEvaluationPublicationForm({
                 const className = classes.find((item) => item.id === classId)?.name ?? `Classe ${classId}`;
                 const subjectName = subjects.find((item) => item.id === subjectId)?.name ?? `Matière ${subjectId}`;
                 const valid = activePairs.has(`${classId}:${subjectId}`);
-                const coefficient = kind === 'devoir'
-                  ? effectiveCoefficientsByPair[pairKey(classId, subjectId)] ?? 1
-                  : 1;
+                const coefficient = effectiveCoefficientsByPair[pairKey(classId, subjectId)] ?? '1';
                 return (
                   <li
                     key={`${classId}:${subjectId}`}
@@ -445,7 +451,7 @@ export default function GroupedEvaluationPublicationForm({
               }))}
             </ul>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {kind === 'devoir' && classIds.flatMap((classId) => subjectIds.map((subjectId) => {
+              {classIds.flatMap((classId) => subjectIds.map((subjectId) => {
                 const className = classes.find((item) => item.id === classId)?.name ?? `Classe ${classId}`;
                 const subjectName = subjects.find((item) => item.id === subjectId)?.name ?? `Matière ${subjectId}`;
                 const valid = activePairs.has(`${classId}:${subjectId}`);
@@ -455,8 +461,9 @@ export default function GroupedEvaluationPublicationForm({
                     <input
                       type="number"
                       min={1}
-                      max={2147483647}
+                      max={kind === 'examen' ? 9 : 2147483647}
                       step={1}
+                      required
                       value={effectiveCoefficientsByPair[pairKey(classId, subjectId)] ?? 1}
                       onChange={(event) => updateCoefficient(classId, subjectId, event.target.value)}
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800"

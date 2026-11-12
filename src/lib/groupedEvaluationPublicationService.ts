@@ -162,7 +162,7 @@ export function hashGroupedEvaluationRequest(
     [...request.classIds].sort((a, b) => a - b).flatMap((classId) =>
       [...request.subjectIds].sort((a, b) => a - b).map((subjectId) => [
         `${classId}:${subjectId}`,
-        request.kind === 'devoir' ? getGroupedEvaluationCoefficient(request, classId, subjectId) : 1,
+        getGroupedEvaluationCoefficient(request, classId, subjectId),
       ] as const),
     ).filter(([, coefficient]) => coefficient !== 1),
   );
@@ -304,9 +304,7 @@ export async function publishGroupedEvaluations(
             { subjectIds: [subjectId] },
           );
         }
-        const coefficient = value.kind === 'devoir'
-          ? getGroupedEvaluationCoefficient(request, classId, subjectId)
-          : 1;
+        const coefficient = getGroupedEvaluationCoefficient(request, classId, subjectId);
         const evaluation = await tx.createEvaluation({
           publicationId: publication.id,
           schoolId,

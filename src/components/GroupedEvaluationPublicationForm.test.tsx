@@ -224,6 +224,9 @@ describe('GroupedEvaluationPublicationForm', () => {
     fireEvent.change(screen.getByLabelText('Date de fin'), { target: { value: '2026-11-15' } });
     fireEvent.click(screen.getByLabelText(/6ème A/));
     fireEvent.click(screen.getByLabelText('Mathématiques'));
+    const examCoefficient = screen.getByLabelText('Coefficient — 6ème A — Mathématiques') as HTMLInputElement;
+    expect(examCoefficient.max).toBe('9');
+    fireEvent.change(examCoefficient, { target: { value: '3' } });
 
     fireEvent.click(screen.getByRole('button', { name: /Vérifier et publier/i }));
     await screen.findByRole('alert');
@@ -239,6 +242,7 @@ describe('GroupedEvaluationPublicationForm', () => {
       endDate: '2026-11-15',
       classIds: [1],
       subjectIds: [10],
+      coefficientsByPair: { '1:10': 3 },
     });
     expect(retryRequest).toEqual(firstRequest);
     expect(retryKey).toBe(firstKey);

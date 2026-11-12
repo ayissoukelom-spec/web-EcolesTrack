@@ -169,13 +169,14 @@ export function validateGroupedEvaluationPublicationRequest(
       return !selectedPairs.has(pairKey)
         || !Number.isInteger(value)
         || Number(value) <= 0
-        || Number(value) > MAX_EVALUATION_COEFFICIENT
-        || (request.kind === 'examen' && Number(value) !== 1);
+        || Number(value) > (request.kind === 'examen' ? 9 : MAX_EVALUATION_COEFFICIENT);
     });
     if (invalid) {
       return {
         code: 'invalid_coefficient',
-        message: 'Chaque coefficient doit être un entier strictement positif.',
+        message: request.kind === 'examen'
+          ? 'Chaque coefficient de composition doit être un entier compris entre 1 et 9.'
+          : 'Chaque coefficient doit être un entier strictement positif.',
       };
     }
   }

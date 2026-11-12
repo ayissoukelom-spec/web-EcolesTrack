@@ -58,11 +58,31 @@ describe('grouped evaluation publication API', () => {
           endDate: '2026-11-15',
           classIds: [1],
           subjectIds: [10],
+          coefficientsByPair: {},
           idempotencyKey: 'key-12345678',
         }),
       }),
     );
     expect(apiFetchMock.mock.calls[0][1].body).not.toContain('schoolId');
+  });
+
+  it('transmits per-pair composition coefficients unchanged', async () => {
+    apiFetchMock.mockResolvedValue({ publicationId: 7 });
+
+    await submitGroupedEvaluationPublication({
+      kind: 'examen',
+      startDate: '2026-11-12',
+      endDate: '2026-11-15',
+      classIds: [1],
+      subjectIds: [10],
+      coefficientsByPair: { '1:10': 3 },
+      idempotencyKey: 'key-12345678',
+    }, 'key-12345678');
+
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toMatchObject({
+      kind: 'examen',
+      coefficientsByPair: { '1:10': 3 },
+    });
   });
 
   it('includes an explicit school only for a super-admin scoped submission', async () => {
