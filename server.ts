@@ -37,6 +37,11 @@ import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { createAccessSessionService, revokeAccessSessionToken } from './src/server/accessSessionRuntime.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
+import {
+  filterCompletedGroupedPublicationNotifications,
+  getCompletedGroupedPublicationIds,
+  hasAllExpectedGrades,
+} from './src/lib/groupedEvaluationVisibility.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { isEmailRequiredForRole, isUsersEmailUniqueViolation, normalizeEmail, normalizedEmailConflictCondition } from './src/lib/emailUniqueness.ts';
@@ -14708,11 +14713,10 @@ if (uniqueParentIds.length > 0) {
         .from(grades)
         .where(eq(grades.evaluationId, parseInt(evaluationId)));
 
-      if (
-        totalStudentsInClass[0]?.count != null &&
-        totalGradesForEvaluation[0]?.count != null &&
-        totalGradesForEvaluation[0].count === totalStudentsInClass[0].count
-      ) {
+      if (hasAllExpectedGrades(
+        totalStudentsInClass[0]?.count,
+        totalGradesForEvaluation[0]?.count,
+      )) {
         await db.delete(notifications).where(
           and(
             eq(notifications.evaluationId, parseInt(evaluationId)),
@@ -15261,7 +15265,47 @@ if (uniqueParentIds.length > 0) {
         return res.json([]);
       }
 
-      const notificationIds = userNotifications.map((notification) => notification.id);
+      let visibleNotifications = userNotifications;
+      if (actor.role === 'parent') {
+        const publicationIds = Array.from(new Set(
+          userNotifications
+            .map((notification) => notification.publicationId)
+            .filter((publicationId): publicationId is number => publicationId != null),
+        ));
+
+        if (publicationIds.length > 0) {
+          const evaluationCounts = await db.select({
+            publicationId: evaluations.publicationId,
+            expectedStudentCount: sql<number>`count(distinct ${students.id})::integer`,
+            recordedGradeCount: sql<number>`count(distinct ${grades.id})::integer`,
+          }).from(evaluations)
+            .leftJoin(students, and(
+              eq(students.classId, evaluations.classId),
+              eq(students.schoolId, evaluations.schoolId),
+            ))
+            .leftJoin(grades, eq(grades.evaluationId, evaluations.id))
+            .where(inArray(evaluations.publicationId, publicationIds))
+            .groupBy(evaluations.id, evaluations.publicationId);
+
+          const completedPublicationIds = getCompletedGroupedPublicationIds(
+            evaluationCounts.flatMap((evaluation) => (
+              evaluation.publicationId == null
+                ? []
+                : [{
+                  publicationId: evaluation.publicationId,
+                  expectedStudentCount: evaluation.expectedStudentCount,
+                  recordedGradeCount: evaluation.recordedGradeCount,
+                }]
+            )),
+          );
+          visibleNotifications = filterCompletedGroupedPublicationNotifications(
+            userNotifications,
+            completedPublicationIds,
+          );
+        }
+      }
+
+      const notificationIds = visibleNotifications.map((notification) => notification.id);
       const attachmentRows = notificationIds.length > 0
         ? await db.select().from(notificationAttachments).where(inArray(notificationAttachments.notificationId, notificationIds))
         : [];
@@ -15281,7 +15325,7 @@ if (uniqueParentIds.length > 0) {
         return acc;
       }, {} as Record<number, any[]>);
 
-      res.json(userNotifications.map((notification) => ({
+      res.json(visibleNotifications.map((notification) => ({
         ...notification,
         attachments: attachmentsByNotificationId[notification.id] ?? [],
       })));

@@ -754,6 +754,9 @@ export default function App() {
         if (parentFocusCheckInFlightRef.current) return;
         parentFocusCheckInFlightRef.current = true;
         void apiFetch('/api/notifications')
+          .then((notifications) => {
+            if (Array.isArray(notifications)) setNotificationsList(notifications);
+          })
           .catch((error) => {
             console.warn('Impossible de vérifier la session parent au retour du focus :', error);
           })

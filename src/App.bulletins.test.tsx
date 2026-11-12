@@ -1289,16 +1289,31 @@ describe('App navigation', () => {
     },
   );
 
-  it('checks a parent session through the protected notifications API when the window regains focus', async () => {
+  it('refreshes parent notifications through the protected API when the window regains focus', async () => {
     await renderWithRole('parent', [], 0);
 
     await waitFor(() => expect(document.getElementById('sidebar-nav-parent-grades')).toBeTruthy());
     const requestsBeforeFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
+    const upcomingNotification = {
+      id: 901,
+      userId: 1,
+      title: 'Nouvelle composition à venir',
+      body: 'Préparez-vous.',
+      type: 'grade',
+      isRead: false,
+      publicationId: 45,
+    };
+    mockApiFetch.mockImplementation((url: string) => (
+      url === '/api/notifications' ? Promise.resolve([upcomingNotification]) : Promise.resolve([])
+    ));
     window.dispatchEvent(new Event('focus'));
 
     await waitFor(() => {
       const requestsAfterFocus = mockApiFetch.mock.calls.filter(([url]) => url === '/api/notifications').length;
       expect(requestsAfterFocus).toBeGreaterThan(requestsBeforeFocus);
+    });
+    await waitFor(() => {
+      expect(document.getElementById('sidebar-nav-notifications')?.textContent).toContain('1');
     });
     expect(localStorage.getItem('ecoletrack_jwt_access')).toBe('jwt-token');
   });
