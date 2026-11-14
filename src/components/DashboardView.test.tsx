@@ -284,7 +284,7 @@ describe('DashboardView absence status counts', () => {
     expect(unjustifiedRow && within(unjustifiedRow).getByText('3')).toBeTruthy();
   });
 
-  it('counts absences linked to parental declarations separately from unjustified absences', () => {
+  it('labels recorded absences linked to parental declarations separately from unjustified absences', () => {
     render(
       <DashboardView
         stats={{ totalStudents: 3, totalAbsences: 3, totalClasses: 1, totalTeachers: 1, attendanceRate: 0 }}
@@ -299,11 +299,47 @@ describe('DashboardView absence status counts', () => {
       />
     );
 
-    const declaredRow = screen.getByText('Déclarées par un parent').closest('.flex.justify-between');
-    const unjustifiedRow = screen.getByText('Non Justifiées').closest('.flex.justify-between');
+    const declaredRow = screen.getByText('Liées à une déclaration parentale').closest<HTMLElement>('.flex.justify-between');
+    const unjustifiedRow = screen.getByText('Non Justifiées').closest<HTMLElement>('.flex.justify-between');
 
     expect(declaredRow && within(declaredRow).getByText('1')).toBeTruthy();
     expect(unjustifiedRow && within(unjustifiedRow).getByText('1')).toBeTruthy();
+  });
+
+  it('renders independent declaration and justification totals with their status breakdowns for administrators', () => {
+    render(
+      <DashboardView
+        stats={{ totalStudents: 2, totalAbsences: 1, totalClasses: 1, totalTeachers: 1, attendanceRate: 95 }}
+        recentAbsences={[]}
+        recentGrades={[]}
+        userRole="school_admin"
+        absenceDeclarationStats={{
+          total: 8,
+          received: 2,
+          accepted: 3,
+          refused: 1,
+          cancelled: 1,
+          notRealized: 1,
+        }}
+        absenceJustificationStats={{ total: 5, pending: 2, accepted: 2, refused: 1 }}
+      />
+    );
+
+    const declarationsCard = screen.getByRole('region', { name: 'Suivi des demandes d’absence' })
+      .querySelector<HTMLElement>('#card-parent-absence-declarations');
+    const justificationsCard = screen.getByRole('region', { name: 'Suivi des demandes d’absence' })
+      .querySelector<HTMLElement>('#card-absence-justifications');
+
+    expect(declarationsCard?.textContent).toContain('Total reçues8');
+    expect(declarationsCard?.textContent).toContain('En attente de validation2');
+    expect(declarationsCard?.textContent).toContain('Acceptées3');
+    expect(declarationsCard?.textContent).toContain('Refusées1');
+    expect(declarationsCard?.textContent).toContain('Annulées1');
+    expect(declarationsCard?.textContent).toContain('Non réalisées1');
+    expect(justificationsCard?.textContent).toContain('Total reçues5');
+    expect(justificationsCard?.textContent).toContain('En attente de validation2');
+    expect(justificationsCard?.textContent).toContain('Acceptées2');
+    expect(justificationsCard?.textContent).toContain('Refusées1');
   });
 
   it('hides recent grades for surveillant while keeping the dashboard visible', () => {

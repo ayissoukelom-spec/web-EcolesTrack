@@ -55,7 +55,36 @@ import { registerBulletinPdfRoute } from './src/lib/bulletinPdfApi.ts';
 import { registerClassRankingRoute } from './src/lib/classRankingApi.ts';
 import { registerClassSubjectPivotRoute } from './src/lib/classSubjectPivotApi.ts';
 import { registerParentSchoolAdminWhatsAppRoute } from './src/lib/parentSchoolAdminWhatsAppApi.ts';
-import { registerAccountingRoutes } from './src/lib/accountingApi.ts';
+import {
+  loadAccountingTuitionProgressCandidatesInTransaction,
+  loadAccountingTuitionProgressCandidates,
+  registerAccountingRoutes,
+} from './src/lib/accountingApi.ts';
+import {
+  isTuitionProgressReminderInAppNotificationsEnabled,
+  isTuitionProgressReminderPushNotificationsEnabled,
+  isTuitionProgressReminderRuntimeEnabled,
+  runTuitionProgressReminderRuntimePass,
+} from './src/lib/tuitionProgressReminderRuntime.ts';
+import { createTuitionProgressReminderPushTransport } from './src/lib/tuitionProgressReminderPushTransport.ts';
+import { createTuitionProgressReminderDrizzleSource } from './src/lib/tuitionProgressReminderDrizzle.ts';
+import { createTuitionProgressReminderExecutionDrizzleSource } from './src/lib/tuitionProgressReminderExecutionDrizzle.ts';
+import { executeDueTuitionProgressReminderControls } from './src/lib/tuitionProgressReminderExecution.ts';
+import {
+  createTuitionProgressReminderInAppNotificationDrizzleSource,
+  createTuitionProgressReminderPushDrizzleSource,
+} from './src/lib/tuitionProgressReminderNotificationsDrizzle.ts';
+import { createTuitionProgressReminderInAppNotifications } from './src/lib/tuitionProgressReminderNotifications.ts';
+import { prepareTuitionProgressReminderControls } from './src/lib/tuitionProgressReminderPreparation.ts';
+import { processTuitionProgressReminderPushOutbox } from './src/lib/tuitionProgressReminderPush.ts';
+import {
+  getLocalTuitionProgressReminderTestConfiguration,
+  getLocalTuitionReminderSimulationInstant,
+  isLocalTuitionReminderTestDatabaseIdentity,
+  matchesLocalTuitionProgressReminderTestTarget,
+  shouldRetainLocalTuitionProgressReminderTestControl,
+} from './src/lib/localTuitionProgressReminderTest.ts';
+import { DEFAULT_SCHOOL_TIME_ZONE, isValidIanaTimeZone } from './src/lib/schoolTimeZone.ts';
 import {
   normalizeTeacherClassIds as normalizeTeacherClassIdSelection,
   planTeacherClassMembershipSync,
@@ -120,6 +149,7 @@ import {
   evaluationParticipations,
   evaluationPublications,
   notificationDeliveryOutbox,
+  tuitionProgressReminderControls,
   userLoginEvents,
 } from './src/db/schema.ts';
 import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, like } from 'drizzle-orm';
@@ -185,9 +215,69 @@ class SchoolDeletionConflictError extends Error {
 
 class SchoolDeletionNotFoundError extends Error {}
 
+const tuitionProgressReminderSchoolDeleteConstraints: ReadonlySet<string> = new Set([
+  'tuition_progress_reminder_controls_school_fk',
+  'tuition_progress_reminder_controls_academic_year_fk',
+  'tuition_progress_reminder_controls_cycle_fk',
+  'tuition_progress_reminder_controls_student_fk',
+]);
+
+const tuitionProgressReminderAcademicYearDeleteConstraints: ReadonlySet<string> = new Set([
+  'tuition_progress_reminder_controls_academic_year_fk',
+]);
+
+function isTuitionProgressReminderForeignKeyViolation(
+  error: unknown,
+  constraintNames: ReadonlySet<string>,
+): boolean {
+  const visited = new Set<object>();
+  let current: unknown = error;
+
+  while (typeof current === 'object' && current !== null && !visited.has(current)) {
+    visited.add(current);
+    const candidate = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (
+      candidate.code === '23503'
+      && typeof candidate.constraint === 'string'
+      && constraintNames.has(candidate.constraint)
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
 const parsePositiveInteger = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const isVerifiedLocalTuitionReminderTestDatabase = async (
+  expectedDatabaseName: string | undefined,
+): Promise<boolean> => {
+  try {
+    const identityResult = await db.execute(sql<{
+      database_name: string;
+      server_address: string | null;
+    }>`SELECT current_database() AS database_name, inet_server_addr()::text AS server_address`);
+    const identity = identityResult.rows[0];
+    if (!identity || typeof identity !== 'object') return false;
+    const databaseName = 'database_name' in identity ? identity.database_name : undefined;
+    const serverAddress = 'server_address' in identity ? identity.server_address : undefined;
+    const isNullableString = (value: unknown): value is string | null =>
+      value === null || typeof value === 'string';
+    if (typeof databaseName !== 'string'
+      || !isNullableString(serverAddress)) return false;
+    return isLocalTuitionReminderTestDatabaseIdentity({
+      databaseName,
+      serverAddress,
+    }, expectedDatabaseName);
+  } catch {
+    console.error('Local tuition reminder test database identity check failed.');
+    return false;
+  }
 };
 
 const STUDENT_DUPLICATE_ERROR = {
@@ -482,9 +572,12 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
         eq(notificationDeliveryOutbox.attemptCount, attemptCount),
       ));
     },
-    markAwaitingConfirmation: async (id, attemptCount, detail, updatedAt) => {
+    markAwaitingConfirmation: async (id, attemptCount, detail, relayJobIds, updatedAt) => {
       await db.update(notificationDeliveryOutbox).set({
         lastError: detail,
+        transportState: 'relay_accepted',
+        relayJobIds,
+        relayAcceptedAt: updatedAt,
         updatedAt,
       }).where(and(
         eq(notificationDeliveryOutbox.id, id),
@@ -495,6 +588,7 @@ function createGroupedPushDeliveryRepository(): GroupedPushDeliveryRepository {
     markUncertain: async (id, attemptCount, error, updatedAt) => {
       await db.update(notificationDeliveryOutbox).set({
         lastError: error,
+        transportState: 'uncertain',
         updatedAt,
       }).where(and(
         eq(notificationDeliveryOutbox.id, id),
@@ -2240,6 +2334,371 @@ export async function createApp() {
       }
       return response.status;
     },
+  });
+
+  app.get('/api/admin/tuition-progress-reminder-local-test', requireAuth, async (req: AuthRequest, res) => {
+    const actor = await resolveActor(req);
+    if (!actor || actor.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const configuration = getLocalTuitionProgressReminderTestConfiguration(process.env);
+    const databaseVerified = configuration.availableLocally
+      && await isVerifiedLocalTuitionReminderTestDatabase(
+        process.env.ECOLETRACK_LOCAL_TUITION_REMINDER_TEST_DATABASE_NAME,
+      );
+    const reason = !configuration.availableLocally
+      ? configuration.reason
+      : !databaseVerified
+        ? 'local_test_database_identity_unverified'
+        : configuration.reason;
+    return res.json({
+      availableLocally: databaseVerified,
+      enabled: configuration.enabled && databaseVerified,
+      reason,
+      targets: configuration.targets,
+    });
+  });
+
+  app.post('/api/admin/tuition-progress-reminder-local-test/run', requireAuth, async (req: AuthRequest, res) => {
+    const actor = await resolveActor(req);
+    if (!actor || actor.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const configuration = getLocalTuitionProgressReminderTestConfiguration(process.env);
+    if (!configuration.enabled
+      || !await isVerifiedLocalTuitionReminderTestDatabase(
+        process.env.ECOLETRACK_LOCAL_TUITION_REMINDER_TEST_DATABASE_NAME,
+      )) {
+      return res.status(404).json({ error: 'Le test local des rappels de scolarité n’est pas disponible ou la base locale n’a pas été vérifiée.' });
+    }
+
+    const body = req.body as Record<string, unknown> | null;
+    const selection = {
+      schoolId: Number(body?.schoolId),
+      studentId: Number(body?.studentId),
+      parentUserId: Number(body?.parentUserId),
+      deviceId: typeof body?.deviceId === 'string' ? body.deviceId : '',
+    };
+    const monthStart = typeof body?.monthStart === 'string' ? body.monthStart : '';
+    if (![selection.schoolId, selection.studentId, selection.parentUserId].every((id) =>
+      Number.isSafeInteger(id) && id > 0)
+      || !/^\d{1,32}$/.test(selection.deviceId)
+      || !/^\d{4}-(0[1-9]|1[0-2])-01$/.test(monthStart)
+      || !configuration.targets.some((target) =>
+        matchesLocalTuitionProgressReminderTestTarget(target, selection))) {
+      return res.status(400).json({ error: 'La cible sélectionnée ne correspond pas à une autorisation de test, ou le mois choisi est invalide.' });
+    }
+
+    let createdControlId: number | null = null;
+    let preserveControl = false;
+    try {
+      const recipients = await db.select({
+        studentId: students.id,
+      }).from(students)
+        .innerJoin(parents, and(
+          eq(parents.id, students.parentId),
+          eq(parents.userId, selection.parentUserId),
+          eq(parents.schoolId, selection.schoolId),
+        ))
+        .innerJoin(users, and(
+          eq(users.id, parents.userId),
+          eq(users.isDeleted, false),
+        ))
+        .innerJoin(userSchools, and(
+          eq(userSchools.userId, parents.userId),
+          eq(userSchools.schoolId, selection.schoolId),
+          eq(userSchools.role, 'parent'),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+        ))
+        .where(and(
+          eq(students.id, selection.studentId),
+          eq(students.schoolId, selection.schoolId),
+          eq(students.isActive, true),
+        ))
+        .limit(2);
+      if (recipients.length !== 1 || recipients[0].studentId !== selection.studentId) {
+        return res.status(409).json({ error: 'Le rattachement actif entre cet élève et ce parent dans cette école n’est plus valide.' });
+      }
+      const [testSchool] = await db.select({
+        isSuspended: schools.isSuspended,
+      }).from(schools).where(eq(schools.id, selection.schoolId)).limit(1);
+      if (!testSchool || testSchool.isSuspended) {
+        return res.status(409).json({ error: 'L’école de test n’existe pas ou est suspendue.' });
+      }
+
+      const matchingScopes = await db.selectDistinct({
+        academicYearId: financialObligations.academicYearId,
+        cycleId: levels.cycleId,
+      }).from(financialObligations)
+        .innerJoin(accountingCategories, and(
+          eq(accountingCategories.id, financialObligations.categoryId),
+          eq(accountingCategories.schoolId, selection.schoolId),
+          eq(accountingCategories.code, 'tuition'),
+        ))
+        .innerJoin(students, and(
+          eq(students.id, financialObligations.studentId),
+          eq(students.schoolId, selection.schoolId),
+          eq(students.isActive, true),
+        ))
+        .innerJoin(classes, and(
+          eq(classes.id, financialObligations.classId),
+          eq(classes.academicYearId, financialObligations.academicYearId),
+        ))
+        .leftJoin(schoolClasses, and(
+          eq(schoolClasses.classId, classes.id),
+          eq(schoolClasses.schoolId, selection.schoolId),
+          eq(schoolClasses.status, 'approved'),
+        ))
+        .innerJoin(levels, eq(levels.id, classes.levelId))
+        .innerJoin(academicYears, and(
+          eq(academicYears.id, financialObligations.academicYearId),
+          eq(academicYears.isActive, true),
+          or(eq(academicYears.schoolId, selection.schoolId), isNull(academicYears.schoolId)),
+        ))
+        .innerJoin(cycles, and(
+          eq(cycles.id, levels.cycleId),
+          eq(cycles.isActive, true),
+        ))
+        .where(and(
+          eq(financialObligations.schoolId, selection.schoolId),
+          eq(financialObligations.studentId, selection.studentId),
+          eq(financialObligations.status, 'active'),
+          or(
+            eq(classes.schoolId, selection.schoolId),
+            and(isNull(classes.schoolId), isNotNull(schoolClasses.id)),
+          ),
+        ));
+      const schoolEnabledMatchingScopes = [];
+      for (const candidate of matchingScopes) {
+        if (await validateSchoolCycle(selection.schoolId, candidate.cycleId)) {
+          schoolEnabledMatchingScopes.push(candidate);
+        }
+      }
+      if (schoolEnabledMatchingScopes.length !== 1) {
+        if (matchingScopes.length === 0) {
+          return res.status(409).json({
+            error: `Aucun périmètre comptable admissible pour l’élève ${selection.studentId} : il faut une obligation active de catégorie « scolarité », rattachée à l’école ${selection.schoolId}, une année active commune ou de cette école, une classe de cette année autorisée et un cycle actif déterminé par le niveau.`,
+          });
+        }
+        if (schoolEnabledMatchingScopes.length === 0) {
+          return res.status(409).json({
+            error: 'Le cycle de la classe de l’élève n’est pas actif ou autorisé pour cette école.',
+          });
+        }
+        return res.status(409).json({
+          error: `Plusieurs périmètres année/cycle (${schoolEnabledMatchingScopes.length}) correspondent aux obligations actives de l’élève; le test refuse de choisir arbitrairement.`,
+        });
+      }
+
+      const scope = {
+        schoolId: selection.schoolId,
+        studentId: selection.studentId,
+        academicYearId: schoolEnabledMatchingScopes[0].academicYearId,
+        cycleId: schoolEnabledMatchingScopes[0].cycleId,
+        monthStart,
+      };
+      const preparationSource = createTuitionProgressReminderDrizzleSource(db);
+      const calendar = await preparationSource.loadCalendar(scope);
+      if (!calendar || !calendar.timeZone) {
+        return res.status(409).json({
+          error: 'Calendrier non résolu : vérifiez que l’école, l’année commune ou propre à l’école, le cycle actif et le fuseau horaire sont cohérents.',
+        });
+      }
+      const simulatedNow = getLocalTuitionReminderSimulationInstant(monthStart, calendar.timeZone);
+      if (!simulatedNow) {
+        return res.status(400).json({ error: 'La date simulée ne peut pas être convertie en 08 h 00 dans le fuseau de l’école.' });
+      }
+
+      const deviceCheckPayload = {
+        parentId: String(selection.parentUserId),
+        schoolId: selection.schoolId,
+        academicYearId: scope.academicYearId,
+        cycleId: scope.cycleId,
+        studentId: selection.studentId,
+        deviceId: selection.deviceId,
+      };
+      const deviceCheckAuth = signInternalPayload(deviceCheckPayload);
+      const deviceCheckResponse = await fetch(
+        `${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/tuition-progress-push/test-device-check`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Internal-Signature': deviceCheckAuth.signature,
+            'X-Internal-Timestamp': deviceCheckAuth.timestamp,
+          },
+          body: JSON.stringify(deviceCheckPayload),
+        },
+      );
+      if (!deviceCheckResponse.ok) {
+        return res.status(409).json({ error: 'Le parent ou l’appareil de test n’est plus autorisé ou disponible.' });
+      }
+      const deviceCheck = await deviceCheckResponse.json() as { status?: unknown; device?: { id?: unknown } };
+      if (deviceCheck.status !== 'ready' || deviceCheck.device?.id !== selection.deviceId) {
+        return res.status(409).json({ error: 'L’appareil sélectionné n’a pas pu être vérifié comme appareil de test autorisé.' });
+      }
+
+      const preparationInput = {
+        ...scope,
+        now: simulatedNow,
+        mode: 'simulate' as const,
+      };
+      const preview = await prepareTuitionProgressReminderControls(preparationInput, preparationSource);
+      if (preview.ok === false) {
+        const calendarFailureMessages: Record<string, string> = {
+          invalid_context: 'L’année scolaire ou le cycle ne correspond pas à l’école.',
+          invalid_amounts: 'Le calcul du calendrier a reçu un montant invalide.',
+          invalid_assessment_date: 'La date d’évaluation calculée est invalide.',
+          period_scope_mismatch: 'Une période est rattachée à une autre école ou ne peut pas être interprétée comme période commune.',
+          periods_incomplete: 'Les périodes actives du cycle sont incomplètes ou leur ordre ne suit pas le calendrier scolaire.',
+          period_type_ambiguous: 'Les périodes actives mélangent les systèmes trimestriel et semestriel, ou leur type est absent.',
+          period_dates_invalid: 'Au moins une période active a des dates absentes ou invalides.',
+          period_order_invalid: 'Les périodes actives se chevauchent ou ne sont pas dans l’ordre chronologique.',
+        };
+        const preparationFailureMessages: Record<string, string> = {
+          invalid_scope: 'L’école, l’année, le cycle ou l’élève transmis à la préparation est invalide.',
+          invalid_mode: 'Le mode de préparation demandé est invalide.',
+          invalid_current_time: 'L’instant simulé n’est pas une date valide.',
+          invalid_month: 'Le mois simulé n’est pas valide.',
+          calendar_not_found: 'Aucun calendrier n’existe pour cette école, cette année et ce cycle.',
+          calendar_scope_mismatch: 'Le calendrier chargé ne correspond pas à l’école, l’année et le cycle retenus.',
+          invalid_time_zone: 'Le fuseau horaire de l’école est absent ou invalide.',
+          invalid_local_time: 'L’heure locale de contrôle ou la fin de journée n’existe pas à cette date dans le fuseau de l’école.',
+          student_scope_mismatch: 'Une inscription ou une obligation renvoyée appartient à une autre école, année ou cycle.',
+          existing_control_scope_mismatch: 'Un contrôle existant appartient à une autre portée scolaire.',
+          existing_control_out_of_scope: 'Un contrôle existant ne correspond pas à l’élève et à la date planifiés.',
+          invalid_insert_count: 'Le stockage a renvoyé un nombre de contrôles incohérent.',
+        };
+        const error = preview.error;
+        const message = error.code === 'invalid_calendar'
+          ? calendarFailureMessages[error.reasonCode]
+            ?? `Le calendrier scolaire est invalide (${error.reasonCode}).`
+          : preparationFailureMessages[error.code]
+            ?? `La préparation a échoué (${error.code}).`;
+        return res.status(409).json({ error: message });
+      }
+      if (preview.emptyReason === 'no_scheduled_control') {
+        return res.status(409).json({
+          error: `Aucune date de contrôle « dernier jour du mois à 08 h » n’est planifiée pour ${monthStart.slice(0, 7)} dans les périodes actives de ce cycle. Le mois peut être hors calendrier ou le contrôle déjà expiré.`,
+        });
+      }
+      if (preview.emptyReason === 'no_eligible_students') {
+        return res.status(409).json({
+          error: `L’élève ${selection.studentId} n’a pas été retenu par le préparateur : aucun contrôle ne peut être créé sans élève actif de l’école, obligation active de catégorie « scolarité », classe autorisée pour l’année et cycle du niveau correspondant.`,
+        });
+      }
+      if (preview.existingCount > 0) {
+        return res.status(409).json({
+          error: 'Un contrôle existe déjà pour cette école, année, cycle, élève, mois et étape. Il n’est pas réutilisé afin d’éviter un doublon.',
+        });
+      }
+      if (preview.plannedCount !== 1 || preview.recordsToInsert.length !== 1) {
+        return res.status(409).json({
+          error: `La préparation a produit ${preview.plannedCount} contrôle(s); une seule étape « dernier jour » était attendue pour l’élève et le mois sélectionnés.`,
+        });
+      }
+      if (preview.recordsToInsert[0].stage !== 'last') {
+        return res.status(409).json({ error: 'Le contrôle calculé est l’étape de l’avant-dernier jour, pas celle de fin de mois demandée.' });
+      }
+      if (preview.recordsToInsert[0].scheduledAt.getTime() > simulatedNow.getTime()) {
+        return res.status(409).json({ error: 'L’heure simulée précède l’heure de déclenchement du contrôle.' });
+      }
+      if (preview.recordsToInsert[0].expiresAt.getTime() <= simulatedNow.getTime()) {
+        return res.status(409).json({ error: 'Le contrôle du mois sélectionné a déjà expiré dans le fuseau de l’école.' });
+      }
+      const prepared = await prepareTuitionProgressReminderControls({
+        ...preparationInput,
+        mode: 'persist',
+      }, preparationSource);
+      if (!prepared.ok || prepared.insertedCount !== 1) {
+        return res.status(409).json({ error: 'Le contrôle n’a pas pu être réservé sans doublon; un autre traitement a pu le créer simultanément.' });
+      }
+
+      const [createdControl] = await db.select({
+        id: tuitionProgressReminderControls.id,
+        stage: tuitionProgressReminderControls.stage,
+      }).from(tuitionProgressReminderControls).where(and(
+        eq(tuitionProgressReminderControls.schoolId, scope.schoolId),
+        eq(tuitionProgressReminderControls.academicYearId, scope.academicYearId),
+        eq(tuitionProgressReminderControls.cycleId, scope.cycleId),
+        eq(tuitionProgressReminderControls.studentId, scope.studentId),
+        eq(tuitionProgressReminderControls.monthStart, monthStart),
+        eq(tuitionProgressReminderControls.stage, 'last'),
+      )).limit(1);
+      if (!createdControl) {
+        return res.status(500).json({ error: 'Le contrôle réservé n’a pas pu être relu après son enregistrement.' });
+      }
+      createdControlId = createdControl.id;
+      const executionScope = { ...scope, stage: createdControl.stage };
+      const clock = () => new Date(simulatedNow);
+      const execution = await executeDueTuitionProgressReminderControls({
+        scope: executionScope,
+        limit: 1,
+      }, {
+        source: createTuitionProgressReminderExecutionDrizzleSource(db),
+        calculateAccounting: (input) => loadAccountingTuitionProgressCandidates(input, db),
+        clock,
+      });
+      const inAppNotifications = await createTuitionProgressReminderInAppNotifications({
+        now: simulatedNow,
+        scope: executionScope,
+        testDeviceId: selection.deviceId,
+        source: createTuitionProgressReminderInAppNotificationDrizzleSource({
+          database: db,
+          clock,
+          calculateAccounting: loadAccountingTuitionProgressCandidatesInTransaction,
+        }),
+        clock,
+      });
+
+      const pushTransport = createTuitionProgressReminderPushTransport({
+        endpoint: resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV),
+        internalSecret: process.env.INTERNAL_SECRET ?? '',
+        testDelivery: {
+          deviceId: selection.deviceId,
+          simulatedNow,
+        },
+      });
+      preserveControl = true;
+      const pushNotifications = await processTuitionProgressReminderPushOutbox({
+        source: createTuitionProgressReminderPushDrizzleSource(
+          db,
+          loadAccountingTuitionProgressCandidatesInTransaction,
+        ),
+        send: pushTransport,
+        clock,
+        scope: executionScope,
+      });
+      preserveControl = shouldRetainLocalTuitionProgressReminderTestControl(pushNotifications.outcomes);
+      if (!preserveControl) {
+        await db.delete(tuitionProgressReminderControls)
+          .where(eq(tuitionProgressReminderControls.id, createdControlId));
+        createdControlId = null;
+      }
+
+      return res.json({
+        simulatedAt: simulatedNow.toISOString(),
+        schoolId: selection.schoolId,
+        studentId: selection.studentId,
+        parentUserId: selection.parentUserId,
+        device: deviceCheck.device,
+        preparation: {
+          plannedCount: prepared.plannedCount,
+          insertedCount: prepared.insertedCount,
+        },
+        execution,
+        inAppNotifications,
+        pushNotifications,
+        controlRetainedForSafeRetry: preserveControl,
+      });
+    } catch (error) {
+      if (createdControlId != null && !preserveControl) {
+        await db.delete(tuitionProgressReminderControls)
+          .where(eq(tuitionProgressReminderControls.id, createdControlId));
+      }
+      console.error('Local tuition progress reminder test failed.');
+      return res.status(500).json({ error: 'Échec inattendu du test local; consultez le journal serveur sans y rechercher de contenu secret.' });
+    }
   });
 
   // Register POST /api/users/:userId/schools (manage multi-school memberships)
@@ -4788,6 +5247,10 @@ export async function createApp() {
       const principalName = req.body?.principalName != null ? String(req.body.principalName).trim() : null;
       const principalGenderRaw = req.body?.principalGender;
       const principalGender = principalGenderRaw == null || principalGenderRaw === '' ? null : String(principalGenderRaw).trim().toUpperCase();
+      const timeZoneRaw = req.body?.timeZone;
+      const timeZone = timeZoneRaw == null
+        ? DEFAULT_SCHOOL_TIME_ZONE
+        : typeof timeZoneRaw === 'string' ? timeZoneRaw.trim() : '';
       const promotionThresholdRaw = req.body?.promotionThreshold;
       const promotionThreshold = promotionThresholdRaw == null || promotionThresholdRaw === ''
         ? 10
@@ -4797,6 +5260,9 @@ export async function createApp() {
 
       if (!name) return res.status(400).json({ error: 'Name is required' });
       if (!phone) return res.status(400).json({ error: 'Phone is required' });
+      if (!isValidIanaTimeZone(timeZone)) {
+        return res.status(400).json({ error: 'timeZone must be a valid IANA time zone' });
+      }
       if (principalGender != null && !['M', 'F'].includes(principalGender)) return res.status(400).json({ error: 'principalGender must be M or F' });
       if (!Number.isFinite(promotionThreshold) || promotionThreshold < 0 || promotionThreshold > 20) {
         return res.status(400).json({ error: 'promotionThreshold must be between 0 and 20' });
@@ -4832,7 +5298,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create schools' });
       }
 
-      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName, principalGender, promotionThreshold: promotionThreshold.toFixed(2) }).returning();
+      const result = await db.insert(schools).values({ name, address, phone, phone2, officialName, abbreviation, motto, postalBox, email, city, region, educationDirection, ministryName, principalName, principalGender, timeZone, promotionThreshold: promotionThreshold.toFixed(2) }).returning();
       const createdSchool = result[0];
 
       if (Array.isArray(classNames) && classNames.length > 0) {
@@ -5054,6 +5520,10 @@ export async function createApp() {
       const administrativeFields = ['officialName', 'abbreviation', 'motto', 'postalBox', 'email', 'city', 'region', 'educationDirection', 'ministryName', 'principalName'] as const;
       const principalGenderRaw = req.body?.principalGender;
       const principalGender = principalGenderRaw == null || principalGenderRaw === '' ? null : String(principalGenderRaw).trim().toUpperCase();
+      const timeZoneRaw = req.body?.timeZone;
+      const timeZone = timeZoneRaw === undefined
+        ? undefined
+        : typeof timeZoneRaw === 'string' ? timeZoneRaw.trim() : '';
       const promotionThresholdRaw = req.body?.promotionThreshold;
       const logoPathRaw = req.body?.logoPath;
       const logoPath = logoPathRaw == null ? undefined : String(logoPathRaw).trim() || null;
@@ -5061,6 +5531,9 @@ export async function createApp() {
       const subjectNames = req.body?.subjectNames;
 
       if (!name) return res.status(400).json({ error: 'Name is required' });
+      if (timeZone !== undefined && !isValidIanaTimeZone(timeZone)) {
+        return res.status(400).json({ error: 'timeZone must be a valid IANA time zone' });
+      }
       if (principalGenderRaw !== undefined && principalGender != null && !['M', 'F'].includes(principalGender)) {
         return res.status(400).json({ error: 'principalGender must be M or F' });
       }
@@ -5102,6 +5575,9 @@ export async function createApp() {
       if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Only school administrators can modify school information' });
       }
+      if (timeZone !== undefined && actor.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Only super admin can modify the school time zone' });
+      }
       if (actor.role === 'school_admin' && actor.schoolId !== id) {
         return res.status(403).json({ error: 'Cannot modify another school' });
       }
@@ -5120,12 +5596,16 @@ export async function createApp() {
         if (req.body?.[field] !== undefined) updatePayload[field] = req.body[field] == null ? null : String(req.body[field]).trim() || null;
       });
       if (principalGenderRaw !== undefined) updatePayload.principalGender = principalGender;
+      if (timeZone !== undefined) updatePayload.timeZone = timeZone;
       if (promotionThresholdRaw !== undefined) updatePayload.promotionThreshold = Number(promotionThresholdRaw).toFixed(2);
       if (logoPathRaw !== undefined) {
         updatePayload.logoPath = logoPath == null ? null : buildSchoolLogoRelativePath(path.basename(logoPath));
       }
       // Track changes for audit
       const changes: string[] = [];
+      if (timeZone !== undefined && existingSchool.timeZone !== timeZone) {
+        changes.push(`time_zone: "${existingSchool.timeZone || ''}" → "${timeZone}"`);
+      }
 
       // allow updating the student creation lock (accept snake_case or camelCase)
       const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
@@ -5938,6 +6418,18 @@ export async function createApp() {
           .for('update');
         if (!school) throw new SchoolDeletionNotFoundError('École introuvable.');
 
+        const [tuitionProgressHistory] = await tx.select({
+          id: tuitionProgressReminderControls.id,
+        }).from(tuitionProgressReminderControls)
+          .where(eq(tuitionProgressReminderControls.schoolId, id))
+          .limit(1);
+        if (tuitionProgressHistory) {
+          throw new SchoolDeletionConflictError(
+            'TUITION_PROGRESS_REMINDER_HISTORY_EXISTS',
+            'Cet établissement ne peut pas être supprimé car il possède un historique de contrôles financiers.',
+          );
+        }
+
         const [financialHistory] = await tx.select({ id: financialObligations.id })
           .from(financialObligations)
           .where(eq(financialObligations.schoolId, id))
@@ -6717,6 +7209,12 @@ export async function createApp() {
       if (err instanceof SchoolDeletionNotFoundError) {
         return res.status(404).json({ error: err.message });
       }
+      if (isTuitionProgressReminderForeignKeyViolation(err, tuitionProgressReminderSchoolDeleteConstraints)) {
+        return res.status(409).json({
+          error: 'Cet établissement ne peut pas être supprimé car il possède un historique de contrôles financiers.',
+          code: 'TUITION_PROGRESS_REMINDER_HISTORY_EXISTS',
+        });
+      }
       if (err?.code === '40001' || err?.code === '40P01') {
         return res.status(409).json({
           error: 'La suppression est entrée en conflit avec une modification concurrente; réessayez.',
@@ -6840,15 +7338,39 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can delete academic years' });
       }
 
-      const [targetYear] = await db.select().from(academicYears).where(eq(academicYears.id, id));
-      if (!targetYear) return res.status(404).json({ error: 'Academic year not found' });
+      const deletionResult = await db.transaction(async (tx) => {
+        const [targetYear] = await tx.select({ id: academicYears.id })
+          .from(academicYears)
+          .where(eq(academicYears.id, id))
+          .for('update');
+        if (!targetYear) return 'not_found' as const;
 
-      await db.delete(academicYears).where(eq(academicYears.id, id));
+        const [tuitionProgressHistory] = await tx.select({
+          id: tuitionProgressReminderControls.id,
+        }).from(tuitionProgressReminderControls)
+          .where(eq(tuitionProgressReminderControls.academicYearId, id))
+          .limit(1);
+        if (tuitionProgressHistory) return 'history_exists' as const;
+
+        await tx.delete(academicYears).where(eq(academicYears.id, id));
+        return 'deleted' as const;
+      });
+
+      if (deletionResult === 'not_found') return res.status(404).json({ error: 'Academic year not found' });
+      if (deletionResult === 'history_exists') {
+        return res.status(409).json({
+          error: 'Cette année scolaire ne peut pas être supprimée car elle est référencée par un historique de contrôles financiers.',
+          code: 'TUITION_PROGRESS_REMINDER_HISTORY_EXISTS',
+        });
+      }
       res.json({ success: true });
     } catch (err: any) {
       console.error('Failed to delete academic year:', err);
-      if (err?.code === '23503' || err?.cause?.code === '23503') {
-        return res.status(409).json({ error: 'Impossible de supprimer cette année: elle est utilisée par des classes, trimestres ou utilisateurs.' });
+      if (isTuitionProgressReminderForeignKeyViolation(err, tuitionProgressReminderAcademicYearDeleteConstraints)) {
+        return res.status(409).json({
+          error: 'Cette année scolaire ne peut pas être supprimée car elle est référencée par un historique de contrôles financiers.',
+          code: 'TUITION_PROGRESS_REMINDER_HISTORY_EXISTS',
+        });
       }
       res.status(500).json({ error: 'Failed to delete academic year' });
     }
@@ -12379,6 +12901,7 @@ export async function createApp() {
 
       const isAlreadyFinalAndEquivalent =
         absence.justificationStatus === status &&
+        absence.isJustified === (status === 'APPROVED') &&
         (
           status === 'APPROVED' ||
           (absence.rejectionReason ?? '') === (rejectionReason || '')
@@ -15187,6 +15710,20 @@ if (uniqueParentIds.length > 0) {
       let teacherAssignmentIds: number[] = [];
       let authorizedTeacherStudentIds: number[] | null = null;
       const ageStatsAsOf = new Date().toISOString().slice(0, 10);
+      const emptyAbsenceDeclarationStats = {
+        total: 0,
+        received: 0,
+        accepted: 0,
+        refused: 0,
+        cancelled: 0,
+        notRealized: 0,
+      };
+      const emptyAbsenceJustificationStats = {
+        total: 0,
+        pending: 0,
+        accepted: 0,
+        refused: 0,
+      };
       if (actor.role !== 'super_admin' && actor.schoolId) {
         schoolFilter = actor.schoolId;
       }
@@ -15224,7 +15761,7 @@ if (uniqueParentIds.length > 0) {
 
       if (actor.role === 'parent') {
         if (!parentChildIds || parentChildIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, absenceDeclarationStats: emptyAbsenceDeclarationStats, absenceJustificationStats: emptyAbsenceJustificationStats, ageStatsAsOf, ageStatsByClass: [] });
         }
 
         studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), inArray(students.id, parentChildIds))) as any;
@@ -15247,14 +15784,14 @@ if (uniqueParentIds.length > 0) {
           .where(inArray(absences.studentId, parentChildIds)) as any;
       } else if (actor.role === 'teacher') {
         if (!teacherClassIds || teacherClassIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, absenceDeclarationStats: emptyAbsenceDeclarationStats, absenceJustificationStats: emptyAbsenceJustificationStats, ageStatsAsOf, ageStatsByClass: [] });
         }
 
         authorizedTeacherStudentIds = teacherScope
           ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds)
           : [];
         if (authorizedTeacherStudentIds.length === 0) {
-          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, ageStatsAsOf, ageStatsByClass: [] });
+          return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, absenceDeclarationStats: emptyAbsenceDeclarationStats, absenceJustificationStats: emptyAbsenceJustificationStats, ageStatsAsOf, ageStatsByClass: [] });
         }
 
         studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), inArray(students.id, authorizedTeacherStudentIds))) as any;
@@ -15411,6 +15948,73 @@ if (uniqueParentIds.length > 0) {
         declared: Number(absenceStatusCountsResult[0]?.declared || 0),
       };
 
+      const absenceDeclarationStatsSelection = {
+        total: sql<number>`count(distinct ${absenceDeclarations.id})::integer`,
+        received: sql<number>`count(distinct case when ${absenceDeclarations.status} = 'RECEIVED' then ${absenceDeclarations.id} end)::integer`,
+        accepted: sql<number>`count(distinct case when ${absenceDeclarations.status} = 'ACCEPTED' then ${absenceDeclarations.id} end)::integer`,
+        refused: sql<number>`count(distinct case when ${absenceDeclarations.status} = 'REFUSED' then ${absenceDeclarations.id} end)::integer`,
+        cancelled: sql<number>`count(distinct case when ${absenceDeclarations.status} = 'CANCELLED' then ${absenceDeclarations.id} end)::integer`,
+        notRealized: sql<number>`count(distinct case when ${absenceDeclarations.status} = 'NOT_REALIZED' then ${absenceDeclarations.id} end)::integer`,
+      };
+      const absenceDeclarationStatsBaseQuery = db
+        .select(absenceDeclarationStatsSelection)
+        .from(absenceDeclarations)
+        .innerJoin(students, eq(students.id, absenceDeclarations.studentId));
+      const absenceDeclarationStatsRows = actor.role === 'super_admin'
+        ? await absenceDeclarationStatsBaseQuery
+        : actor.role === 'parent'
+          ? parentChildIds?.length
+            ? await absenceDeclarationStatsBaseQuery.where(inArray(absenceDeclarations.studentId, parentChildIds))
+            : await absenceDeclarationStatsBaseQuery.where(sql`false`)
+          : actor.role === 'teacher'
+            ? await absenceDeclarationStatsBaseQuery.where(sql`false`)
+            : actor.schoolId != null
+              ? await absenceDeclarationStatsBaseQuery.where(eq(students.schoolId, actor.schoolId))
+              : await absenceDeclarationStatsBaseQuery.where(sql`false`);
+      const absenceDeclarationStatsRow = absenceDeclarationStatsRows[0];
+      const absenceDeclarationStats = {
+        total: Number(absenceDeclarationStatsRow?.total ?? 0),
+        received: Number(absenceDeclarationStatsRow?.received ?? 0),
+        accepted: Number(absenceDeclarationStatsRow?.accepted ?? 0),
+        refused: Number(absenceDeclarationStatsRow?.refused ?? 0),
+        cancelled: Number(absenceDeclarationStatsRow?.cancelled ?? 0),
+        notRealized: Number(absenceDeclarationStatsRow?.notRealized ?? 0),
+      };
+
+      const absenceJustificationStatsSelection = {
+        total: sql<number>`count(distinct case when ${absences.justificationStatus} in ('PENDING', 'APPROVED', 'REJECTED') or (${absences.justificationStatus} is null and ${absences.isJustified} = true) then ${absences.id} end)::integer`,
+        pending: sql<number>`count(distinct case when ${absences.justificationStatus} = 'PENDING' then ${absences.id} end)::integer`,
+        accepted: sql<number>`count(distinct case when ${absences.justificationStatus} = 'APPROVED' or (${absences.justificationStatus} is null and ${absences.isJustified} = true) then ${absences.id} end)::integer`,
+        refused: sql<number>`count(distinct case when ${absences.justificationStatus} = 'REJECTED' then ${absences.id} end)::integer`,
+      };
+      const absenceJustificationStatsBaseQuery = db
+        .select(absenceJustificationStatsSelection)
+        .from(absences)
+        .innerJoin(students, eq(students.id, absences.studentId));
+      const absenceJustificationStatsRows = actor.role === 'super_admin'
+        ? await absenceJustificationStatsBaseQuery
+        : actor.role === 'parent'
+          ? parentChildIds?.length
+            ? await absenceJustificationStatsBaseQuery.where(inArray(absences.studentId, parentChildIds))
+            : await absenceJustificationStatsBaseQuery.where(sql`false`)
+          : actor.role === 'teacher'
+            ? teacherAssignmentIds.length > 0
+              ? await absenceJustificationStatsBaseQuery.where(and(
+                inArray(absences.teachingAssignmentId, teacherAssignmentIds),
+                eq(students.schoolId, actor.schoolId!),
+              ))
+              : await absenceJustificationStatsBaseQuery.where(sql`false`)
+            : actor.schoolId != null
+              ? await absenceJustificationStatsBaseQuery.where(eq(students.schoolId, actor.schoolId))
+              : await absenceJustificationStatsBaseQuery.where(sql`false`);
+      const absenceJustificationStatsRow = absenceJustificationStatsRows[0];
+      const absenceJustificationStats = {
+        total: Number(absenceJustificationStatsRow?.total ?? 0),
+        pending: Number(absenceJustificationStatsRow?.pending ?? 0),
+        accepted: Number(absenceJustificationStatsRow?.accepted ?? 0),
+        refused: Number(absenceJustificationStatsRow?.refused ?? 0),
+      };
+
       const totalStudents = studentCountResult[0]?.count || 0;
       const genderCounts = studentGenderRows.reduce((acc, row) => {
         const normalized = normalizeGenderValue(row.gender);
@@ -15535,6 +16139,8 @@ if (uniqueParentIds.length > 0) {
         recentGrades,
         chartData,
         absenceStatusCounts,
+        absenceDeclarationStats,
+        absenceJustificationStats,
         ageStatsAsOf,
         ageStatsByClass,
       });
@@ -16068,6 +16674,67 @@ export async function startServer() {
       const timer = setInterval(() => { void runBatch(); }, 15_000);
       timer.unref();
     })();
+
+    if (isTuitionProgressReminderRuntimeEnabled(process.env)) {
+      let isRunning = false;
+      let nextPreparationAt = 0;
+      const runTuitionProgressBatch = async () => {
+        if (isRunning) return;
+        isRunning = true;
+        const now = Date.now();
+        const shouldPrepare = now >= nextPreparationAt;
+        if (shouldPrepare) nextPreparationAt = now + 60 * 60 * 1000;
+        try {
+          const enablePushNotifications = isTuitionProgressReminderPushNotificationsEnabled(process.env);
+          const sendPush = enablePushNotifications
+            ? createTuitionProgressReminderPushTransport({
+              endpoint: resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV),
+              internalSecret: process.env.INTERNAL_SECRET ?? '',
+            })
+            : undefined;
+          const result = await runTuitionProgressReminderRuntimePass({
+            database: db,
+            calculateAccounting: (input) => loadAccountingTuitionProgressCandidates(input, db),
+            calculateAccountingInTransaction: loadAccountingTuitionProgressCandidatesInTransaction,
+            enableInAppNotifications: isTuitionProgressReminderInAppNotificationsEnabled(process.env),
+            enablePushNotifications,
+            sendPush,
+          }, shouldPrepare);
+          if (shouldPrepare && result.preparationFailures.length === 0) {
+            nextPreparationAt = Date.now() + 24 * 60 * 60 * 1000;
+          }
+          const outcomeCounts = result.execution.outcomes.reduce<Record<string, number>>((counts, outcome) => {
+            counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
+            return counts;
+          }, {});
+          console.info('Tuition progress reminder pass completed.', {
+            preparedScopeCount: result.preparedScopeCount,
+            preparedControlCount: result.preparedControlCount,
+            preparationFailureCount: result.preparationFailures.length,
+            expiredCount: result.execution.expiredCount,
+            claimedCount: result.execution.claimedCount,
+            outcomeCounts,
+            inAppNotificationCreatedCount: result.inAppNotifications?.createdCount ?? 0,
+            pushQueuedCount: result.inAppNotifications?.pushQueuedCount ?? 0,
+            pushUnavailableDeviceCount: result.inAppNotifications?.pushUnavailableDeviceCount ?? 0,
+            pushOutboxOutcomeCounts: result.pushNotifications?.outcomes.reduce<Record<string, number>>((counts, outcome) => {
+              counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
+              return counts;
+            }, {}) ?? {},
+          });
+        } catch (error) {
+          if (shouldPrepare) nextPreparationAt = Date.now() + 60 * 60 * 1000;
+          console.error('Tuition progress reminder pass failed.', error);
+        } finally {
+          isRunning = false;
+        }
+      };
+      void runTuitionProgressBatch();
+      const timer = setInterval(() => { void runTuitionProgressBatch(); }, 15_000);
+      timer.unref();
+    } else if (process.env.ECOLETRACK_TUITION_PROGRESS_REMINDERS_ENABLED === 'true') {
+      console.warn('Tuition progress reminders remain disabled until the 08:00 local schedule is confirmed.');
+    }
   });
 }
 

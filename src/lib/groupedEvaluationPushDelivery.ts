@@ -20,7 +20,13 @@ export interface GroupedPushDeliveryRepository {
   markSent(id: number, attemptCount: number, sentAt: Date): Promise<void>;
   markFailed(id: number, attemptCount: number, error: string, updatedAt: Date): Promise<void>;
   scheduleRetry(id: number, attemptCount: number, error: string, nextAttemptAt: Date, updatedAt: Date): Promise<void>;
-  markAwaitingConfirmation(id: number, attemptCount: number, detail: string, updatedAt: Date): Promise<void>;
+  markAwaitingConfirmation(
+    id: number,
+    attemptCount: number,
+    detail: string,
+    relayJobIds: string[],
+    updatedAt: Date,
+  ): Promise<void>;
   markUncertain(id: number, attemptCount: number, error: string, updatedAt: Date): Promise<void>;
 }
 
@@ -28,7 +34,7 @@ export interface GroupedPushDeliveryTransport {
   send(
     delivery: GroupedPushDeliveryRecord,
     idempotencyKey: string,
-  ): Promise<{ outcome: GroupedPushOutcome; error?: string }>;
+  ): Promise<{ outcome: GroupedPushOutcome; error?: string; relayJobIds?: string[] }>;
 }
 
 export interface GroupedPushDeliveryOptions {
@@ -111,6 +117,7 @@ export function buildGroupedPushNotificationPayload(
 export function getInternalNotificationDispatchOutcome(response: unknown): {
   outcome: GroupedPushOutcome;
   error?: string;
+  relayJobIds?: string[];
 } {
   if (!response || typeof response !== 'object') {
     throw new Error('Push API response did not contain a notification dispatch result.');
@@ -146,6 +153,7 @@ export function getInternalNotificationDispatchOutcome(response: unknown): {
   return {
     outcome: 'queued',
     error: `Push API accepted job(s) ${jobIds.join(', ')}; FCM completion was not reported.`,
+    relayJobIds: jobIds,
   };
 }
 
@@ -205,6 +213,7 @@ export async function processGroupedPushOutboxBatch(
         delivery.id,
         delivery.attemptCount,
         errorText(result.error, 'Push API accepted the request; FCM completion is unconfirmed.'),
+        result.relayJobIds ?? [],
         now(),
       );
       summary.queued += 1;

@@ -2664,6 +2664,9 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
     fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
+    const createTimeZone = screen.getByLabelText('Fuseau horaire') as HTMLInputElement;
+    expect(createTimeZone.value).toBe('Africa/Lome');
+    fireEvent.change(createTimeZone, { target: { value: 'Europe/Paris' } });
     fireEvent.click(screen.getByLabelText('6ème'));
     fireEvent.click(screen.getByLabelText('Mathématiques'));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Enregistrer$/i }));
@@ -2716,6 +2719,7 @@ describe('AdminView create-user teacher form', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Créer une école/i }));
+    fireEvent.change(screen.getByLabelText('Fuseau horaire'), { target: { value: 'Europe/Paris' } });
     fireEvent.change(screen.getByPlaceholderText('Lycée de Lomé'), { target: { value: 'École du Lac' } });
     fireEvent.change(getPrimarySchoolPhoneInput(), { target: { value: '90000000' } });
     fireEvent.click(screen.getByLabelText('6ème'));
@@ -2732,6 +2736,7 @@ describe('AdminView create-user teacher form', () => {
     expect(savingButton).toHaveAttribute('aria-busy', 'true');
     expect(savingButton.querySelector('.animate-spin')).not.toBeNull();
     expect(onAddSchool).toHaveBeenCalledTimes(1);
+    expect(onAddSchool).toHaveBeenCalledWith(expect.objectContaining({ timeZone: 'Europe/Paris' }));
 
     resolveCreation({ id: 1, name: 'École du Lac' });
     await screen.findByRole('button', { name: /Créer une école/i });
@@ -2740,7 +2745,7 @@ describe('AdminView create-user teacher form', () => {
 
   it('updates an existing school while preserving the current phone when unchanged', async () => {
     const onUpdateSchool = vi.fn().mockResolvedValue({ id: 1, name: 'École du Lac' });
-    const schools: School[] = [{ id: 1, name: 'École du Lac', address: 'Ancienne adresse', phone: '+228 90000000' }];
+    const schools: School[] = [{ id: 1, name: 'École du Lac', address: 'Ancienne adresse', phone: '+228 90000000', timeZone: 'Africa/Accra' }];
     const years: AcademicYear[] = [{ id: 1, name: '2024-2025', isActive: true, schoolId: 1 }];
     const classes: Class[] = [];
     const teachers: Teacher[] = [];
@@ -2779,6 +2784,9 @@ describe('AdminView create-user teacher form', () => {
     fireEvent.click(screen.getByTitle('Éditer'));
 
     const editDialog = screen.getByRole('dialog', { name: /Modifier l'école/ });
+    const editTimeZone = within(editDialog).getByLabelText('Fuseau horaire') as HTMLInputElement;
+    expect(editTimeZone.value).toBe('Africa/Accra');
+    fireEvent.change(editTimeZone, { target: { value: 'Europe/Paris' } });
     fireEvent.change(within(editDialog).getByPlaceholderText('C.S LE SAVOIR'), { target: { value: 'École du Lac Modifiée' } });
     fireEvent.click(within(editDialog).getByRole('button', { name: /^Enregistrer$/i }));
 
@@ -2786,6 +2794,7 @@ describe('AdminView create-user teacher form', () => {
       name: 'École du Lac Modifiée',
       address: 'Ancienne adresse',
       phone: '+228 90000000',
+      timeZone: 'Europe/Paris',
     }));
   });
 

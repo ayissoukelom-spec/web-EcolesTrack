@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { bigint, boolean, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { emailTrimCharactersSql } from '../lib/emailUniqueness.ts';
 import type { VerifiedAccessContext } from '../server/verifiedAccessContext.ts';
@@ -27,6 +27,7 @@ export const schools = pgTable('schools', {
   principalName: text('principal_name'),
   principalGender: text('principal_gender'),
   logoPath: text('logo_path'),
+  timeZone: text('time_zone'),
   promotionThreshold: numeric('promotion_threshold', { precision: 5, scale: 2 }).default('10.00').notNull(),
   studentsCreationLocked: boolean('students_creation_locked').default(false).notNull(),
   isSuspended: boolean('is_suspended').default(false).notNull(),
@@ -765,6 +766,11 @@ export const notificationDeliveryOutbox = pgTable('notification_delivery_outbox'
   attemptCount: integer('attempt_count').default(0).notNull(),
   nextAttemptAt: timestamp('next_attempt_at').defaultNow().notNull(),
   lastError: text('last_error'),
+  transportState: text('transport_state').$type<'relay_accepted' | 'uncertain' | 'fcm_accepted' | 'delivered'>(),
+  relayJobIds: jsonb('relay_job_ids').$type<string[] | null>(),
+  relayAcceptedAt: timestamp('relay_accepted_at', { withTimezone: true }),
+  fcmAcceptedAt: timestamp('fcm_accepted_at', { withTimezone: true }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
   sentAt: timestamp('sent_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -789,6 +795,129 @@ export const notificationDeliveryOutbox = pgTable('notification_delivery_outbox'
     'notification_delivery_outbox_attempt_count_check',
     sql`${table.attemptCount} >= 0`,
   ),
+  deliveryTransportStateCheck: check(
+    'notification_delivery_outbox_transport_state_check',
+    sql`${table.transportState} IS NULL OR ${table.transportState} IN ('relay_accepted', 'uncertain', 'fcm_accepted', 'delivered')`,
+  ),
+}));
+
+export const tuitionProgressReminderControls = pgTable('tuition_progress_reminder_controls', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').notNull(),
+  academicYearId: integer('academic_year_id').notNull(),
+  cycleId: integer('cycle_id').notNull(),
+  studentId: integer('student_id').notNull(),
+  monthStart: date('month_start', { mode: 'string' }).notNull(),
+  stage: text('stage').$type<'penultimate' | 'last'>().notNull(),
+  scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  timeZone: text('time_zone').notNull(),
+  status: text('status').$type<
+    | 'scheduled'
+    | 'checking'
+    | 'retry_pending'
+    | 'checked_up_to_date'
+    | 'checked_below_target'
+    | 'skipped_ambiguous'
+    | 'skipped_invalid_calendar'
+    | 'skipped_no_recipient'
+    | 'suppressed_paid'
+    | 'expired'
+    | 'failed'
+  >().default('scheduled').notNull(),
+  targetAmount: integer('target_amount'),
+  netPaidAmount: integer('net_paid_amount'),
+  shortfallAmount: integer('shortfall_amount'),
+  lastCalculatedAt: timestamp('last_calculated_at', { withTimezone: true }),
+  attemptCount: integer('attempt_count').default(0).notNull(),
+  lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull(),
+  leaseToken: uuid('lease_token'),
+  leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  notificationId: integer('notification_id'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  schoolFk: foreignKey({
+    columns: [table.schoolId],
+    foreignColumns: [schools.id],
+    name: 'tuition_progress_reminder_controls_school_fk',
+  }).onDelete('restrict'),
+  academicYearFk: foreignKey({
+    columns: [table.academicYearId],
+    foreignColumns: [academicYears.id],
+    name: 'tuition_progress_reminder_controls_academic_year_fk',
+  }).onDelete('restrict'),
+  cycleFk: foreignKey({
+    columns: [table.cycleId],
+    foreignColumns: [cycles.id],
+    name: 'tuition_progress_reminder_controls_cycle_fk',
+  }).onDelete('restrict'),
+  studentFk: foreignKey({
+    columns: [table.studentId],
+    foreignColumns: [students.id],
+    name: 'tuition_progress_reminder_controls_student_fk',
+  }).onDelete('restrict'),
+  notificationFk: foreignKey({
+    columns: [table.notificationId],
+    foreignColumns: [notifications.id],
+    name: 'tuition_progress_reminder_controls_notification_fk',
+  }).onDelete('set null'),
+  notificationUnique: unique('tuition_progress_reminder_controls_notification_unique')
+    .on(table.notificationId),
+  scopeUnique: unique('tuition_progress_reminder_controls_scope_unique')
+    .on(table.schoolId, table.academicYearId, table.cycleId, table.studentId, table.monthStart, table.stage),
+  monthStartCheck: check(
+    'tuition_progress_reminder_controls_month_start_check',
+    sql`EXTRACT(DAY FROM ${table.monthStart}) = 1`,
+  ),
+  stageCheck: check(
+    'tuition_progress_reminder_controls_stage_check',
+    sql`${table.stage} IN ('penultimate', 'last')`,
+  ),
+  statusCheck: check(
+    'tuition_progress_reminder_controls_status_check',
+    sql`${table.status} IN ('scheduled', 'checking', 'retry_pending', 'checked_up_to_date', 'checked_below_target', 'skipped_ambiguous', 'skipped_invalid_calendar', 'skipped_no_recipient', 'suppressed_paid', 'expired', 'failed')`,
+  ),
+  timeZoneCheck: check(
+    'tuition_progress_reminder_controls_time_zone_check',
+    sql`btrim(${table.timeZone}) <> ''`,
+  ),
+  expirationCheck: check(
+    'tuition_progress_reminder_controls_expiration_check',
+    sql`${table.scheduledAt} <= ${table.expiresAt}`,
+  ),
+  attemptCountCheck: check(
+    'tuition_progress_reminder_controls_attempt_count_check',
+    sql`${table.attemptCount} >= 0`,
+  ),
+  leaseCheck: check(
+    'tuition_progress_reminder_controls_lease_check',
+    sql`(${table.leaseToken} IS NULL AND ${table.leaseExpiresAt} IS NULL) OR (${table.leaseToken} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
+  ),
+  amountsCheck: check(
+    'tuition_progress_reminder_controls_amounts_check',
+    sql`(${table.targetAmount} IS NULL AND ${table.netPaidAmount} IS NULL AND ${table.shortfallAmount} IS NULL) OR (${table.targetAmount} IS NOT NULL AND ${table.netPaidAmount} IS NOT NULL AND ${table.shortfallAmount} IS NOT NULL AND ${table.shortfallAmount} = GREATEST(${table.targetAmount} - ${table.netPaidAmount}, 0))`,
+  ),
+  targetNonnegativeCheck: check(
+    'tuition_progress_reminder_controls_target_nonnegative_check',
+    sql`${table.targetAmount} IS NULL OR ${table.targetAmount} >= 0`,
+  ),
+  paidNonnegativeCheck: check(
+    'tuition_progress_reminder_controls_paid_nonnegative_check',
+    sql`${table.netPaidAmount} IS NULL OR ${table.netPaidAmount} >= 0`,
+  ),
+  shortfallNonnegativeCheck: check(
+    'tuition_progress_reminder_controls_shortfall_nonnegative_check',
+    sql`${table.shortfallAmount} IS NULL OR ${table.shortfallAmount} >= 0`,
+  ),
+  dueIdx: index('tuition_progress_reminder_controls_due_idx')
+    .on(table.nextAttemptAt, table.id)
+    .where(sql`${table.status} IN ('scheduled', 'retry_pending')`),
+  expiredLeaseIdx: index('tuition_progress_reminder_controls_expired_lease_idx')
+    .on(table.leaseExpiresAt, table.id)
+    .where(sql`${table.status} = 'checking' AND ${table.leaseExpiresAt} IS NOT NULL`),
 }));
 
 // 12b. Notification attachments
@@ -825,6 +954,10 @@ export const bulletins = pgTable('bulletins', {
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   schoolYearId: integer('school_year_id').references(() => academicYears.id, { onDelete: 'cascade' }).notNull(),
   termId: integer('term_id').references(() => schoolTerms.id, { onDelete: 'set null' }).notNull(),
+  termStartDateSnapshot: text('term_start_date_snapshot'),
+  termEndDateSnapshot: text('term_end_date_snapshot'),
+  unjustifiedAbsencesCount: integer('unjustified_absences_count'),
+  unjustifiedLateArrivalMinutes: integer('unjustified_late_arrival_minutes'),
   generationId: integer('generation_id').references(() => bulletinGenerations.id, { onDelete: 'set null' }),
   schoolScopeVersion: integer('school_scope_version').default(0).notNull(),
   average: text('average'),
@@ -839,7 +972,32 @@ export const bulletins = pgTable('bulletins', {
   generatedAt: timestamp('generated_at').defaultNow().notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  attendanceSnapshotComplete: check(
+    'bulletins_attendance_snapshot_complete_check',
+    sql`(
+      (
+        ${table.termStartDateSnapshot} IS NULL
+        AND ${table.termEndDateSnapshot} IS NULL
+        AND ${table.unjustifiedAbsencesCount} IS NULL
+        AND ${table.unjustifiedLateArrivalMinutes} IS NULL
+      )
+      OR (
+        ${table.termStartDateSnapshot} IS NOT NULL
+        AND ${table.termEndDateSnapshot} IS NOT NULL
+        AND ${table.unjustifiedAbsencesCount} IS NOT NULL
+        AND ${table.unjustifiedLateArrivalMinutes} IS NOT NULL
+        AND ${table.termStartDateSnapshot} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND ${table.termEndDateSnapshot} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND to_char(${table.termStartDateSnapshot}::date, 'YYYY-MM-DD') = ${table.termStartDateSnapshot}
+        AND to_char(${table.termEndDateSnapshot}::date, 'YYYY-MM-DD') = ${table.termEndDateSnapshot}
+        AND ${table.termStartDateSnapshot}::date <= ${table.termEndDateSnapshot}::date
+        AND ${table.unjustifiedAbsencesCount} >= 0
+        AND ${table.unjustifiedLateArrivalMinutes} >= 0
+      )
+    )`,
+  ),
+}));
 
 // 15. Bulletin lines (one line per subject)
 export const bulletinLines = pgTable('bulletin_lines', {
@@ -1207,7 +1365,10 @@ export const accountingScheduleTemplates = pgTable('accounting_schedule_template
   classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }).notNull(),
   categoryId: integer('category_id').references(() => accountingCategories.id, { onDelete: 'restrict' }).notNull(),
   periodType: text('period_type').notNull(),
-  installments: jsonb('installments').$type<Array<{ label: string; dueDate: string; basisPoints: number }>>().notNull(),
+  installments: jsonb('installments').$type<Array<
+    { label: string; dueDate: string }
+    & ({ basisPoints: number; amount?: never } | { amount: number; basisPoints?: never })
+  >>().notNull(),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

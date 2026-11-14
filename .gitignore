@@ -15,3 +15,4 @@ uploads/**
 uploads/
 temp-*.txt
 vitest-e2e-*.json
+*.dump

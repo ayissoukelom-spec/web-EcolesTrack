@@ -17,6 +17,7 @@ const categoryRow = (
   studentPaid: number,
   studentRemaining: number,
   studentStatus: ClassSituationPdfCategoryRow['studentStatus'],
+  obligationClassNames: string[] = [],
 ): ClassSituationPdfCategoryRow => ({
   studentId,
   firstName: studentId === 1 ? 'Kossi' : 'Ama',
@@ -25,6 +26,7 @@ const categoryRow = (
   categoryId,
   categoryCode,
   categoryLabel,
+  obligationClassNames,
   due,
   paid,
   studentDue,
@@ -56,7 +58,7 @@ describe('class financial situation PDF', () => {
 
   it('groups each student once with all category details and totals counted once', () => {
     const rows = [
-      categoryRow(1, 1, 'tuition', 'Scolarité', 100000, 100000, 130000, 110000, 20000, 'partial'),
+      categoryRow(1, 1, 'tuition', 'Scolarité', 100000, 100000, 130000, 110000, 20000, 'partial', ['6e A']),
       categoryRow(1, 2, 'enrollment', 'Inscription', 10000, 0, 130000, 110000, 20000, 'partial'),
       categoryRow(1, 3, 'canteen', 'Cantine', 20000, 10000, 130000, 110000, 20000, 'partial'),
       categoryRow(2, 1, 'tuition', 'Scolarité', 100000, 100000, 130000, 110000, 20000, 'partial'),
@@ -70,7 +72,13 @@ describe('class financial situation PDF', () => {
     expect(students[0].categories.map((category) => category.categoryLabel))
       .toEqual(['Scolarité', 'Inscription', 'Cantine']);
     expect(students[0].categories).toEqual([
-      expect.objectContaining({ categoryLabel: 'Scolarité', due: 100000, paid: 100000, remaining: 0 }),
+      expect.objectContaining({
+        categoryLabel: 'Scolarité',
+        obligationClassNames: ['6e A'],
+        due: 100000,
+        paid: 100000,
+        remaining: 0,
+      }),
       expect.objectContaining({ categoryLabel: 'Inscription', due: 10000, paid: 0, remaining: 10000 }),
       expect.objectContaining({ categoryLabel: 'Cantine', due: 20000, paid: 10000, remaining: 10000 }),
     ]);

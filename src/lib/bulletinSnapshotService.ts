@@ -5,11 +5,13 @@ import { requireRole, verifyToken } from '../middleware/auth.ts';
 import studentAccess, { isApprovedClassForSchool } from './studentAccess';
 import { bulletinGenerations } from '../db/schema.ts';
 import {
+  absences,
   bulletinLines,
   bulletins,
   classes,
   evaluations,
   grades,
+  lateArrivals,
   schoolSubjects,
   schoolTerms,
   students,
@@ -35,6 +37,12 @@ import { getGradeAppreciation } from './gradeColor';
 import { resolveSchoolTermForClass } from './educationStructure.ts';
 import { assertSchoolActiveInTransaction, SchoolSuspendedError } from './schoolSuspension.ts';
 import { sortStudentsAlphabetically } from './studentOrdering';
+import {
+  InvalidBulletinTermPeriodError,
+  unjustifiedAbsenceCondition,
+  unjustifiedLateArrivalCondition,
+  validateBulletinTermPeriod,
+} from './bulletinAttendance';
 
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
@@ -106,6 +114,10 @@ export interface CreateBulletinInput {
   classId: number;
   schoolYearId: number;
   termId: number;
+  termStartDateSnapshot: string;
+  termEndDateSnapshot: string;
+  unjustifiedAbsencesCount: number;
+  unjustifiedLateArrivalMinutes: number;
   generationId?: number | null;
   schoolScopeVersion?: number;
   average: number | null;
@@ -137,7 +149,15 @@ export interface BulletinSnapshotResult {
 export interface BulletinSnapshotContext {
   getStudentById(studentId: number): Promise<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string } | null>;
   getClassById(classId: number): Promise<{ id: number; academicYearId: number } | null>;
-  getTermById(termId: number): Promise<{ id: number; academicYearId: number; periodType?: string | null } | null>;
+  getTermById(termId: number): Promise<{
+    id: number;
+    academicYearId: number;
+    periodType?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+  } | null>;
+  getUnjustifiedAbsencesCount(studentId: number, classId: number, startDate: string, endDate: string): Promise<number>;
+  getUnjustifiedLateArrivalMinutes(studentId: number, classId: number, startDate: string, endDate: string): Promise<number>;
   getClassStudents(classId: number, schoolId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
   getClassTermEvaluations(classId: number, termId: number, schoolId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
@@ -149,6 +169,48 @@ export interface BulletinSnapshotContext {
   insertBulletin(payload: CreateBulletinInput): Promise<{ id: number }>;
   insertBulletinLines(bulletinId: number, lines: BulletinLineSnapshotInput[]): Promise<void>;
 }
+
+const countUnjustifiedAbsences = async (
+  tx: any,
+  studentId: number,
+  classId: number,
+  startDate: string,
+  endDate: string,
+): Promise<number> => {
+  const [row] = await tx.select({
+    count: sql<number>`count(distinct ${absences.id})::int`,
+  }).from(absences).where(and(
+    eq(absences.studentId, studentId),
+    eq(absences.classId, classId),
+    sql`${absences.date} >= ${startDate}`,
+    sql`${absences.date} <= ${endDate}`,
+    unjustifiedAbsenceCondition(),
+  ));
+  return Number(row?.count ?? 0);
+};
+
+const countUnjustifiedLateArrivalMinutes = async (
+  tx: any,
+  studentId: number,
+  classId: number,
+  startDate: string,
+  endDate: string,
+): Promise<number> => {
+  const [row] = await tx.select({
+    total: sql<number>`coalesce(sum(${lateArrivals.lateMinutes}), 0)::int`,
+  }).from(lateArrivals).where(and(
+    eq(lateArrivals.studentId, studentId),
+    eq(lateArrivals.classId, classId),
+    sql`${lateArrivals.date} >= ${startDate}`,
+    sql`${lateArrivals.date} <= ${endDate}`,
+    unjustifiedLateArrivalCondition(),
+  ));
+  const totalMinutes = Number(row?.total ?? 0);
+  if (!Number.isInteger(totalMinutes) || totalMinutes < 0) {
+    throw new Error('Unjustified late-arrival minutes must be a non-negative integer.');
+  }
+  return totalMinutes;
+};
 
 export const loadSubjectTypeNames = async (tx: any, schoolId: number): Promise<Map<string, SubjectTypeMetadata>> => {
   const result = await tx.execute(sql`
@@ -875,8 +937,16 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             id: schoolTerms.id,
             academicYearId: schoolTerms.academicYearId,
             periodType: schoolTerms.periodType,
+            startDate: schoolTerms.startDate,
+            endDate: schoolTerms.endDate,
           }).from(schoolTerms).where(eq(schoolTerms.id, termId));
           return row ?? null;
+        },
+        async getUnjustifiedAbsencesCount(studentId, classId, startDate, endDate) {
+          return countUnjustifiedAbsences(tx, studentId, classId, startDate, endDate);
+        },
+        async getUnjustifiedLateArrivalMinutes(studentId, classId, startDate, endDate) {
+          return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, startDate, endDate);
         },
         async getClassStudents(classId, schoolId) {
           await assertSchoolActiveInTransaction(tx, schoolId);
@@ -976,6 +1046,10 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
             termId: payload.termId,
             generationId: payload.generationId ?? null,
             schoolScopeVersion: payload.schoolScopeVersion ?? 0,
+            termStartDateSnapshot: payload.termStartDateSnapshot,
+            termEndDateSnapshot: payload.termEndDateSnapshot,
+            unjustifiedAbsencesCount: payload.unjustifiedAbsencesCount,
+            unjustifiedLateArrivalMinutes: payload.unjustifiedLateArrivalMinutes,
             average: toStoredNumber(payload.average),
             classHighestAverage: toStoredNumber(payload.classHighestAverage),
             classLowestAverage: toStoredNumber(payload.classLowestAverage),
@@ -1092,8 +1166,21 @@ export const registerBulletinGenerateRoute = (
       if (studentRecord) {
         if (studentRecord.classId == null) return res.status(400).json({ error: 'Student does not have a current class', code: 'STUDENT_WITHOUT_CURRENT_CLASS' });
         const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, studentRecord.classId));
-        const [termRecord] = await db.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+        const [termRecord] = await db.select({
+          id: schoolTerms.id,
+          academicYearId: schoolTerms.academicYearId,
+          startDate: schoolTerms.startDate,
+          endDate: schoolTerms.endDate,
+        }).from(schoolTerms).where(eq(schoolTerms.id, termId));
         if (classRecord && termRecord) {
+          try {
+            validateBulletinTermPeriod(termRecord.startDate, termRecord.endDate);
+          } catch (error) {
+            if (error instanceof InvalidBulletinTermPeriodError) {
+              return res.status(400).json({ error: error.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
+            }
+            throw error;
+          }
           if (classRecord.academicYearId !== termRecord.academicYearId) {
             return res.status(400).json({ error: 'Term does not belong to student class academic year' });
           }
@@ -1180,8 +1267,20 @@ export const registerBulletinGenerateRoute = (
                 return row ?? null;
               },
               async getTermById(termId) {
-                const [row] = await tx.select({ id: schoolTerms.id, academicYearId: schoolTerms.academicYearId, periodType: schoolTerms.periodType }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+                const [row] = await tx.select({
+                  id: schoolTerms.id,
+                  academicYearId: schoolTerms.academicYearId,
+                  periodType: schoolTerms.periodType,
+                  startDate: schoolTerms.startDate,
+                  endDate: schoolTerms.endDate,
+                }).from(schoolTerms).where(eq(schoolTerms.id, termId));
                 return row ?? null;
+              },
+              async getUnjustifiedAbsencesCount(studentId, classId, startDate, endDate) {
+                return countUnjustifiedAbsences(tx, studentId, classId, startDate, endDate);
+              },
+              async getUnjustifiedLateArrivalMinutes(studentId, classId, startDate, endDate) {
+                return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, startDate, endDate);
               },
               async getClassStudents(classId, schoolId) {
                 if (actor) {
@@ -1290,6 +1389,10 @@ export const registerBulletinGenerateRoute = (
                   termId: payload.termId,
                   generationId: payload.generationId ?? null,
                   schoolScopeVersion: payload.schoolScopeVersion ?? 0,
+                  termStartDateSnapshot: payload.termStartDateSnapshot,
+                  termEndDateSnapshot: payload.termEndDateSnapshot,
+                  unjustifiedAbsencesCount: payload.unjustifiedAbsencesCount,
+                  unjustifiedLateArrivalMinutes: payload.unjustifiedLateArrivalMinutes,
                   average: toStoredNumber(payload.average),
                   classHighestAverage: toStoredNumber(payload.classHighestAverage),
                   classLowestAverage: toStoredNumber(payload.classLowestAverage),
@@ -1341,6 +1444,9 @@ export const registerBulletinGenerateRoute = (
       if (generationId != null) {
         await updateBulletinGeneration(generationId, { completedCount: 0, status: 'failed' }).catch(() => undefined);
       }
+      if (err instanceof InvalidBulletinTermPeriodError) {
+        return res.status(400).json({ error: err.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
+      }
       if (err instanceof StudentAuthorizationError) {
         console.error('Bulletin generation authorization error:', err.message);
         return res.status(403).json({ error: 'Unauthorized to generate bulletin for this class' });
@@ -1373,6 +1479,19 @@ export const registerBulletinGenerateRoute = (
         actor.schoolId == null
         || !(await isApprovedClassForSchool(classId, actor.schoolId))
       )) return res.status(403).json({ error: 'Class is outside the school scope' });
+
+      const [termRecord] = await db.select({
+        startDate: schoolTerms.startDate,
+        endDate: schoolTerms.endDate,
+      }).from(schoolTerms).where(eq(schoolTerms.id, termId));
+      try {
+        validateBulletinTermPeriod(termRecord?.startDate, termRecord?.endDate);
+      } catch (error) {
+        if (error instanceof InvalidBulletinTermPeriodError) {
+          return res.status(400).json({ error: error.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
+        }
+        throw error;
+      }
 
       const classStudents = sortStudentsAlphabetically(
         await studentAccess.getAuthorizedStudents(actor as any, { classIds: [classId] }),
@@ -1458,7 +1577,7 @@ export const registerBulletinGenerateRoute = (
           bulletinIds.push(result.bulletinId);
           generatedBulletins.push({ id: result.bulletinId, studentId });
         } catch (error: any) {
-          if (error instanceof SchoolSuspendedError) throw error;
+          if (error instanceof SchoolSuspendedError || error instanceof InvalidBulletinTermPeriodError) throw error;
           console.warn('Failed to generate bulletin for class generation', { studentId, classId, termId, error: error?.message || error });
         }
       }
@@ -1485,6 +1604,9 @@ export const registerBulletinGenerateRoute = (
       }
       if (generationId != null) {
         await updateBulletinGeneration(generationId, { completedCount, status: 'failed' }).catch(() => undefined);
+      }
+      if (err instanceof InvalidBulletinTermPeriodError) {
+        return res.status(400).json({ error: err.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
       }
       console.error('Failed to generate class bulletins:', err);
       return res.status(500).json({ error: 'Failed to generate class bulletins' });
@@ -1519,6 +1641,21 @@ export const generateBulletinSnapshot = async (
     if (klass.academicYearId !== term.academicYearId) {
       throw new Error('Term does not belong to student class academic year');
     }
+
+    const { startDate: termStartDateSnapshot, endDate: termEndDateSnapshot } =
+      validateBulletinTermPeriod(term.startDate, term.endDate);
+    const unjustifiedAbsencesCount = await ctx.getUnjustifiedAbsencesCount(
+      student.id,
+      student.classId,
+      termStartDateSnapshot,
+      termEndDateSnapshot,
+    );
+    const unjustifiedLateArrivalMinutes = await ctx.getUnjustifiedLateArrivalMinutes(
+      student.id,
+      student.classId,
+      termStartDateSnapshot,
+      termEndDateSnapshot,
+    );
 
     const classStudents = await ctx.getClassStudents(student.classId, student.schoolId);
     const termEvaluations = await ctx.getClassTermEvaluations(student.classId, termId, student.schoolId);
@@ -1581,6 +1718,10 @@ export const generateBulletinSnapshot = async (
       classId: student.classId,
       schoolYearId: klass.academicYearId,
       termId: term.id,
+      termStartDateSnapshot,
+      termEndDateSnapshot,
+      unjustifiedAbsencesCount,
+      unjustifiedLateArrivalMinutes,
       generationId,
       schoolScopeVersion: 1,
       average: finalAverage,

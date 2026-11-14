@@ -66,7 +66,11 @@ import { selectPreferredClassExamConfiguration } from './classExamConfiguration'
 import { readStoredFile } from './fileStorage';
 import { normalizeClassNameForDisplay } from './classDisplay';
 import { getParentChildStudentIds } from './parentStudentAccess.ts';
-import { unjustifiedLateArrivalCondition } from './bulletinAttendance';
+import {
+  getCompleteBulletinAttendanceSnapshot,
+  unjustifiedAbsenceCondition,
+  unjustifiedLateArrivalCondition,
+} from './bulletinAttendance';
 
 export const formatStudentStatusForPdf = (status: string | null | undefined): string | null => {
   const abbreviations: Record<string, string> = {
@@ -217,6 +221,8 @@ export interface BulletinPdfData {
   schoolYearName: string;
   termId: number;
   termName: string;
+  termStartDate?: string | null;
+  termEndDate?: string | null;
   average: number | null;
   totalPoints: number;
   totalCoefficients: number;
@@ -899,6 +905,10 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       termName: schoolTerms.name,
       termStartDate: schoolTerms.startDate,
       termEndDate: schoolTerms.endDate,
+      termStartDateSnapshot: bulletins.termStartDateSnapshot,
+      termEndDateSnapshot: bulletins.termEndDateSnapshot,
+      unjustifiedAbsencesCount: bulletins.unjustifiedAbsencesCount,
+      unjustifiedLateArrivalMinutes: bulletins.unjustifiedLateArrivalMinutes,
       termPeriodType: schoolTerms.periodType,
       termOrderIndex: schoolTerms.orderIndex,
       termCycleId: schoolTerms.cycleId,
@@ -1025,6 +1035,18 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
   async getById(actor, bulletinId) {
     const header = await loadAuthorizedBulletinHeader(actor, bulletinId);
     if (!header) return null;
+    const attendanceSnapshot = getCompleteBulletinAttendanceSnapshot({
+      termStartDateSnapshot: header.termStartDateSnapshot,
+      termEndDateSnapshot: header.termEndDateSnapshot,
+      unjustifiedAbsencesCount: header.unjustifiedAbsencesCount,
+      unjustifiedLateArrivalMinutes: header.unjustifiedLateArrivalMinutes,
+    });
+    const termStartDate = attendanceSnapshot
+      ? attendanceSnapshot.termStartDateSnapshot
+      : header.termStartDate;
+    const termEndDate = attendanceSnapshot
+      ? attendanceSnapshot.termEndDateSnapshot
+      : header.termEndDate;
 
     const lines = await db
       .select({
@@ -1096,7 +1118,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       };
     });
 
-    const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.studentSchoolId, header.termStartDate ?? null, header.termEndDate ?? null);
+    const breakdownBySubject = await computeSubjectBreakdown(header.studentId, header.classId, header.termId, header.studentSchoolId, termStartDate ?? null, termEndDate ?? null);
     resolvedLines = resolvedLines.map((line) => {
       const subjectBreakdown = breakdownBySubject.get(line.subjectName) ?? null;
       const classAverage = subjectBreakdown?.classAverage ?? null;
@@ -1114,13 +1136,13 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
     });
 
     if (resolvedLines.length === 0) {
-      const termScopeCondition: SQL = (header.termStartDate && header.termEndDate)
+      const termScopeCondition: SQL = (termStartDate && termEndDate)
         ? sql`(
             ${evaluations.termId} = ${header.termId}
             or (
               ${evaluations.termId} is null
-              and ${evaluations.date} >= ${header.termStartDate}
-              and ${evaluations.date} <= ${header.termEndDate}
+              and ${evaluations.date} >= ${termStartDate}
+              and ${evaluations.date} <= ${termEndDate}
             )
           )`
         : sql`${evaluations.termId} = ${header.termId}`;
@@ -1364,9 +1386,9 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       }
     }
 
-    let absencesCount = 0;
-    let lateMinutesTotal = 0;
-    if (header.termStartDate && header.termEndDate) {
+    let absencesCount = attendanceSnapshot?.unjustifiedAbsencesCount ?? 0;
+    let lateMinutesTotal = attendanceSnapshot?.unjustifiedLateArrivalMinutes ?? 0;
+    if (!attendanceSnapshot && termStartDate && termEndDate) {
       const absenceRows = await db
         .select({ count: sql<number>`count(distinct ${absences.id})::int` })
         .from(absences)
@@ -1374,24 +1396,20 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
           and(
             eq(absences.studentId, header.studentId),
             eq(absences.classId, header.classId),
-            sql`${absences.date} >= ${header.termStartDate}`,
-            sql`${absences.date} <= ${header.termEndDate}`,
-            sql`(
-              ${absences.justificationStatus} = 'REJECTED'
-              or (${absences.justificationStatus} is null and ${absences.isJustified} = false)
-            )`,
+            sql`${absences.date} >= ${termStartDate}`,
+            sql`${absences.date} <= ${termEndDate}`,
+            unjustifiedAbsenceCondition(),
           ),
         );
       absencesCount = Number(absenceRows[0]?.count ?? 0);
-
       const lateRows = await db
         .select({ total: sql<number>`coalesce(sum(${lateArrivals.lateMinutes}), 0)::int` })
         .from(lateArrivals)
         .where(and(
           eq(lateArrivals.studentId, header.studentId),
           eq(lateArrivals.classId, header.classId),
-          sql`${lateArrivals.date} >= ${header.termStartDate}`,
-          sql`${lateArrivals.date} <= ${header.termEndDate}`,
+          sql`${lateArrivals.date} >= ${termStartDate}`,
+          sql`${lateArrivals.date} <= ${termEndDate}`,
           unjustifiedLateArrivalCondition(),
         ));
       lateMinutesTotal = Number(lateRows[0]?.total ?? 0);
@@ -1419,6 +1437,8 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
       schoolYearName: header.schoolYearName,
       termId: header.termId,
       termName: header.termName,
+      termStartDate,
+      termEndDate,
       average: parseNumber(header.average),
       totalPoints: parseNumber(header.totalPoints) ?? 0,
       totalCoefficients: parseNumber(header.totalCoefficients) ?? 0,

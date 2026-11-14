@@ -85,7 +85,7 @@ describe('calcul de la moyenne et du rang annuels', () => {
 interface FakeState {
   students: Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>;
   classes: Array<{ id: number; academicYearId: number }>;
-  terms: Array<{ id: number; academicYearId: number }>;
+  terms: Array<{ id: number; academicYearId: number; startDate: string; endDate: string }>;
   evaluations: BulletinEvaluationLike[];
   grades: BulletinGradeLike[];
   bulletins: Array<CreateBulletinInput & { id: number }>;
@@ -126,6 +126,12 @@ const createFakePersistence = (initial: FakeState, failOnInsertLines = false): {
         },
         async getTermById(termId) {
           return draft.terms.find((row) => row.id === termId) ?? null;
+        },
+        async getUnjustifiedAbsencesCount() {
+          return 0;
+        },
+        async getUnjustifiedLateArrivalMinutes() {
+          return 0;
         },
         async getClassStudents(classId, schoolId) {
           return draft.students.filter((row) => row.classId === classId && row.schoolId === schoolId);
@@ -251,7 +257,7 @@ describe('generateBulletinSnapshot', () => {
       { id: 2, classId: 10, schoolId: 1, firstName: 'Bob', lastName: 'Martin' },
     ],
     classes: [{ id: 10, academicYearId: 100 }],
-    terms: [{ id: 7, academicYearId: 100 }],
+    terms: [{ id: 7, academicYearId: 100, startDate: '2025-09-01', endDate: '2026-06-30' }],
     evaluations: [
       { id: 1, classId: 10, teacherId: 1, termId: 7, subject: 'Math', title: 'DS 1', type: 'devoir', coefficient: 2, maxScore: 20, countInBulletin: true },
       { id: 2, classId: 10, teacherId: 2, termId: 7, subject: 'Français', title: 'DS 2', type: 'interrogation', coefficient: 1, maxScore: 10, countInBulletin: true },
@@ -506,7 +512,7 @@ describe('generateBulletinSnapshot', () => {
           { id: 1, classId: 10, schoolId: 1, firstName: 'Alice', lastName: 'Dupont' },
         ];
         const classes = [{ id: 10, academicYearId: 100 }];
-        const terms = [{ id: 7, academicYearId: 100 }];
+        const terms = [{ id: 7, academicYearId: 100, startDate: '2025-09-01', endDate: '2026-06-30' }];
         const evaluations: BulletinEvaluationLike[] = [
           { id: 500, classId: 10, teacherId: 1, termId: 7, subject: 'Physique et Chimie', title: 'Interro', type: 'interrogation', coefficient: 1, maxScore: 20, countInBulletin: true, subjectId: 5 },
         ];
@@ -520,6 +526,8 @@ describe('generateBulletinSnapshot', () => {
           async getStudentById(studentId) { return students.find((row) => row.id === studentId) ?? null; },
           async getClassById(classId) { return classes.find((row) => row.id === classId) ?? null; },
           async getTermById(termId) { return terms.find((row) => row.id === termId) ?? null; },
+          async getUnjustifiedAbsencesCount() { return 0; },
+          async getUnjustifiedLateArrivalMinutes() { return 0; },
           async getClassStudents(classId) { return students.filter((row) => row.classId === classId); },
           async getClassTermEvaluations(classId, termId) { return evaluations.filter((row) => row.classId === classId && row.termId === termId); },
           async getGradesForStudents(studentIds, evaluationIds) { return grades.filter((row) => studentIds.includes(row.studentId) && evaluationIds.includes(row.evaluationId)); },

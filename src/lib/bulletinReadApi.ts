@@ -21,7 +21,11 @@ import {
   teachers,
 } from '../db/schema.ts';
 import { buildSubjectTeacherNameMap } from './bulletinSnapshotService';
-import { unjustifiedLateArrivalCondition } from './bulletinAttendance';
+import {
+  getCompleteBulletinAttendanceSnapshot,
+  unjustifiedAbsenceCondition,
+  unjustifiedLateArrivalCondition,
+} from './bulletinAttendance';
 
 export interface BulletinReadActor {
   id?: number | null;
@@ -91,6 +95,8 @@ export interface BulletinDetailResponse {
   schoolYearName: string;
   termId: number;
   termName: string;
+  termStartDate: string | null;
+  termEndDate: string | null;
   average: number | null;
   totalPoints: number;
   totalCoefficients: number;
@@ -262,8 +268,12 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         schoolYearName: academicYears.name,
         termId: bulletins.termId,
         termName: schoolTerms.name,
-        termStartDate: schoolTerms.startDate,
-        termEndDate: schoolTerms.endDate,
+        termStartDateSnapshot: bulletins.termStartDateSnapshot,
+        termEndDateSnapshot: bulletins.termEndDateSnapshot,
+        unjustifiedAbsencesCount: bulletins.unjustifiedAbsencesCount,
+        unjustifiedLateArrivalMinutes: bulletins.unjustifiedLateArrivalMinutes,
+        currentTermStartDate: schoolTerms.startDate,
+        currentTermEndDate: schoolTerms.endDate,
         average: bulletins.average,
         totalPoints: bulletins.totalPoints,
         totalCoefficients: bulletins.totalCoefficients,
@@ -283,6 +293,19 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
 
     if (!header) return null;
 
+    const attendanceSnapshot = getCompleteBulletinAttendanceSnapshot({
+      termStartDateSnapshot: header.termStartDateSnapshot,
+      termEndDateSnapshot: header.termEndDateSnapshot,
+      unjustifiedAbsencesCount: header.unjustifiedAbsencesCount,
+      unjustifiedLateArrivalMinutes: header.unjustifiedLateArrivalMinutes,
+    });
+    const termStartDate = attendanceSnapshot
+      ? attendanceSnapshot.termStartDateSnapshot
+      : header.currentTermStartDate;
+    const termEndDate = attendanceSnapshot
+      ? attendanceSnapshot.termEndDateSnapshot
+      : header.currentTermEndDate;
+
     const lines = await db
       .select({
         id: bulletinLines.id,
@@ -299,32 +322,28 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       .where(eq(bulletinLines.bulletinId, id))
       .orderBy(bulletinLines.id);
 
-    let absenceCount = 0;
-    let lateMinutesTotal = 0;
-    if (header.termStartDate && header.termEndDate) {
+    let absenceCount = attendanceSnapshot?.unjustifiedAbsencesCount ?? 0;
+    let lateMinutesTotal = attendanceSnapshot?.unjustifiedLateArrivalMinutes ?? 0;
+    if (!attendanceSnapshot && termStartDate && termEndDate) {
       const [absenceSummary] = await db
         .select({ count: sql<number>`count(distinct ${absences.id})::int` })
         .from(absences)
         .where(and(
           eq(absences.studentId, header.studentId),
           eq(absences.classId, header.classId),
-          sql`${absences.date} >= ${header.termStartDate}`,
-          sql`${absences.date} <= ${header.termEndDate}`,
-          sql`(
-            ${absences.justificationStatus} = 'REJECTED'
-            or (${absences.justificationStatus} is null and ${absences.isJustified} = false and ${absences.declarationId} is null)
-          )`,
+          sql`${absences.date} >= ${termStartDate}`,
+          sql`${absences.date} <= ${termEndDate}`,
+          unjustifiedAbsenceCondition(),
         ));
       absenceCount = Number(absenceSummary?.count ?? 0);
-
       const [lateSummary] = await db
         .select({ total: sql<number>`coalesce(sum(${lateArrivals.lateMinutes}), 0)::int` })
         .from(lateArrivals)
         .where(and(
           eq(lateArrivals.studentId, header.studentId),
           eq(lateArrivals.classId, header.classId),
-          sql`${lateArrivals.date} >= ${header.termStartDate}`,
-          sql`${lateArrivals.date} <= ${header.termEndDate}`,
+          sql`${lateArrivals.date} >= ${termStartDate}`,
+          sql`${lateArrivals.date} <= ${termEndDate}`,
           unjustifiedLateArrivalCondition(),
         ));
       lateMinutesTotal = Number(lateSummary?.total ?? 0);
@@ -342,6 +361,8 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
       schoolYearName: header.schoolYearName,
       termId: header.termId,
       termName: header.termName,
+      termStartDate,
+      termEndDate,
       average: parseNumber(header.average),
       totalPoints: parseNumber(header.totalPoints) ?? 0,
       totalCoefficients: parseNumber(header.totalCoefficients) ?? 0,

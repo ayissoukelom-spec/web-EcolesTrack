@@ -6,6 +6,7 @@ import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import PortalCustomDropdown from './CustomDropdown';
 import { STUDENT_ACADEMIC_YEAR_STATUSES } from '../lib/studentAcademicYearStatus.ts';
+import { DEFAULT_SCHOOL_TIME_ZONE, getIanaTimeZoneOptions } from '../lib/schoolTimeZone.ts';
 import { sortTeachersAlphabetically } from '../lib/teacherOrdering';
 import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
 
@@ -483,6 +484,24 @@ export default function AdminModal(props: any) {
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Adresse</label>
                 <input type="text" value={schoolForm.address} onChange={e => setSchoolForm({...schoolForm, address: e.target.value})} placeholder="Adresse complète" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl" />
               </div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Fuseau horaire
+                <input
+                  required
+                  type="text"
+                  list="school-time-zone-options"
+                  aria-label="Fuseau horaire"
+                  value={schoolForm.timeZone || DEFAULT_SCHOOL_TIME_ZONE}
+                  onChange={(event) => setSchoolForm({ ...schoolForm, timeZone: event.target.value })}
+                  placeholder="Africa/Lome"
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl"
+                />
+                <datalist id="school-time-zone-options">
+                  {getIanaTimeZoneOptions(schoolForm.timeZone).map((timeZone) => (
+                    <option key={timeZone} value={timeZone}>{timeZone}</option>
+                  ))}
+                </datalist>
+              </label>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                   <RequiredLabel label="Téléphone" required />

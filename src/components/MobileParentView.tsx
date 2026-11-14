@@ -3,6 +3,7 @@ import { Student, Absence, Grade, SystemNotification, UserRole, Parent } from '.
 import { apiFetch } from '../lib/api.ts';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import { getPublicationLabel } from '../lib/dateFormatting';
+import { getEffectiveAbsenceJustificationStatus } from '../lib/absenceJustificationStatus.ts';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
 import { classifyParentNotification } from '../lib/parentNotificationCategory.ts';
 import {
@@ -376,7 +377,10 @@ export default function MobileParentView({
                               {childAbsences.length} <span className="text-[10px] text-slate-500 font-normal">absences</span>
                             </p>
                             <p className="text-[8px] text-slate-500">
-                              {childAbsences.filter(a => !a.isJustified).length} non justifiées
+                              {childAbsences.filter((absence) => {
+                                const status = getEffectiveAbsenceJustificationStatus(absence);
+                                return status === 'REJECTED' || (status === null && !absence.isJustified);
+                              }).length} non justifiées
                             </p>
                           </div>
                         </div>
@@ -421,42 +425,66 @@ export default function MobileParentView({
                         </div>
 
                         <div className="space-y-2">
-                          {childAbsences.map((abs) => (
-                            <div key={abs.id} className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5 text-[10px]">
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-white font-mono text-[10px]">{abs.date}</span>
-                                <span className={`px-1.5 py-0.5 rounded-[4px] font-bold uppercase text-[8px] ${
-                                  abs.isJustified ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
-                                }`}>
-                                  {abs.isJustified ? 'Justifiée' : 'A Justifier'}
-                                </span>
-                              </div>
-                              <p className="text-slate-400 capitalize">Période : {abs.period === 'morning' ? 'Matin' : 'Après-midi'}</p>
-                              
-                              {abs.isJustified ? (
-                                <div className="pt-2 border-t border-slate-800/30">
-                                  <div className="text-[10px] text-slate-400">Motif :</div>
-                                  <div className="font-bold text-emerald-500 py-1 whitespace-pre-wrap break-words">
-                                    {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                          {childAbsences.map((abs) => {
+                            const justificationStatus = getEffectiveAbsenceJustificationStatus(abs);
+                            return (
+                              <div key={abs.id} className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5 text-[10px]">
+                                <div className="flex justify-between items-center">
+                                  <span className="font-bold text-white font-mono text-[10px]">{abs.date}</span>
+                                  <span className={`px-1.5 py-0.5 rounded-[4px] font-bold uppercase text-[8px] ${
+                                    justificationStatus === 'APPROVED'
+                                      ? 'bg-emerald-500/10 text-emerald-400'
+                                      : justificationStatus === 'PENDING'
+                                        ? 'bg-amber-500/10 text-amber-400'
+                                        : 'bg-rose-500/10 text-rose-400'
+                                  }`}>
+                                    {justificationStatus === 'APPROVED'
+                                      ? 'Justifiée'
+                                      : justificationStatus === 'PENDING'
+                                        ? 'En attente'
+                                        : justificationStatus === 'REJECTED'
+                                          ? 'Justification refusée'
+                                          : 'À justifier'}
+                                  </span>
+                                </div>
+                                <p className="text-slate-400 capitalize">Période : {abs.period === 'morning' ? 'Matin' : 'Après-midi'}</p>
+
+                                {justificationStatus === 'APPROVED' ? (
+                                  <div className="pt-2 border-t border-slate-800/30">
+                                    <div className="text-[10px] text-slate-400">Motif :</div>
+                                    <div className="font-bold text-emerald-500 py-1 whitespace-pre-wrap break-words">
+                                      {abs.justificationReason || '— En attente de motif de l\'enfant...'}
+                                    </div>
                                   </div>
-                                </div>
-                              ) : (
-                                <div className="pt-2 border-t border-slate-800/30">
-                                  <button
-                                    onClick={() => {
-                                      const reason = window.prompt("Saisissez le motif de justification pour Lucas Dubois :");
-                                      if (reason) {
-                                        onJustifyAbsence(abs.id, reason);
-                                      }
-                                    }}
-                                    className="w-full py-1 bg-indigo-600 text-white font-bold rounded-lg text-[9px] hover:bg-indigo-700"
-                                  >
-                                    Justifier Maintenant
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                                ) : justificationStatus === 'REJECTED' ? (
+                                  <p className="pt-2 border-t border-slate-800/30 text-rose-400">
+                                    Veuillez vous rapprocher de l’établissement pour régulariser cette justification.
+                                  </p>
+                                ) : (
+                                  <>
+                                    {justificationStatus === 'PENDING' && (
+                                      <p className="pt-2 border-t border-slate-800/30 text-amber-400">
+                                        Votre demande est en attente de validation.
+                                      </p>
+                                    )}
+                                    <div className={justificationStatus === 'PENDING' ? 'pt-2' : 'pt-2 border-t border-slate-800/30'}>
+                                      <button
+                                        onClick={() => {
+                                          const reason = window.prompt("Saisissez le motif de justification pour Lucas Dubois :");
+                                          if (reason) {
+                                            onJustifyAbsence(abs.id, reason);
+                                          }
+                                        }}
+                                        className="w-full py-1 bg-indigo-600 text-white font-bold rounded-lg text-[9px] hover:bg-indigo-700"
+                                      >
+                                        Justifier Maintenant
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
 
                           {childAbsences.length === 0 && (
                             <div className="py-8 text-center text-slate-500 text-[10px]">

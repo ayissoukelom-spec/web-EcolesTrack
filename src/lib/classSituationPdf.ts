@@ -8,6 +8,7 @@ export interface ClassSituationPdfCategoryRow {
   categoryId: number;
   categoryCode: string;
   categoryLabel: string;
+  obligationClassNames?: string[];
   due: number;
   paid: number;
   studentDue: number;
@@ -25,6 +26,7 @@ export interface ClassSituationPdfStudent {
     categoryId: number;
     categoryCode: string;
     categoryLabel: string;
+    obligationClassNames: string[];
     due: number;
     paid: number;
     remaining: number;
@@ -100,16 +102,19 @@ export const aggregateClassSituationPdfRows = (
     }
     const due = Math.max(0, Number(row.due) || 0);
     const paid = Math.min(due, Math.max(0, Number(row.paid) || 0));
+    const obligationClassNames = row.obligationClassNames ?? [];
     const category = student.categories.find((item) => item.categoryId === row.categoryId);
     if (category) {
       category.due += due;
       category.paid += paid;
       category.remaining = Math.max(0, category.due - category.paid);
+      category.obligationClassNames = [...new Set([...category.obligationClassNames, ...obligationClassNames])];
     } else {
       student.categories.push({
         categoryId: row.categoryId,
         categoryCode: row.categoryCode,
         categoryLabel: row.categoryLabel,
+        obligationClassNames: [...new Set(obligationClassNames)],
         due,
         paid,
         remaining: Math.max(0, due - paid),
@@ -187,9 +192,12 @@ export const generateClassSituationPdf = async ({
   drawTableHeader();
 
   for (const [index, student] of students.entries()) {
-    const categoryLines = student.categories.map((category) =>
+    const categoryLines = student.categories.flatMap((category) => [
       `${category.categoryLabel} : ${money(category.due)} / ${money(category.paid)} / ${money(category.remaining)}`,
-    );
+      ...(category.obligationClassNames.length > 0
+        ? [`Classe(s) de l’obligation : ${category.obligationClassNames.join(', ')}`]
+        : []),
+    ]);
     const rowHeight = Math.max(27, categoryLines.length * lineHeight + 8);
     if (y - rowHeight < bottomLimit) addPage(true);
     const top = y;

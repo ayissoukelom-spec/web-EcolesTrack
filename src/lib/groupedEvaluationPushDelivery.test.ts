@@ -27,6 +27,11 @@ class FakeRepository implements GroupedPushDeliveryRepository {
   attemptCount = 0;
   nextAttemptAt = new Date(0);
   lastError: string | null = null;
+  transportState: 'relay_accepted' | 'uncertain' | null = null;
+  relayJobIds: string[] | null = null;
+  relayAcceptedAt: Date | null = null;
+  fcmAcceptedAt: Date | null = null;
+  deliveredAt: Date | null = null;
   private lock = Promise.resolve();
 
   async claimDue(_limit: number, now: Date) {
@@ -63,12 +68,26 @@ class FakeRepository implements GroupedPushDeliveryRepository {
     }
   }
 
-  async markAwaitingConfirmation(_id: number, attemptCount: number, detail: string) {
-    if (this.status === 'sending' && this.attemptCount === attemptCount) this.lastError = detail;
+  async markAwaitingConfirmation(
+    _id: number,
+    attemptCount: number,
+    detail: string,
+    relayJobIds: string[],
+    updatedAt: Date,
+  ) {
+    if (this.status === 'sending' && this.attemptCount === attemptCount) {
+      this.lastError = detail;
+      this.transportState = 'relay_accepted';
+      this.relayJobIds = relayJobIds;
+      this.relayAcceptedAt = updatedAt;
+    }
   }
 
   async markUncertain(_id: number, attemptCount: number, error: string) {
-    if (this.status === 'sending' && this.attemptCount === attemptCount) this.lastError = error;
+    if (this.status === 'sending' && this.attemptCount === attemptCount) {
+      this.lastError = error;
+      this.transportState = 'uncertain';
+    }
   }
 }
 
@@ -143,6 +162,7 @@ describe('grouped push outbox processor', () => {
     })).toEqual({
       outcome: 'queued',
       error: 'Push API accepted job(s) queued-1; FCM completion was not reported.',
+      relayJobIds: ['queued-1'],
     });
 
     expect(getInternalNotificationDispatchOutcome({
@@ -151,11 +171,12 @@ describe('grouped push outbox processor', () => {
     })).toMatchObject({ outcome: 'no_subscription' });
   });
 
-  it('keeps accepted jobs unconfirmed and does not submit them a second time', async () => {
+  it('records relay acceptance without claiming FCM acceptance or delivery', async () => {
     const repository = new FakeRepository();
     const send = vi.fn(async () => ({
       outcome: 'queued' as const,
       error: 'API accepted job-1; awaiting FCM result',
+      relayJobIds: ['job-1'],
     }));
 
     await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
@@ -165,6 +186,11 @@ describe('grouped push outbox processor', () => {
     });
     expect(repository.status).toBe('sending');
     expect(repository.lastError).toContain('awaiting FCM result');
+    expect(repository.transportState).toBe('relay_accepted');
+    expect(repository.relayJobIds).toEqual(['job-1']);
+    expect(repository.relayAcceptedAt).toBeInstanceOf(Date);
+    expect(repository.fcmAcceptedAt).toBeNull();
+    expect(repository.deliveredAt).toBeNull();
 
     await expect(processGroupedPushOutboxBatch(repository, { send })).resolves.toMatchObject({
       claimed: 0,
@@ -289,6 +315,9 @@ describe('grouped push outbox processor', () => {
 
     expect(repository.status).toBe('sending');
     expect(repository.lastError).toContain('Socket closed');
+    expect(repository.transportState).toBe('uncertain');
+    expect(repository.fcmAcceptedAt).toBeNull();
+    expect(repository.deliveredAt).toBeNull();
   });
 
   it('does not dispatch when a failed transaction produced no committed outbox row', async () => {

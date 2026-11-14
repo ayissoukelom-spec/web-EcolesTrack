@@ -18,6 +18,7 @@ export interface School {
   principalName?: string | null;
   principalGender?: 'M' | 'F' | null;
   logoPath?: string | null;
+  timeZone?: string | null;
   promotionThreshold?: string | number | null;
   studentsCreationLocked?: boolean;
   isSuspended?: boolean;

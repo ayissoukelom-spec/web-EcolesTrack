@@ -1,4 +1,5 @@
 import type express from 'express';
+import { createHash } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -23,18 +24,48 @@ import {
   notificationAttachments,
   parents,
   schools,
+  schoolTerms,
   schoolClasses,
   students,
+  userSchools,
+  users,
 } from '../db/schema.ts';
 import { deleteStoredFile, persistUploadedFile, readStoredFile } from './fileStorage.ts';
 import { assertSchoolActiveInTransaction, SchoolSuspendedError } from './schoolSuspension.ts';
 import {
+  buildAccountingPaymentReminderMessage,
+  calculateAccountingReminderInstallments,
+  getAccountingReminderDedupeKey,
+  getAccountingReminderPreviewFingerprint,
+  type AccountingReminderStatus,
+  type AccountingReminderStatusFilter,
+  type AmbiguousAccountingReminderInstallment,
+  type AccountingReminderInstallmentLine,
+} from './accountingPaymentReminders.ts';
+import {
   allocateToOldestInstallments,
+  aggregateInstallmentPunctuality,
+  calculateInstallmentPunctuality,
   calculateStudentFeeBalance,
+  compareAccountingClassOrder,
+  doAccountingClassRangesOverlap,
+  getAccountingCategoryDisplayLabel,
+  isAccountingEnrollmentKind,
+  isAccountingClassWithinRange,
+  isStandardAccountingCategoryLabel,
   splitAmountBySchedule,
+  type AccountingEnrollmentKind,
+  type AccountingClassOrder,
+  type InstallmentPunctualityStatus,
+  STANDARD_ACCOUNTING_CATEGORY_LABELS,
   validateAccountingSchedule,
 } from './accountingRules.ts';
-import type { AccountingScheduleItem } from './accountingRules.ts';
+import {
+  getAccountingTuitionProgressCandidates,
+  type AccountingTuitionProgressDataSource,
+  type AccountingTuitionProgressInput,
+  type AccountingTuitionProgressResult,
+} from './accountingTuitionProgress.ts';
 
 type AccountingActor = {
   id?: number | null;
@@ -54,14 +85,139 @@ type PaymentAllocationState = {
 
 type AdjustmentAllocationState = { paymentAllocationId: number; amount: number };
 
+type ObligationGenerationSelection = Record<string, number[]>;
+type TuitionReduction = { discountAmount: number; reason: string };
+type TuitionReductionsByTariffId = Record<string, Record<string, TuitionReduction>>;
+type TuitionInstallmentAmountsByTariffId = Record<string, Record<string, number[]>>;
+
+type ObligationGenerationRow = {
+  key: string;
+  studentId: number;
+  studentName: string;
+  classId: number;
+  className: string;
+  categoryId: number;
+  categoryCode: string;
+  categoryLabel: string | null;
+  tariffId: number | null;
+  referenceAmount: number | null;
+  discountAmount: number;
+  individualizationReason: string | null;
+  canIndividualize: boolean;
+  amount: number | null;
+  state: 'eligible' | 'existing' | 'excluded';
+  selected: boolean;
+  reason: string | null;
+  installments: Array<{ label: string; dueDate: string; amount: number; orderIndex: number }>;
+};
+
+type AccountingReminderCandidate = {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  className: string | null;
+  obligationClassNames: string[];
+  installments: AccountingReminderInstallmentLine[];
+  ambiguousInstallments: AmbiguousAccountingReminderInstallment[];
+  matchedInstallmentCount: number;
+  settledInstallmentCount: number;
+  totalRemaining: number;
+  earliestDueDate: string | null;
+  status: AccountingReminderStatus | 'mixed' | 'undetermined' | 'settled' | 'none';
+  canSend: boolean;
+  alreadyNotified: boolean;
+  reason: string | null;
+  message: string | null;
+  dedupeKey: string | null;
+  recipientUserId: number | null;
+};
+
+type AccountingReminderScope = {
+  schoolId: number;
+  academicYearId: number;
+  classId: number | null;
+  status: AccountingReminderStatusFilter;
+};
+
 const asPositiveInt = (value: unknown): number | null => {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
 };
 
+const asReminderStatusFilter = (value: unknown): AccountingReminderStatusFilter | null =>
+  value === 'all' || value === 'upcoming' || value === 'today' || value === 'overdue'
+    ? value
+    : null;
+
+const asStudentIdList = (value: unknown): number[] | null => {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const parsed = value.map(asPositiveInt);
+  if (parsed.some((id) => id == null) || new Set(parsed).size !== parsed.length) return null;
+  return parsed.filter((id): id is number => id != null);
+};
+
 const asMoney = (value: unknown): number | null => {
   const amount = Number(value);
   return Number.isSafeInteger(amount) && amount > 0 && amount <= 2147483647 ? amount : null;
+};
+
+const asNonNegativeMoney = (value: unknown): number | null => {
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 && amount <= 2147483647 ? amount : null;
+};
+
+const parsePositiveIdArray = (value: unknown): number[] | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 500) return null;
+  const parsed = value.map(asPositiveInt);
+  if (parsed.some((id) => id == null)) return null;
+  return [...new Set(parsed as number[])].sort((left, right) => left - right);
+};
+
+const hashObligationGenerationSnapshot = (snapshot: unknown) =>
+  createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+
+const parseInitialTuitionInput = (body: Record<string, unknown>) => {
+  const amountValue = body.initialTuitionAmount;
+  const hasAmount = amountValue != null && amountValue !== '';
+  const justificationValue = body.initialTuitionJustification;
+  const hasJustification = justificationValue != null && justificationValue !== '';
+  if (!hasAmount) {
+    if (hasJustification) {
+      throw Object.assign(new Error('A tuition amount is required with its justification'), { statusCode: 400 });
+    }
+    return { amount: null, justification: null };
+  }
+  const amount = asMoney(amountValue);
+  if (!amount) {
+    throw Object.assign(new Error('Initial tuition amount must be a positive whole number'), { statusCode: 400 });
+  }
+  if (justificationValue != null && typeof justificationValue !== 'string') {
+    throw Object.assign(new Error('Tuition justification must be text'), { statusCode: 400 });
+  }
+  const justification = typeof justificationValue === 'string' ? justificationValue.trim() : '';
+  if (justification.length > 1000) {
+    throw Object.assign(new Error('Tuition justification must not exceed 1000 characters'), { statusCode: 400 });
+  }
+  return { amount, justification: justification || null };
+};
+
+const resolveInitialTuitionAmount = (
+  categoryCode: string,
+  referenceAmount: number,
+  initialAmount: number | null,
+  justification: string | null,
+) => {
+  if (initialAmount == null) return { amount: referenceAmount, individualized: false };
+  if (categoryCode !== 'tuition') {
+    throw Object.assign(new Error('An individualized initial amount is only available for tuition'), { statusCode: 400 });
+  }
+  if (initialAmount >= referenceAmount) {
+    throw Object.assign(new Error('Initial individualized tuition must be lower than the class tariff'), { statusCode: 400 });
+  }
+  if (!justification) {
+    throw Object.assign(new Error('A justification is required for reduced initial tuition'), { statusCode: 400 });
+  }
+  return { amount: initialAmount, individualized: true };
 };
 
 const asDate = (value: unknown): string | null => {
@@ -145,7 +301,7 @@ const getOrCreateAccountingCategory = async (
   const normalizedLabel = normalizeAccountingLabel(label);
   const categories = await tx.select().from(accountingCategories)
     .where(eq(accountingCategories.schoolId, schoolId));
-  const existing = categories.find((category) => category.code !== 'enrollment'
+  const existing = categories.find((category) => category.code !== 'enrollment' && category.code !== 'tuition'
     && normalizeAccountingLabel(category.label) === normalizedLabel);
   if (existing) {
     if (!existing.isEnabled) {
@@ -188,7 +344,11 @@ const loadOutstandingInstallments = async (
   const obligationRows = await executor.select({
     id: financialObligations.id,
     categoryId: financialObligations.categoryId,
+    classId: financialObligations.classId,
     tariffId: financialObligations.tariffId,
+    feeDefinitionId: financialObligations.feeDefinitionId,
+    enrollmentKind: financialObligations.enrollmentKind,
+    classNameSnapshot: financialObligations.classNameSnapshot,
     label: financialObligations.label,
     amount: financialObligations.amount,
     createdAt: financialObligations.createdAt,
@@ -246,6 +406,257 @@ const loadOutstandingInstallments = async (
   return { obligations: obligationRows, installments: installmentRows, balances, paidByObligation };
 };
 
+type ClassSituationInstallmentDetail = {
+  studentId: number;
+  obligationId: number;
+  className: string | null;
+  categoryLabel: string;
+  label: string | null;
+  dueDate: string | null;
+  amount: number | null;
+  paid: number | null;
+  remaining: number | null;
+  currentStatus: 'paid' | 'partial' | 'overdue' | 'pending' | 'not_applicable';
+  punctualityStatus: InstallmentPunctualityStatus;
+  settledAt: string | null;
+  punctualityReason: string | null;
+};
+
+type ClassInstallmentSummary = {
+  overdueInstallmentCount: number;
+  overdueInstallmentAmount: number;
+  nextInstallment: { label: string; dueDate: string; remaining: number } | null;
+  punctualityStatus: InstallmentPunctualityStatus;
+  punctualityReason: string | null;
+  installmentDetails?: ClassSituationInstallmentDetail[];
+};
+
+const loadClassInstallmentSummaries = async (
+  executor: Pick<typeof defaultDb, 'select'>,
+  schoolId: number,
+  academicYearId: number,
+  studentIds: number[],
+  includeInstallmentDetails = false,
+) => {
+  const summaries = new Map<number, ClassInstallmentSummary>(studentIds.map((studentId) => [studentId, {
+    overdueInstallmentCount: 0,
+    overdueInstallmentAmount: 0,
+    nextInstallment: null as { label: string; dueDate: string; remaining: number } | null,
+    punctualityStatus: 'not_applicable' as InstallmentPunctualityStatus,
+    punctualityReason: null as string | null,
+    ...(includeInstallmentDetails ? { installmentDetails: [] } : {}),
+  }]));
+  if (!studentIds.length) return summaries;
+
+  const obligations = await executor.select({
+    id: financialObligations.id,
+    studentId: financialObligations.studentId,
+    className: financialObligations.classNameSnapshot,
+    label: financialObligations.label,
+    categoryId: financialObligations.categoryId,
+  }).from(financialObligations).where(and(
+      eq(financialObligations.schoolId, schoolId),
+      eq(financialObligations.academicYearId, academicYearId),
+      eq(financialObligations.status, 'active'),
+      inArray(financialObligations.studentId, studentIds),
+    ));
+  if (!obligations.length) return summaries;
+
+  const categoriesById = new Map<number, string>();
+  if (includeInstallmentDetails) {
+    const categoryIds = [...new Set(obligations.map((obligation) => obligation.categoryId))];
+    const categoryRows = categoryIds.length
+      ? await executor.select({
+        id: accountingCategories.id,
+        label: accountingCategories.label,
+      }).from(accountingCategories).where(inArray(accountingCategories.id, categoryIds))
+      : [];
+    for (const category of categoryRows) categoriesById.set(category.id, category.label);
+  }
+  const obligationIds = obligations.map((obligation) => obligation.id);
+  const installments = await executor.select({
+    id: financialInstallments.id,
+    obligationId: financialInstallments.obligationId,
+    label: financialInstallments.label,
+    dueDate: financialInstallments.dueDate,
+    amount: financialInstallments.amount,
+  }).from(financialInstallments)
+    .where(inArray(financialInstallments.obligationId, obligationIds))
+    .orderBy(asc(financialInstallments.dueDate), asc(financialInstallments.id));
+  const installmentsByObligation = new Map<number, typeof installments>();
+  for (const installment of installments) {
+    const obligationInstallments = installmentsByObligation.get(installment.obligationId) ?? [];
+    obligationInstallments.push(installment);
+    installmentsByObligation.set(installment.obligationId, obligationInstallments);
+  }
+  if (includeInstallmentDetails) {
+    for (const obligation of obligations) {
+      if (installmentsByObligation.has(obligation.id)) continue;
+      summaries.get(obligation.studentId)?.installmentDetails?.push({
+        studentId: obligation.studentId,
+        obligationId: obligation.id,
+        className: obligation.className,
+        categoryLabel: obligation.label ?? categoriesById.get(obligation.categoryId) ?? null,
+        label: null,
+        dueDate: null,
+        amount: null,
+        paid: null,
+        remaining: null,
+        currentStatus: 'not_applicable',
+        punctualityStatus: 'not_applicable',
+        settledAt: null,
+        punctualityReason: null,
+      });
+    }
+  }
+  if (!installments.length) return summaries;
+
+  const allocations = await executor.select({
+    id: financialPaymentAllocations.id,
+    obligationId: financialPaymentAllocations.obligationId,
+    installmentId: financialPaymentAllocations.installmentId,
+    amount: financialPaymentAllocations.amount,
+    paymentStatus: financialPayments.status,
+    // Keep the stored calendar day; pg's Date parser would apply the process-local timezone.
+    paidAtDate: sql<string>`to_char(${financialPayments.paidAt}, 'YYYY-MM-DD')`,
+  }).from(financialPaymentAllocations)
+    .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
+    .where(and(
+      inArray(financialPaymentAllocations.obligationId, obligationIds),
+      eq(financialPayments.schoolId, schoolId),
+      eq(financialPayments.academicYearId, academicYearId),
+    ));
+  const allocationIds = allocations.map((allocation) => allocation.id);
+  const adjustments = allocationIds.length
+    ? await executor.select({
+      paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
+      amount: financialAdjustmentAllocations.amount,
+      kind: financialAdjustments.kind,
+      recordedAtDate: sql<string>`to_char(${financialAdjustments.createdAt}, 'YYYY-MM-DD')`,
+    }).from(financialAdjustmentAllocations)
+      .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
+      .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allocationIds))
+    : [];
+  const postedAllocations = allocations.filter((allocation) => allocation.paymentStatus === 'posted');
+  const postedAllocationIds = new Set(postedAllocations.map((allocation) => allocation.id));
+  const adjustmentsForPostedPayments = adjustments.filter((adjustment) => (
+    postedAllocationIds.has(adjustment.paymentAllocationId)
+  ));
+  const adjustedById = getAdjustmentTotals(postedAllocations, adjustmentsForPostedPayments);
+  const paidByInstallment = new Map<number, number>();
+  const allocationsByInstallment = new Map<number, typeof postedAllocations>();
+  const refundsByAllocation = new Map<number, typeof adjustmentsForPostedPayments>();
+  const hasUnallocatedPaymentByObligation = new Set<number>();
+  const obligationById = new Map(obligations.map((obligation) => [obligation.id, obligation]));
+  for (const allocation of postedAllocations) {
+    if (allocation.installmentId == null) continue;
+    const net = allocation.amount - (adjustedById.get(allocation.id) ?? 0);
+    paidByInstallment.set(
+      allocation.installmentId,
+      (paidByInstallment.get(allocation.installmentId) ?? 0) + net,
+    );
+    const installmentAllocations = allocationsByInstallment.get(allocation.installmentId) ?? [];
+    installmentAllocations.push(allocation);
+    allocationsByInstallment.set(allocation.installmentId, installmentAllocations);
+  }
+  for (const allocation of postedAllocations) {
+    if (allocation.installmentId == null) hasUnallocatedPaymentByObligation.add(allocation.obligationId);
+  }
+  for (const adjustment of adjustmentsForPostedPayments) {
+    if (adjustment.kind !== 'refund') continue;
+    const allocationAdjustments = refundsByAllocation.get(adjustment.paymentAllocationId) ?? [];
+    allocationAdjustments.push(adjustment);
+    refundsByAllocation.set(adjustment.paymentAllocationId, allocationAdjustments);
+  }
+
+  const today = todayUtc();
+  const punctualityByStudent = new Map<number, Array<{
+    dueDate: string;
+    status: InstallmentPunctualityStatus;
+    reason: string | null;
+    currentStatus: 'overdue' | 'upcoming' | 'settled' | 'undetermined';
+  }>>();
+  for (const installment of installments) {
+    const remaining = Math.max(0, installment.amount - (paidByInstallment.get(installment.id) ?? 0));
+    const obligation = obligationById.get(installment.obligationId);
+    const studentId = obligation?.studentId;
+    const summary = studentId == null ? null : summaries.get(studentId);
+    if (!summary) continue;
+    const installmentAllocations = allocationsByInstallment.get(installment.id) ?? [];
+    const installmentRefunds = installmentAllocations.flatMap((allocation) =>
+      (refundsByAllocation.get(allocation.id) ?? []).map((adjustment) => ({
+        amount: adjustment.amount,
+        recordedAtDate: adjustment.recordedAtDate,
+      })),
+    );
+    const punctuality = calculateInstallmentPunctuality({
+      amount: installment.amount,
+      dueDate: installment.dueDate,
+      remaining,
+      today,
+      hasUnallocatedPayment: hasUnallocatedPaymentByObligation.has(installment.obligationId),
+      payments: installmentAllocations.map((allocation) => ({
+        amount: allocation.amount,
+        paidAtDate: allocation.paidAtDate,
+        status: 'posted',
+      })),
+      refunds: installmentRefunds,
+    });
+    const paid = paidByInstallment.get(installment.id) ?? 0;
+    const currentStatus = remaining === 0 ? 'paid'
+      : punctuality.currentStatus === 'overdue' ? 'overdue'
+      : paid > 0 ? 'partial'
+        : installment.dueDate < today ? 'overdue' : 'pending';
+    if (includeInstallmentDetails && obligation) {
+      summary.installmentDetails?.push({
+        studentId,
+        obligationId: obligation.id,
+        className: obligation.className,
+        categoryLabel: obligation.label ?? categoriesById.get(obligation.categoryId) ?? null,
+        label: installment.label,
+        dueDate: installment.dueDate,
+        amount: installment.amount,
+        paid,
+        remaining,
+        currentStatus,
+        punctualityStatus: punctuality.status,
+        settledAt: punctuality.settledAt,
+        punctualityReason: punctuality.reason,
+      });
+    }
+    const studentInstallments = punctualityByStudent.get(studentId) ?? [];
+    studentInstallments.push({
+      dueDate: installment.dueDate,
+      status: punctuality.status,
+      reason: punctuality.reason,
+      currentStatus: punctuality.currentStatus,
+    });
+    punctualityByStudent.set(studentId, studentInstallments);
+
+    if (punctuality.currentStatus === 'overdue') {
+      summary.overdueInstallmentCount += 1;
+      summary.overdueInstallmentAmount += remaining;
+    }
+    if (remaining <= 0 || installment.dueDate < today) continue;
+    const next = summary.nextInstallment;
+    if (!next || installment.dueDate < next.dueDate) {
+      summary.nextInstallment = {
+        label: installment.label,
+        dueDate: installment.dueDate,
+        remaining,
+      };
+    }
+  }
+  for (const [studentId, studentInstallments] of punctualityByStudent) {
+    const summary = summaries.get(studentId);
+    if (!summary) continue;
+    const punctuality = aggregateInstallmentPunctuality(studentInstallments, today);
+    summary.punctualityStatus = punctuality.status;
+    summary.punctualityReason = punctuality.reason;
+  }
+  return summaries;
+};
+
 const getApplicableTariffs = async (
   executor: Pick<typeof defaultDb, 'select'>,
   {
@@ -267,27 +678,36 @@ const getApplicableTariffs = async (
     eq(accountingTariffs.academicYearId, academicYearId),
     eq(accountingTariffs.isEnabled, true),
     ...(categoryId ? [eq(accountingTariffs.categoryId, categoryId)] : []),
-    ...(tariffId ? [eq(accountingTariffs.id, tariffId)] : []),
   ));
-  const exact = candidates.filter((tariff) => tariff.classId === classId);
-  if (!candidates.some((tariff) => tariff.classFromId != null && tariff.classToId != null)) {
-    return exact;
-  }
-  const scopedRanges = candidates.filter((tariff) => tariff.classId == null
+  const requestedTariff = tariffId == null ? null : candidates.find((tariff) => tariff.id === tariffId);
+  if (tariffId != null && !requestedTariff) return [];
+  if (requestedTariff && categoryId != null && requestedTariff.categoryId !== categoryId) return [];
+  const selectedCategoryId = requestedTariff?.categoryId ?? categoryId;
+  const scopedCandidates = selectedCategoryId == null
+    ? candidates
+    : candidates.filter((tariff) => tariff.categoryId === selectedCategoryId);
+  const exact = scopedCandidates.filter((tariff) => tariff.classId === classId);
+  const scopedRanges = scopedCandidates.filter((tariff) => tariff.classId == null
     && tariff.classFromId != null && tariff.classToId != null);
+  if (!scopedRanges.length) return exact;
   const classIds = [...new Set([
     classId,
     ...scopedRanges.flatMap((tariff) => [tariff.classFromId!, tariff.classToId!]),
   ])];
   const classOrders = await executor.select({
     classId: classes.id,
+    className: classes.name,
     academicYearId: classes.academicYearId,
-    orderIndex: levels.orderIndex,
+    levelOrder: levels.orderIndex,
   }).from(classes).innerJoin(levels, eq(levels.id, classes.levelId))
     .where(inArray(classes.id, classIds));
-  const orderByClassId = new Map(classOrders
+  const orderByClassId = new Map<number, AccountingClassOrder>(classOrders
     .filter((row) => row.academicYearId === academicYearId)
-    .map((row) => [row.classId, row.orderIndex]));
+    .map((row) => [row.classId, {
+      classId: row.classId,
+      className: row.className,
+      levelOrder: row.levelOrder,
+    }]));
   const studentOrder = orderByClassId.get(classId);
   if (studentOrder == null) return exact;
   const exactCategories = new Set(exact.map((tariff) => tariff.categoryId));
@@ -296,13 +716,106 @@ const getApplicableTariffs = async (
     const startOrder = tariff.classFromId == null ? undefined : orderByClassId.get(tariff.classFromId);
     const endOrder = tariff.classToId == null ? undefined : orderByClassId.get(tariff.classToId);
     return startOrder != null && endOrder != null
-      && startOrder <= endOrder && studentOrder >= startOrder && studentOrder <= endOrder;
+      && isAccountingClassWithinRange(studentOrder, startOrder, endOrder);
   });
   const rangeByCategory = new Map<number, (typeof matchingRanges)[number]>();
   for (const tariff of matchingRanges) {
     if (!rangeByCategory.has(tariff.categoryId)) rangeByCategory.set(tariff.categoryId, tariff);
   }
-  return [...exact, ...rangeByCategory.values()];
+  if (requestedTariff) {
+    if (exact.length) return exact;
+    return matchingRanges.filter((tariff) => tariff.id === requestedTariff.id);
+  }
+  const resolved = [...exact, ...rangeByCategory.values()];
+  return resolved;
+};
+
+const findEquivalentTariffObligation = (
+  obligations: Array<{
+    id: number;
+    classId: number;
+    tariffId: number | null;
+    feeDefinitionId: number | null;
+    enrollmentKind: string | null;
+  }>,
+  {
+    classId,
+    enrollmentKind,
+    ambiguityMessage,
+  }: {
+    classId: number;
+    enrollmentKind: string | null;
+    ambiguityMessage?: string;
+  },
+) => {
+  const sameScopeAndNature = obligations.filter((obligation) =>
+    obligation.classId === classId && obligation.enrollmentKind === enrollmentKind);
+  const unidentified = sameScopeAndNature.some((obligation) =>
+    obligation.tariffId == null && obligation.feeDefinitionId == null);
+  const conflictingSource = sameScopeAndNature.some((obligation) =>
+    obligation.tariffId != null && obligation.feeDefinitionId != null);
+  const tariffObligations = sameScopeAndNature.filter((obligation) =>
+    obligation.tariffId != null && obligation.feeDefinitionId == null);
+
+  if (unidentified || conflictingSource || tariffObligations.length > 1) {
+    throw Object.assign(
+      new Error(ambiguityMessage
+        ?? 'An existing obligation matches this fee and class ambiguously; no new obligation or payment was recorded'),
+      { statusCode: 409 },
+    );
+  }
+
+  return tariffObligations[0] ?? null;
+};
+
+const findExistingEnrollmentTariffObligation = (
+  obligations: Array<{
+    id: number;
+    classId: number;
+    tariffId: number | null;
+    feeDefinitionId: number | null;
+    enrollmentKind: string | null;
+  }>,
+  { classId, tariffId }: { classId: number; tariffId?: number },
+) => {
+  const sameClass = obligations.filter((obligation) => obligation.classId === classId);
+  const unidentified = sameClass.some((obligation) =>
+    obligation.tariffId == null && obligation.feeDefinitionId == null);
+  const conflictingSource = sameClass.some((obligation) =>
+    obligation.tariffId != null && obligation.feeDefinitionId != null);
+  const tariffObligations = sameClass.filter((obligation) =>
+    obligation.tariffId != null
+      && obligation.feeDefinitionId == null
+      && (tariffId == null || obligation.tariffId === tariffId));
+
+  if (unidentified || conflictingSource || tariffObligations.length > 1) {
+    throw Object.assign(
+      new Error('Plusieurs obligations d’inscription correspondent à ce paiement; aucune opération n’a été enregistrée.'),
+      { statusCode: 409 },
+    );
+  }
+
+  return tariffObligations[0] ?? null;
+};
+
+const findExistingTuitionObligation = (
+  obligations: Array<{
+    id: number;
+    classId: number;
+    tariffId: number | null;
+    feeDefinitionId: number | null;
+    enrollmentKind: string | null;
+  }>,
+) => {
+  const tuitionObligations = obligations.filter((obligation) =>
+    obligation.feeDefinitionId == null && obligation.enrollmentKind == null);
+  if (tuitionObligations.length > 1) {
+    throw Object.assign(
+      new Error('Multiple active tuition obligations match ambiguously for this student and year; no new obligation or payment was recorded'),
+      { statusCode: 409 },
+    );
+  }
+  return tuitionObligations[0] ?? null;
 };
 
 const ensureTariffObligation = async (
@@ -316,6 +829,9 @@ const ensureTariffObligation = async (
     className,
     categoryId,
     tariffId,
+    enrollmentKind,
+    initialTuitionAmount,
+    initialTuitionJustification,
   }: {
     actor: AccountingActor;
     schoolId: number;
@@ -325,11 +841,17 @@ const ensureTariffObligation = async (
     className: string;
     categoryId: number;
     tariffId?: number;
+    enrollmentKind?: AccountingEnrollmentKind | null;
+    initialTuitionAmount?: number | null;
+    initialTuitionJustification?: string | null;
   },
 ) => {
   const existing = await executor.select({
     id: financialObligations.id,
+    classId: financialObligations.classId,
     tariffId: financialObligations.tariffId,
+    feeDefinitionId: financialObligations.feeDefinitionId,
+    enrollmentKind: financialObligations.enrollmentKind,
   }).from(financialObligations).where(and(
     eq(financialObligations.schoolId, schoolId),
     eq(financialObligations.studentId, studentId),
@@ -341,6 +863,31 @@ const ensureTariffObligation = async (
     eq(accountingCategories.id, categoryId),
     eq(accountingCategories.schoolId, schoolId),
   ));
+  if (!category) {
+    throw Object.assign(new Error('No configured amount is available for this fee and class'), { statusCode: 409 });
+  }
+  if (category.code === 'tuition') {
+    if (initialTuitionAmount != null) {
+      const [priorTuitionObligation] = await executor.select({
+        id: financialObligations.id,
+      }).from(financialObligations).where(and(
+        eq(financialObligations.schoolId, schoolId),
+        eq(financialObligations.studentId, studentId),
+        eq(financialObligations.academicYearId, academicYearId),
+        eq(financialObligations.categoryId, categoryId),
+      ));
+      if (priorTuitionObligation) {
+        throw Object.assign(new Error('Initial tuition can only be individualized before any tuition obligation has been constituted'), { statusCode: 409 });
+      }
+    } else {
+      const existingTuition = findExistingTuitionObligation(existing);
+      if (existingTuition) return existingTuition;
+    }
+  }
+  if (category.code === 'enrollment' && enrollmentKind == null) {
+    const existingEnrollment = findExistingEnrollmentTariffObligation(existing, { classId, tariffId });
+    if (existingEnrollment) return existingEnrollment;
+  }
   const tariff = (await getApplicableTariffs(executor, {
     schoolId,
     academicYearId,
@@ -348,52 +895,53 @@ const ensureTariffObligation = async (
     categoryId,
     tariffId,
   }))[0];
-  const existingTariffObligation = existing.find((obligation) => obligation.tariffId === tariff?.id);
-  if (existing.length && (!tariff || existingTariffObligation)) {
-    if (tariff && existingTariffObligation) {
-      const installments = await executor.select().from(financialInstallments)
-        .where(eq(financialInstallments.obligationId, existingTariffObligation.id))
-        .orderBy(asc(financialInstallments.orderIndex));
-      const scheduledAmount = installments.reduce((total, item) => total + item.amount, 0);
-      const additionalAmount = tariff.amount - scheduledAmount;
-      if (additionalAmount > 0) {
-        await executor.insert(financialInstallments).values({
-          obligationId: existingTariffObligation.id,
-          label: 'Complément du tarif actuel',
-          orderIndex: installments.reduce((max, item) => Math.max(max, item.orderIndex), 0) + 1,
-          amount: additionalAmount,
-          dueDate: todayUtc(),
-        });
-      }
-    }
-    return;
+  const effectiveEnrollmentKind = category.code === 'enrollment' ? enrollmentKind ?? null : null;
+  const equivalent = findEquivalentTariffObligation(existing, {
+    classId,
+    enrollmentKind: effectiveEnrollmentKind,
+    ...(category.code === 'enrollment'
+      ? { ambiguityMessage: 'Plusieurs obligations d’inscription correspondent à ce type et à cette classe.' }
+      : {}),
+  });
+  if (equivalent) return equivalent;
+  if (!tariff && existing.length && category.code !== 'enrollment') return null;
+  if (!tariff) {
+    throw Object.assign(new Error(category.code === 'enrollment'
+      ? 'Aucun tarif d’inscription configuré n’est disponible pour cet élève et cette classe.'
+      : 'No configured amount is available for this fee and class'), { statusCode: 409 });
   }
-  if (!category || !tariff) {
-    throw Object.assign(new Error('No configured amount is available for this fee and class'), { statusCode: 409 });
-  }
-  if (category.code === 'enrollment') {
-    console.warn('Rejected enrollment category during tariff payment', {
-      tariffId: tariff?.id ?? tariffId ?? null,
-      categoryId,
-      categoryCode: category.code,
-      academicYearId,
-      classId,
-      studentId,
-      enrollmentId: null,
-      configuredAmount: tariff?.amount ?? null,
-      tariffFound: Boolean(tariff),
-    });
-    throw Object.assign(new Error('Select a configured enrollment charge before recording this payment'), { statusCode: 409 });
+  if (category.code === 'enrollment' && enrollmentKind == null) {
+    throw Object.assign(
+      new Error('Sélectionnez un type d’inscription avant d’enregistrer ce paiement.'),
+      { statusCode: 400 },
+    );
   }
 
+  const initialTerms = resolveInitialTuitionAmount(
+    category.code,
+    tariff.amount,
+    initialTuitionAmount ?? null,
+    initialTuitionJustification ?? null,
+  );
   const sourceKey = `tariff-${tariff.id}-student-${studentId}`;
   const [duplicate] = await executor.select().from(financialObligations).where(and(
     eq(financialObligations.schoolId, schoolId),
     eq(financialObligations.sourceKey, sourceKey),
   ));
   if (duplicate) {
-    if (duplicate.status === 'active') return;
-    throw Object.assign(new Error('The configured charge has already been cancelled'), { statusCode: 409 });
+    if (duplicate.status === 'active' && duplicate.classId === classId
+      && duplicate.categoryId === categoryId && duplicate.feeDefinitionId == null
+      && duplicate.enrollmentKind === effectiveEnrollmentKind) {
+      return duplicate;
+    }
+    if (duplicate.status === 'active') {
+      throw Object.assign(new Error(category.code === 'enrollment'
+        ? 'Une obligation d’inscription existe déjà pour une autre classe ou un autre type.'
+        : 'The configured charge already exists for a different class or fee nature'), { statusCode: 409 });
+    }
+    throw Object.assign(new Error(category.code === 'enrollment'
+      ? 'Cette obligation d’inscription a déjà été annulée.'
+      : 'The configured charge has already been cancelled'), { statusCode: 409 });
   }
 
   let planned: Array<{ label: string; dueDate: string; amount: number; orderIndex: number }>;
@@ -406,23 +954,23 @@ const ensureTariffObligation = async (
     ));
     const schedule = validateAccountingSchedule(scheduleRow?.installments);
     planned = schedule
-      ? splitAmountBySchedule(tariff.amount, schedule) ?? [{
+      ? splitAmountBySchedule(initialTerms.amount, schedule) ?? [{
         label: 'Paiement unique',
         dueDate: todayUtc(),
-        amount: tariff.amount,
+        amount: initialTerms.amount,
         orderIndex: 1,
       }]
       : [{
         label: 'Paiement unique',
         dueDate: todayUtc(),
-        amount: tariff.amount,
+        amount: initialTerms.amount,
         orderIndex: 1,
       }];
   } else {
     planned = [{
       label: category.label,
       dueDate: todayUtc(),
-      amount: tariff.amount,
+      amount: initialTerms.amount,
       orderIndex: 1,
     }];
   }
@@ -436,10 +984,10 @@ const ensureTariffObligation = async (
     tariffId: tariff.id,
     feeDefinitionId: null,
     label: tariff.label,
-    amount: tariff.amount,
+    amount: initialTerms.amount,
     currency: 'XOF',
     classNameSnapshot: className,
-    enrollmentKind: null,
+    enrollmentKind: effectiveEnrollmentKind,
     sourceKey,
     createdBy: actor.id ?? null,
   }).onConflictDoNothing().returning();
@@ -448,7 +996,11 @@ const ensureTariffObligation = async (
       eq(financialObligations.schoolId, schoolId),
       eq(financialObligations.sourceKey, sourceKey),
     ));
-    if (raced?.status === 'active') return;
+    if (raced?.status === 'active'
+      && raced.classId === classId
+      && raced.categoryId === categoryId
+      && raced.feeDefinitionId == null
+      && raced.enrollmentKind === effectiveEnrollmentKind) return raced;
     throw Object.assign(new Error('The configured charge could not be created for this payment'), { statusCode: 409 });
   }
   await executor.insert(financialInstallments).values(planned.map((item) => ({
@@ -465,8 +1017,11 @@ const ensureTariffObligation = async (
     'create',
     'financial_obligation',
     created.id,
-    `Charge created from configured tariff: category=${category.code} amount=${tariff.amount}`,
+    initialTerms.individualized
+      ? `Charge created from configured tariff: category=tuition amount=${initialTerms.amount} XOF referenceAmount=${tariff.amount} XOF tariffId=${tariff.id} justification=${JSON.stringify(initialTuitionJustification)}`
+      : `Charge created from configured tariff: category=${category.code} amount=${initialTerms.amount}`,
   );
+  return created;
 };
 
 const createReceiptSnapshot = async ({
@@ -561,8 +1116,116 @@ export interface RegisterAccountingApiOptions {
   database?: typeof defaultDb;
 }
 
+export type AccountingTuitionProgressExecutor = Parameters<Parameters<typeof defaultDb.transaction>[0]>[0];
+
+const createAccountingTuitionProgressDataSource = (
+  executor: AccountingTuitionProgressExecutor,
+): AccountingTuitionProgressDataSource => ({
+  loadAcademicYear: async (_schoolId, academicYearId) => {
+    const [year] = await executor.select({
+      id: academicYears.id,
+      schoolId: academicYears.schoolId,
+    }).from(academicYears).where(eq(academicYears.id, academicYearId));
+    return year ?? null;
+  },
+  loadPeriods: async (schoolId, academicYearId, cycleId) =>
+    executor.select({
+      schoolId: schoolTerms.schoolId,
+      academicYearId: schoolTerms.academicYearId,
+      cycleId: schoolTerms.cycleId,
+      periodType: schoolTerms.periodType,
+      orderIndex: schoolTerms.orderIndex,
+      startDate: schoolTerms.startDate,
+      endDate: schoolTerms.endDate,
+      isActive: schoolTerms.isActive,
+    }).from(schoolTerms).where(and(
+      eq(schoolTerms.academicYearId, academicYearId),
+      eq(schoolTerms.cycleId, cycleId),
+      or(isNull(schoolTerms.schoolId), eq(schoolTerms.schoolId, schoolId)),
+    )),
+  loadTuitionObligations: async (schoolId, academicYearId) =>
+    executor.select({
+      id: financialObligations.id,
+      studentId: financialObligations.studentId,
+      schoolId: financialObligations.schoolId,
+      academicYearId: financialObligations.academicYearId,
+      classId: financialObligations.classId,
+      categoryId: financialObligations.categoryId,
+      amount: financialObligations.amount,
+      currency: financialObligations.currency,
+      studentSchoolId: students.schoolId,
+      firstName: students.firstName,
+      lastName: students.lastName,
+      matricule: students.matricule,
+      classSchoolId: classes.schoolId,
+      classAcademicYearId: classes.academicYearId,
+      className: financialObligations.classNameSnapshot,
+      cycleId: levels.cycleId,
+    }).from(financialObligations)
+      .innerJoin(accountingCategories, eq(accountingCategories.id, financialObligations.categoryId))
+      .leftJoin(students, eq(students.id, financialObligations.studentId))
+      .leftJoin(classes, eq(classes.id, financialObligations.classId))
+      .leftJoin(levels, eq(levels.id, classes.levelId))
+      .where(and(
+        eq(financialObligations.schoolId, schoolId),
+        eq(financialObligations.academicYearId, academicYearId),
+        eq(financialObligations.status, 'active'),
+        eq(accountingCategories.schoolId, schoolId),
+        eq(accountingCategories.code, 'tuition'),
+      ))
+      .orderBy(asc(financialObligations.studentId), asc(financialObligations.id)),
+  loadPaymentAllocations: async (_schoolId, _academicYearId, obligationIds) =>
+    obligationIds.length
+      ? executor.select({
+        id: financialPaymentAllocations.id,
+        obligationId: financialPaymentAllocations.obligationId,
+        installmentId: financialPaymentAllocations.installmentId,
+        installmentObligationId: financialInstallments.obligationId,
+        amount: financialPaymentAllocations.amount,
+        paymentId: financialPayments.id,
+        paymentSchoolId: financialPayments.schoolId,
+        paymentStudentId: financialPayments.studentId,
+        paymentAcademicYearId: financialPayments.academicYearId,
+        paymentStatus: financialPayments.status,
+        paidAtDate: sql<string>`to_char(${financialPayments.paidAt}, 'YYYY-MM-DD')`,
+      }).from(financialPaymentAllocations)
+        .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
+        .leftJoin(financialInstallments, eq(financialInstallments.id, financialPaymentAllocations.installmentId))
+        .where(inArray(financialPaymentAllocations.obligationId, [...obligationIds]))
+      : [],
+  loadPaymentAdjustments: async (paymentAllocationIds) =>
+    paymentAllocationIds.length
+      ? executor.select({
+        adjustmentId: financialAdjustments.id,
+        paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
+        adjustmentPaymentId: financialAdjustments.paymentId,
+        amount: financialAdjustmentAllocations.amount,
+        kind: financialAdjustments.kind,
+        recordedAtDate: sql<string>`to_char(${financialAdjustments.createdAt}, 'YYYY-MM-DD')`,
+      }).from(financialAdjustmentAllocations)
+        .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
+        .where(inArray(financialAdjustmentAllocations.paymentAllocationId, [...paymentAllocationIds]))
+      : [],
+});
+
+export const loadAccountingTuitionProgressCandidatesInTransaction = (
+  input: AccountingTuitionProgressInput,
+  executor: AccountingTuitionProgressExecutor,
+): Promise<AccountingTuitionProgressResult> =>
+  getAccountingTuitionProgressCandidates(input, createAccountingTuitionProgressDataSource(executor));
+
+export const loadAccountingTuitionProgressCandidates = (
+  input: AccountingTuitionProgressInput,
+  database: typeof defaultDb = defaultDb,
+) => database.transaction((executor) =>
+  loadAccountingTuitionProgressCandidatesInTransaction(input, executor));
+
 export const registerAccountingRoutes = (app: express.Express, options: RegisterAccountingApiOptions) => {
   const db = options.database ?? defaultDb;
+  const tariffVersioningUnavailable = {
+    error: 'Tariff versioning is unavailable until its schema is installed and activation is explicitly authorized',
+    code: 'ACCOUNTING_TARIFF_VERSIONING_UNAVAILABLE',
+  };
   const actorFor = async (req: any, res: express.Response) => {
     const actor = await options.resolveActor(req);
     if (!actor) {
@@ -575,6 +1238,50 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     }
     return actor;
   };
+
+  const respondTariffVersioningUnavailable = async (
+    req: any,
+    res: express.Response,
+    requestedSchoolId: unknown,
+    ids: unknown[],
+    invalidIdMessage = 'Valid tariff id is required',
+  ) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const schoolId = await getSchoolId(actor, requestedSchoolId, res);
+      if (!schoolId) return;
+      if (ids.some((id) => !asPositiveInt(id))) {
+        return res.status(400).json({ error: invalidIdMessage });
+      }
+      return res.status(503).json(tariffVersioningUnavailable);
+    } catch (error) {
+      console.error('Failed to resolve accounting tariff version request:', error);
+      return res.status(500).json({ error: 'Failed to resolve accounting tariff version request' });
+    }
+  };
+
+  app.get('/api/accounting/tariffs/:tariffId/versions', async (req, res) => {
+    return respondTariffVersioningUnavailable(req, res, req.query.schoolId, [req.params.tariffId]);
+  });
+
+  app.post('/api/accounting/tariffs/:tariffId/versions', async (req, res) => {
+    return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [req.params.tariffId]);
+  });
+
+  app.post('/api/accounting/tariffs/:tariffId/versions/:versionId/replace', async (req, res) => {
+    return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [
+      req.params.tariffId,
+      req.params.versionId,
+    ], 'Valid tariff and version ids are required');
+  });
+
+  app.post('/api/accounting/tariffs/:tariffId/versions/:versionId/cancel', async (req, res) => {
+    return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [
+      req.params.tariffId,
+      req.params.versionId,
+    ], 'Valid tariff and version ids are required');
+  });
 
   const validateClassAndYear = async (schoolId: number, classId: number, academicYearId: number) => {
     const [classRow] = await db.select({
@@ -594,6 +1301,639 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       || (classRow.schoolId == null && await options.isApprovedClassForSchool(classId, schoolId));
     return classAllowed ? { classRow, yearRow } : null;
   };
+
+  const buildObligationGenerationPlan = async (
+    executor: Pick<typeof db, 'select'>,
+    {
+      schoolId,
+      academicYearId,
+      classIds,
+      categoryIds,
+      selection,
+      tuitionReductions,
+      tuitionInstallmentAmounts,
+      strictSelection,
+    }: {
+      schoolId: number;
+      academicYearId: number;
+      classIds: number[];
+      categoryIds: number[];
+      selection: ObligationGenerationSelection | null;
+      tuitionReductions: TuitionReductionsByTariffId;
+      tuitionInstallmentAmounts: TuitionInstallmentAmountsByTariffId;
+      strictSelection: boolean;
+    },
+  ) => {
+    const [year] = await executor.select({
+      id: academicYears.id,
+      schoolId: academicYears.schoolId,
+      name: academicYears.name,
+    }).from(academicYears).where(eq(academicYears.id, academicYearId));
+    if (!year || (year.schoolId != null && year.schoolId !== schoolId)) {
+      throw Object.assign(new Error('Academic year is not available for this school'), { statusCode: 400 });
+    }
+
+    const categoryRows = await executor.select({
+      id: accountingCategories.id,
+      code: accountingCategories.code,
+      label: accountingCategories.label,
+    }).from(accountingCategories).where(and(
+      eq(accountingCategories.schoolId, schoolId),
+      eq(accountingCategories.isEnabled, true),
+      inArray(accountingCategories.id, categoryIds),
+    ));
+    if (categoryRows.length !== categoryIds.length) {
+      throw Object.assign(new Error('One or more selected fee categories are unavailable'), { statusCode: 400 });
+    }
+    if (categoryRows.some((category) => category.code === 'enrollment')) {
+      throw Object.assign(new Error('Enrollment fees are excluded from batch generation'), { statusCode: 400 });
+    }
+
+    const classRows = await executor.select({
+      id: classes.id,
+      schoolId: classes.schoolId,
+      academicYearId: classes.academicYearId,
+      name: classes.name,
+    }).from(classes).where(inArray(classes.id, classIds));
+    const validatedClasses = await Promise.all(classRows.map(async (classRow) => {
+      if (classRow.academicYearId !== academicYearId) return null;
+      const approval = classRow.schoolId == null
+        ? await executor.select({ id: schoolClasses.id }).from(schoolClasses).where(and(
+          eq(schoolClasses.classId, classRow.id),
+          eq(schoolClasses.schoolId, schoolId),
+          eq(schoolClasses.status, 'approved'),
+        ))
+        : [];
+      const classAllowed = classRow.schoolId === schoolId
+        || (classRow.schoolId == null && approval.length > 0);
+      return classAllowed ? { classRow, yearRow: year } : null;
+    }));
+    if (classRows.length !== classIds.length || validatedClasses.some((context) => !context)) {
+      throw Object.assign(new Error('One or more selected classes are not authorized for this school year'), { statusCode: 400 });
+    }
+    const classById = new Map(validatedClasses.map((context) => [context!.classRow.id, context!.classRow]));
+    const studentRows = await executor.select({
+      id: students.id,
+      firstName: students.firstName,
+      lastName: students.lastName,
+      matricule: students.matricule,
+      classId: students.classId,
+    }).from(students).where(and(
+      eq(students.schoolId, schoolId),
+      eq(students.isActive, true),
+      inArray(students.classId, classIds),
+    ));
+    const studentsByClass = new Map<number, typeof studentRows>();
+    for (const student of studentRows) {
+      if (student.classId == null) continue;
+      const current = studentsByClass.get(student.classId) ?? [];
+      current.push(student);
+      studentsByClass.set(student.classId, current);
+    }
+    for (const classStudents of studentsByClass.values()) {
+      classStudents.sort((left, right) => left.id - right.id);
+    }
+
+    const applicableTariffsByClass = new Map<number, typeof accountingTariffs.$inferSelect[]>();
+    for (const classId of classIds) {
+      applicableTariffsByClass.set(classId, await getApplicableTariffs(executor, {
+        schoolId,
+        academicYearId,
+        classId,
+      }));
+    }
+
+    const tuitionCategoryIds = categoryRows
+      .filter((category) => category.code === 'tuition')
+      .map((category) => category.id);
+    const scheduleRows = tuitionCategoryIds.length
+      ? await executor.select().from(accountingScheduleTemplates).where(and(
+        eq(accountingScheduleTemplates.schoolId, schoolId),
+        eq(accountingScheduleTemplates.academicYearId, academicYearId),
+        inArray(accountingScheduleTemplates.classId, classIds),
+        inArray(accountingScheduleTemplates.categoryId, tuitionCategoryIds),
+      ))
+      : [];
+    const scheduleByScope = new Map(scheduleRows.map((schedule) =>
+      [`${schedule.classId}:${schedule.categoryId}`, schedule]));
+
+    const allStudentIds = studentRows.map((student) => student.id);
+    const existingObligations = allStudentIds.length
+      ? await executor.select({
+        id: financialObligations.id,
+        studentId: financialObligations.studentId,
+        classId: financialObligations.classId,
+        categoryId: financialObligations.categoryId,
+        tariffId: financialObligations.tariffId,
+        feeDefinitionId: financialObligations.feeDefinitionId,
+        sourceKey: financialObligations.sourceKey,
+        status: financialObligations.status,
+        amount: financialObligations.amount,
+      }).from(financialObligations).where(and(
+        eq(financialObligations.schoolId, schoolId),
+        eq(financialObligations.academicYearId, academicYearId),
+        inArray(financialObligations.studentId, allStudentIds),
+        inArray(financialObligations.categoryId, categoryIds),
+      ))
+      : [];
+    const obligationsByStudentCategory = new Map<string, typeof existingObligations>();
+    for (const obligation of existingObligations) {
+      const key = `${obligation.studentId}:${obligation.categoryId}`;
+      const current = obligationsByStudentCategory.get(key) ?? [];
+      current.push(obligation);
+      obligationsByStudentCategory.set(key, current);
+    }
+
+    const rows: ObligationGenerationRow[] = [];
+    const configurationIssues: string[] = [];
+    const appliedReductionKeys = new Set<string>();
+    const appliedInstallmentOverrideKeys = new Set<string>();
+    for (const classId of classIds) {
+      const classRow = classById.get(classId)!;
+      const classStudents = studentsByClass.get(classId) ?? [];
+      const classTariffs = applicableTariffsByClass.get(classId) ?? [];
+      for (const category of categoryRows) {
+        const categoryTariffs = classTariffs.filter((tariff) => tariff.categoryId === category.id);
+        const tariff = categoryTariffs.length === 1 ? categoryTariffs[0] : null;
+        const issue = categoryTariffs.length > 1
+          ? 'Plusieurs tarifs applicables à cette classe'
+          : !tariff ? 'Aucun tarif actif applicable à cette classe' : null;
+        const schedule = category.code === 'tuition' && tariff
+          ? validateAccountingSchedule(
+            scheduleByScope.get(`${classId}:${category.id}`)?.installments,
+            tariff.amount,
+          )
+          : null;
+        const plannedInstallments = category.code === 'tuition' && tariff && schedule
+          ? splitAmountBySchedule(tariff.amount, schedule)
+          : category.code === 'tuition' ? null : tariff
+            ? [{ label: tariff.label, dueDate: todayUtc(), amount: tariff.amount, orderIndex: 1 }]
+            : null;
+        const scheduleIssue = category.code === 'tuition' && tariff && !plannedInstallments
+          ? 'Échéancier de scolarité absent ou invalide'
+          : null;
+        if (issue) configurationIssues.push(`${classRow.name} — ${category.label} : ${issue}`);
+        if (scheduleIssue) configurationIssues.push(`${classRow.name} — ${category.label} : ${scheduleIssue}`);
+
+        for (const student of classStudents) {
+          const existingForCategory = obligationsByStudentCategory.get(`${student.id}:${category.id}`) ?? [];
+          const activeObligations = existingForCategory.filter((obligation) => obligation.status === 'active');
+          const sourceKey = tariff ? `tariff-${tariff.id}-student-${student.id}` : null;
+          const sameSourceObligation = sourceKey
+            ? existingForCategory.find((obligation) => obligation.sourceKey === sourceKey)
+            : null;
+          const reduction = tariff && category.code === 'tuition'
+            ? tuitionReductions[String(tariff.id)]?.[String(student.id)] ?? null
+            : null;
+          const individualizedAmounts = tariff && category.code === 'tuition'
+            ? tuitionInstallmentAmounts[String(tariff.id)]?.[String(student.id)] ?? null
+            : null;
+          if (reduction && reduction.discountAmount >= tariff!.amount) {
+            throw Object.assign(new Error('The tuition reduction must be lower than the class tariff; the final amount must remain positive'), { statusCode: 400 });
+          }
+          let state: ObligationGenerationRow['state'] = 'eligible';
+          let reason: string | null = null;
+          const referenceAmount = tariff?.amount ?? null;
+          const discountAmount = reduction?.discountAmount ?? 0;
+          let amount = referenceAmount == null ? null : referenceAmount - discountAmount;
+          const individualizationReason = reduction?.reason ?? null;
+          let canIndividualize = category.code === 'tuition' && tariff != null;
+          let installments = plannedInstallments ?? [];
+          if (activeObligations.length) {
+            if (reduction) {
+              throw Object.assign(new Error('Tuition can only be individualized before an obligation exists'), { statusCode: 409 });
+            }
+            state = 'existing';
+            amount = activeObligations.reduce((total, obligation) => total + obligation.amount, 0);
+            reason = activeObligations.length > 1
+              ? 'Plusieurs obligations actives existent déjà pour cette catégorie et cette année'
+              : 'Une obligation active existe déjà pour cette catégorie et cette année';
+            installments = [];
+            canIndividualize = false;
+          } else if (issue) {
+            if (reduction) {
+              throw Object.assign(new Error('Tuition cannot be individualized without one unambiguous applicable tariff'), { statusCode: 400 });
+            }
+            state = 'excluded';
+            reason = issue;
+            installments = [];
+            canIndividualize = false;
+          } else if (scheduleIssue) {
+            if (reduction) {
+              throw Object.assign(new Error('Configure a valid tuition installment schedule before individualizing this student'), { statusCode: 409 });
+            }
+            state = 'excluded';
+            reason = scheduleIssue;
+            installments = [];
+            canIndividualize = false;
+          } else if (sameSourceObligation) {
+            if (reduction) {
+              throw Object.assign(new Error('Tuition can only be individualized before an obligation exists'), { statusCode: 409 });
+            }
+            state = 'excluded';
+            reason = 'Une obligation historique utilise déjà la clé source de ce tarif';
+            installments = [];
+            canIndividualize = false;
+          } else if (reduction) {
+            if (!schedule) {
+              throw Object.assign(new Error('Configure a valid tuition installment schedule before individualizing this student'), { statusCode: 409 });
+            }
+            if (!individualizedAmounts
+              || individualizedAmounts.length !== schedule.length
+              || individualizedAmounts.some((installmentAmount) => !asMoney(installmentAmount))
+              || individualizedAmounts.reduce((total, installmentAmount) => total + installmentAmount, 0) !== amount) {
+              throw Object.assign(new Error('Enter positive individualized tuition installment amounts whose total equals the reduced tuition amount'), { statusCode: 400 });
+            }
+            installments = schedule.map((item, index) => ({
+              label: item.label,
+              dueDate: item.dueDate,
+              amount: individualizedAmounts[index],
+              orderIndex: index + 1,
+            }));
+            appliedReductionKeys.add(`${tariff!.id}:${student.id}`);
+            appliedInstallmentOverrideKeys.add(`${tariff!.id}:${student.id}`);
+          }
+          rows.push({
+            key: `${student.id}:${category.id}:${tariff?.id ?? 'missing'}`,
+            studentId: student.id,
+            studentName: `${student.lastName} ${student.firstName}`.trim(),
+            classId,
+            className: classRow.name,
+            categoryId: category.id,
+            categoryCode: category.code,
+            categoryLabel: tariff?.label ?? category.label,
+            tariffId: tariff?.id ?? null,
+            referenceAmount,
+            discountAmount,
+            individualizationReason,
+            canIndividualize,
+            amount,
+            state,
+            selected: false,
+            reason,
+            installments,
+          });
+        }
+      }
+    }
+    const unknownReduction = Object.entries(tuitionReductions).some(([tariffId, studentReductions]) =>
+      Object.entries(studentReductions).some(([studentId]) => !appliedReductionKeys.has(`${tariffId}:${studentId}`)));
+    if (unknownReduction) {
+      throw Object.assign(new Error('One or more tuition reductions are not valid for an eligible student and tariff'), { statusCode: 400 });
+    }
+    const unknownInstallmentOverride = Object.entries(tuitionInstallmentAmounts).some(([tariffId, studentInstallments]) =>
+      Object.entries(studentInstallments).some(([studentId]) => !appliedInstallmentOverrideKeys.has(`${tariffId}:${studentId}`)));
+    if (unknownInstallmentOverride) {
+      throw Object.assign(new Error('One or more individualized installment amounts are not valid for a reduced tuition student and tariff'), { statusCode: 400 });
+    }
+    rows.sort((left, right) => left.classId - right.classId
+      || left.categoryId - right.categoryId
+      || left.studentId - right.studentId);
+
+    const rowsByTariff = new Map<number, ObligationGenerationRow[]>();
+    for (const row of rows) {
+      if (row.tariffId == null) continue;
+      const current = rowsByTariff.get(row.tariffId) ?? [];
+      current.push(row);
+      rowsByTariff.set(row.tariffId, current);
+    }
+    const effectiveSelection: ObligationGenerationSelection = {};
+    const invalidSelectionIds: number[] = [];
+    for (const [tariffId, tariffRows] of rowsByTariff) {
+      const eligibleRows = tariffRows.filter((row) => row.state === 'eligible');
+      const requestedIds = selection == null
+        ? eligibleRows.filter((row) => row.categoryCode === 'tuition').map((row) => row.studentId)
+        : selection[String(tariffId)] ?? [];
+      const knownStudentIds = new Set(tariffRows.map((row) => row.studentId));
+      const eligibleStudentIds = new Set(eligibleRows.map((row) => row.studentId));
+      const invalidIds = requestedIds.filter((studentId) => !knownStudentIds.has(studentId));
+      invalidSelectionIds.push(...invalidIds);
+      if (strictSelection && invalidIds.length) {
+        throw Object.assign(new Error('The student selection is no longer eligible; preview the generation again'), { statusCode: 400 });
+      }
+      const selectedIds = [...new Set(requestedIds.filter((studentId) => eligibleStudentIds.has(studentId)))]
+        .sort((left, right) => left - right);
+      effectiveSelection[String(tariffId)] = selectedIds;
+      const selectedSet = new Set(selectedIds);
+      for (const row of tariffRows) row.selected = row.state === 'eligible' && selectedSet.has(row.studentId);
+    }
+    for (const [tariffId, requestedIds] of Object.entries(selection ?? {})) {
+      if (!rowsByTariff.has(Number(tariffId))) {
+        invalidSelectionIds.push(...requestedIds);
+        if (strictSelection && requestedIds.length) {
+          throw Object.assign(new Error('The student selection is no longer eligible; preview the generation again'), { statusCode: 400 });
+        }
+      }
+    }
+
+    const sortedSelection = Object.fromEntries(Object.entries(effectiveSelection)
+      .sort(([left], [right]) => Number(left) - Number(right)));
+    const sortedTuitionReductions = Object.fromEntries(Object.entries(tuitionReductions)
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([tariffId, studentReductions]) => [
+        tariffId,
+        Object.fromEntries(Object.entries(studentReductions)
+          .sort(([left], [right]) => Number(left) - Number(right))),
+      ]));
+    const sortedTuitionInstallmentAmounts = Object.fromEntries(Object.entries(tuitionInstallmentAmounts)
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([tariffId, studentInstallments]) => [
+        tariffId,
+        Object.fromEntries(Object.entries(studentInstallments)
+          .sort(([left], [right]) => Number(left) - Number(right))),
+      ]));
+    const snapshot = {
+      schoolId,
+      year: { id: year.id, schoolId: year.schoolId, name: year.name },
+      classIds,
+      classes: validatedClasses.map((context) => ({
+        id: context!.classRow.id,
+        schoolId: context!.classRow.schoolId,
+        academicYearId: context!.classRow.academicYearId,
+        name: context!.classRow.name,
+      })).sort((left, right) => left.id - right.id),
+      categories: categoryRows.map((category) => ({
+        id: category.id,
+        code: category.code,
+        label: category.label,
+      })).sort((left, right) => left.id - right.id),
+      students: studentRows.map((student) => ({
+        id: student.id,
+        classId: student.classId,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        matricule: student.matricule,
+      })).sort((left, right) => left.id - right.id),
+      tariffs: [...applicableTariffsByClass.entries()].flatMap(([classId, classTariffs]) =>
+        classTariffs.filter((tariff) => categoryIds.includes(tariff.categoryId)).map((tariff) => ({
+          classId,
+          id: tariff.id,
+          categoryId: tariff.categoryId,
+          label: tariff.label,
+          amount: tariff.amount,
+          classIdOnTariff: tariff.classId,
+          classFromId: tariff.classFromId,
+          classToId: tariff.classToId,
+        }))).sort((left, right) => left.classId - right.classId || left.id - right.id),
+      schedules: scheduleRows.map((schedule) => ({
+        classId: schedule.classId,
+        categoryId: schedule.categoryId,
+        installments: schedule.installments,
+      })).sort((left, right) => left.classId - right.classId || left.categoryId - right.categoryId),
+      obligations: existingObligations.map((obligation) => ({
+        id: obligation.id,
+        studentId: obligation.studentId,
+        classId: obligation.classId,
+        categoryId: obligation.categoryId,
+        tariffId: obligation.tariffId,
+        feeDefinitionId: obligation.feeDefinitionId,
+        sourceKey: obligation.sourceKey,
+        status: obligation.status,
+        amount: obligation.amount,
+      })).sort((left, right) => left.id - right.id),
+      selection: sortedSelection,
+      tuitionReductions: sortedTuitionReductions,
+      tuitionInstallmentAmounts: sortedTuitionInstallmentAmounts,
+      invalidSelectionIds: [...invalidSelectionIds].sort((left, right) => left - right),
+      rows: rows.map((row) => ({
+        key: row.key,
+        state: row.state,
+        selected: row.selected,
+        referenceAmount: row.referenceAmount,
+        discountAmount: row.discountAmount,
+        individualizationReason: row.individualizationReason,
+        amount: row.amount,
+        reason: row.reason,
+        installments: row.installments,
+      })),
+    };
+
+    const selectedRows = rows.filter((row) => row.state === 'eligible' && row.selected);
+    return {
+      previewToken: hashObligationGenerationSnapshot(snapshot),
+      selectionByTariffId: sortedSelection,
+      tuitionReductionsByTariffId: sortedTuitionReductions,
+      tuitionInstallmentAmountsByTariffId: sortedTuitionInstallmentAmounts,
+      rows,
+      studentsExamined: new Set(studentRows.map((student) => student.id)).size,
+      studentsEligible: new Set(rows.filter((row) => row.state === 'eligible').map((row) => row.studentId)).size,
+      newObligationCount: selectedRows.length,
+      existingObligationCount: rows.filter((row) => row.state === 'existing').length,
+      excludedCount: rows.filter((row) => row.state === 'excluded').length,
+      estimatedTotal: selectedRows.reduce((total, row) => total + (row.amount ?? 0), 0),
+      configurationIssues: [...new Set(configurationIssues)],
+      snapshot,
+    };
+  };
+
+  const parseObligationGenerationRequest = (body: Record<string, unknown> | undefined) => {
+    const academicYearId = asPositiveInt(body?.academicYearId);
+    const classIds = parsePositiveIdArray(body?.classIds);
+    const categoryIds = parsePositiveIdArray(body?.categoryIds);
+    const rawSelection = body?.selectedStudentIdsByTariffId;
+    let selection: ObligationGenerationSelection | null = null;
+    if (rawSelection != null) {
+      if (typeof rawSelection !== 'object' || Array.isArray(rawSelection)) return null;
+      selection = {};
+      for (const [rawTariffId, rawStudentIds] of Object.entries(rawSelection)) {
+        const tariffId = asPositiveInt(rawTariffId);
+        if (!tariffId || !Array.isArray(rawStudentIds) || rawStudentIds.length > 500) return null;
+        const studentIds = rawStudentIds.map(asPositiveInt);
+        if (studentIds.some((studentId) => studentId == null)) return null;
+        selection[String(tariffId)] = [...new Set(studentIds as number[])].sort((left, right) => left - right);
+      }
+    }
+    const rawTuitionReductions = body?.tuitionReductionsByTariffId;
+    const tuitionReductions: TuitionReductionsByTariffId = {};
+    if (rawTuitionReductions != null) {
+      if (typeof rawTuitionReductions !== 'object' || Array.isArray(rawTuitionReductions)) {
+        throw Object.assign(new Error('Tuition reductions must be provided as a tariff-to-student map'), { statusCode: 400 });
+      }
+      let reductionCount = 0;
+      for (const [rawTariffId, rawStudentReductions] of Object.entries(rawTuitionReductions)) {
+        const tariffId = asPositiveInt(rawTariffId);
+        if (!tariffId || typeof rawStudentReductions !== 'object' || rawStudentReductions == null || Array.isArray(rawStudentReductions)) {
+          throw Object.assign(new Error('Tuition reduction references are invalid'), { statusCode: 400 });
+        }
+        for (const [rawStudentId, rawReduction] of Object.entries(rawStudentReductions)) {
+          const studentId = asPositiveInt(rawStudentId);
+          if (!studentId || typeof rawReduction !== 'object' || rawReduction == null || Array.isArray(rawReduction)) {
+            throw Object.assign(new Error('Tuition reduction references are invalid'), { statusCode: 400 });
+          }
+          const reduction = rawReduction as Record<string, unknown>;
+          const rawDiscountAmount = reduction.discountAmount;
+          const hasNumericDiscount = typeof rawDiscountAmount === 'number'
+            || (typeof rawDiscountAmount === 'string' && rawDiscountAmount.trim() !== '');
+          const discountAmount = hasNumericDiscount ? asNonNegativeMoney(rawDiscountAmount) : null;
+          const reason = typeof reduction.reason === 'string' ? reduction.reason.trim() : '';
+          if (discountAmount == null || reason.length > 1000
+            || (discountAmount > 0 && !reason)
+            || (discountAmount === 0 && reason)) {
+            throw Object.assign(new Error('Enter a positive tuition reduction below the class tariff and a justification; a 100% reduction is not allowed'), { statusCode: 400 });
+          }
+          if (discountAmount === 0) continue;
+          reductionCount += 1;
+          if (reductionCount > 500) {
+            throw Object.assign(new Error('Too many individualized tuition rows were submitted'), { statusCode: 400 });
+          }
+          tuitionReductions[String(tariffId)] ??= {};
+          tuitionReductions[String(tariffId)][String(studentId)] = { discountAmount, reason };
+        }
+      }
+    }
+    const rawTuitionInstallmentAmounts = body?.tuitionInstallmentAmountsByTariffId;
+    const tuitionInstallmentAmounts: TuitionInstallmentAmountsByTariffId = {};
+    if (rawTuitionInstallmentAmounts != null) {
+      if (typeof rawTuitionInstallmentAmounts !== 'object' || Array.isArray(rawTuitionInstallmentAmounts)) {
+        throw Object.assign(new Error('Individualized tuition installments must be provided as a tariff-to-student map'), { statusCode: 400 });
+      }
+      let installmentOverrideCount = 0;
+      for (const [rawTariffId, rawStudentInstallments] of Object.entries(rawTuitionInstallmentAmounts)) {
+        const tariffId = asPositiveInt(rawTariffId);
+        if (!tariffId || typeof rawStudentInstallments !== 'object'
+          || rawStudentInstallments == null || Array.isArray(rawStudentInstallments)) {
+          throw Object.assign(new Error('Individualized tuition installment references are invalid'), { statusCode: 400 });
+        }
+        for (const [rawStudentId, rawAmounts] of Object.entries(rawStudentInstallments)) {
+          const studentId = asPositiveInt(rawStudentId);
+          if (!studentId || !Array.isArray(rawAmounts) || rawAmounts.length < 1 || rawAmounts.length > 12) {
+            throw Object.assign(new Error('Individualized tuition installment references are invalid'), { statusCode: 400 });
+          }
+          const amounts = rawAmounts.map(asMoney);
+          if (amounts.some((amount) => amount == null)) {
+            throw Object.assign(new Error('Individualized tuition installment amounts must be positive whole numbers'), { statusCode: 400 });
+          }
+          installmentOverrideCount += 1;
+          if (installmentOverrideCount > 500) {
+            throw Object.assign(new Error('Too many individualized tuition schedules were submitted'), { statusCode: 400 });
+          }
+          tuitionInstallmentAmounts[String(tariffId)] ??= {};
+          tuitionInstallmentAmounts[String(tariffId)][String(studentId)] = amounts as number[];
+        }
+      }
+    }
+    if (!academicYearId || !classIds || !categoryIds) return null;
+    return {
+      academicYearId,
+      classIds,
+      categoryIds,
+      selection,
+      tuitionReductions,
+      tuitionInstallmentAmounts,
+    };
+  };
+
+  app.post('/api/accounting/obligation-generation/preview', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
+      if (!schoolId) return;
+      const input = parseObligationGenerationRequest(req.body);
+      if (!input) return res.status(400).json({ error: 'Select a school year, at least one class, and at least one fee category' });
+      const plan = await buildObligationGenerationPlan(db, {
+        schoolId,
+        ...input,
+        strictSelection: true,
+      });
+      const { snapshot: _snapshot, ...preview } = plan;
+      return res.json(preview);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      console.error('Failed to preview accounting obligation generation:', error);
+      return res.status(500).json({ error: 'Failed to preview accounting obligation generation' });
+    }
+  });
+
+  app.post('/api/accounting/obligation-generation/confirm', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
+      if (!schoolId) return;
+      const input = parseObligationGenerationRequest(req.body);
+      const previewToken = typeof req.body?.previewToken === 'string' ? req.body.previewToken : '';
+      if (!input || !/^[a-f0-9]{64}$/.test(previewToken)) {
+        return res.status(400).json({ error: 'A valid generation preview and selection are required' });
+      }
+
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        await tx.execute(sql`SELECT id FROM academic_years WHERE id = ${input.academicYearId} FOR UPDATE`);
+        const plan = await buildObligationGenerationPlan(tx, {
+          schoolId,
+          ...input,
+          strictSelection: false,
+        });
+        if (plan.previewToken !== previewToken) return { stale: true as const };
+        const selectedRows = plan.rows.filter((row) => row.state === 'eligible' && row.selected);
+        if (!selectedRows.length) {
+          throw Object.assign(new Error('No new obligations are selected for generation'), { statusCode: 400 });
+        }
+
+        for (const row of selectedRows) {
+          if (row.tariffId == null || row.amount == null || row.installments.length === 0) {
+            throw Object.assign(new Error('The generation preview contains an incomplete obligation'), { statusCode: 409 });
+          }
+          const sourceKey = `tariff-${row.tariffId}-student-${row.studentId}`;
+          const [created] = await tx.insert(financialObligations).values({
+            schoolId,
+            studentId: row.studentId,
+            academicYearId: input.academicYearId,
+            classId: row.classId,
+            categoryId: row.categoryId,
+            tariffId: row.tariffId,
+            feeDefinitionId: null,
+            label: row.categoryLabel,
+            amount: row.amount,
+            currency: 'XOF',
+            classNameSnapshot: row.className,
+            enrollmentKind: null,
+            sourceKey,
+            createdBy: actor.id ?? null,
+          }).onConflictDoNothing().returning();
+          if (!created) {
+            throw Object.assign(new Error('An obligation changed during generation; preview the batch again'), { statusCode: 409 });
+          }
+          await tx.insert(financialInstallments).values(row.installments.map((installment) => ({
+            obligationId: created.id,
+            label: installment.label,
+            orderIndex: installment.orderIndex,
+            amount: installment.amount,
+            dueDate: installment.dueDate,
+          })));
+          await addAudit(tx, actor, schoolId, 'create', 'financial_obligation', created.id,
+            row.discountAmount > 0
+              ? `Batch obligation created: category=tuition tariffId=${row.tariffId} referenceAmount=${row.referenceAmount} discountAmount=${row.discountAmount} amount=${row.amount} justification=${JSON.stringify(row.individualizationReason)} installments=${JSON.stringify(row.installments)}`
+              : `Batch obligation created: category=${row.categoryCode} amount=${row.amount} tariffId=${row.tariffId}`);
+        }
+        return {
+          stale: false as const,
+          createdCount: selectedRows.length,
+          totalAmount: selectedRows.reduce((total, row) => total + (row.amount ?? 0), 0),
+        };
+      });
+      if (result.stale) {
+        return res.status(409).json({
+          error: 'The students, tariffs, schedules, or existing obligations changed after preview; preview the generation again',
+          code: 'ACCOUNTING_GENERATION_PREVIEW_STALE',
+        });
+      }
+      return res.status(201).json(result);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      if (typeof error === 'object' && error && 'code' in error && error.code === '40001') {
+        return res.status(409).json({
+          error: 'Concurrent accounting changes prevented generation; preview the batch again',
+          code: 'ACCOUNTING_GENERATION_PREVIEW_STALE',
+        });
+      }
+      console.error('Failed to confirm accounting obligation generation:', error);
+      return res.status(500).json({ error: 'Failed to confirm accounting obligation generation' });
+    }
+  });
 
   app.get('/api/accounting/categories', async (req, res) => {
     try {
@@ -805,6 +2145,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         || (req.body?.categoryId != null && !categoryId)) {
         return res.status(400).json({ error: 'Invalid tariff values' });
       }
+      if (usesLabel && isStandardAccountingCategoryLabel(label)) {
+        return res.status(409).json({ error: 'Select the standard fee type instead of creating a duplicate category' });
+      }
       const classContext = !isRange && classId
         ? await validateClassAndYear(schoolId, classId, academicYearId)
         : null;
@@ -817,20 +2160,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if ((!isRange && !classContext) || (isRange && rangeContexts.some((context) => !context))) {
         return res.status(400).json({ error: 'Class and academic year are not valid for this school' });
       }
-      let rangeOrder: { startOrder: number; endOrder: number } | null = null;
+      let rangeOrder: { start: AccountingClassOrder; end: AccountingClassOrder } | null = null;
       if (isRange) {
         const rows = await db.select({
           classId: classes.id,
-          orderIndex: levels.orderIndex,
+          className: classes.name,
+          levelOrder: levels.orderIndex,
         }).from(classes).innerJoin(levels, eq(levels.id, classes.levelId))
           .where(inArray(classes.id, [classFromId!, classToId!]));
-        const orderByClassId = new Map(rows.map((row) => [row.classId, row.orderIndex]));
-        const startOrder = orderByClassId.get(classFromId!);
-        const endOrder = orderByClassId.get(classToId!);
-        if (startOrder == null || endOrder == null || startOrder > endOrder) {
+        const orderByClassId = new Map<number, AccountingClassOrder>(rows.map((row) => [row.classId, {
+          classId: row.classId,
+          className: row.className,
+          levelOrder: row.levelOrder,
+        }]));
+        const start = orderByClassId.get(classFromId!);
+        const end = orderByClassId.get(classToId!);
+        if (!start || !end || compareAccountingClassOrder(start, end) > 0) {
           return res.status(400).json({ error: 'Class range must follow the pedagogical order' });
         }
-        rangeOrder = { startOrder, endOrder };
+        rangeOrder = { start, end };
       }
       const saved = await db.transaction(async (tx) => {
         const category = usesLabel
@@ -841,6 +2189,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             eq(accountingCategories.isEnabled, true),
           )))[0];
         if (!category) throw Object.assign(new Error('Accounting category is not enabled for this school'), { statusCode: 400 });
+        const tariffLabel = usesLabel
+          ? label
+          : getAccountingCategoryDisplayLabel(category.code, category.label);
         if (isRange) {
           const configuredRanges = await tx.select({
             id: accountingTariffs.id,
@@ -858,15 +2209,20 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
               [tariff.classFromId, tariff.classToId].filter((id): id is number => id != null)))];
             const rangeClassOrders = await tx.select({
               classId: classes.id,
-              orderIndex: levels.orderIndex,
+              className: classes.name,
+              levelOrder: levels.orderIndex,
             }).from(classes).innerJoin(levels, eq(levels.id, classes.levelId))
               .where(inArray(classes.id, rangeClassIds));
-            const orders = new Map(rangeClassOrders.map((row) => [row.classId, row.orderIndex]));
+            const orders = new Map<number, AccountingClassOrder>(rangeClassOrders.map((row) => [row.classId, {
+              classId: row.classId,
+              className: row.className,
+              levelOrder: row.levelOrder,
+            }]));
             const overlaps = configuredRanges.some((tariff) => {
               const existingStart = tariff.classFromId == null ? undefined : orders.get(tariff.classFromId);
               const existingEnd = tariff.classToId == null ? undefined : orders.get(tariff.classToId);
               return existingStart != null && existingEnd != null
-                && rangeOrder!.startOrder <= existingEnd && existingStart <= rangeOrder!.endOrder;
+                && doAccountingClassRangesOverlap(rangeOrder!, { start: existingStart, end: existingEnd });
             });
             if (overlaps) {
               throw Object.assign(new Error('An enabled tariff range already overlaps these classes for this fee and year'), { statusCode: 409 });
@@ -879,7 +2235,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             classFromId,
             classToId,
             categoryId: category.id,
-            label: usesLabel ? label : category.label,
+            label: tariffLabel,
             amount,
             createdBy: actor.id ?? null,
           }).onConflictDoNothing().returning();
@@ -920,12 +2276,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           academicYearId,
           classId,
           categoryId: category.id,
-          label: category.label,
+          label: tariffLabel,
           amount,
           createdBy: actor.id ?? null,
         }).onConflictDoUpdate({
           target: [accountingTariffs.schoolId, accountingTariffs.academicYearId, accountingTariffs.classId, accountingTariffs.categoryId],
-          set: { label: category.label, amount, isEnabled: true, updatedAt: new Date(), createdBy: actor.id ?? null },
+          set: { label: tariffLabel, amount, isEnabled: true, updatedAt: new Date(), createdBy: actor.id ?? null },
         }).returning();
         await addAudit(tx, actor, schoolId, 'upsert', 'accounting_tariff', row.id, `Tariff ${category.code} amount=${amount} class=${classId} year=${academicYearId}`);
         return { duplicate: false as const, row };
@@ -973,20 +2329,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (contexts.some((context) => !context)) {
         return res.status(400).json({ error: 'Class and academic year are not valid for this school' });
       }
-      let rangeOrder: { startOrder: number; endOrder: number } | null = null;
+      let rangeOrder: { start: AccountingClassOrder; end: AccountingClassOrder } | null = null;
       if (isRange) {
         const rows = await db.select({
           classId: classes.id,
-          orderIndex: levels.orderIndex,
+          className: classes.name,
+          levelOrder: levels.orderIndex,
         }).from(classes).innerJoin(levels, eq(levels.id, classes.levelId))
           .where(inArray(classes.id, [classFromId!, classToId!]));
-        const orders = new Map(rows.map((row) => [row.classId, row.orderIndex]));
-        const startOrder = orders.get(classFromId!);
-        const endOrder = orders.get(classToId!);
-        if (startOrder == null || endOrder == null || startOrder > endOrder) {
+        const orders = new Map<number, AccountingClassOrder>(rows.map((row) => [row.classId, {
+          classId: row.classId,
+          className: row.className,
+          levelOrder: row.levelOrder,
+        }]));
+        const start = orders.get(classFromId!);
+        const end = orders.get(classToId!);
+        if (!start || !end || compareAccountingClassOrder(start, end) > 0) {
           return res.status(400).json({ error: 'Class range must follow the pedagogical order' });
         }
-        rangeOrder = { startOrder, endOrder };
+        rangeOrder = { start, end };
       }
       const [updated] = await db.transaction(async (tx) => {
         const [current] = await tx.select().from(accountingTariffs).where(and(
@@ -1003,6 +2364,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           eq(accountingCategories.schoolId, schoolId),
         ));
         if (!category) throw Object.assign(new Error('Accounting category not found'), { statusCode: 404 });
+        if (category.code !== 'tuition' && category.code !== 'enrollment'
+          && isStandardAccountingCategoryLabel(label)
+          && !isStandardAccountingCategoryLabel(current.label)) {
+          throw Object.assign(new Error('Select the standard fee type instead of using its label for a custom fee'), { statusCode: 409 });
+        }
+        const tariffLabel = getAccountingCategoryDisplayLabel(category.code, label);
         if (isRange) {
           const otherRanges = await tx.select({
             id: accountingTariffs.id,
@@ -1022,22 +2389,27 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           const rows = rangeIds.length
             ? await tx.select({
               classId: classes.id,
-              orderIndex: levels.orderIndex,
+              className: classes.name,
+              levelOrder: levels.orderIndex,
             }).from(classes).innerJoin(levels, eq(levels.id, classes.levelId))
               .where(inArray(classes.id, rangeIds))
             : [];
-          const orders = new Map(rows.map((row) => [row.classId, row.orderIndex]));
+          const orders = new Map<number, AccountingClassOrder>(rows.map((row) => [row.classId, {
+            classId: row.classId,
+            className: row.className,
+            levelOrder: row.levelOrder,
+          }]));
           const overlaps = otherRanges.some((range) => {
             if (range.id === tariffId || range.classFromId == null || range.classToId == null) return false;
             const existingStart = orders.get(range.classFromId);
             const existingEnd = orders.get(range.classToId);
             return existingStart != null && existingEnd != null
-              && rangeOrder!.startOrder <= existingEnd && existingStart <= rangeOrder!.endOrder;
+              && doAccountingClassRangesOverlap(rangeOrder!, { start: existingStart, end: existingEnd });
           });
           if (overlaps) {
             throw Object.assign(new Error('An enabled tariff range already overlaps these classes for this fee and year'), { statusCode: 409 });
           }
-        } else {
+        } else if (category.code !== 'tuition' && category.code !== 'enrollment') {
           const targetTariffs = await tx.select({
             id: accountingTariffs.id,
             label: accountingTariffs.label,
@@ -1047,7 +2419,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             eq(accountingTariffs.classId, classId!),
           ));
           const duplicate = targetTariffs.find((tariff) => tariff.id !== tariffId
-            && normalizeAccountingLabel(tariff.label) === normalizeAccountingLabel(label));
+            && normalizeAccountingLabel(tariff.label) === normalizeAccountingLabel(tariffLabel));
           if (duplicate) {
             throw Object.assign(new Error('Un frais avec ce libellé existe déjà pour cette classe et cette année scolaire.'), { statusCode: 409 });
           }
@@ -1056,7 +2428,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           classId: isRange ? null : classId,
           classFromId: isRange ? classFromId : null,
           classToId: isRange ? classToId : null,
-          label,
+          label: tariffLabel,
           amount,
           isEnabled: true,
           updatedAt: new Date(),
@@ -1066,7 +2438,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           eq(accountingTariffs.schoolId, schoolId),
         )).returning();
         if (row) await addAudit(tx, actor, schoolId, 'update', 'accounting_tariff', row.id,
-          `Updated tariff ${isRange ? `range=${classFromId}-${classToId}` : `class=${classId}`} label=${label} amount=${amount}`);
+          `Updated tariff ${isRange ? `range=${classFromId}-${classToId}` : `class=${classId}`} label=${tariffLabel} amount=${amount}`);
         return [row];
       });
       if (!updated) return res.status(404).json({ error: 'Tariff not found' });
@@ -1084,6 +2456,40 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     }
   });
 
+  app.get('/api/accounting/schedules', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const schoolId = await getSchoolId(actor, req.query.schoolId, res);
+      if (!schoolId) return;
+      const classId = asPositiveInt(req.query.classId);
+      const academicYearId = asPositiveInt(req.query.academicYearId);
+      const categoryId = asPositiveInt(req.query.categoryId);
+      if (!classId || !academicYearId || !categoryId) {
+        return res.status(400).json({ error: 'Select a school year, class, and fee category' });
+      }
+      if (!await validateClassAndYear(schoolId, classId, academicYearId)) {
+        return res.status(400).json({ error: 'Class and academic year are not valid for this school' });
+      }
+      const [category] = await db.select({ id: accountingCategories.id }).from(accountingCategories).where(and(
+        eq(accountingCategories.id, categoryId),
+        eq(accountingCategories.schoolId, schoolId),
+        eq(accountingCategories.isEnabled, true),
+      ));
+      if (!category) return res.status(400).json({ error: 'Accounting category is not enabled for this school' });
+      const [schedule] = await db.select().from(accountingScheduleTemplates).where(and(
+        eq(accountingScheduleTemplates.schoolId, schoolId),
+        eq(accountingScheduleTemplates.academicYearId, academicYearId),
+        eq(accountingScheduleTemplates.classId, classId),
+        eq(accountingScheduleTemplates.categoryId, categoryId),
+      ));
+      return res.json(schedule ?? null);
+    } catch (error) {
+      console.error('Failed to load accounting schedule:', error);
+      return res.status(500).json({ error: 'Failed to load accounting schedule' });
+    }
+  });
+
   app.put('/api/accounting/schedules', async (req, res) => {
     try {
       const actor = await actorFor(req, res);
@@ -1098,20 +2504,37 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (!classId || !academicYearId || !categoryId || !['annual', 'trimester', 'semester'].includes(periodType) || !installments) {
         return res.status(400).json({ error: 'Invalid schedule template; installment basis points must total 10000' });
       }
-      if ((periodType === 'annual' && installments.length !== 1)
-        || (periodType === 'trimester' && installments.length !== 3)
-        || (periodType === 'semester' && installments.length !== 2)) {
-        return res.status(400).json({ error: 'Installment count does not match the selected period type' });
-      }
       if (!await validateClassAndYear(schoolId, classId, academicYearId)) {
         return res.status(400).json({ error: 'Class and academic year are not valid for this school' });
       }
-      const [category] = await db.select({ id: accountingCategories.id }).from(accountingCategories).where(and(
+      const [category] = await db.select({
+        id: accountingCategories.id,
+        code: accountingCategories.code,
+      }).from(accountingCategories).where(and(
         eq(accountingCategories.id, categoryId),
         eq(accountingCategories.schoolId, schoolId),
         eq(accountingCategories.isEnabled, true),
       ));
       if (!category) return res.status(400).json({ error: 'Accounting category is not enabled for this school' });
+      if ('amount' in installments[0]) {
+        if (category.code !== 'tuition') {
+          return res.status(400).json({ error: 'Fixed installment amounts are only available for tuition' });
+        }
+        const applicableTuitionTariffs = await getApplicableTariffs(db, {
+          schoolId,
+          academicYearId,
+          classId,
+          categoryId,
+        });
+        if (applicableTuitionTariffs.length !== 1
+          || !validateAccountingSchedule(req.body?.installments, applicableTuitionTariffs[0]?.amount)) {
+          return res.status(400).json({
+            error: applicableTuitionTariffs.length === 1
+              ? 'Installment amounts must total the configured annual tuition tariff'
+              : 'A single unambiguous tuition tariff is required before configuring fixed installment amounts',
+          });
+        }
+      }
       const [saved] = await db.transaction(async (tx) => {
         const [row] = await tx.insert(accountingScheduleTemplates).values({
           schoolId, academicYearId, classId, categoryId, periodType, installments, createdBy: actor.id ?? null,
@@ -1264,10 +2687,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const tariffId = req.body?.tariffId == null ? null : asPositiveInt(req.body.tariffId);
       const feeDefinitionId = req.body?.feeDefinitionId == null ? null : asPositiveInt(req.body.feeDefinitionId);
       const enrollmentKind = req.body?.enrollmentKind == null ? null : String(req.body.enrollmentKind);
+      const initialTuitionInput = parseInitialTuitionInput(req.body ?? {});
       if (!studentId || !academicYearId || (Boolean(tariffId) === Boolean(feeDefinitionId))) {
         return res.status(400).json({ error: 'Provide a student, academic year, and exactly one tariff or validated fee' });
       }
-      if (enrollmentKind != null && !['first_enrollment', 're_enrollment', 'ordinary'].includes(enrollmentKind)) {
+      if (enrollmentKind != null && !isAccountingEnrollmentKind(enrollmentKind)) {
         return res.status(400).json({ error: 'Invalid enrollment kind' });
       }
       const [student] = await db.select().from(students).where(and(
@@ -1317,40 +2741,109 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if ((!tariff && !fee) || !category) {
         return res.status(400).json({ error: 'Tariff or fee is unavailable, inactive, or unvalidated' });
       }
+      if (initialTuitionInput.amount != null && (!tariff || category.code !== 'tuition')) {
+        return res.status(400).json({ error: 'An individualized initial amount is only available for tuition tariffs' });
+      }
       if (category.code === 'enrollment' && enrollmentKind == null) {
         return res.status(400).json({ error: 'enrollmentKind must explicitly distinguish first enrollment, re-enrollment, or ordinary enrollment' });
       }
-      const amount = tariff?.amount ?? fee!.amount;
+      const referenceAmount = tariff?.amount ?? fee!.amount;
       const label = fee?.label ?? tariff?.label ?? category.label;
       const sourceKey = tariff
         ? `tariff-${tariff.id}-student-${studentId}`
         : `fee-${fee!.id}-student-${studentId}`;
-      const existing = await db.select().from(financialObligations).where(and(
-        eq(financialObligations.schoolId, schoolId),
-        eq(financialObligations.sourceKey, sourceKey),
-      ));
-      if (existing.length) return res.json(existing[0]);
 
       const context = await validateClassAndYear(schoolId, student.classId, academicYearId);
       if (!context) return res.status(400).json({ error: 'Class and academic year are not valid for this school' });
-      const scheduleRows = await db.select().from(accountingScheduleTemplates).where(and(
-        eq(accountingScheduleTemplates.schoolId, schoolId),
-        eq(accountingScheduleTemplates.academicYearId, academicYearId),
-        eq(accountingScheduleTemplates.classId, student.classId),
-        eq(accountingScheduleTemplates.categoryId, category.id),
-      ));
-      let planned: Array<{ label: string; dueDate: string; amount: number; orderIndex: number }>;
-      if (category.code === 'tuition') {
-        const schedule = validateAccountingSchedule(scheduleRows[0]?.installments);
-        if (!schedule) return res.status(409).json({ error: 'Configure a valid installment schedule before creating a tuition obligation' });
-        const split = splitAmountBySchedule(amount, schedule);
-        if (!split) return res.status(400).json({ error: 'Invalid tuition schedule amounts' });
-        planned = split;
-      } else {
-        const dueDate = fee?.dueDate || asDate(req.body?.dueDate) || todayUtc();
-        planned = [{ label, dueDate, amount, orderIndex: 1 }];
-      }
-      const obligation = await db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM academic_years WHERE id = ${academicYearId} FOR UPDATE`);
+        if (tariff) {
+          if (category!.code === 'tuition' && initialTuitionInput.amount != null) {
+            const [priorTuitionObligation] = await tx.select({
+              id: financialObligations.id,
+            }).from(financialObligations).where(and(
+              eq(financialObligations.schoolId, schoolId),
+              eq(financialObligations.studentId, studentId),
+              eq(financialObligations.academicYearId, academicYearId),
+              eq(financialObligations.categoryId, category!.id),
+            ));
+            if (priorTuitionObligation) {
+              throw Object.assign(new Error('Initial tuition can only be individualized before any tuition obligation has been constituted'), { statusCode: 409 });
+            }
+          }
+          const existingInScope = await tx.select({
+            id: financialObligations.id,
+            classId: financialObligations.classId,
+            tariffId: financialObligations.tariffId,
+            feeDefinitionId: financialObligations.feeDefinitionId,
+            enrollmentKind: financialObligations.enrollmentKind,
+          }).from(financialObligations).where(and(
+            eq(financialObligations.schoolId, schoolId),
+            eq(financialObligations.studentId, studentId),
+            eq(financialObligations.academicYearId, academicYearId),
+            eq(financialObligations.categoryId, category!.id),
+            eq(financialObligations.status, 'active'),
+          ));
+          const equivalent = findEquivalentTariffObligation(existingInScope, {
+            classId: student.classId!,
+            enrollmentKind,
+          });
+          if (category!.code === 'tuition') {
+            const existingTuition = findExistingTuitionObligation(existingInScope);
+            if (existingTuition) {
+              if (initialTuitionInput.amount != null) {
+                throw Object.assign(new Error('An existing tuition obligation cannot be individualized or replaced'), { statusCode: 409 });
+              }
+              return { obligation: existingTuition, created: false };
+            }
+          }
+          if (equivalent) return { obligation: equivalent, created: false };
+        }
+        const [existingSource] = await tx.select().from(financialObligations).where(and(
+          eq(financialObligations.schoolId, schoolId),
+          eq(financialObligations.sourceKey, sourceKey),
+        ));
+        if (existingSource) {
+          if (existingSource.status === 'active' && tariff
+            && (existingSource.classId !== student.classId
+              || existingSource.categoryId !== category!.id
+              || existingSource.feeDefinitionId != null
+              || existingSource.enrollmentKind !== enrollmentKind)) {
+            throw Object.assign(new Error('The configured charge already exists for a different class or fee nature'), { statusCode: 409 });
+          }
+          if (initialTuitionInput.amount != null) {
+            throw Object.assign(new Error('An existing obligation cannot be individualized or replaced'), { statusCode: 409 });
+          }
+          return { obligation: existingSource, created: false };
+        }
+        const initialTerms = tariff
+          ? resolveInitialTuitionAmount(
+            category!.code,
+            referenceAmount,
+            initialTuitionInput.amount,
+            initialTuitionInput.justification,
+          )
+          : { amount: referenceAmount, individualized: false };
+        const amount = initialTerms.amount;
+        let planned: Array<{ label: string; dueDate: string; amount: number; orderIndex: number }>;
+        if (category!.code === 'tuition') {
+          const [scheduleRow] = await tx.select().from(accountingScheduleTemplates).where(and(
+            eq(accountingScheduleTemplates.schoolId, schoolId),
+            eq(accountingScheduleTemplates.academicYearId, academicYearId),
+            eq(accountingScheduleTemplates.classId, student.classId),
+            eq(accountingScheduleTemplates.categoryId, category!.id),
+          ));
+          const schedule = validateAccountingSchedule(scheduleRow?.installments);
+          if (!schedule) {
+            throw Object.assign(new Error('Configure a valid installment schedule before creating a tuition obligation'), { statusCode: 409 });
+          }
+          const split = splitAmountBySchedule(amount, schedule);
+          if (!split) throw Object.assign(new Error('Invalid tuition schedule amounts'), { statusCode: 400 });
+          planned = split;
+        } else {
+          const dueDate = fee?.dueDate || asDate(req.body?.dueDate) || todayUtc();
+          planned = [{ label, dueDate, amount, orderIndex: 1 }];
+        }
         const [created] = await tx.insert(financialObligations).values({
           schoolId,
           studentId,
@@ -1372,7 +2865,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             eq(financialObligations.schoolId, schoolId),
             eq(financialObligations.sourceKey, sourceKey),
           ));
-          return duplicate;
+          if (duplicate?.status === 'active' && tariff
+            && duplicate.classId !== student.classId) {
+            throw Object.assign(new Error('The configured charge already exists for a different class or fee nature'), { statusCode: 409 });
+          }
+          return { obligation: duplicate, created: false };
         }
         await tx.insert(financialInstallments).values(planned.map((item) => ({
           obligationId: created.id,
@@ -1381,11 +2878,28 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           amount: item.amount,
           dueDate: item.dueDate,
         })));
-        await addAudit(tx, actor, schoolId, 'create', 'financial_obligation', created.id, `Obligation created: category=${category!.code} amount=${amount}`);
-        return created;
+        await addAudit(
+          tx,
+          actor,
+          schoolId,
+          'create',
+          'financial_obligation',
+          created.id,
+          initialTerms.individualized
+            ? `Obligation created: category=tuition amount=${amount} XOF referenceAmount=${referenceAmount} XOF tariffId=${tariff!.id} justification=${JSON.stringify(initialTuitionInput.justification)}`
+            : `Obligation created: category=${category!.code} amount=${amount}`,
+        );
+        return { obligation: created, created: true };
       });
-      return res.status(201).json(obligation);
+      if (!result.obligation) {
+        return res.status(409).json({ error: 'The configured charge could not be created for this payment' });
+      }
+      return res.status(result.created ? 201 : 200).json(result.obligation);
     } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) {
+        return res.status(statusCode).json({ error: (error as Error).message });
+      }
       console.error('Failed to create financial obligation:', error);
       return res.status(500).json({ error: 'Failed to create financial obligation' });
     }
@@ -1448,11 +2962,18 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const studentStatus = req.query.status == null ? null : String(req.query.status);
       const aggregateByStudent = req.query.aggregate === 'student';
       const includeAllCategories = req.query.includeAllCategories === 'true';
+      const includeInstallmentDetails = req.query.includeInstallmentDetails === 'true';
       if (req.query.aggregate != null && !aggregateByStudent) {
         return res.status(400).json({ error: 'Valid situation aggregate is required' });
       }
       if (req.query.includeAllCategories != null && !includeAllCategories) {
         return res.status(400).json({ error: 'Valid includeAllCategories value is required' });
+      }
+      if (req.query.includeInstallmentDetails != null && !includeInstallmentDetails) {
+        return res.status(400).json({ error: 'Valid installment detail value is required' });
+      }
+      if (includeInstallmentDetails && !aggregateByStudent) {
+        return res.status(400).json({ error: 'Installment details require student aggregate situations' });
       }
       if (!academicYearId || (req.query.categoryId != null && !categoryId)) {
         return res.status(400).json({ error: 'Valid academicYearId and categoryId are required' });
@@ -1491,8 +3012,41 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const categoryEnabledCondition = tariffIds.length || studentStatus != null || aggregateByStudent || includeAllCategories
         ? sql``
         : sql`AND category.is_enabled = true`;
+      const selectedTariffIdList = sql.join(tariffIds.map((tariffId) => sql`${tariffId}`), sql`, `);
       const tariffCondition = tariffIds.length
-        ? sql`AND tariff.id IN (${sql.join(tariffIds.map((tariffId) => sql`${tariffId}`), sql`, `)})`
+        ? sql`AND (
+          tariff.id IN (${selectedTariffIdList})
+          OR EXISTS (
+            SELECT 1
+            FROM accounting_tariffs AS selected_filter
+            LEFT JOIN classes AS selected_start_class
+              ON selected_start_class.id = selected_filter.class_from_id
+              AND selected_start_class.academic_year_id = ${academicYearId}
+            LEFT JOIN levels AS selected_start_level
+              ON selected_start_level.id = selected_start_class.level_id
+            LEFT JOIN classes AS selected_end_class
+              ON selected_end_class.id = selected_filter.class_to_id
+              AND selected_end_class.academic_year_id = ${academicYearId}
+            LEFT JOIN levels AS selected_end_level
+              ON selected_end_level.id = selected_end_class.level_id
+            LEFT JOIN levels AS selected_student_level
+              ON selected_student_level.id = class.level_id
+            WHERE selected_filter.id IN (${selectedTariffIdList})
+              AND selected_filter.school_id = ${schoolId}
+              AND selected_filter.academic_year_id = ${academicYearId}
+              AND selected_filter.category_id = tariff.category_id
+              AND selected_filter.is_enabled = true
+              AND selected_filter.class_id IS NULL
+              AND selected_filter.class_from_id IS NOT NULL
+              AND selected_filter.class_to_id IS NOT NULL
+              AND (selected_start_level.order_index, selected_start_class.name COLLATE "C", selected_start_class.id)
+                <= (selected_end_level.order_index, selected_end_class.name COLLATE "C", selected_end_class.id)
+              AND (selected_start_level.order_index, selected_start_class.name COLLATE "C", selected_start_class.id)
+                <= (selected_student_level.order_index, class.name COLLATE "C", class.id)
+              AND (selected_student_level.order_index, class.name COLLATE "C", class.id)
+                <= (selected_end_level.order_index, selected_end_class.name COLLATE "C", selected_end_class.id)
+          )
+        )`
         : sql``;
       const selectedClassCondition = classId ? sql`AND class.id = ${classId}` : sql``;
       const studentActiveCondition = req.query.includeInactive === 'true'
@@ -1501,9 +3055,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const result = await db.execute(sql`
         WITH student_obligations AS (
           SELECT obligation.student_id, obligation.category_id,
-            (sum(obligation.amount) FILTER (WHERE obligation.tariff_id IS NULL))::int AS historical_amount,
-            (sum(obligation.amount) FILTER (WHERE obligation.tariff_id IS NOT NULL))::int AS tariff_obligation_amount,
-            bool_or(obligation.tariff_id IS NOT NULL) AS has_tariff_obligation
+            sum(obligation.amount)::int AS obligation_amount,
+            array_agg(DISTINCT obligation.class_name_snapshot)
+              FILTER (WHERE obligation.class_name_snapshot IS NOT NULL) AS obligation_class_names
           FROM financial_obligations AS obligation
           WHERE obligation.school_id = ${schoolId}
             AND obligation.academic_year_id = ${academicYearId}
@@ -1539,6 +3093,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           category.id AS "categoryId",
           category.code AS "categoryCode",
           tariff.id AS "tariffId",
+          COALESCE(student_obligations.obligation_class_names, ARRAY[]::text[]) AS "obligationClassNames",
+          CASE
+            WHEN tariff.id IS NOT NULL AND NOT EXISTS (
+              SELECT 1
+              FROM financial_obligations AS current_tariff_obligation
+              WHERE current_tariff_obligation.school_id = ${schoolId}
+                AND current_tariff_obligation.student_id = student.id
+                AND current_tariff_obligation.academic_year_id = ${academicYearId}
+                AND current_tariff_obligation.category_id = category.id
+                AND current_tariff_obligation.tariff_id IS NOT NULL
+                AND current_tariff_obligation.fee_definition_id IS NULL
+                AND current_tariff_obligation.status = 'active'
+                AND (
+                  current_tariff_obligation.class_id = student.class_id
+                  OR category.code = 'tuition'
+                )
+            ) THEN tariff.amount
+            ELSE NULL
+          END::int AS "indicativeTariffAmount",
           COALESCE(tariff.label, category.label) AS "categoryLabel",
           COALESCE(expected.amount, 0)::int AS due,
           COALESCE(student_payments.amount, 0)::int AS paid,
@@ -1595,8 +3168,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
                 configured_tariff.class_id IS NULL
                 AND configured_tariff.class_from_id IS NOT NULL
                 AND configured_tariff.class_to_id IS NOT NULL
-                AND range_start_level.order_index <= range_end_level.order_index
-                AND student_level.order_index BETWEEN range_start_level.order_index AND range_end_level.order_index
+                AND (range_start_level.order_index, range_start_class.name COLLATE "C", range_start_class.id)
+                  <= (range_end_level.order_index, range_end_class.name COLLATE "C", range_end_class.id)
+                AND (range_start_level.order_index, range_start_class.name COLLATE "C", range_start_class.id)
+                  <= (student_level.order_index, class.name COLLATE "C", class.id)
+                AND (student_level.order_index, class.name COLLATE "C", class.id)
+                  <= (range_end_level.order_index, range_end_class.name COLLATE "C", range_end_class.id)
               )
             )
           ORDER BY CASE WHEN configured_tariff.class_id = student.class_id THEN 0 ELSE 1 END,
@@ -1611,11 +3188,8 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           AND student_payments.category_id = category.id
         LEFT JOIN LATERAL (
           SELECT CASE
-            WHEN COALESCE(student_obligations.has_tariff_obligation, false) THEN
-              COALESCE(tariff.amount, student_obligations.tariff_obligation_amount, 0)
-                + COALESCE(student_obligations.historical_amount, 0)
-            WHEN student_obligations.historical_amount IS NOT NULL THEN student_obligations.historical_amount
-            ELSE tariff.amount
+            WHEN student_obligations.obligation_amount IS NOT NULL THEN student_obligations.obligation_amount
+            ELSE 0
           END AS amount
         ) AS expected ON true
         WHERE student.school_id = ${schoolId}
@@ -1634,6 +3208,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         studentId: number;
         due: number;
         paid: number;
+        obligationClassNames?: string[];
       }>;
       const totalsByStudent = new Map<number, { due: number; paid: number }>();
       for (const row of situationRows) {
@@ -1641,7 +3216,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         const due = Math.max(0, Number(row.due) || 0);
         const paid = Math.max(0, Number(row.paid) || 0);
         studentTotals.due += due;
-        studentTotals.paid += Math.min(due, paid);
+        studentTotals.paid += paid;
         totalsByStudent.set(row.studentId, studentTotals);
       }
 
@@ -1668,11 +3243,35 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (aggregateByStudent) {
         const rowsByStudent = new Map<number, (typeof rows)[number]>();
         for (const row of rows) {
-          if (!rowsByStudent.has(row.studentId)) rowsByStudent.set(row.studentId, row);
+          const existing = rowsByStudent.get(row.studentId);
+          if (!existing) {
+            rowsByStudent.set(row.studentId, row);
+            continue;
+          }
+          rowsByStudent.set(row.studentId, {
+            ...existing,
+            obligationClassNames: [...new Set([
+              ...(existing.obligationClassNames ?? []),
+              ...(row.obligationClassNames ?? []),
+            ])],
+          });
         }
         const studentRows = [...rowsByStudent.values()]
           .filter((row) => studentStatus == null || row.studentStatus === studentStatus);
-        return res.json({ academicYearId, rows: studentRows });
+        const installmentSummaries = await loadClassInstallmentSummaries(
+          db,
+          schoolId,
+          academicYearId,
+          studentRows.map((row) => row.studentId),
+          includeInstallmentDetails,
+        );
+        return res.json({
+          academicYearId,
+          rows: studentRows.map((row) => ({
+            ...row,
+            ...installmentSummaries.get(row.studentId),
+          })),
+        });
       }
       return res.json({ academicYearId, rows });
     } catch (error) {
@@ -1710,30 +3309,52 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           obligationId: financialPaymentAllocations.obligationId,
           installmentId: financialPaymentAllocations.installmentId,
           amount: financialPaymentAllocations.amount,
+          paidAtDate: sql<string>`to_char(${financialPayments.paidAt}, 'YYYY-MM-DD')`,
         }).from(financialPaymentAllocations)
           .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
-          .where(and(inArray(financialPaymentAllocations.obligationId, obligationIds), eq(financialPayments.status, 'posted')))
+          .where(and(
+            inArray(financialPaymentAllocations.obligationId, obligationIds),
+            eq(financialPayments.schoolId, schoolId),
+            eq(financialPayments.academicYearId, academicYearId),
+            eq(financialPayments.status, 'posted'),
+          ))
         : [];
       const allocationIds = allocations.map((row) => row.id);
       const adjustments = allocationIds.length
         ? await db.select({
           paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
-          amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
+          amount: financialAdjustmentAllocations.amount,
+          kind: financialAdjustments.kind,
+          recordedAtDate: sql<string>`to_char(${financialAdjustments.createdAt}, 'YYYY-MM-DD')`,
         }).from(financialAdjustmentAllocations)
           .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
           .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allocationIds))
-          .groupBy(financialAdjustmentAllocations.paymentAllocationId)
         : [];
       const adjustedById = getAdjustmentTotals(allocations, adjustments);
       const paidByObligation = new Map<number, number>();
       const paidByInstallment = new Map<number, number>();
+      const allocationsByInstallment = new Map<number, typeof allocations>();
+      const refundsByAllocation = new Map<number, typeof adjustments>();
+      const hasUnallocatedPaymentByObligation = new Set<number>();
       for (const allocation of allocations) {
         const net = allocation.amount - (adjustedById.get(allocation.id) ?? 0);
         paidByObligation.set(allocation.obligationId, (paidByObligation.get(allocation.obligationId) ?? 0) + net);
         if (allocation.installmentId != null) {
           paidByInstallment.set(allocation.installmentId, (paidByInstallment.get(allocation.installmentId) ?? 0) + net);
+          const installmentAllocations = allocationsByInstallment.get(allocation.installmentId) ?? [];
+          installmentAllocations.push(allocation);
+          allocationsByInstallment.set(allocation.installmentId, installmentAllocations);
+        } else {
+          hasUnallocatedPaymentByObligation.add(allocation.obligationId);
         }
       }
+      for (const adjustment of adjustments) {
+        if (adjustment.kind !== 'refund') continue;
+        const allocationAdjustments = refundsByAllocation.get(adjustment.paymentAllocationId) ?? [];
+        allocationAdjustments.push(adjustment);
+        refundsByAllocation.set(adjustment.paymentAllocationId, allocationAdjustments);
+      }
+      const today = todayUtc();
       const categories = await db.select().from(accountingCategories).where(eq(accountingCategories.schoolId, schoolId));
       const tariffs = await getApplicableTariffs(db, {
         schoolId,
@@ -1750,20 +3371,49 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         group.items.push({
           id: obligation.id,
           label: obligation.label,
+          className: obligation.classNameSnapshot,
           amount: obligation.amount,
           paid: paidByObligation.get(obligation.id) ?? 0,
           remaining: Math.max(0, obligation.amount - (paidByObligation.get(obligation.id) ?? 0)),
-          installments: installments.filter((item) => item.obligationId === obligation.id).map((item) => ({
-            id: item.id,
-            label: item.label,
-            dueDate: item.dueDate,
-            amount: item.amount,
-            paid: paidByInstallment.get(item.id) ?? 0,
-            remaining: Math.max(0, item.amount - (paidByInstallment.get(item.id) ?? 0)),
-            status: (paidByInstallment.get(item.id) ?? 0) >= item.amount ? 'paid'
-              : (paidByInstallment.get(item.id) ?? 0) > 0 ? 'partial'
-                : item.dueDate < todayUtc() ? 'overdue' : 'pending',
-          })),
+          installments: installments.filter((item) => item.obligationId === obligation.id).map((item) => {
+            const remaining = Math.max(0, item.amount - (paidByInstallment.get(item.id) ?? 0));
+            const installmentAllocations = allocationsByInstallment.get(item.id) ?? [];
+            const installmentRefunds = installmentAllocations.flatMap((allocation) =>
+              (refundsByAllocation.get(allocation.id) ?? []).map((adjustment) => ({
+                amount: adjustment.amount,
+                recordedAtDate: adjustment.recordedAtDate,
+              })),
+            );
+            const punctuality = calculateInstallmentPunctuality({
+              amount: item.amount,
+              dueDate: item.dueDate,
+              remaining,
+              today,
+              hasUnallocatedPayment: hasUnallocatedPaymentByObligation.has(obligation.id),
+              payments: installmentAllocations.map((allocation) => ({
+                amount: allocation.amount,
+                paidAtDate: allocation.paidAtDate,
+                status: 'posted',
+              })),
+              refunds: installmentRefunds,
+            });
+            return {
+              id: item.id,
+              label: item.label,
+              dueDate: item.dueDate,
+              amount: item.amount,
+              paid: paidByInstallment.get(item.id) ?? 0,
+              remaining,
+              status: remaining === 0 ? 'paid'
+                : punctuality.currentStatus === 'overdue' ? 'overdue'
+                : (paidByInstallment.get(item.id) ?? 0) > 0 ? 'partial'
+                  : item.dueDate < today ? 'overdue' : 'pending',
+              currentStatus: punctuality.currentStatus,
+              punctualityStatus: punctuality.status,
+              settledAt: punctuality.settledAt,
+              punctualityReason: punctuality.reason,
+            };
+          }),
         });
         obligationByCategory.set(obligation.categoryId, group);
       }
@@ -1774,6 +3424,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           method: financialPayments.method,
           reference: financialPayments.reference,
           paidAt: financialPayments.paidAt,
+          status: financialPayments.status,
           receiptId: financialReceipts.id,
           receiptNumber: financialReceipts.receiptNumber,
         }).from(financialPayments)
@@ -1784,10 +3435,16 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const categoryBalances = categories.map((category) => {
         const group = obligationByCategory.get(category.id) ?? { due: 0, paid: 0, items: [], count: 0 };
         const tariff = tariffByCategory.get(category.id);
+        const hasEquivalentTariffObligation = tariff != null && obligations.some((obligation) =>
+          obligation.categoryId === category.id
+          && obligation.tariffId != null
+          && obligation.feeDefinitionId == null
+          && (obligation.enrollmentKind == null || category.code === 'enrollment')
+          && (category.code === 'tuition' || obligation.classId === student.classId));
         const balance = calculateStudentFeeBalance({
           studentId,
           categoryId: category.id,
-          tariffAmount: tariff?.amount ?? null,
+          indicativeTariffAmount: tariff?.amount ?? null,
           obligations: obligations.filter((obligation) => obligation.categoryId === category.id).map((obligation) => ({
             id: obligation.id,
             amount: obligation.amount,
@@ -1808,8 +3465,14 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           due: balance.due,
           paid: balance.paid,
           remaining: balance.remaining,
+          overpayment: Math.max(0, balance.paid - balance.due),
           status: balance.status,
           tariffId: tariff?.id ?? null,
+          indicativeTariffAmount: tariff && !hasEquivalentTariffObligation ? tariff.amount : null,
+          obligationClassNames: [...new Set(obligations
+            .filter((obligation) => obligation.categoryId === category.id)
+            .map((obligation) => obligation.classNameSnapshot)
+            .filter((className): className is string => Boolean(className)))],
           obligations: group.items,
         };
       });
@@ -1818,7 +3481,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         academicYearId,
         totals: {
           due: categoryBalances.reduce((sum, category) => sum + category.due, 0),
-          paid: categoryBalances.reduce((sum, category) => sum + Math.min(category.due, category.paid), 0),
+          paid: categoryBalances.reduce((sum, category) => sum + category.paid, 0),
+          remaining: categoryBalances.reduce((sum, category) => sum + category.remaining, 0),
+          overpayment: categoryBalances.reduce((sum, category) => sum + category.overpayment, 0),
         },
         categories: categoryBalances,
         payments: paymentRows,
@@ -1853,12 +3518,20 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           };
         })
         : null;
+      const initialTuitionInput = parseInitialTuitionInput(req.body ?? {});
       const amount = tariffAllocations
         ? tariffAllocations.reduce((sum, item) => sum + item.amount, 0)
         : asMoney(req.body?.amount);
       const method = String(req.body?.method ?? '');
       const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
       const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() || null : null;
+      const enrollmentKindInput = req.body?.enrollmentKind;
+      const normalizedEnrollmentKind = typeof enrollmentKindInput === 'string'
+        ? enrollmentKindInput.trim()
+        : '';
+      const enrollmentKind = isAccountingEnrollmentKind(normalizedEnrollmentKind)
+        ? normalizedEnrollmentKind
+        : null;
       const hasExplicitPaidAt = req.body?.paidAt != null && req.body.paidAt !== '';
       const paidAt = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
       const paidAtFingerprint = hasExplicitPaidAt && !Number.isNaN(paidAt.getTime())
@@ -1874,7 +3547,15 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         categoryId,
         paidAtFingerprint,
         ...(tariffAllocations ? [tariffAllocations.map((item) => [item.tariffId, item.amount])] : []),
+        ...(initialTuitionInput.amount != null
+          ? [initialTuitionInput.amount, initialTuitionInput.justification]
+          : []),
+        ...(enrollmentKind ? [enrollmentKind] : []),
       ]);
+      if (enrollmentKindInput != null && enrollmentKindInput !== ''
+        && enrollmentKind == null) {
+        return res.status(400).json({ error: 'Le type d’inscription sélectionné est invalide.' });
+      }
       if (!studentId || !academicYearId || !Number.isSafeInteger(amount) || amount <= 0 || amount > 2147483647
         || !idempotencyKey || idempotencyKey.length > 120
         || (req.body?.obligationId != null && req.body.obligationId !== '' && !obligationId)
@@ -1919,7 +3600,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           const [receipt] = await tx.select().from(financialReceipts).where(eq(financialReceipts.paymentId, existing.id));
           return { payment: existing, receipt, duplicate: true, pushNotification: undefined };
         }
+        const obligationIdByTariffId = new Map<number, number>();
         if (tariffAllocations) {
+          let initialTuitionApplied = false;
           for (const allocation of tariffAllocations) {
             const [tariff] = await getApplicableTariffs(tx, {
               schoolId,
@@ -1930,7 +3613,20 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             if (!tariff) {
               throw Object.assign(new Error('Selected fee is not available for this student and year'), { statusCode: 404 });
             }
-            await ensureTariffObligation(tx, {
+            let tariffCategoryCode: string | null = null;
+            if (initialTuitionInput.amount != null) {
+              const [tariffCategory] = await tx.select({
+                code: accountingCategories.code,
+              }).from(accountingCategories).where(and(
+                eq(accountingCategories.id, tariff.categoryId),
+                eq(accountingCategories.schoolId, schoolId),
+              ));
+              tariffCategoryCode = tariffCategory?.code ?? null;
+            }
+            const applyInitialTuition = initialTuitionInput.amount != null
+              && tariffCategoryCode === 'tuition'
+              && !initialTuitionApplied;
+            const obligation = await ensureTariffObligation(tx, {
               actor,
               schoolId,
               studentId,
@@ -1939,7 +3635,18 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
               className: student.className ?? '—',
               categoryId: tariff.categoryId,
               tariffId: tariff.id,
+              enrollmentKind,
+              initialTuitionAmount: applyInitialTuition ? initialTuitionInput.amount : null,
+              initialTuitionJustification: applyInitialTuition ? initialTuitionInput.justification : null,
             });
+            if (!obligation) {
+              throw Object.assign(new Error('No obligation exists for a selected fee'), { statusCode: 409 });
+            }
+            obligationIdByTariffId.set(allocation.tariffId!, obligation.id);
+            if (applyInitialTuition) initialTuitionApplied = true;
+          }
+          if (initialTuitionInput.amount != null && !initialTuitionApplied) {
+            throw Object.assign(new Error('An individualized initial amount requires a selected tuition tariff'), { statusCode: 400 });
           }
         } else if (categoryId) {
           await ensureTariffObligation(tx, {
@@ -1950,7 +3657,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             classId: student.classId!,
             className: student.className ?? '—',
             categoryId,
+            enrollmentKind,
+            initialTuitionAmount: initialTuitionInput.amount,
+            initialTuitionJustification: initialTuitionInput.justification,
           });
+        } else if (initialTuitionInput.amount != null) {
+          throw Object.assign(new Error('An individualized initial amount requires a selected tuition fee'), { statusCode: 400 });
         }
         const outstanding = await loadOutstandingInstallments(tx, schoolId, studentId, academicYearId, tariffAllocations
           ? undefined
@@ -1963,7 +3675,8 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         let plannedAllocations: ReturnType<typeof allocateToOldestInstallments>;
         if (tariffAllocations) {
           const relevantObligations = tariffAllocations.map((allocation) => {
-            const obligation = outstanding.obligations.find((row) => row.tariffId === allocation.tariffId);
+            const resolvedObligationId = obligationIdByTariffId.get(allocation.tariffId!);
+            const obligation = outstanding.obligations.find((row) => row.id === resolvedObligationId);
             if (!obligation) {
               throw Object.assign(new Error('No obligation exists for a selected fee'), { statusCode: 409 });
             }
@@ -1986,6 +3699,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             return { obligation, allocations, remaining };
           });
           const obligationIds = new Set(relevantObligations.map((item) => item.obligation.id));
+          if (obligationIds.size !== tariffAllocations.length) {
+            throw Object.assign(new Error('Each selected fee must map to a separate obligation'), { statusCode: 409 });
+          }
           totalDue = relevantObligations.reduce((sum, item) => sum + item.obligation.amount, 0);
           const totalPaid = relevantObligations.reduce(
             (sum, item) => sum + (outstanding.paidByObligation.get(item.obligation.id) ?? 0),
@@ -1999,27 +3715,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           if (amount > Math.max(0, totalDue - totalPaid)) {
             throw Object.assign(new Error('Payment exceeds the outstanding balance'), { statusCode: 409 });
           }
-          if ([...obligationIds].length !== tariffAllocations.length) {
-            throw Object.assign(new Error('Each selected fee must map to a separate obligation'), { statusCode: 409 });
-          }
         } else {
           const totalRemaining = [...outstanding.balances.values()].reduce((sum, value) => sum + value, 0);
-        const currentTariff = categoryId
-          ? (await getApplicableTariffs(tx, {
-            schoolId,
-            academicYearId,
-            classId: student.classId!,
-            categoryId,
-          }))[0]
-          : null;
         const scopedObligations = categoryId
           ? outstanding.obligations.filter((row) => row.categoryId === categoryId)
           : outstanding.obligations;
-        totalDue = categoryId && currentTariff
-          ? scopedObligations
-            .filter((row) => row.tariffId == null)
-            .reduce((sum, row) => sum + row.amount, currentTariff.amount)
-          : scopedObligations.reduce((sum, row) => sum + row.amount, 0);
+        totalDue = scopedObligations.reduce((sum, row) => sum + row.amount, 0);
         const totalPaid = scopedObligations.reduce(
           (sum, row) => sum + (outstanding.paidByObligation.get(row.id) ?? 0),
           0,
@@ -2376,6 +4077,8 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         method: financialPayments.method,
         paymentId: financialPayments.id,
         paidAt: financialPayments.paidAt,
+        receiptId: financialReceipts.id,
+        receiptNumber: financialReceipts.receiptNumber,
         classId: financialObligations.classId,
         studentId: financialPayments.studentId,
         studentName: sql<string>`concat_ws(' ', ${students.lastName}, ${students.firstName})`,
@@ -2385,6 +4088,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         .innerJoin(financialObligations, eq(financialObligations.id, financialPaymentAllocations.obligationId))
         .innerJoin(accountingCategories, eq(accountingCategories.id, financialObligations.categoryId))
         .leftJoin(accountingTariffs, eq(accountingTariffs.id, financialObligations.tariffId))
+        .leftJoin(financialReceipts, eq(financialReceipts.paymentId, financialPayments.id))
         .innerJoin(students, eq(students.id, financialPayments.studentId))
         .where(and(...conditions));
       const allocationIds = rows.map((row) => row.allocationId);
@@ -2412,57 +4116,17 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         categories.set(row.categoryCode, (categories.get(row.categoryCode) ?? 0) + net);
         methods.set(row.method, (methods.get(row.method) ?? 0) + net);
       }
-      const allObligations = await db.select({
-        amount: financialObligations.amount,
-        id: financialObligations.id,
-      }).from(financialObligations).where(and(
-        eq(financialObligations.schoolId, schoolId),
-        eq(financialObligations.status, 'active'),
-        ...(yearId ? [eq(financialObligations.academicYearId, yearId)] : []),
-        ...(studentId ? [eq(financialObligations.studentId, studentId)] : []),
-        ...(categoryId ? [eq(financialObligations.categoryId, categoryId)] : []),
-        ...(classId ? [eq(financialObligations.classId, classId)] : []),
-        ...(tariffIds.length ? [inArray(financialObligations.tariffId, tariffIds as number[])] : []),
-      ));
-      const allAllocations = allObligations.length
-        ? await db.select({
-          id: financialPaymentAllocations.id,
-          obligationId: financialPaymentAllocations.obligationId,
-          amount: financialPaymentAllocations.amount,
-        }).from(financialPaymentAllocations)
-          .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
-          .where(and(inArray(financialPaymentAllocations.obligationId, allObligations.map((row) => row.id)), eq(financialPayments.status, 'posted')))
-        : [];
-      const outstandingAdjustments = allAllocations.length
-        ? await db.select({
-          paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
-          amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
-        }).from(financialAdjustmentAllocations)
-          .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
-          .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allAllocations.map((row) => row.id)))
-          .groupBy(financialAdjustmentAllocations.paymentAllocationId)
-        : [];
-      const adjustedForOutstanding = getAdjustmentTotals(
-        allAllocations.map((row) => ({ ...row, installmentId: null })),
-        outstandingAdjustments,
-      );
-      const paidForScope = new Map<number, number>();
-      for (const allocation of allAllocations) {
-        paidForScope.set(
-          allocation.obligationId,
-          (paidForScope.get(allocation.obligationId) ?? 0)
-            + allocation.amount - (adjustedForOutstanding.get(allocation.id) ?? 0),
-        );
-      }
-      const expected = allObligations.reduce((sum, obligation) => sum + obligation.amount, 0);
-      const paidAll = allObligations.reduce((sum, obligation) => sum + (paidForScope.get(obligation.id) ?? 0), 0);
+      const obligationTotals = await fetchObligationTotals(db, schoolId, yearId, {
+        studentId,
+        categoryId,
+        classId,
+        tariffIds,
+      });
       return res.json({
         total,
         categories: Object.fromEntries(categories),
         methods: Object.fromEntries(methods),
-        expected,
-        paid: paidAll,
-        remaining: expected - paidAll,
+        ...obligationTotals,
         currency: 'XOF',
         paymentCount: new Set(rows.map((row) => row.paymentId)).size,
         allocations: rows.map((row) => ({
@@ -2517,20 +4181,314 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     }
   });
 
+  const resolveReminderScope = async (
+    actor: AccountingActor,
+    requestedSchoolId: unknown,
+    requestedYearId: unknown,
+    requestedClassId: unknown,
+    requestedStatus: unknown,
+    res: express.Response,
+  ) => {
+    const schoolId = await getSchoolId(actor, requestedSchoolId, res);
+    if (!schoolId) return null;
+    const academicYearId = asPositiveInt(requestedYearId);
+    if (!academicYearId) {
+      res.status(400).json({ error: 'A valid academicYearId is required' });
+      return null;
+    }
+    const classId = requestedClassId == null || requestedClassId === ''
+      ? null
+      : asPositiveInt(requestedClassId);
+    if (requestedClassId != null && requestedClassId !== '' && !classId) {
+      res.status(400).json({ error: 'Invalid classId' });
+      return null;
+    }
+    const status = requestedStatus == null || requestedStatus === ''
+      ? 'all'
+      : asReminderStatusFilter(requestedStatus);
+    if (!status) {
+      res.status(400).json({ error: 'Invalid reminder status filter' });
+      return null;
+    }
+
+    const [year] = await db.select({
+      id: academicYears.id,
+      schoolId: academicYears.schoolId,
+      name: academicYears.name,
+    }).from(academicYears).where(eq(academicYears.id, academicYearId));
+    if (!year || (year.schoolId != null && year.schoolId !== schoolId)) {
+      res.status(404).json({ error: 'Academic year not found in this school' });
+      return null;
+    }
+    if (classId != null && !await validateClassAndYear(schoolId, classId, academicYearId)) {
+      res.status(404).json({ error: 'Class not found in this school and academic year' });
+      return null;
+    }
+    const [school] = await db.select({ name: schools.name })
+      .from(schools)
+      .where(eq(schools.id, schoolId));
+    if (!school) {
+      res.status(404).json({ error: 'School not found' });
+      return null;
+    }
+
+    return {
+      schoolId,
+      academicYearId,
+      classId,
+      status,
+      schoolName: school.name,
+      yearName: year.name,
+    };
+  };
+
+  const isReminderStudentScopeValid = async (
+    executor: Pick<typeof defaultDb, 'select'>,
+    schoolId: number,
+    studentIds: number[],
+  ) => {
+    const rows = await executor.select({ id: students.id })
+      .from(students)
+      .where(and(
+        eq(students.schoolId, schoolId),
+        inArray(students.id, studentIds),
+      ))
+      .for('share');
+    return rows.length === studentIds.length;
+  };
+
+  const getReminderPreviewFingerprint = (
+    scope: AccountingReminderScope,
+    studentIds: number[],
+    candidates: AccountingReminderCandidate[],
+  ) => getAccountingReminderPreviewFingerprint({
+    schoolId: scope.schoolId,
+    academicYearId: scope.academicYearId,
+    classId: scope.classId,
+    status: scope.status,
+    selectedStudentIds: studentIds,
+    candidates: candidates.map((candidate) => ({
+      studentId: candidate.studentId,
+      recipientUserId: candidate.recipientUserId,
+      canSend: candidate.canSend,
+      dedupeKey: candidate.dedupeKey,
+      message: candidate.message,
+      installments: candidate.installments,
+      ambiguousInstallments: candidate.ambiguousInstallments,
+      reason: candidate.reason,
+    })),
+  });
+
   app.post('/api/accounting/notifications/overdue', async (req, res) => {
+    const actor = await actorFor(req, res);
+    if (!actor) return;
+    return res.status(410).json({
+      error: 'Les rappels globaux implicites sont désactivés. Utilisez l’aperçu puis confirmez les élèves sélectionnés.',
+      code: 'MANUAL_REMINDER_PREVIEW_REQUIRED',
+    });
+  });
+
+  app.get('/api/accounting/reminders/candidates', async (req, res) => {
     try {
       const actor = await actorFor(req, res);
       if (!actor) return;
-      const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
-      if (!schoolId) return;
-      const yearId = req.body?.academicYearId == null ? null : asPositiveInt(req.body.academicYearId);
-      if (req.body?.academicYearId != null && !yearId) return res.status(400).json({ error: 'Invalid academicYearId' });
-      const { obligations, lateInstallments, dueSoonInstallments } = await loadOverdueInstallments(db, schoolId, yearId);
-      await notifyDueInstallments(db, schoolId, obligations, lateInstallments, dueSoonInstallments);
-      return res.json({ notified: lateInstallments.length + dueSoonInstallments.length });
+      const scope = await resolveReminderScope(
+        actor,
+        req.query?.schoolId,
+        req.query?.academicYearId,
+        req.query?.classId,
+        req.query?.status,
+        res,
+      );
+      if (!scope) return;
+      const candidates = await loadAccountingReminderCandidates(db, {
+        ...scope,
+        schoolName: scope.schoolName,
+        yearName: scope.yearName,
+      });
+      return res.json({
+        candidates: candidates.map(publicAccountingReminderCandidate),
+        deliveryChannel: 'in_app',
+        reminderPreferencesAvailable: false,
+      });
     } catch (error) {
-      console.error('Failed to notify overdue accounting installments:', error);
-      return res.status(500).json({ error: 'Failed to notify overdue accounting installments' });
+      console.error('Failed to load accounting payment reminder candidates:', error);
+      return res.status(500).json({ error: 'Failed to load payment reminder candidates' });
+    }
+  });
+
+  app.post('/api/accounting/reminders/preview', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const scope = await resolveReminderScope(
+        actor,
+        req.body?.schoolId,
+        req.body?.academicYearId,
+        req.body?.classId,
+        req.body?.status,
+        res,
+      );
+      if (!scope) return;
+      const studentIds = asStudentIdList(req.body?.studentIds);
+      if (!studentIds) return res.status(400).json({ error: 'Select at least one valid student' });
+      if (!await isReminderStudentScopeValid(db, scope.schoolId, studentIds)) {
+        return res.status(403).json({ error: 'A selected student is outside the authorized school' });
+      }
+
+      const candidates = await loadAccountingReminderCandidates(db, {
+        ...scope,
+        schoolName: scope.schoolName,
+        yearName: scope.yearName,
+        selectedStudentIds: studentIds,
+      });
+      return res.json({
+        previewFingerprint: getReminderPreviewFingerprint(scope, studentIds, candidates),
+        candidates: candidates.map(publicAccountingReminderCandidate),
+        deliveryChannel: 'in_app',
+        reminderPreferencesAvailable: false,
+      });
+    } catch (error) {
+      console.error('Failed to preview accounting payment reminders:', error);
+      return res.status(500).json({ error: 'Failed to preview payment reminders' });
+    }
+  });
+
+  app.post('/api/accounting/reminders/confirm', async (req, res) => {
+    const actor = await actorFor(req, res);
+    if (!actor) return;
+    try {
+      const scope = await resolveReminderScope(
+        actor,
+        req.body?.schoolId,
+        req.body?.academicYearId,
+        req.body?.classId,
+        req.body?.status,
+        res,
+      );
+      if (!scope) return;
+      const studentIds = asStudentIdList(req.body?.studentIds);
+      const previewFingerprint = typeof req.body?.previewFingerprint === 'string'
+        ? req.body.previewFingerprint
+        : '';
+      if (!studentIds || !/^[a-f0-9]{64}$/i.test(previewFingerprint)) {
+        return res.status(400).json({ error: 'A valid preview and selected students are required' });
+      }
+
+      const result = await db.transaction(async (tx) => {
+        await assertSchoolActiveInTransaction(tx, scope.schoolId);
+        await tx.execute(sql`SELECT id FROM academic_years WHERE id = ${scope.academicYearId} FOR UPDATE`);
+        if (!await isReminderStudentScopeValid(tx, scope.schoolId, studentIds)) {
+          return { kind: 'student-scope-invalid' as const };
+        }
+
+        const obligationConditions = [
+          eq(financialObligations.schoolId, scope.schoolId),
+          eq(financialObligations.academicYearId, scope.academicYearId),
+          eq(financialObligations.status, 'active'),
+          inArray(financialObligations.studentId, studentIds),
+          ...(scope.classId == null ? [] : [eq(financialObligations.classId, scope.classId)]),
+        ];
+        const obligations = await tx.select({ id: financialObligations.id })
+          .from(financialObligations)
+          .where(and(...obligationConditions));
+        const obligationIds = obligations.map((obligation) => obligation.id);
+        const paymentIdRows = obligationIds.length
+          ? await tx.select({ id: financialPaymentAllocations.paymentId })
+            .from(financialPaymentAllocations)
+            .where(inArray(financialPaymentAllocations.obligationId, obligationIds))
+          : [];
+        const paymentIds = [...new Set(paymentIdRows.map((row) => row.id))];
+        if (paymentIds.length > 0) {
+          await tx.select({ id: financialPayments.id })
+            .from(financialPayments)
+            .where(inArray(financialPayments.id, paymentIds))
+            .for('update');
+        }
+
+        const candidates = await loadAccountingReminderCandidates(tx, {
+          ...scope,
+          schoolName: scope.schoolName,
+          yearName: scope.yearName,
+          selectedStudentIds: studentIds,
+        });
+        const currentFingerprint = getReminderPreviewFingerprint(scope, studentIds, candidates);
+        if (currentFingerprint !== previewFingerprint) {
+          return {
+            kind: 'stale-preview' as const,
+            previewFingerprint: currentFingerprint,
+            candidates: candidates.map(publicAccountingReminderCandidate),
+          };
+        }
+
+        const operationResult = {
+          kind: 'complete' as const,
+          selectedStudentCount: studentIds.length,
+          createdNotifications: 0,
+          duplicateCount: 0,
+          excludedZeroBalance: 0,
+          excludedAmbiguous: 0,
+          excludedNoRecipient: 0,
+          excludedNoMatchingInstallments: 0,
+          studentsWithAmbiguousInstallments: 0,
+          ambiguousInstallmentCount: 0,
+          failedCount: 0,
+          deliveryChannel: 'in_app' as const,
+        };
+        for (const candidate of candidates) {
+          if (candidate.ambiguousInstallments.length > 0) {
+            operationResult.studentsWithAmbiguousInstallments += 1;
+            operationResult.ambiguousInstallmentCount += candidate.ambiguousInstallments.length;
+          }
+          if (candidate.installments.length === 0) {
+            if (candidate.ambiguousInstallments.length > 0) {
+              operationResult.excludedAmbiguous += 1;
+            } else if (candidate.status === 'settled') {
+              operationResult.excludedZeroBalance += 1;
+            } else {
+              operationResult.excludedNoMatchingInstallments += 1;
+            }
+            continue;
+          }
+          if (candidate.recipientUserId == null) {
+            operationResult.excludedNoRecipient += 1;
+            continue;
+          }
+          if (!candidate.message || !candidate.dedupeKey) {
+            throw new Error(`Reminder preview is incomplete for student ${candidate.studentId}`);
+          }
+          const [insertedNotification] = await tx.insert(notifications).values({
+            userId: candidate.recipientUserId,
+            title: 'Rappel de paiement',
+            body: candidate.message,
+            type: 'info',
+            dedupeKey: candidate.dedupeKey,
+          }).onConflictDoNothing().returning({ id: notifications.id });
+          if (insertedNotification) operationResult.createdNotifications += 1;
+          else operationResult.duplicateCount += 1;
+        }
+        return operationResult;
+      });
+
+      if (result.kind === 'student-scope-invalid') {
+        return res.status(403).json({ error: 'A selected student is outside the authorized school' });
+      }
+      if (result.kind === 'stale-preview') {
+        return res.status(409).json({
+          error: 'Les soldes ou les destinataires ont changé. Vérifiez le nouvel aperçu avant de confirmer.',
+          code: 'ACCOUNTING_REMINDER_PREVIEW_STALE',
+          previewFingerprint: result.previewFingerprint,
+          candidates: result.candidates,
+        });
+      }
+      return res.json(result);
+    } catch (error) {
+      console.error('Failed to confirm accounting payment reminders:', error);
+      return res.status(500).json({
+        error: 'La confirmation a échoué ; aucune notification de cette opération n’a été enregistrée.',
+        code: 'ACCOUNTING_REMINDER_CONFIRMATION_FAILED',
+        failedCount: 1,
+      });
     }
   });
 
@@ -2545,6 +4503,16 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       const schoolId = await getSchoolId(actor, actor.role === 'school_admin' ? undefined : receipt.schoolId, res);
       if (!schoolId) return;
       if (receipt.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      const [payment] = await db.select({
+        status: financialPayments.status,
+      }).from(financialPayments).where(and(
+        eq(financialPayments.id, receipt.paymentId),
+        eq(financialPayments.schoolId, schoolId),
+      ));
+      if (!payment) return res.status(404).json({ error: 'Payment not found for this receipt' });
+      if (payment.status !== 'posted') {
+        return res.status(409).json({ error: 'Le reçu d’un paiement annulé ne peut pas être réimprimé.' });
+      }
       const pdf = await renderAccountingReceipt(receipt.snapshot);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${receipt.receiptNumber}.pdf"`);
@@ -2594,7 +4562,69 @@ async function fetchAccountingCash(db: typeof defaultDb, schoolId: number, acade
     total += net;
   }
 
-  return { total, categories: Object.fromEntries(categories), currency: 'XOF' };
+  const obligationTotals = await fetchObligationTotals(db, schoolId, academicYearId);
+  return { total, categories: Object.fromEntries(categories), ...obligationTotals, currency: 'XOF' };
+}
+
+async function fetchObligationTotals(
+  db: typeof defaultDb,
+  schoolId: number,
+  academicYearId: number | null,
+  filters: {
+    studentId?: number | null;
+    categoryId?: number | null;
+    classId?: number | null;
+    tariffIds?: number[];
+  } = {},
+) {
+  const obligations = await db.select({
+    amount: financialObligations.amount,
+    id: financialObligations.id,
+  }).from(financialObligations).where(and(
+    eq(financialObligations.schoolId, schoolId),
+    eq(financialObligations.status, 'active'),
+    ...(academicYearId ? [eq(financialObligations.academicYearId, academicYearId)] : []),
+    ...(filters.studentId ? [eq(financialObligations.studentId, filters.studentId)] : []),
+    ...(filters.categoryId ? [eq(financialObligations.categoryId, filters.categoryId)] : []),
+    ...(filters.classId ? [eq(financialObligations.classId, filters.classId)] : []),
+    ...(filters.tariffIds?.length ? [inArray(financialObligations.tariffId, filters.tariffIds)] : []),
+  ));
+  const allocations = obligations.length
+    ? await db.select({
+      id: financialPaymentAllocations.id,
+      obligationId: financialPaymentAllocations.obligationId,
+      amount: financialPaymentAllocations.amount,
+    }).from(financialPaymentAllocations)
+      .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
+      .where(and(
+        inArray(financialPaymentAllocations.obligationId, obligations.map((row) => row.id)),
+        eq(financialPayments.status, 'posted'),
+      ))
+    : [];
+  const adjustments = allocations.length
+    ? await db.select({
+      paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
+      amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
+    }).from(financialAdjustmentAllocations)
+      .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
+      .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allocations.map((row) => row.id)))
+      .groupBy(financialAdjustmentAllocations.paymentAllocationId)
+    : [];
+  const adjustedById = getAdjustmentTotals(
+    allocations.map((row) => ({ ...row, installmentId: null })),
+    adjustments,
+  );
+  const paidByObligation = new Map<number, number>();
+  for (const allocation of allocations) {
+    paidByObligation.set(
+      allocation.obligationId,
+      (paidByObligation.get(allocation.obligationId) ?? 0)
+        + allocation.amount - (adjustedById.get(allocation.id) ?? 0),
+    );
+  }
+  const expected = obligations.reduce((sum, obligation) => sum + obligation.amount, 0);
+  const paid = obligations.reduce((sum, obligation) => sum + (paidByObligation.get(obligation.id) ?? 0), 0);
+  return { expected, paid, remaining: Math.max(0, expected - paid) };
 }
 
 async function loadOverdueInstallments(db: typeof defaultDb, schoolId: number, academicYearId: number | null) {
@@ -2657,44 +4687,305 @@ async function loadOverdueInstallments(db: typeof defaultDb, schoolId: number, a
   };
 }
 
-async function notifyDueInstallments(
-  db: typeof defaultDb,
-  schoolId: number,
-  obligations: Array<{ id: number; studentId: number }>,
-  lateInstallments: Array<{ id: number; obligationId: number; dueDate: string }>,
-  dueSoonInstallments: Array<{ id: number; obligationId: number; dueDate: string }>,
-) {
-  const notificationsToSend = [
-    ...lateInstallments.map((item) => ({ ...item, event: 'overdue' as const })),
-    ...dueSoonInstallments.map((item) => ({ ...item, event: 'due-soon' as const })),
+async function loadAccountingReminderCandidates(
+  executor: Pick<typeof defaultDb, 'select'>,
+  input: AccountingReminderScope & {
+    schoolName: string;
+    yearName: string;
+    selectedStudentIds?: number[];
+    today?: string;
+  },
+): Promise<AccountingReminderCandidate[]> {
+  const obligationConditions = [
+    eq(financialObligations.schoolId, input.schoolId),
+    eq(financialObligations.academicYearId, input.academicYearId),
+    eq(financialObligations.status, 'active'),
+    eq(students.schoolId, input.schoolId),
+    ...(input.classId == null ? [] : [eq(financialObligations.classId, input.classId)]),
+    ...(input.selectedStudentIds == null
+      ? []
+      : [inArray(financialObligations.studentId, input.selectedStudentIds)]),
   ];
-  if (!notificationsToSend.length) return;
-  const obligationIds = new Set(notificationsToSend.map((item) => item.obligationId));
-  const relevantObligations = obligations.filter((item) => obligationIds.has(item.id));
-  const parentByStudent = await db.select({ studentId: students.id, userId: parents.userId })
-    .from(students).innerJoin(parents, eq(parents.id, students.parentId))
-    .where(and(
-      eq(students.schoolId, schoolId),
-      inArray(students.id, relevantObligations.map((row) => row.studentId)),
-    ));
-  const parentForStudent = new Map(parentByStudent.map((row) => [row.studentId, row.userId]));
-  const obligationById = new Map(obligations.map((row) => [row.id, row]));
-  for (const installment of notificationsToSend) {
-    const obligation = obligationById.get(installment.obligationId);
-    const userId = obligation ? parentForStudent.get(obligation.studentId) : null;
-    if (!userId) continue;
-    const isOverdue = installment.event === 'overdue';
-    await db.insert(notifications).values({
-      userId,
-      title: isOverdue ? 'Échéance scolaire impayée' : 'Échéance scolaire à venir',
-      body: isOverdue
-        ? 'Une échéance financière de votre enfant est arrivée à échéance et reste partiellement ou totalement impayée.'
-        : 'Une échéance financière de votre enfant arrive à échéance dans les sept prochains jours.',
-      type: 'info',
-      dedupeKey: `accounting-${installment.event}-${installment.id}-${installment.dueDate}`,
-    }).onConflictDoNothing();
+  const obligationRows = await executor.select({
+    id: financialObligations.id,
+    studentId: financialObligations.studentId,
+    classNameSnapshot: financialObligations.classNameSnapshot,
+    obligationClassName: classes.name,
+    label: financialObligations.label,
+    tariffLabel: accountingTariffs.label,
+    categoryLabel: accountingCategories.label,
+  }).from(financialObligations)
+    .innerJoin(students, eq(students.id, financialObligations.studentId))
+    .leftJoin(classes, eq(classes.id, financialObligations.classId))
+    .innerJoin(accountingCategories, eq(accountingCategories.id, financialObligations.categoryId))
+    .leftJoin(accountingTariffs, eq(accountingTariffs.id, financialObligations.tariffId))
+    .where(and(...obligationConditions))
+    .orderBy(asc(students.lastName), asc(students.firstName), asc(financialObligations.id));
+
+  const obligationIds = obligationRows.map((row) => row.id);
+  const installmentRows = obligationIds.length
+    ? await executor.select().from(financialInstallments)
+      .where(inArray(financialInstallments.obligationId, obligationIds))
+      .orderBy(asc(financialInstallments.dueDate), asc(financialInstallments.id))
+    : [];
+  const allocationRows = obligationIds.length
+    ? await executor.select({
+      id: financialPaymentAllocations.id,
+      obligationId: financialPaymentAllocations.obligationId,
+      installmentId: financialPaymentAllocations.installmentId,
+      amount: financialPaymentAllocations.amount,
+      paymentSchoolId: financialPayments.schoolId,
+      paymentAcademicYearId: financialPayments.academicYearId,
+    }).from(financialPaymentAllocations)
+      .innerJoin(financialPayments, eq(financialPayments.id, financialPaymentAllocations.paymentId))
+      .where(and(
+        inArray(financialPaymentAllocations.obligationId, obligationIds),
+        eq(financialPayments.status, 'posted'),
+      ))
+    : [];
+  const adjustmentRows = allocationRows.length
+    ? await executor.select({
+      paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
+      amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
+    }).from(financialAdjustmentAllocations)
+      .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
+      .where(inArray(
+        financialAdjustmentAllocations.paymentAllocationId,
+        allocationRows.map((row) => row.id),
+      ))
+      .groupBy(financialAdjustmentAllocations.paymentAllocationId)
+    : [];
+  const adjustedByAllocationId = getAdjustmentTotals(
+    allocationRows.map((row) => ({
+      id: row.id,
+      amount: row.amount,
+      obligationId: row.obligationId,
+      installmentId: row.installmentId,
+    })),
+    adjustmentRows,
+  );
+  const installmentsByObligation = new Map<number, typeof installmentRows>();
+  for (const installment of installmentRows) {
+    const current = installmentsByObligation.get(installment.obligationId) ?? [];
+    current.push(installment);
+    installmentsByObligation.set(installment.obligationId, current);
   }
+  const allocationsByObligation = new Map<number, typeof allocationRows>();
+  for (const allocation of allocationRows) {
+    const current = allocationsByObligation.get(allocation.obligationId) ?? [];
+    current.push(allocation);
+    allocationsByObligation.set(allocation.obligationId, current);
+  }
+
+  const studentIds = input.selectedStudentIds
+    ?? [...new Set(obligationRows.map((row) => row.studentId))];
+  if (!studentIds.length) return [];
+  const studentRows = await executor.select({
+    id: students.id,
+    firstName: students.firstName,
+    lastName: students.lastName,
+    className: classes.name,
+  }).from(students)
+    .leftJoin(classes, eq(classes.id, students.classId))
+    .where(and(
+      eq(students.schoolId, input.schoolId),
+      inArray(students.id, studentIds),
+    ));
+  const studentById = new Map(studentRows.map((student) => [student.id, student]));
+
+  const groupByStudent = new Map<number, {
+    firstName: string;
+    lastName: string;
+    className: string | null;
+    obligationClassNames: Set<string>;
+    installments: AccountingReminderInstallmentLine[];
+    ambiguousInstallments: AmbiguousAccountingReminderInstallment[];
+    matchedInstallmentCount: number;
+    settledInstallmentCount: number;
+  }>();
+  for (const student of studentRows) {
+    groupByStudent.set(student.id, {
+      firstName: student.firstName,
+      lastName: student.lastName,
+      className: student.className ?? null,
+      obligationClassNames: new Set<string>(),
+      installments: [],
+      ambiguousInstallments: [],
+      matchedInstallmentCount: 0,
+      settledInstallmentCount: 0,
+    });
+  }
+
+  for (const obligation of obligationRows) {
+    let group = groupByStudent.get(obligation.studentId);
+    if (!group) {
+      group = {
+        firstName: '',
+        lastName: '',
+        className: null,
+        obligationClassNames: new Set<string>(),
+        installments: [],
+        ambiguousInstallments: [],
+        matchedInstallmentCount: 0,
+        settledInstallmentCount: 0,
+      };
+      groupByStudent.set(obligation.studentId, group);
+    }
+    const obligationClassName = obligation.classNameSnapshot || obligation.obligationClassName;
+    if (obligationClassName) group.obligationClassNames.add(obligationClassName);
+
+    const sourceInstallments = (installmentsByObligation.get(obligation.id) ?? []).map((installment) => ({
+      id: installment.id,
+      obligationId: installment.obligationId,
+      categoryLabel: obligation.categoryLabel?.trim() || 'Frais',
+      feeLabel: obligation.tariffLabel?.trim() || obligation.label,
+      label: installment.label?.trim() || 'Échéance',
+      dueDate: installment.dueDate,
+      amount: installment.amount,
+    }));
+    const sourceAllocations = (allocationsByObligation.get(obligation.id) ?? []).map((allocation) => ({
+      obligationId: allocation.obligationId,
+      installmentId: allocation.installmentId,
+      amount: allocation.amount,
+      adjustedAmount: adjustedByAllocationId.get(allocation.id) ?? 0,
+      valid: allocation.paymentSchoolId === input.schoolId
+        && allocation.paymentAcademicYearId === input.academicYearId,
+    }));
+    const calculated = calculateAccountingReminderInstallments(
+      sourceInstallments,
+      sourceAllocations,
+      input.today ?? todayUtc(),
+      input.status,
+    );
+    group.matchedInstallmentCount += calculated.matchedCount;
+    group.settledInstallmentCount += calculated.settledCount;
+    group.installments.push(...calculated.eligible);
+    group.ambiguousInstallments.push(...calculated.ambiguous);
+  }
+
+  const recipientRows = await executor.select({
+    studentId: students.id,
+    userId: users.id,
+  }).from(students)
+    .innerJoin(parents, and(
+      eq(parents.id, students.parentId),
+      eq(parents.schoolId, input.schoolId),
+    ))
+    .innerJoin(userSchools, and(
+      eq(userSchools.userId, parents.userId),
+      eq(userSchools.schoolId, input.schoolId),
+      eq(userSchools.role, 'parent'),
+      sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+    ))
+    .innerJoin(users, and(
+      eq(users.id, parents.userId),
+      eq(users.isDeleted, false),
+    ))
+    .where(and(
+      eq(students.schoolId, input.schoolId),
+      inArray(students.id, studentIds),
+    ))
+    .for('share', { of: [parents, userSchools, users] });
+  const recipientByStudent = new Map(recipientRows.map((row) => [row.studentId, row.userId]));
+
+  const candidates: AccountingReminderCandidate[] = [];
+  for (const studentId of studentIds) {
+    const group = groupByStudent.get(studentId);
+    const student = studentById.get(studentId);
+    if (!group || !student) continue;
+    const recipientUserId = recipientByStudent.get(studentId) ?? null;
+    const statusSet = new Set<AccountingReminderStatus>([
+      ...group.installments.map((installment) => installment.status),
+      ...group.ambiguousInstallments.flatMap((installment) =>
+        installment.status == null ? [] : [installment.status]),
+    ]);
+    const status: AccountingReminderCandidate['status'] = statusSet.size > 1
+      ? 'mixed'
+      : statusSet.size === 1
+        ? [...statusSet][0]
+        : group.ambiguousInstallments.length > 0
+          ? 'undetermined'
+          : group.matchedInstallmentCount > 0
+            && group.settledInstallmentCount === group.matchedInstallmentCount
+            ? 'settled'
+            : 'none';
+    const installments = [...group.installments].sort((left, right) =>
+      left.dueDate.localeCompare(right.dueDate) || left.id - right.id);
+    const ambiguousInstallments = [...group.ambiguousInstallments].sort((left, right) =>
+      left.dueDate.localeCompare(right.dueDate) || left.id - right.id);
+    const dedupeKey = installments.length
+      ? getAccountingReminderDedupeKey({
+        schoolId: input.schoolId,
+        academicYearId: input.academicYearId,
+        studentId,
+        installmentIds: installments.map((installment) => installment.id),
+      })
+      : null;
+    const message = installments.length && recipientUserId != null
+      ? buildAccountingPaymentReminderMessage({
+        schoolName: input.schoolName,
+        yearName: input.yearName,
+        studentName: `${student.firstName} ${student.lastName}`.trim(),
+        installments,
+      })
+      : null;
+
+    candidates.push({
+      studentId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      className: student.className ?? null,
+      obligationClassNames: [...group.obligationClassNames].sort((left, right) => left.localeCompare(right, 'fr')),
+      installments,
+      ambiguousInstallments,
+      matchedInstallmentCount: group.matchedInstallmentCount,
+      settledInstallmentCount: group.settledInstallmentCount,
+      totalRemaining: installments.reduce((sum, installment) => sum + installment.remaining, 0),
+      earliestDueDate: installments[0]?.dueDate ?? ambiguousInstallments[0]?.dueDate ?? null,
+      status,
+      canSend: installments.length > 0 && recipientUserId != null,
+      alreadyNotified: false,
+      reason: installments.length === 0
+        ? ambiguousInstallments.length > 0
+          ? 'Le solde d’au moins une échéance est indéterminé ; aucun rappel affirmatif ne sera créé pour ces échéances.'
+          : status === 'settled'
+            ? 'Les échéances correspondant aux filtres sont déjà soldées.'
+            : 'Aucune échéance non soldée ne correspond aux filtres.'
+        : recipientUserId == null
+          ? 'Aucun compte parent actif associé à cet élève dans cet établissement.'
+          : null,
+      message,
+      dedupeKey,
+      recipientUserId,
+    });
+  }
+
+  const candidateKeys = candidates.flatMap((candidate) =>
+    candidate.dedupeKey == null ? [] : [candidate.dedupeKey]);
+  const existingNotifications = candidateKeys.length
+    ? await executor.select({ dedupeKey: notifications.dedupeKey })
+      .from(notifications)
+      .where(inArray(notifications.dedupeKey, candidateKeys))
+    : [];
+  const existingKeys = new Set(existingNotifications.map((row) => row.dedupeKey));
+  for (const candidate of candidates) {
+    candidate.alreadyNotified = candidate.dedupeKey != null && existingKeys.has(candidate.dedupeKey);
+    if (candidate.alreadyNotified) {
+      candidate.canSend = false;
+      candidate.reason = 'Un rappel a déjà été créé pour cet élève et cet ensemble d’échéances.';
+    }
+  }
+
+  return input.selectedStudentIds == null
+    ? candidates.filter((candidate) =>
+      candidate.installments.length > 0 || candidate.ambiguousInstallments.length > 0)
+    : candidates;
 }
+
+const publicAccountingReminderCandidate = (candidate: AccountingReminderCandidate) => {
+  const { recipientUserId: _recipientUserId, ...publicCandidate } = candidate;
+  return publicCandidate;
+};
 
 async function handlePaymentAdjustment(
   req: any,

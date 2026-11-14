@@ -38,6 +38,7 @@ import { useAbsences } from './hooks/useAbsences.ts';
 import { useLateArrivals, type LateArrivalInput } from './hooks/useLateArrivals.ts';
 import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import { reexamineAbsenceJustification } from './lib/absenceJustificationApi.ts';
+import { getEffectiveAbsenceJustificationStatus } from './lib/absenceJustificationStatus.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import type { ClassAgeStats } from './lib/studentAgeStats.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
@@ -289,6 +290,15 @@ export default function App() {
         attendanceRate: 0,
         absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 },
       });
+      setAbsenceDeclarationStats({
+        total: 0,
+        received: 0,
+        accepted: 0,
+        refused: 0,
+        cancelled: 0,
+        notRealized: 0,
+      });
+      setAbsenceJustificationStats({ total: 0, pending: 0, accepted: 0, refused: 0 });
       setChartData([]);
       setSchoolToSwitchTo('');
       void apiFetch('/api/auth/schools')
@@ -329,6 +339,20 @@ export default function App() {
       declared: 0,
     },
   });
+  const [absenceDeclarationStats, setAbsenceDeclarationStats] = useState({
+    total: 0,
+    received: 0,
+    accepted: 0,
+    refused: 0,
+    cancelled: 0,
+    notRealized: 0,
+  });
+  const [absenceJustificationStats, setAbsenceJustificationStats] = useState({
+    total: 0,
+    pending: 0,
+    accepted: 0,
+    refused: 0,
+  });
   const [chartData, setChartData] = useState<Array<{ name: string; taux: number }>>([]);
   const [ageStatsByClass, setAgeStatsByClass] = useState<ClassAgeStats[]>([]);
   const [ageStatsAsOf, setAgeStatsAsOf] = useState('');
@@ -361,7 +385,10 @@ export default function App() {
   const [lateArrivalJustificationsList, setLateArrivalJustificationsList] = useState<LateArrivalJustificationListItem[]>([]);
   const [absenceControlsList, setAbsenceControlsList] = useState<any[]>([]);
   const [summaryRecentAbsences, setSummaryRecentAbsences] = useState<any[]>([]);
-  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => absence.justificationStatus !== 'PENDING' && !absence.isJustified && (!absence.declarationId || absence.justificationStatus === 'REJECTED')).length;
+  const unjustifiedAbsencesCount = absencesList.filter((absence: any) => {
+    const status = getEffectiveAbsenceJustificationStatus(absence);
+    return status === 'REJECTED' || (status === null && !absence.isJustified && !absence.declarationId);
+  }).length;
   const pendingAbsenceValidationsCount = Math.max(0, Number(stats.absenceStatusCounts.pending) || 0);
   const pendingAttendanceJustificationsCount = pendingAbsenceValidationsCount
     + lateArrivalJustificationsList.filter(({ justification }) => justification.status === 'PENDING').length;
@@ -481,6 +508,12 @@ export default function App() {
             ...prev,
             absenceStatusCounts: summary.absenceStatusCounts || prev.absenceStatusCounts,
           }));
+        }
+        if ('absenceDeclarationStats' in summary) {
+          setAbsenceDeclarationStats(summary.absenceDeclarationStats);
+        }
+        if ('absenceJustificationStats' in summary) {
+          setAbsenceJustificationStats(summary.absenceJustificationStats);
         }
         if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
         if ('recentAbsences' in summary) setSummaryRecentAbsences(summary.recentAbsences);
@@ -868,7 +901,7 @@ export default function App() {
   // HANDLERS FOR CREATIONS (POSTS REST API)
   // ==========================================
 
-  const handleAddSchool = async (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => {
+  const handleAddSchool = async (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; timeZone?: string; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => {
     try {
       const createdSchool = await apiFetch('/api/schools', {
         method: 'POST',
@@ -1009,7 +1042,7 @@ export default function App() {
       throw err;
     }
   };
-  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone?: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => {
+  const handleUpdateSchool = async (id: number, data: { name: string; address: string; phone?: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; timeZone?: string; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => {
     try {
       await apiFetch(`/api/schools/${id}`, {
         method: 'PUT',
@@ -2064,6 +2097,8 @@ export default function App() {
                   ageStatsByClass={ageStatsByClass}
                   ageStatsAsOf={ageStatsAsOf}
                   absenceStatusCounts={stats.absenceStatusCounts}
+                  absenceDeclarationStats={absenceDeclarationStats}
+                  absenceJustificationStats={absenceJustificationStats}
                 />
               )}
 

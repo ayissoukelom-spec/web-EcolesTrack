@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
+import { getEffectiveAbsenceJustificationStatus } from '../lib/absenceJustificationStatus.ts';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown, LoaderCircle } from 'lucide-react';
 import { downloadAbsenceJustification } from '../lib/api.ts';
 import type {
@@ -793,7 +794,7 @@ export default function AbsenceView({
 
   const canReviewJustification = ['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(userRole);
   const canReexamineJustification = ['school_admin', 'surveillant', 'super_admin'].includes(userRole);
-  const getJustificationStatus = (absence: Absence) => absence.justificationStatus || (absence.isJustified ? 'APPROVED' : null);
+  const getJustificationStatus = getEffectiveAbsenceJustificationStatus;
   const canReviewLateArrivalJustification = ['teacher', 'school_admin', 'surveillant'].includes(userRole);
   const canReexamineLateArrivalJustification = ['school_admin', 'surveillant'].includes(userRole);
 
@@ -933,11 +934,14 @@ export default function AbsenceView({
       return false;
     }
 
-    if (filterJustification === 'justified' && !event.isJustified) {
+    const justificationStatus = getJustificationStatus(event);
+
+    if (filterJustification === 'justified' && justificationStatus !== 'APPROVED') {
       return false;
     }
 
-    if (filterJustification === 'unjustified' && (event.isJustified || (event.declarationId && !event.justificationStatus))) {
+    if (filterJustification === 'unjustified' && justificationStatus !== 'REJECTED' &&
+      !(justificationStatus === null && !event.isJustified && !event.declarationId)) {
       return false;
     }
 
@@ -1709,7 +1713,7 @@ export default function AbsenceView({
                           </p>
                         )}
                       </>
-                    ) : abs.declarationId && !abs.justificationStatus && !abs.isJustified ? (
+                    ) : abs.declarationId && getJustificationStatus(abs) === null ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-50 text-sky-700 text-xs font-bold rounded-full border border-sky-100">
                         Déclaration parentale associée
                       </span>
@@ -1785,7 +1789,7 @@ export default function AbsenceView({
                     ) : (
                       <>
                         <div className="font-bold">
-                          {abs.declarationId && !abs.justificationStatus && !abs.isJustified
+                          {abs.declarationId && getJustificationStatus(abs) === null
                             ? 'Absence rattachée à une déclaration parentale'
                             : abs.justificationStatus === 'REJECTED'
                             ? `Motif du refus : ${abs.rejectionReason || 'Non précisé'}`

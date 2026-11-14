@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { UserRole } from '../types.ts';
 import type { LoginStats } from '../hooks/useAdminDashboard.ts';
 import { getGradeBadgeClass, getGradeBand } from '../lib/gradeColor';
+import { getEffectiveAbsenceJustificationStatus } from '../lib/absenceJustificationStatus.ts';
 import type { ClassAgeStats } from '../lib/studentAgeStats.ts';
 
 export function normalizeDashboardChartData(rawData: unknown): Array<{ name: string; taux: number }> {
@@ -62,6 +63,20 @@ interface DashboardViewProps {
     pending?: number;
     declared?: number;
   };
+  absenceDeclarationStats?: {
+    total: number;
+    received: number;
+    accepted: number;
+    refused: number;
+    cancelled: number;
+    notRealized: number;
+  };
+  absenceJustificationStats?: {
+    total: number;
+    pending: number;
+    accepted: number;
+    refused: number;
+  };
   loginStats?: LoginStats;
 }
 
@@ -74,6 +89,8 @@ export default function DashboardView({
   ageStatsByClass = [],
   ageStatsAsOf,
   absenceStatusCounts,
+  absenceDeclarationStats,
+  absenceJustificationStats,
   loginStats,
 }: DashboardViewProps) {
   console.log('Statistiques reçues par DashboardView :', stats);
@@ -88,6 +105,21 @@ export default function DashboardView({
   const unjustifiedCount = absenceStatusCounts?.unjustified ?? recentAbsences.filter((a) => a.justificationStatus === 'REJECTED' || (!a.justificationStatus && !a.isJustified && !a.declarationId)).length;
   const declaredCount = absenceStatusCounts?.declared ?? recentAbsences.filter((a) => a.declarationId && !a.justificationStatus && !a.isJustified).length;
   const totalAbsenceCount = justifiedCount + unjustifiedCount + pendingCount + declaredCount;
+  const declarationStats = absenceDeclarationStats ?? {
+    total: 0,
+    received: 0,
+    accepted: 0,
+    refused: 0,
+    cancelled: 0,
+    notRealized: 0,
+  };
+  const justificationStats = absenceJustificationStats ?? {
+    total: 0,
+    pending: 0,
+    accepted: 0,
+    refused: 0,
+  };
+  const showAdministrativeAbsenceRequestStats = ['super_admin', 'school_admin', 'surveillant'].includes(userRole ?? '');
   const ageStatsSummary = ageStatsByClass.reduce((summary, classStats) => {
     summary.students += classStats.includedStudents;
     for (const item of classStats.distribution) {
@@ -132,7 +164,7 @@ export default function DashboardView({
     { name: 'Justifiées', value: justifiedCount, color: '#10b981' },
     { name: 'Non Justifiées', value: unjustifiedCount, color: '#ef4444' },
     { name: 'En attente', value: pendingCount, color: '#f59e0b' },
-    { name: 'Déclarées par un parent', value: declaredCount, color: '#0ea5e9' },
+    { name: 'Liées à une déclaration parentale', value: declaredCount, color: '#0ea5e9' },
   ];
 
   return (
@@ -241,6 +273,62 @@ export default function DashboardView({
         </div>
       </div>
 
+      {showAdministrativeAbsenceRequestStats && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2" role="region" aria-label="Suivi des demandes d’absence">
+          <section id="card-parent-absence-declarations" className="rounded-3xl border border-sky-200 bg-gradient-to-br from-white to-sky-50 p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Déclarations parentales</h3>
+                <p className="mt-1 text-xs text-slate-500">Chaque déclaration soumise, quel que soit son statut.</p>
+              </div>
+              <div className="rounded-2xl bg-sky-100 px-4 py-2 text-right text-sky-900">
+                <span className="block text-[0.6rem] font-semibold uppercase tracking-wide">Total reçues</span>
+                <span className="text-3xl font-black leading-none">{declarationStats.total.toLocaleString('fr-FR')}</span>
+              </div>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {[
+                ['En attente de validation', declarationStats.received],
+                ['Acceptées', declarationStats.accepted],
+                ['Refusées', declarationStats.refused],
+                ['Annulées', declarationStats.cancelled],
+                ['Non réalisées', declarationStats.notRealized],
+              ].map(([label, count]) => (
+                <div key={label} className="rounded-xl border border-sky-100 bg-white/80 p-3">
+                  <dt className="text-xs font-medium text-slate-500">{label}</dt>
+                  <dd className="mt-1 text-xl font-bold text-slate-800">{Number(count).toLocaleString('fr-FR')}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <section id="card-absence-justifications" className="rounded-3xl border border-amber-200 bg-gradient-to-br from-white to-amber-50 p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Justifications d’absences</h3>
+                <p className="mt-1 text-xs text-slate-500">Une demande comptée une fois par absence, sans multiplier ses pièces jointes.</p>
+              </div>
+              <div className="rounded-2xl bg-amber-100 px-4 py-2 text-right text-amber-900">
+                <span className="block text-[0.6rem] font-semibold uppercase tracking-wide">Total reçues</span>
+                <span className="text-3xl font-black leading-none">{justificationStats.total.toLocaleString('fr-FR')}</span>
+              </div>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {[
+                ['En attente de validation', justificationStats.pending],
+                ['Acceptées', justificationStats.accepted],
+                ['Refusées', justificationStats.refused],
+              ].map(([label, count]) => (
+                <div key={label} className="rounded-xl border border-amber-100 bg-white/80 p-3">
+                  <dt className="text-xs font-medium text-slate-500">{label}</dt>
+                  <dd className="mt-1 text-xl font-bold text-slate-800">{Number(count).toLocaleString('fr-FR')}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </div>
+      )}
+
       {/* Charts section */}
       <div className="grid grid-cols-1 gap-6">
         {userRole !== 'parent' && (
@@ -273,8 +361,8 @@ export default function DashboardView({
         <div className="rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-rose-50/60 p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-lg font-bold text-slate-800">Statut des Absences</h3>
-              <p className="text-xs text-slate-500">Répartition entre absences déclarées et justifiées</p>
+              <h3 className="text-lg font-bold text-slate-800">Statut des absences enregistrées</h3>
+              <p className="text-xs text-slate-500">Répartition des absences présentes au registre selon leur statut</p>
             </div>
             <div className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-rose-600">
               Suivi
@@ -498,32 +586,45 @@ export default function DashboardView({
 
           <div className="space-y-2">
             {recentAbsences && recentAbsences.length > 0 ? (
-              recentAbsences.map((abs, i) => (
-                <div key={abs.id || i} className="rounded-2xl border border-slate-100 bg-white/80 px-3 py-3 shadow-sm transition-all duration-150 hover:shadow-md">
-                  <div className="flex items-center justify-between gap-3 text-xs sm:text-sm">
-                    <div>
-                      <p className="font-bold text-slate-800">{abs.studentName}</p>
-                      <p className="text-xs text-slate-400">Classe : {abs.className} • Date : {abs.date}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-slate-500 capitalize bg-slate-100 px-2 py-1 rounded-full">
-                        {abs.period === 'morning' ? 'Matin' : abs.period === 'afternoon' ? 'Après-midi' : 'Journée'}
-                      </span>
-                      {abs.isJustified ? (
-                        <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
-                          <CheckCircle className="h-3 w-3" />
-                          Justifiée
+              recentAbsences.map((abs, i) => {
+                const justificationStatus = getEffectiveAbsenceJustificationStatus(abs);
+                return (
+                  <div key={abs.id || i} className="rounded-2xl border border-slate-100 bg-white/80 px-3 py-3 shadow-sm transition-all duration-150 hover:shadow-md">
+                    <div className="flex items-center justify-between gap-3 text-xs sm:text-sm">
+                      <div>
+                        <p className="font-bold text-slate-800">{abs.studentName}</p>
+                        <p className="text-xs text-slate-400">Classe : {abs.className} • Date : {abs.date}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-slate-500 capitalize bg-slate-100 px-2 py-1 rounded-full">
+                          {abs.period === 'morning' ? 'Matin' : abs.period === 'afternoon' ? 'Après-midi' : 'Journée'}
                         </span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
-                          <XCircle className="h-3 w-3" />
-                          A Justifier
-                        </span>
-                      )}
+                        {justificationStatus === 'APPROVED' ? (
+                          <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
+                            <CheckCircle className="h-3 w-3" />
+                            Justifiée
+                          </span>
+                        ) : justificationStatus === 'PENDING' ? (
+                          <span className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
+                            <Clock className="h-3 w-3" />
+                            En attente
+                          </span>
+                        ) : justificationStatus === 'REJECTED' ? (
+                          <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
+                            <XCircle className="h-3 w-3" />
+                            Justification refusée
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded-full font-bold text-[0.62rem] uppercase tracking-[0.12em]">
+                            <XCircle className="h-3 w-3" />
+                            À justifier
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <p className="text-slate-400 py-4 text-center text-xs">Aucune absence enregistrée ces derniers jours.</p>
             )}

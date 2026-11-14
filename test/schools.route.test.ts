@@ -10,6 +10,7 @@ import {
   evaluations, grades, evaluationParticipations, bulletins, bulletinGenerations, absences, lateArrivals,
   classHomeroomAssignments, classSuccessions, classExamConfigurations, absenceControls, teacherSubjects,
   accountingCategories, accountingTariffs, accountingScheduleTemplates, accountingFeeDefinitions, financialPayments,
+  tuitionProgressReminderControls,
 } from '../src/db/schema.ts';
 import { hashLocalPassword } from '../src/lib/localPassword.ts';
 
@@ -33,7 +34,7 @@ const mockState = {
   academicYears: [
     { id: 1, name: '2024-2025', isActive: true, schoolId: null },
   ],
-  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; promotionThreshold?: string | number | null; isSuspended?: boolean }>,
+  schools: [] as Array<{ id: number; name: string; address?: string; phone?: string; ministryName?: string | null; principalName?: string | null; principalGender?: string | null; logoPath?: string | null; timeZone?: string | null; promotionThreshold?: string | number | null; isSuspended?: boolean }>,
   lastSchoolUpdate: null as Record<string, any> | null,
   schoolUpdateError: null as Error | null,
   classes: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null; cycleId?: number | null; cycleCode?: string | null }>,
@@ -51,6 +52,7 @@ const mockState = {
   createdClasses: [] as Array<{ id: number; name: string; schoolId: number | null; academicYearId: number | null }>,
   financialObligations: [] as Array<Record<string, any>>,
   financialPayments: [] as Array<Record<string, any>>,
+  tuitionProgressReminderControls: [] as Array<Record<string, any>>,
   evaluations: [] as Array<Record<string, any>>,
   grades: [] as Array<Record<string, any>>,
   evaluationParticipations: [] as Array<Record<string, any>>,
@@ -71,6 +73,7 @@ const mockState = {
   accountingFeeDefinitions: [] as Array<Record<string, any>>,
   auditEvents: [] as Array<Record<string, any>>,
   failOnDeleteTable: null as any,
+  failOnDeleteConstraint: null as string | null,
   transactionIsolationLevels: [] as Array<string | undefined>,
   transactionLockTableCalls: 0,
   onTransactionLock: null as (() => void) | null,
@@ -151,6 +154,7 @@ const getRowsForTable = (table: any): Array<Record<string, any>> | null => {
   const tableRows = new Map<any, Array<Record<string, any>>>([
     [schools, mockState.schools as Array<Record<string, any>>],
     [academicYears, mockState.academicYears as Array<Record<string, any>>],
+    [tuitionProgressReminderControls, mockState.tuitionProgressReminderControls],
     [users, mockState.users],
     [userSchools, mockState.userSchools],
     [teachers, mockState.teachers],
@@ -223,6 +227,7 @@ const snapshotSchoolDeletionState = () => structuredClone({
   accountingFeeDefinitions: mockState.accountingFeeDefinitions,
   financialObligations: mockState.financialObligations,
   financialPayments: mockState.financialPayments,
+  tuitionProgressReminderControls: mockState.tuitionProgressReminderControls,
   auditEvents: mockState.auditEvents,
 });
 
@@ -544,7 +549,15 @@ const mockDb = {
   }),
   delete: (table: any) => ({
     where: async (...conditions: any[]) => {
-      if (mockState.failOnDeleteTable === table) throw new Error('Simulated transactional delete failure');
+      if (mockState.failOnDeleteTable === table) {
+        if (mockState.failOnDeleteConstraint) {
+          throw Object.assign(new Error('Simulated foreign key violation'), {
+            code: '23503',
+            constraint: mockState.failOnDeleteConstraint,
+          });
+        }
+        throw new Error('Simulated transactional delete failure');
+      }
       const filterRows = (rows: Array<Record<string, any>>) => conditions.length === 0
         ? rows
         : rows.filter((row) => !matchesConditions(row, conditions));
@@ -741,6 +754,7 @@ describe('POST /api/schools', () => {
     mockState.createdClasses = [];
     mockState.financialObligations = [];
     mockState.financialPayments = [];
+    mockState.tuitionProgressReminderControls = [];
     mockState.evaluations = [];
     mockState.grades = [];
     mockState.evaluationParticipations = [];
@@ -761,6 +775,7 @@ describe('POST /api/schools', () => {
     mockState.accountingFeeDefinitions = [];
     mockState.auditEvents = [];
     mockState.failOnDeleteTable = null;
+    mockState.failOnDeleteConstraint = null;
     mockState.transactionIsolationLevels = [];
     mockState.transactionLockTableCalls = 0;
     mockState.onTransactionLock = null;
@@ -773,6 +788,114 @@ describe('POST /api/schools', () => {
 
     await request(app).delete('/api/schools/1').send({ password: 'unit-test-password' }).expect(409);
     expect(mockState.schools).toHaveLength(1);
+  });
+
+  it('refuses school deletion when tuition reminder history exists without exposing its details', async () => {
+    mockState.schools = [{ id: 1, name: 'École avec historique' }];
+    setSuperAdminPassword();
+    mockState.tuitionProgressReminderControls = [{
+      id: 17,
+      schoolId: 1,
+      academicYearId: 24,
+      studentId: 39,
+      targetAmount: 120000,
+      netPaidAmount: 50000,
+      shortfallAmount: 70000,
+    }];
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('TUITION_PROGRESS_REMINDER_HISTORY_EXISTS');
+    expect(JSON.stringify(response.body)).not.toContain('120000');
+    expect(JSON.stringify(response.body)).not.toContain('studentId');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('does not let another school’s tuition reminder history block or leak through school deletion', async () => {
+    mockState.schools = [{ id: 1, name: 'École supprimée' }, { id: 2, name: 'École conservée' }];
+    setSuperAdminPassword();
+    mockState.tuitionProgressReminderControls = [{ id: 17, schoolId: 2, academicYearId: 24, studentId: 39 }];
+
+    await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(200);
+
+    expect(mockState.schools.map((school) => school.id)).toEqual([2]);
+    expect(mockState.tuitionProgressReminderControls).toEqual([
+      { id: 17, schoolId: 2, academicYearId: 24, studentId: 39 },
+    ]);
+  });
+
+  it('maps a concurrent tuition-history school FK violation to the stable conflict and rolls back', async () => {
+    mockState.schools = [{ id: 1, name: 'École à conserver' }];
+    mockState.users.push({ id: 2, uid: 'school-user', email: 'school@example.com', role: 'school_admin', schoolId: 1 });
+    setSuperAdminPassword();
+    mockState.failOnDeleteTable = schools;
+    mockState.failOnDeleteConstraint = 'tuition_progress_reminder_controls_school_fk';
+    const before = snapshotSchoolDeletionState();
+
+    const response = await request(app).delete('/api/schools/1')
+      .send({ password: 'unit-test-password' }).expect(409);
+
+    expect(response.body.code).toBe('TUITION_PROGRESS_REMINDER_HISTORY_EXISTS');
+    expect(snapshotSchoolDeletionState()).toEqual(before);
+  });
+
+  it('refuses academic-year deletion when tuition reminder history exists without changing data', async () => {
+    mockState.academicYears = [{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }];
+    mockState.tuitionProgressReminderControls = [{ id: 17, schoolId: 1, academicYearId: 11, studentId: 39 }];
+
+    const response = await request(app).delete('/api/academic-years/11').expect(409);
+
+    expect(response.body.code).toBe('TUITION_PROGRESS_REMINDER_HISTORY_EXISTS');
+    expect(mockState.academicYears).toEqual([{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }]);
+    expect(mockState.tuitionProgressReminderControls).toHaveLength(1);
+  });
+
+  it('deletes an academic year without tuition reminder history in a transaction', async () => {
+    mockState.academicYears = [{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }];
+
+    await request(app).delete('/api/academic-years/11').expect(200, { success: true });
+
+    expect(mockState.academicYears).toHaveLength(0);
+    expect(mockState.transactionIsolationLevels).toEqual([undefined]);
+  });
+
+  it('maps a concurrent tuition-history academic-year FK violation to the stable conflict', async () => {
+    mockState.academicYears = [{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }];
+    mockState.failOnDeleteTable = academicYears;
+    mockState.failOnDeleteConstraint = 'tuition_progress_reminder_controls_academic_year_fk';
+    const before = structuredClone(mockState.academicYears);
+
+    const response = await request(app).delete('/api/academic-years/11').expect(409);
+
+    expect(response.body.code).toBe('TUITION_PROGRESS_REMINDER_HISTORY_EXISTS');
+    expect(mockState.academicYears).toEqual(before);
+  });
+
+  it('does not map an unrelated academic-year FK violation to a tuition-history conflict', async () => {
+    mockState.academicYears = [{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }];
+    mockState.failOnDeleteTable = academicYears;
+    mockState.failOnDeleteConstraint = 'unrelated_foreign_key';
+    const before = structuredClone(mockState.academicYears);
+
+    const response = await request(app).delete('/api/academic-years/11')
+      .expect(500, { error: 'Failed to delete academic year' });
+
+    expect(response.body.code).toBeUndefined();
+    expect(JSON.stringify(response.body)).not.toContain('TUITION_PROGRESS_REMINDER_HISTORY_EXISTS');
+    expect(mockState.academicYears).toEqual(before);
+  });
+
+  it('preserves super-admin-only permissions for academic-year deletion', async () => {
+    mockState.users[0].role = 'school_admin';
+    mockState.academicYears = [{ id: 11, name: '2025-2026', isActive: true, schoolId: 1 }];
+
+    await request(app).delete('/api/academic-years/11').expect(403);
+
+    expect(mockState.academicYears).toHaveLength(1);
+    expect(mockState.transactionIsolationLevels).toEqual([]);
   });
 
   it('rejects school deletion when the password is incorrect', async () => {
@@ -1128,8 +1251,41 @@ describe('POST /api/schools', () => {
       .send({ name: 'École du Lac', address: '', phone: '+228 90000000', ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M', classNames: ['6ème'], subjectNames: ['Mathématiques'] })
       .expect(201);
 
-    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M', promotionThreshold: '10.00' });
+    expect(res.body).toMatchObject({ id: 1, ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M', timeZone: 'Africa/Lome', promotionThreshold: '10.00' });
     expect((await request(app).get('/api/schools').expect(200)).body[0]).toMatchObject({ ministryName: 'Ministère du Togo', principalName: 'Kossi AYISSOU', principalGender: 'M' });
+  });
+
+  it('accepts a valid IANA time zone when creating a school', async () => {
+    const response = await request(app)
+      .post('/api/schools')
+      .send({
+        name: 'École du Lac',
+        address: '',
+        phone: '+228 90000000',
+        timeZone: 'Europe/Paris',
+        classNames: ['6ème'],
+        subjectNames: ['Mathématiques'],
+      })
+      .expect(201);
+
+    expect(response.body.timeZone).toBe('Europe/Paris');
+  });
+
+  it('rejects an invalid IANA time zone when creating a school', async () => {
+    const response = await request(app)
+      .post('/api/schools')
+      .send({
+        name: 'École du Lac',
+        address: '',
+        phone: '+228 90000000',
+        timeZone: 'Not/A_Time_Zone',
+        classNames: ['6ème'],
+        subjectNames: ['Mathématiques'],
+      })
+      .expect(400);
+
+    expect(response.body.error).toContain('valid IANA time zone');
+    expect(mockState.schools).toHaveLength(0);
   });
 
   it('enregistre et modifie le seuil de passage de l école', async () => {
@@ -1146,6 +1302,40 @@ describe('POST /api/schools', () => {
       .expect(200);
 
     expect(mockState.schools[0].promotionThreshold).toBe('9.50');
+    expect(mockState.schools[0].timeZone).toBe('Africa/Lome');
+  });
+
+  it('updates a school time zone only when a valid value is provided', async () => {
+    mockState.schools = [{ id: 1, name: 'École du Lac', timeZone: 'Africa/Lome' }];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', timeZone: 'America/New_York' })
+      .expect(200);
+
+    expect(mockState.schools[0].timeZone).toBe('America/New_York');
+
+    const response = await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', timeZone: 'Invalid/Zone' })
+      .expect(400);
+
+    expect(response.body.error).toContain('valid IANA time zone');
+    expect(mockState.schools[0].timeZone).toBe('America/New_York');
+  });
+
+  it('does not allow a school administrator to change the school time zone', async () => {
+    mockState.users = [
+      { id: 1, uid: 'sim-admin', email: 'admin@example.com', role: 'school_admin', schoolId: 1 },
+    ];
+    mockState.schools = [{ id: 1, name: 'École du Lac', timeZone: 'Africa/Lome' }];
+
+    await request(app)
+      .put('/api/schools/1')
+      .send({ name: 'École du Lac', timeZone: 'Europe/Paris' })
+      .expect(403);
+
+    expect(mockState.schools[0].timeZone).toBe('Africa/Lome');
   });
 
   it('transmet ministryName lors de la modification d une école', async () => {

@@ -372,24 +372,18 @@ describe.sequential('accounting ledger PostgreSQL integration', () => {
     expect(count.rows[0].count).toBe(1);
   });
 
-  it('keeps dashboard reads side-effect free and deduplicates explicit overdue reminders', async () => {
-    await pool.query(`INSERT INTO parents (id, user_id) VALUES (1, 7)`);
-    await pool.query(`UPDATE students SET parent_id = 1 WHERE id = 1`);
-    await pool.query(`UPDATE financial_installments SET due_date = '2000-01-01'`);
-
+  it('keeps dashboard reads side-effect free and rejects implicit overdue reminders', async () => {
     const dashboard = await request(app).get('/api/accounting/dashboard?academicYearId=1');
     expect(dashboard.status).toBe(200);
     let count = await pool.query('SELECT count(*)::int AS count FROM notifications');
     expect(count.rows[0].count).toBe(0);
 
-    const firstReminder = await request(app).post('/api/accounting/notifications/overdue')
+    const implicitReminder = await request(app).post('/api/accounting/notifications/overdue')
       .send({ academicYearId: 1 });
-    const repeatedReminder = await request(app).post('/api/accounting/notifications/overdue')
-      .send({ academicYearId: 1 });
-    expect(firstReminder.status).toBe(200);
-    expect(repeatedReminder.status).toBe(200);
+    expect(implicitReminder.status).toBe(410);
+    expect(implicitReminder.body.code).toBe('MANUAL_REMINDER_PREVIEW_REQUIRED');
     count = await pool.query('SELECT count(*)::int AS count FROM notifications');
-    expect(count.rows[0].count).toBe(1);
+    expect(count.rows[0].count).toBe(0);
   });
 
   it('issues unique increasing receipt numbers and renders from the stored historical snapshot', async () => {

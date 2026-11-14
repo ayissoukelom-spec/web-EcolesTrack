@@ -3,6 +3,7 @@ import { apiFetch, apiFetchBlob, deleteClassExamConfiguration, deleteExamResult,
 import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
+import LocalTuitionProgressReminderTestPanel from './LocalTuitionProgressReminderTestPanel.tsx';
 import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, AuditEvent, getTeacherDisplayName } from '../types.ts';
 import {
   Building2,
@@ -32,6 +33,8 @@ import { normalizeClassProgressionCode } from '../lib/classProgression.ts';
 import { STUDENT_ACADEMIC_YEAR_STATUSES, isStudentAcademicYearStatus } from '../lib/studentAcademicYearStatus.ts';
 import ExcelJS from 'exceljs';
 import { readFirstExcelSheetRecords } from '../lib/excelImport';
+
+const IS_DEVELOPMENT_BUILD = (import.meta as ImportMeta & { env: { DEV: boolean } }).env.DEV;
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
 import TeachingAssignmentsEditor from './TeachingAssignmentsEditor';
@@ -42,6 +45,7 @@ import { canonicalizeParentImportPhone, PARENT_IMPORT_HEADERS, validateParentImp
 import { canonicalizeStudentParentPhone } from '../lib/studentImport';
 import { buildTemporaryCredentialsWorkbook, mapTemporaryCredentialAccounts } from '../lib/temporaryCredentialsWorkbook';
 import { buildTeacherExportWorkbook } from '../lib/teacherAssignmentsExcel';
+import { DEFAULT_SCHOOL_TIME_ZONE, getIanaTimeZoneOptions } from '../lib/schoolTimeZone.ts';
 import type { ExamResultStatus, ExamType } from '../lib/examDecision';
 import { EXAM_MENTIONS, type ExamMention } from '../lib/examMention';
 import type { TeachingAssignmentDraft } from './TeachingAssignmentsEditor';
@@ -419,7 +423,7 @@ interface AdminViewProps {
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
-  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
+  onAddSchool: (data: { name: string; address: string; phone: string; phone2?: string | null; officialName?: string | null; abbreviation?: string | null; motto?: string | null; postalBox?: string | null; email?: string | null; city?: string | null; region?: string | null; educationDirection?: string | null; ministryName?: string | null; principalName?: string | null; principalGender?: 'M' | 'F' | null; timeZone?: string; promotionThreshold?: number; classNames?: string[]; subjectNames?: string[] }) => Promise<any>;
   onUpdateSchool?: (id: number, data: any) => Promise<any>;
   onUploadSchoolLogo?: (id: number, file: File) => Promise<any>;
   onUpdateStudent?: (id: number, data: { firstName: string; lastName: string; birthDate: string | null; schoolId?: number; classId: number; parentId: number; academicYearId?: number; teacherIds?: number[]; schoolAdminId?: number; studentStatus?: string | null }) => Promise<any>;
@@ -679,7 +683,7 @@ export default function AdminView({
   // New item forms state
   const classGroupsStorageKey = 'ecoletrack-class-groups:v2';
   const defaultSubjectGroups: any[] = [];
-  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', principalGender: '' as '' | 'M' | 'F', promotionThreshold: '10.00', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
+  const [schoolForm, setSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', principalGender: '' as '' | 'M' | 'F', timeZone: DEFAULT_SCHOOL_TIME_ZONE, promotionThreshold: '10.00', selectedClassNames: [] as string[], selectedClassGroups: [] as string[], manuallySelectedClassNames: [] as string[], manuallyDeselectedClassNames: [] as string[], subjectNames: '', selectedSubjectNames: [] as string[], selectedSubjectGroups: [] as string[], manuallySelectedSubjectNames: [] as string[], manuallyDeselectedSubjectNames: [] as string[] });
   const [groupPresets, setGroupPresets] = useState<any[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
@@ -728,7 +732,7 @@ export default function AdminView({
   const [subjectGroupForm, setSubjectGroupForm] = useState({ name: '', selectedSubjectNames: [] as string[] });
   const [editingSubjectGroupId, setEditingSubjectGroupId] = useState<string | null>(null);
   const [subjectGroupError, setSubjectGroupError] = useState<string | null>(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', principalGender: '' as '' | 'M' | 'F', promotionThreshold: '10.00', classNames: [] as string[], subjectNames: [] as string[] });
+  const [editSchoolForm, setEditSchoolForm] = useState({ name: '', address: '', phone: '', phoneDigits: '', phone2Digits: '', officialName: '', abbreviation: '', motto: '', postalBox: '', email: '', city: '', region: '', educationDirection: '', ministryName: '', principalName: '', principalGender: '' as '' | 'M' | 'F', timeZone: DEFAULT_SCHOOL_TIME_ZONE, promotionThreshold: '10.00', classNames: [] as string[], subjectNames: [] as string[] });
   const [yearForm, setYearForm] = useState({ name: '', isActive: false, schoolId: '' });
   const [termsList, setTermsList] = useState<any[]>([]);
   const [educationCycles, setEducationCycles] = useState<any[]>([]);
@@ -1813,6 +1817,7 @@ export default function AdminView({
           ministryName: String(schoolForm.ministryName || '').trim() || null,
           principalName: String(schoolForm.principalName || '').trim() || null,
           principalGender: schoolForm.principalGender || null,
+          timeZone: schoolForm.timeZone || DEFAULT_SCHOOL_TIME_ZONE,
           promotionThreshold: Number(schoolForm.promotionThreshold || 10),
           classNames: finalClassNames,
           subjectNames: finalSubjectNames,
@@ -1834,6 +1839,7 @@ export default function AdminView({
           ministryName: '',
           principalName: '',
           principalGender: '',
+          timeZone: DEFAULT_SCHOOL_TIME_ZONE,
           promotionThreshold: '10.00',
           selectedClassNames: [],
           selectedClassGroups: [],
@@ -2999,6 +3005,25 @@ export default function AdminView({
                           <option value="F">Féminin</option>
                         </select>
                       </label>
+                      {userRole === 'super_admin' && (
+                        <label className="text-xs font-semibold text-slate-600">
+                          Fuseau horaire
+                          <input
+                            type="text"
+                            list="school-time-zone-options"
+                            aria-label="Fuseau horaire"
+                            value={editSchoolForm.timeZone}
+                            onChange={(event) => setEditSchoolForm({ ...editSchoolForm, timeZone: event.target.value })}
+                            placeholder="Africa/Lome"
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800"
+                          />
+                          <datalist id="school-time-zone-options">
+                            {getIanaTimeZoneOptions(editSchoolForm.timeZone).map((timeZone) => (
+                              <option key={timeZone} value={timeZone}>{timeZone}</option>
+                            ))}
+                          </datalist>
+                        </label>
+                      )}
                       <label className="text-xs font-semibold text-slate-600">
                         Seuil de passage (/20)
                         <input type="number" min="0" max="20" step="0.01" value={editSchoolForm.promotionThreshold || '10.00'} onChange={(e) => setEditSchoolForm({ ...editSchoolForm, promotionThreshold: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-normal text-slate-800" />
@@ -3234,6 +3259,7 @@ export default function AdminView({
                           ministryName: editSchoolForm.ministryName.trim() || null,
                           principalName: editSchoolForm.principalName.trim() || null,
                           principalGender: editSchoolForm.principalGender || null,
+                          ...(userRole === 'super_admin' ? { timeZone: editSchoolForm.timeZone } : {}),
                           promotionThreshold: Number(editSchoolForm.promotionThreshold || 10),
                           classNames: editSchoolForm.classNames?.filter((name) => name.trim() !== ''),
                         };
@@ -5140,6 +5166,13 @@ export default function AdminView({
         {/* TAB 1: SCHOOLS */}
         {activeTab === 'schools' && (
           <div>
+            {userRole === 'super_admin' && IS_DEVELOPMENT_BUILD && (
+              <LocalTuitionProgressReminderTestPanel
+                schools={schoolsList}
+                students={studentsList}
+                parents={parentsList}
+              />
+            )}
             {schoolSuspensionError && (
               <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
                 {schoolSuspensionError}
@@ -5166,6 +5199,7 @@ export default function AdminView({
                       ministryName: '',
                       principalName: '',
                       principalGender: '',
+                      timeZone: DEFAULT_SCHOOL_TIME_ZONE,
                       promotionThreshold: '10.00',
                       selectedClassNames: [],
                       selectedClassGroups: [],
@@ -5244,7 +5278,7 @@ export default function AdminView({
                                 setSchoolToEdit(sc);
                                 const phoneDigits = sc.phone ? sc.phone.replace(/\D/g, '').slice(-8) : '';
                                 const phone2Digits = sc.phone2 ? sc.phone2.replace(/\D/g, '').slice(-8) : '';
-                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', principalName: sc.principalName || '', principalGender: sc.principalGender || '', promotionThreshold: String(sc.promotionThreshold ?? '10.00'), classNames: [], subjectNames: [] });
+                                setEditSchoolForm({ name: sc.name, address: sc.address || '', phone: sc.phone || '', phoneDigits, phone2Digits, officialName: sc.officialName || '', abbreviation: sc.abbreviation || '', motto: sc.motto || '', postalBox: sc.postalBox || '', email: sc.email || '', city: sc.city || '', region: sc.region || '', educationDirection: sc.educationDirection || '', ministryName: sc.ministryName || '', principalName: sc.principalName || '', principalGender: sc.principalGender || '', timeZone: sc.timeZone || DEFAULT_SCHOOL_TIME_ZONE, promotionThreshold: String(sc.promotionThreshold ?? '10.00'), classNames: [], subjectNames: [] });
                                 setEditSchoolOpen(true);
                                 setEditSchoolError(null);
                               }}
