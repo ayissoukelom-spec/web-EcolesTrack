@@ -63,7 +63,13 @@ export default function AuditView({ auditEvents, isLoading = false, onReload }: 
                         : 'Date inconnue';
                     })()}</span>
                   </div>
-                  {event.schoolId != null && <p className="text-xs text-slate-400 mt-1">École #{event.schoolId}</p>}
+                  {(event.schoolNameSnapshot
+                    || (event.schoolId ?? (event.resourceType === 'school' ? event.resourceId : null)) != null) && (
+                    <p className="text-xs text-slate-400 mt-1">
+                      {event.schoolNameSnapshot
+                        || `École #${event.schoolId ?? event.resourceId}`}
+                    </p>
+                  )}
                 </div>
               </div>
             ))

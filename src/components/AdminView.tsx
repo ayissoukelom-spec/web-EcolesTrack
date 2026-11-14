@@ -1380,7 +1380,9 @@ export default function AdminView({
     : usersList.filter((user) => !user.isDeleted);
   const latestDeactivationByUserId = new Map<number, AuditEvent>();
   auditEvents.forEach((event) => {
-    if (event.action !== 'delete' || event.resourceType !== 'user' || event.resourceId == null) return;
+    if (!['delete', 'deactivate'].includes(event.action)
+      || event.resourceType !== 'user'
+      || event.resourceId == null) return;
     const current = latestDeactivationByUserId.get(event.resourceId);
     if (!current || event.id > current.id) latestDeactivationByUserId.set(event.resourceId, event);
   });

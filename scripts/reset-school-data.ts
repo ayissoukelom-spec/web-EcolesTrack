@@ -49,33 +49,6 @@ const steps: Step[] = [
     `,
   },
   {
-    name: 'grade_history',
-    description: 'Grade history',
-    countSql: (schoolId) => sql`
-      select count(*)::int as cnt
-      from grade_history gh
-      where exists (
-        select 1
-        from grades g
-        join evaluations e on e.id = g.evaluation_id
-        join classes c on c.id = e.class_id
-        where g.id = gh.grade_id
-          and c.school_id = ${schoolId}
-      )
-    `,
-    deleteSql: (schoolId) => sql`
-      delete from grade_history gh
-      where exists (
-        select 1
-        from grades g
-        join evaluations e on e.id = g.evaluation_id
-        join classes c on c.id = e.class_id
-        where g.id = gh.grade_id
-          and c.school_id = ${schoolId}
-      )
-    `,
-  },
-  {
     name: 'grades',
     description: 'Grades',
     countSql: (schoolId) => sql`
@@ -387,6 +360,24 @@ async function executeDelete(tx: typeof db, deleteQuery: ReturnType<typeof sql>)
   return typeof result.rowCount === 'number' ? result.rowCount : 0;
 }
 
+async function assertHistoricalConstraintsRemoved(): Promise<void> {
+  const result = await db.execute(sql`
+    select conname
+    from pg_constraint
+    where contype = 'f'
+      and conrelid in (
+        to_regclass('public.audit_events'),
+        to_regclass('public.user_login_events'),
+        to_regclass('public.grade_history')
+      )
+  `);
+  if (result.rows.length > 0) {
+    throw new Error(
+      'Cannot reset data while historical journal foreign keys remain. Apply the journal-preservation SQL first.'
+    );
+  }
+}
+
 async function confirmApply(schoolId: number): Promise<void> {
   if (!stdout.isTTY || !stdin.isTTY) {
     throw new Error('Interactive terminal required for apply mode.');
@@ -408,6 +399,7 @@ async function run() {
   const mode = args.apply ? 'apply' : 'dryRun';
   console.log(`Reset school data for school_id=${args.schoolId} in ${mode} mode.`);
   console.log('This script will delete only school-specific business data and preserve global system state.');
+  console.log('Historical journals, including grade_history when present, are intentionally preserved.');
 
   const availableSteps: Step[] = [];
   const ignoredTables: string[] = [];
@@ -478,10 +470,33 @@ async function run() {
     process.exit(0);
   }
 
+  await assertHistoricalConstraintsRemoved();
   await confirmApply(args.schoolId);
 
   await db.transaction(async (tx) => {
     for (const step of allSteps) {
+      if (step.name === 'users') {
+        await tx.execute(sql`
+          insert into audit_events (
+            actor_user_id, actor_role, actor_name, action,
+            resource_type, resource_id, school_id, school_name_snapshot,
+            module, result, source, description
+          )
+          select
+            null, 'system', current_user, 'delete',
+            'user', u.id, u.school_id, s.name,
+            'user_management', 'success', 'sql',
+            concat(
+              'Permanent account deletion by reset-school-data; user_id=', u.id,
+              '; role=', u.role
+            )
+          from users u
+          left join schools s on s.id = u.school_id
+          where u.school_id = ${args.schoolId}
+            and u.role != 'super_admin'
+        `);
+      }
+
       const deleted = await executeDelete(tx, step.deleteSql(args.schoolId));
       console.log(`Deleted ${deleted} rows from ${step.name} (${step.description})`);
     }

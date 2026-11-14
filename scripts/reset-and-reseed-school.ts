@@ -9,7 +9,6 @@ import {
   classTeachers,
   classes,
   evaluations,
-  gradeHistory,
   grades,
   localAuths,
   notifications,
@@ -65,33 +64,6 @@ const resetSteps: ResetStep[] = [
             or b.class_id in (select id from classes where school_id = ${schoolId})
             or b.student_id in (select id from students where school_id = ${schoolId})
           )
-      )
-    `,
-  },
-  {
-    table: 'grade_history',
-    description: 'Grade history',
-    countSql: (schoolId) => sql`
-      select count(*)::int as cnt
-      from grade_history gh
-      where exists (
-        select 1
-        from grades g
-        join evaluations e on e.id = g.evaluation_id
-        join classes c on c.id = e.class_id
-        where g.id = gh.grade_id
-          and c.school_id = ${schoolId}
-      )
-    `,
-    deleteSql: (schoolId) => sql`
-      delete from grade_history gh
-      where exists (
-        select 1
-        from grades g
-        join evaluations e on e.id = g.evaluation_id
-        join classes c on c.id = e.class_id
-        where g.id = gh.grade_id
-          and c.school_id = ${schoolId}
       )
     `,
   },
@@ -406,6 +378,24 @@ async function executeCount(countQuery: ReturnType<typeof sql>): Promise<number>
 async function executeDelete(tx: typeof db, deleteQuery: ReturnType<typeof sql>): Promise<number> {
   const result = await tx.execute(deleteQuery);
   return typeof result.rowCount === 'number' ? result.rowCount : 0;
+}
+
+async function assertHistoricalConstraintsRemoved(): Promise<void> {
+  const result = await db.execute(sql`
+    select conname
+    from pg_constraint
+    where contype = 'f'
+      and conrelid in (
+        to_regclass('public.audit_events'),
+        to_regclass('public.user_login_events'),
+        to_regclass('public.grade_history')
+      )
+  `);
+  if (result.rows.length > 0) {
+    throw new Error(
+      'Cannot reset data while historical journal foreign keys remain. Apply the journal-preservation SQL first.'
+    );
+  }
 }
 
 async function confirmApply(schoolId: number): Promise<void> {
@@ -776,6 +766,7 @@ async function run() {
   console.log(`Target school_id: ${args.schoolId}`);
   console.log(`Mode: ${mode}`);
   console.log('This script deletes only school-scoped business data and reseeds baseline school data.');
+  console.log('Historical journals, including grade_history when present, are intentionally preserved.');
 
   const school = await getSchool(args.schoolId);
   if (!school) {
@@ -865,6 +856,7 @@ async function run() {
     }
   }
 
+  await assertHistoricalConstraintsRemoved();
   await confirmApply(args.schoolId);
 
   const phaseResults = {
@@ -875,6 +867,28 @@ async function run() {
 
   await db.transaction(async (tx) => {
     for (const step of availableSteps) {
+      if (step.table === 'users') {
+        await tx.execute(sql`
+          insert into audit_events (
+            actor_user_id, actor_role, actor_name, action,
+            resource_type, resource_id, school_id, school_name_snapshot,
+            module, result, source, description
+          )
+          select
+            null, 'system', current_user, 'delete',
+            'user', u.id, u.school_id, s.name,
+            'user_management', 'success', 'sql',
+            concat(
+              'Permanent account deletion by reset-and-reseed-school; user_id=', u.id,
+              '; role=', u.role
+            )
+          from users u
+          left join schools s on s.id = u.school_id
+          where u.school_id = ${args.schoolId}
+            and u.role != 'super_admin'
+        `);
+      }
+
       const deleted = await executeDelete(tx, step.deleteSql(args.schoolId));
       phaseResults.deleted.push({ table: step.table, rows: deleted });
       console.log(`Deleted ${deleted} rows from ${step.table}`);

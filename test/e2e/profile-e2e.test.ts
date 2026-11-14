@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomInt, randomUUID } from 'node:crypto';
 import { inArray } from 'drizzle-orm';
 import { db } from '../../src/db';
-import { auditEvents, localAuths, notifications, schools, users } from '../../src/db/schema';
+import { localAuths, notifications, schools, users } from '../../src/db/schema';
 
 let app: any;
 const testEmails: string[] = [];
@@ -19,7 +19,6 @@ afterAll(async () => {
   const testUsers = await db.select({ id: users.id }).from(users).where(inArray(users.email, testEmails));
   const testUserIds = testUsers.map((user) => user.id);
   if (testUserIds.length === 0) return;
-  await db.delete(auditEvents).where(inArray(auditEvents.actorUserId, testUserIds));
   await db.delete(localAuths).where(inArray(localAuths.userId, testUserIds));
   await db.delete(notifications).where(inArray(notifications.userId, testUserIds));
   await db.delete(users).where(inArray(users.id, testUserIds));

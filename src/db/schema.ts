@@ -168,11 +168,22 @@ export const userSchools = pgTable('user_schools', {
 
 export const userLoginEvents = pgTable('user_login_events', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').notNull(),
   role: text('role').notNull(),
-  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
+  schoolId: integer('school_id'),
   loginAt: timestamp('login_at').defaultNow().notNull(),
   clientType: text('client_type'),
+  actorNameSnapshot: text('actor_name_snapshot'),
+  actorEmailSnapshot: text('actor_email_snapshot'),
+  schoolNameSnapshot: text('school_name_snapshot'),
+  activeFunctionId: text('active_function_id'),
+  activeFunctionName: text('active_function_name'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).defaultNow(),
+  result: text('result'),
+  source: text('source'),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  correlationId: text('correlation_id'),
 }, (table) => ({
   clientTypeCheck: check(
     'user_login_events_client_type_check',
@@ -565,13 +576,13 @@ export const evaluationParticipations = pgTable('evaluation_participations', {
   evaluationStudentIdx: uniqueIndex('evaluation_participations_evaluation_student_idx').on(table.evaluationId, table.studentId),
 }));
 
-// 10. Grade history / audit trail
+// 10. Optional legacy grade history; do not create it at runtime.
 export const gradeHistory = pgTable('grade_history', {
   id: serial('id').primaryKey(),
-  gradeId: integer('grade_id').references(() => grades.id, { onDelete: 'cascade' }).notNull(),
+  gradeId: integer('grade_id').notNull(),
   oldValue: text('old_value'),
   newValue: text('new_value'),
-  changedBy: integer('changed_by').references(() => users.id, { onDelete: 'set null' }),
+  changedBy: integer('changed_by'),
   changedAt: timestamp('changed_at').defaultNow().notNull(),
 });
 
@@ -1015,14 +1026,27 @@ export const bulletinLines = pgTable('bulletin_lines', {
 // 16. Audit Events / Journal d'événements
 export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
-  actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+  actorUserId: integer('actor_user_id'),
   actorRole: text('actor_role').notNull(),
   actorEmail: text('actor_email'),
   actorName: text('actor_name'),
   action: text('action').notNull(),
   resourceType: text('resource_type').notNull(),
   resourceId: integer('resource_id'),
-  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
+  schoolId: integer('school_id'),
+  activeFunctionId: text('active_function_id'),
+  activeFunctionName: text('active_function_name'),
+  schoolNameSnapshot: text('school_name_snapshot'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).defaultNow(),
+  module: text('module'),
+  result: text('result'),
+  source: text('source'),
+  beforeValues: jsonb('before_values').$type<Record<string, unknown> | null>(),
+  afterValues: jsonb('after_values').$type<Record<string, unknown> | null>(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  correlationId: text('correlation_id'),
+  reason: text('reason'),
   description: text('description').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });

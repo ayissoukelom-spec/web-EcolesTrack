@@ -20,34 +20,48 @@ async function main() {
     }
 
     console.log('Starting deletion of teacher-related data...');
-    await db.execute(sql`BEGIN;`);
+    await db.transaction(async (tx) => {
+      const historyConstraints = await tx.execute(sql`
+        select conname
+        from pg_constraint
+        where contype = 'f'
+          and conrelid in (
+            to_regclass('public.audit_events'),
+            to_regclass('public.user_login_events'),
+            to_regclass('public.grade_history')
+          )
+      `);
+      if (historyConstraints.rows.length > 0) {
+        throw new Error('Apply the journal-preservation SQL before deleting teacher accounts or grades.');
+      }
 
-    // 1) Nullify classes principal teacher references
-    await db.execute(sql`UPDATE classes SET teacher_id = NULL WHERE teacher_id IN (SELECT id FROM teachers);`);
+      await tx.execute(sql`
+        insert into audit_events (
+          actor_user_id, actor_role, actor_name, action,
+          resource_type, resource_id, school_id, school_name_snapshot,
+          module, result, source, description
+        )
+        select
+          null, 'system', current_user, 'delete',
+          'user', u.id, u.school_id, s.name,
+          'user_management', 'success', 'sql',
+          concat('Permanent account deletion by delete_all_teachers; role=', u.role)
+        from users u
+        left join schools s on s.id = u.school_id
+        where u.role = 'teacher'
+      `);
 
-    // 2) Remove class_teachers assignments
-    await db.execute(sql`DELETE FROM class_teachers WHERE teacher_id IN (SELECT id FROM teachers);`);
-
-    // 3) Delete grades linked to evaluations owned by these teachers
-    await db.execute(sql`DELETE FROM grades WHERE evaluation_id IN (SELECT id FROM evaluations WHERE teacher_id IN (SELECT id FROM teachers));`);
-
-    // 4) Delete evaluations created by these teachers
-    await db.execute(sql`DELETE FROM evaluations WHERE teacher_id IN (SELECT id FROM teachers);`);
-
-    // 5) Delete notifications and local_auths for teacher user accounts
-    await db.execute(sql`DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
-    await db.execute(sql`DELETE FROM local_auths WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
-
-    // 6) Delete teacher profiles
-    await db.execute(sql`DELETE FROM teachers WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
-
-    // 7) Delete user accounts with role teacher
-    await db.execute(sql`DELETE FROM users WHERE role = 'teacher';`);
-
-    await db.execute(sql`COMMIT;`);
+      await tx.execute(sql`UPDATE classes SET teacher_id = NULL WHERE teacher_id IN (SELECT id FROM teachers);`);
+      await tx.execute(sql`DELETE FROM class_teachers WHERE teacher_id IN (SELECT id FROM teachers);`);
+      await tx.execute(sql`DELETE FROM grades WHERE evaluation_id IN (SELECT id FROM evaluations WHERE teacher_id IN (SELECT id FROM teachers));`);
+      await tx.execute(sql`DELETE FROM evaluations WHERE teacher_id IN (SELECT id FROM teachers);`);
+      await tx.execute(sql`DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
+      await tx.execute(sql`DELETE FROM local_auths WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
+      await tx.execute(sql`DELETE FROM teachers WHERE user_id IN (SELECT id FROM users WHERE role = 'teacher');`);
+      await tx.execute(sql`DELETE FROM users WHERE role = 'teacher';`);
+    });
     console.log('Deletion of teachers completed successfully.');
   } catch (err: any) {
-    await db.execute(sql`ROLLBACK;`);
     console.error('Error during deletion of teachers, rolled back:', err?.message || err);
     process.exit(1);
   } finally {

@@ -366,8 +366,10 @@ export interface AuditEvent {
   resourceType: string;
   resourceId?: number | null;
   schoolId?: number | null;
+  schoolNameSnapshot?: string | null;
   description: string;
   createdAt?: string;
+  occurredAt?: string | null;
 }
 
 export interface BulletinListItem {

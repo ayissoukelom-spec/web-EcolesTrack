@@ -20,26 +20,46 @@ async function main() {
     }
 
     console.log('Starting deletion of student-related data...');
-    await db.execute(sql`BEGIN;`);
+    await db.transaction(async (tx) => {
+      const historyConstraints = await tx.execute(sql`
+        select conname
+        from pg_constraint
+        where contype = 'f'
+          and conrelid in (
+            to_regclass('public.audit_events'),
+            to_regclass('public.user_login_events'),
+            to_regclass('public.grade_history')
+          )
+      `);
+      if (historyConstraints.rows.length > 0) {
+        throw new Error('Apply the journal-preservation SQL before deleting student accounts or grades.');
+      }
 
-    // 1) Delete grades and absences for students
-    await db.execute(sql`DELETE FROM grades WHERE student_id IN (SELECT id FROM students);`);
-    await db.execute(sql`DELETE FROM absences WHERE student_id IN (SELECT id FROM students);`);
+      await tx.execute(sql`
+        insert into audit_events (
+          actor_user_id, actor_role, actor_name, action,
+          resource_type, resource_id, school_id, school_name_snapshot,
+          module, result, source, description
+        )
+        select
+          null, 'system', current_user, 'delete',
+          'user', u.id, u.school_id, s.name,
+          'user_management', 'success', 'sql',
+          concat('Permanent account deletion by delete_all_students; role=', u.role)
+        from users u
+        left join schools s on s.id = u.school_id
+        where u.role = 'student'
+      `);
 
-    // 2) Delete notifications and local auth for student user accounts
-    await db.execute(sql`DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE role = 'student');`);
-    await db.execute(sql`DELETE FROM local_auths WHERE user_id IN (SELECT id FROM users WHERE role = 'student');`);
-
-    // 3) Delete student records
-    await db.execute(sql`DELETE FROM students;`);
-
-    // 4) Delete user accounts with role student
-    await db.execute(sql`DELETE FROM users WHERE role = 'student';`);
-
-    await db.execute(sql`COMMIT;`);
+      await tx.execute(sql`DELETE FROM grades WHERE student_id IN (SELECT id FROM students);`);
+      await tx.execute(sql`DELETE FROM absences WHERE student_id IN (SELECT id FROM students);`);
+      await tx.execute(sql`DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE role = 'student');`);
+      await tx.execute(sql`DELETE FROM local_auths WHERE user_id IN (SELECT id FROM users WHERE role = 'student');`);
+      await tx.execute(sql`DELETE FROM students;`);
+      await tx.execute(sql`DELETE FROM users WHERE role = 'student';`);
+    });
     console.log('Deletion of students completed successfully.');
   } catch (err: any) {
-    await db.execute(sql`ROLLBACK;`);
     console.error('Error during deletion of students, rolled back:', err?.message || err);
     process.exit(1);
   } finally {

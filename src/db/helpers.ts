@@ -10,7 +10,6 @@ import {
   students,
   evaluations,
   grades,
-  gradeHistory,
   absences,
   notifications,
   subjects,
@@ -144,33 +143,6 @@ async function insertTemplateTerms(academicYearId: number, schoolId: number | nu
     });
   }
   return true;
-}
-
-/**
- * Ensure the audit_events table exists and contains expected columns.
- */
-export async function ensureAuditEventsTableExists() {
-  try {
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS audit_events (
-      id SERIAL PRIMARY KEY,
-      actor_user_id INTEGER REFERENCES users(id),
-      actor_role TEXT NOT NULL,
-      actor_email TEXT,
-      actor_name TEXT,
-      action TEXT NOT NULL,
-      resource_type TEXT NOT NULL,
-      resource_id INTEGER,
-      school_id INTEGER REFERENCES schools(id),
-      description TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT now()
-    );`);
-
-    await db.execute(sql`ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_email TEXT;`);
-    await db.execute(sql`ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_name TEXT;`);
-  } catch (err: any) {
-    console.error('Failed to ensure audit_events table exists:', err?.message || err);
-    throw err;
-  }
 }
 
 export async function ensureParentsTableSchema() {
@@ -551,14 +523,6 @@ export async function ensureGradesTableSchema() {
     await db.execute(sql`ALTER TABLE grades ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();`);
     await db.execute(sql`ALTER TABLE grades ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now();`);
     await db.execute(sql`UPDATE grades SET updated_at = COALESCE(updated_at, created_at, now()) WHERE updated_at IS NULL;`);
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS grade_history (
-      id SERIAL PRIMARY KEY,
-      grade_id INTEGER NOT NULL REFERENCES grades(id) ON DELETE CASCADE,
-      old_value TEXT,
-      new_value TEXT,
-      changed_by INTEGER REFERENCES users(id),
-      changed_at TIMESTAMP NOT NULL DEFAULT now()
-    );`);
   } catch (err: any) {
     console.error('Failed to ensure grades table schema exists:', err?.message || err);
     throw err;
@@ -693,5 +657,636 @@ export async function ensureAbsenceTeachingAssignmentsSchema() {
   } catch (error: any) {
     console.error('Failed to ensure absence teaching assignments schema exists:', error?.message || error);
     throw error;
+  }
+}
+
+export async function verifyRestrictedRuntimeSchema() {
+  const { rows } = await db.execute(sql`
+    WITH required_tables(table_name) AS (
+      VALUES
+        ('cycles'), ('levels'), ('school_cycles'), ('cycle_period_templates'),
+        ('school_terms'), ('classes'), ('parents'), ('students'), ('users'),
+        ('schools'), ('class_successions'), ('class_progressions'),
+        ('class_exam_configurations'), ('exam_results'),
+        ('student_academic_year_statuses'), ('school_classes'),
+        ('class_homeroom_assignments'), ('user_schools'), ('token_blacklist'),
+        ('absence_declarations'), ('absences'), ('teacher_class_subjects'),
+        ('teachers'), ('academic_years'), ('subjects'),
+        ('audit_events'), ('user_login_events'), ('teacher_control_audit_events')
+    ),
+    required_columns(table_name, column_name) AS (
+      VALUES
+        ('cycles', 'id'), ('cycles', 'code'), ('cycles', 'name'),
+        ('cycles', 'is_active'), ('cycles', 'created_at'),
+        ('levels', 'id'), ('levels', 'cycle_id'), ('levels', 'code'),
+        ('levels', 'name'), ('levels', 'order_index'), ('levels', 'is_active'),
+        ('levels', 'created_at'),
+        ('school_cycles', 'id'), ('school_cycles', 'school_id'),
+        ('school_cycles', 'cycle_id'), ('school_cycles', 'is_active'),
+        ('school_cycles', 'created_at'),
+        ('cycle_period_templates', 'id'), ('cycle_period_templates', 'cycle_id'),
+        ('cycle_period_templates', 'period_type'), ('cycle_period_templates', 'name'),
+        ('cycle_period_templates', 'order_index'), ('cycle_period_templates', 'is_active'),
+        ('cycle_period_templates', 'created_at'),
+        ('school_terms', 'school_id'), ('school_terms', 'academic_year_id'),
+        ('school_terms', 'name'), ('school_terms', 'start_date'),
+        ('school_terms', 'end_date'), ('school_terms', 'order_index'),
+        ('school_terms', 'is_active'), ('school_terms', 'created_at'),
+        ('school_terms', 'cycle_id'), ('school_terms', 'template_id'),
+        ('school_terms', 'period_type'),
+        ('classes', 'id'), ('classes', 'name'), ('classes', 'school_id'),
+        ('classes', 'teacher_id'), ('classes', 'level_id'),
+        ('classes', 'progression_code'),
+        ('parents', 'student_id'), ('parents', 'school_id'),
+        ('students', 'id'), ('students', 'last_name'), ('students', 'gender'),
+        ('students', 'matricule'),
+        ('users', 'academic_year_id'), ('users', 'gender'), ('users', 'last_login_at'),
+        ('schools', 'students_creation_locked'), ('schools', 'logo_path'),
+        ('schools', 'principal_name'), ('schools', 'promotion_threshold'),
+        ('class_successions', 'school_id'), ('class_successions', 'academic_year_id'),
+        ('class_successions', 'source_class_id'), ('class_successions', 'target_class_id'),
+        ('class_progressions', 'source_code'), ('class_progressions', 'target_code'),
+        ('class_progressions', 'cycle_id'), ('class_progressions', 'is_active'),
+        ('class_exam_configurations', 'class_id'), ('class_exam_configurations', 'school_id'),
+        ('class_exam_configurations', 'academic_year_id'), ('class_exam_configurations', 'exam_type'),
+        ('class_exam_configurations', 'is_active'),
+        ('exam_results', 'student_id'), ('exam_results', 'academic_year_id'),
+        ('exam_results', 'exam_type'), ('exam_results', 'result_status'),
+        ('exam_results', 'mention'), ('exam_results', 'exam_session'),
+        ('exam_results', 'recorded_by'),
+        ('student_academic_year_statuses', 'student_id'),
+        ('student_academic_year_statuses', 'academic_year_id'),
+        ('student_academic_year_statuses', 'status'),
+        ('school_classes', 'school_id'), ('school_classes', 'class_id'),
+        ('school_classes', 'status'),
+        ('class_homeroom_assignments', 'school_id'),
+        ('class_homeroom_assignments', 'class_id'),
+        ('class_homeroom_assignments', 'teacher_id'),
+        ('user_schools', 'user_id'), ('user_schools', 'school_id'),
+        ('user_schools', 'role'), ('user_schools', 'is_active'),
+        ('user_schools', 'created_at'),
+        ('token_blacklist', 'token'), ('token_blacklist', 'token_jti'),
+        ('token_blacklist', 'user_id'), ('token_blacklist', 'blacklisted_at'),
+        ('token_blacklist', 'expires_at'),
+        ('absence_declarations', 'student_id'), ('absence_declarations', 'parent_id'),
+        ('absence_declarations', 'date'), ('absence_declarations', 'status'),
+        ('absences', 'declaration_id'), ('absences', 'teaching_assignment_id'),
+        ('teacher_class_subjects', 'teacher_id'), ('teacher_class_subjects', 'school_id'),
+        ('teacher_class_subjects', 'class_id'), ('teacher_class_subjects', 'subject_id'),
+        ('teacher_class_subjects', 'is_active'),
+        ('audit_events', 'id'), ('audit_events', 'actor_user_id'),
+        ('audit_events', 'action'), ('audit_events', 'resource_type'),
+        ('audit_events', 'resource_id'), ('audit_events', 'school_id'),
+        ('audit_events', 'active_function_id'), ('audit_events', 'active_function_name'),
+        ('audit_events', 'school_name_snapshot'), ('audit_events', 'occurred_at'),
+        ('audit_events', 'module'), ('audit_events', 'result'), ('audit_events', 'source'),
+        ('audit_events', 'before_values'), ('audit_events', 'after_values'),
+        ('audit_events', 'ip_address'), ('audit_events', 'user_agent'),
+        ('audit_events', 'correlation_id'), ('audit_events', 'reason'),
+        ('audit_events', 'description'), ('audit_events', 'created_at'),
+        ('user_login_events', 'id'), ('user_login_events', 'user_id'),
+        ('user_login_events', 'role'), ('user_login_events', 'school_id'),
+        ('user_login_events', 'login_at'), ('user_login_events', 'client_type'),
+        ('user_login_events', 'actor_name_snapshot'), ('user_login_events', 'actor_email_snapshot'),
+        ('user_login_events', 'school_name_snapshot'), ('user_login_events', 'active_function_id'),
+        ('user_login_events', 'active_function_name'), ('user_login_events', 'occurred_at'),
+        ('user_login_events', 'result'), ('user_login_events', 'source'),
+        ('user_login_events', 'ip_address'), ('user_login_events', 'user_agent'),
+        ('user_login_events', 'correlation_id'),
+        ('teacher_control_audit_events', 'id'),
+        ('teacher_control_audit_events', 'school_id'),
+        ('teacher_control_audit_events', 'school_name_snapshot'),
+        ('teacher_control_audit_events', 'actor_user_id'),
+        ('teacher_control_audit_events', 'actor_role'),
+        ('teacher_control_audit_events', 'actor_email_snapshot'),
+        ('teacher_control_audit_events', 'actor_name_snapshot'),
+        ('teacher_control_audit_events', 'action'),
+        ('teacher_control_audit_events', 'resource_type'),
+        ('teacher_control_audit_events', 'resource_id'),
+        ('teacher_control_audit_events', 'before_values'),
+        ('teacher_control_audit_events', 'after_values'),
+        ('teacher_control_audit_events', 'reason'),
+        ('teacher_control_audit_events', 'created_at')
+    ),
+    required_column_shapes(table_name, column_name, data_type, is_nullable) AS (
+      VALUES
+        ('audit_events', 'active_function_id', 'text', 'YES'),
+        ('audit_events', 'active_function_name', 'text', 'YES'),
+        ('audit_events', 'school_name_snapshot', 'text', 'YES'),
+        ('audit_events', 'occurred_at', 'timestamp with time zone', 'YES'),
+        ('audit_events', 'module', 'text', 'YES'),
+        ('audit_events', 'result', 'text', 'YES'),
+        ('audit_events', 'source', 'text', 'YES'),
+        ('audit_events', 'before_values', 'jsonb', 'YES'),
+        ('audit_events', 'after_values', 'jsonb', 'YES'),
+        ('audit_events', 'ip_address', 'text', 'YES'),
+        ('audit_events', 'user_agent', 'text', 'YES'),
+        ('audit_events', 'correlation_id', 'text', 'YES'),
+        ('audit_events', 'reason', 'text', 'YES'),
+        ('user_login_events', 'actor_name_snapshot', 'text', 'YES'),
+        ('user_login_events', 'actor_email_snapshot', 'text', 'YES'),
+        ('user_login_events', 'school_name_snapshot', 'text', 'YES'),
+        ('user_login_events', 'active_function_id', 'text', 'YES'),
+        ('user_login_events', 'active_function_name', 'text', 'YES'),
+        ('user_login_events', 'occurred_at', 'timestamp with time zone', 'YES'),
+        ('user_login_events', 'result', 'text', 'YES'),
+        ('user_login_events', 'source', 'text', 'YES'),
+        ('user_login_events', 'ip_address', 'text', 'YES'),
+        ('user_login_events', 'user_agent', 'text', 'YES'),
+        ('user_login_events', 'correlation_id', 'text', 'YES'),
+        ('teacher_control_audit_events', 'school_id', 'integer', 'NO'),
+        ('teacher_control_audit_events', 'school_name_snapshot', 'text', 'NO'),
+        ('teacher_control_audit_events', 'actor_user_id', 'integer', 'YES'),
+        ('teacher_control_audit_events', 'actor_role', 'text', 'NO'),
+        ('teacher_control_audit_events', 'actor_name_snapshot', 'text', 'NO'),
+        ('teacher_control_audit_events', 'action', 'text', 'NO'),
+        ('teacher_control_audit_events', 'resource_type', 'text', 'NO'),
+        ('teacher_control_audit_events', 'resource_id', 'integer', 'YES'),
+        ('teacher_control_audit_events', 'before_values', 'jsonb', 'YES'),
+        ('teacher_control_audit_events', 'after_values', 'jsonb', 'YES'),
+        ('teacher_control_audit_events', 'reason', 'text', 'YES'),
+        ('teacher_control_audit_events', 'created_at', 'timestamp with time zone', 'NO'),
+        ('cycles', 'code', 'text', 'NO'),
+        ('cycles', 'name', 'text', 'NO'),
+        ('cycles', 'is_active', 'boolean', 'YES'),
+        ('levels', 'cycle_id', 'integer', 'NO'),
+        ('levels', 'code', 'text', 'NO'),
+        ('levels', 'name', 'text', 'NO'),
+        ('levels', 'order_index', 'integer', 'NO'),
+        ('school_cycles', 'school_id', 'integer', 'NO'),
+        ('school_cycles', 'cycle_id', 'integer', 'NO'),
+        ('cycle_period_templates', 'cycle_id', 'integer', 'NO'),
+        ('cycle_period_templates', 'period_type', 'text', 'NO'),
+        ('cycle_period_templates', 'order_index', 'integer', 'NO'),
+        ('school_terms', 'academic_year_id', 'integer', 'NO'),
+        ('school_terms', 'name', 'text', 'NO'),
+        ('school_terms', 'start_date', 'text', 'YES'),
+        ('school_terms', 'end_date', 'text', 'YES'),
+        ('school_terms', 'order_index', 'integer', 'NO'),
+        ('school_terms', 'is_active', 'boolean', 'NO'),
+        ('school_terms', 'cycle_id', 'integer', 'YES'),
+        ('school_terms', 'template_id', 'integer', 'YES'),
+        ('school_terms', 'period_type', 'text', 'YES'),
+        ('classes', 'level_id', 'integer', 'YES'),
+        ('classes', 'progression_code', 'text', 'YES'),
+        ('users', 'academic_year_id', 'integer', 'YES'),
+        ('users', 'gender', 'text', 'YES'),
+        ('users', 'last_login_at', 'timestamp without time zone', 'YES'),
+        ('schools', 'students_creation_locked', 'boolean', 'NO'),
+        ('schools', 'logo_path', 'text', 'YES'),
+        ('schools', 'principal_name', 'text', 'YES'),
+        ('schools', 'promotion_threshold', 'numeric', 'NO'),
+        ('students', 'matricule', 'text', 'NO'),
+        ('class_successions', 'school_id', 'integer', 'NO'),
+        ('class_successions', 'academic_year_id', 'integer', 'NO'),
+        ('class_successions', 'source_class_id', 'integer', 'NO'),
+        ('class_successions', 'target_class_id', 'integer', 'NO'),
+        ('class_progressions', 'source_code', 'text', 'NO'),
+        ('class_progressions', 'target_code', 'text', 'NO'),
+        ('class_progressions', 'cycle_id', 'integer', 'YES'),
+        ('class_exam_configurations', 'class_id', 'integer', 'NO'),
+        ('class_exam_configurations', 'school_id', 'integer', 'YES'),
+        ('class_exam_configurations', 'academic_year_id', 'integer', 'NO'),
+        ('class_exam_configurations', 'exam_type', 'text', 'NO'),
+        ('exam_results', 'student_id', 'integer', 'NO'),
+        ('exam_results', 'academic_year_id', 'integer', 'NO'),
+        ('exam_results', 'exam_type', 'text', 'NO'),
+        ('student_academic_year_statuses', 'student_id', 'integer', 'NO'),
+        ('student_academic_year_statuses', 'academic_year_id', 'integer', 'NO'),
+        ('student_academic_year_statuses', 'status', 'text', 'YES'),
+        ('school_classes', 'school_id', 'integer', 'NO'),
+        ('school_classes', 'class_id', 'integer', 'NO'),
+        ('school_classes', 'status', 'text', 'NO'),
+        ('class_homeroom_assignments', 'school_id', 'integer', 'NO'),
+        ('class_homeroom_assignments', 'class_id', 'integer', 'NO'),
+        ('class_homeroom_assignments', 'teacher_id', 'integer', 'NO'),
+        ('user_schools', 'user_id', 'integer', 'NO'),
+        ('user_schools', 'school_id', 'integer', 'NO'),
+        ('user_schools', 'role', 'text', 'NO'),
+        ('token_blacklist', 'token', 'text', 'NO'),
+        ('token_blacklist', 'token_jti', 'text', 'YES'),
+        ('token_blacklist', 'user_id', 'integer', 'YES'),
+        ('token_blacklist', 'blacklisted_at', 'timestamp without time zone', 'NO'),
+        ('token_blacklist', 'expires_at', 'timestamp without time zone', 'NO'),
+        ('absence_declarations', 'student_id', 'integer', 'NO'),
+        ('absence_declarations', 'parent_id', 'integer', 'NO'),
+        ('absence_declarations', 'date', 'text', 'NO'),
+        ('absence_declarations', 'status', 'text', 'NO'),
+        ('absences', 'declaration_id', 'integer', 'YES'),
+        ('absences', 'teaching_assignment_id', 'integer', 'YES'),
+        ('teacher_class_subjects', 'teacher_id', 'integer', 'NO'),
+        ('teacher_class_subjects', 'school_id', 'integer', 'NO'),
+        ('teacher_class_subjects', 'class_id', 'integer', 'NO'),
+        ('teacher_class_subjects', 'subject_id', 'integer', 'NO'),
+        ('teacher_class_subjects', 'is_active', 'boolean', 'NO')
+    ),
+    required_defaults(table_name, column_name, expected_default) AS (
+      VALUES
+        ('audit_events', 'occurred_at', 'now()'),
+        ('user_login_events', 'occurred_at', 'now()'),
+        ('teacher_control_audit_events', 'created_at', 'now()'),
+        ('schools', 'students_creation_locked', 'false'),
+        ('schools', 'promotion_threshold', '10.00'),
+        ('school_terms', 'order_index', '1'),
+        ('school_terms', 'is_active', 'true'),
+        ('school_classes', 'status', '''pending'''),
+        ('user_schools', 'is_active', 'true'),
+        ('token_blacklist', 'blacklisted_at', 'now()'),
+        ('absence_declarations', 'status', '''RECEIVED'''),
+        ('teacher_class_subjects', 'is_active', 'true')
+    ),
+    required_append_only_triggers(table_name, trigger_name, trigger_type) AS (
+      VALUES
+        ('audit_events', 'audit_events_append_only_row', 27),
+        ('audit_events', 'audit_events_append_only_truncate', 34),
+        ('user_login_events', 'user_login_events_append_only_row', 27),
+        ('user_login_events', 'user_login_events_append_only_truncate', 34),
+        ('grade_history', 'grade_history_append_only_row', 27),
+        ('grade_history', 'grade_history_append_only_truncate', 34)
+    ),
+    required_indexes(table_name, index_name, is_unique) AS (
+      VALUES
+        ('school_classes', 'school_classes_school_id_class_id_idx', true),
+        ('class_homeroom_assignments', 'class_homeroom_assignments_school_class_idx', true),
+        ('class_homeroom_assignments', 'class_homeroom_assignments_school_teacher_idx', false),
+        ('class_exam_configurations', 'class_exam_configurations_school_context_unique', true),
+        ('class_exam_configurations', 'class_exam_configurations_global_context_unique', true),
+        ('user_schools', 'user_schools_user_id_school_id_role_idx', true),
+        ('token_blacklist', 'token_blacklist_token_jti_idx', false),
+        ('absence_declarations', 'absence_declarations_parent_date_idx', false),
+        ('absence_declarations', 'absence_declarations_student_date_status_idx', false),
+        ('absences', 'absences_declaration_id_idx', false),
+        ('teacher_class_subjects', 'teacher_class_subjects_school_teacher_active_idx', false),
+        ('absences', 'absences_teaching_assignment_id_idx', false)
+    ),
+    required_unique_indexes(table_name, index_name, key_columns, predicate) AS (
+      VALUES
+        ('school_classes', 'school_classes_school_id_class_id_idx', ARRAY['school_id', 'class_id']::text[], NULL::text),
+        ('class_homeroom_assignments', 'class_homeroom_assignments_school_class_idx', ARRAY['school_id', 'class_id']::text[], NULL::text),
+        ('class_exam_configurations', 'class_exam_configurations_school_context_unique', ARRAY['class_id', 'school_id', 'academic_year_id', 'exam_type']::text[], 'school_id IS NOT NULL'),
+        ('class_exam_configurations', 'class_exam_configurations_global_context_unique', ARRAY['class_id', 'academic_year_id', 'exam_type']::text[], 'school_id IS NULL'),
+        ('user_schools', 'user_schools_user_id_school_id_role_idx', ARRAY['user_id', 'school_id', 'role']::text[], NULL::text)
+    ),
+    required_constraints(table_name, constraint_name) AS (
+      VALUES
+        ('students', 'students_matricule_unique'),
+        ('student_academic_year_statuses', 'student_academic_year_statuses_student_year_unique'),
+        ('student_academic_year_statuses', 'student_academic_year_statuses_status_check')
+    ),
+    required_unique_constraints(table_name, constraint_name, key_columns) AS (
+      VALUES
+        ('students', 'students_matricule_unique', ARRAY['matricule']::text[]),
+        ('student_academic_year_statuses', 'student_academic_year_statuses_student_year_unique', ARRAY['student_id', 'academic_year_id']::text[])
+    ),
+    missing AS (
+      SELECT 'table public.' || expected.table_name AS item
+      FROM required_tables expected
+      LEFT JOIN information_schema.tables actual
+        ON actual.table_schema = 'public'
+       AND actual.table_name = expected.table_name
+       AND actual.table_type = 'BASE TABLE'
+      WHERE actual.table_name IS NULL
+
+      UNION ALL
+
+      SELECT 'column public.' || expected.table_name || '.' || expected.column_name
+      FROM required_columns expected
+      LEFT JOIN information_schema.columns actual
+        ON actual.table_schema = 'public'
+       AND actual.table_name = expected.table_name
+       AND actual.column_name = expected.column_name
+      WHERE actual.column_name IS NULL
+
+      UNION ALL
+
+      SELECT 'column type/nullability public.' || expected.table_name || '.' || expected.column_name
+      FROM required_column_shapes expected
+      LEFT JOIN information_schema.columns actual
+        ON actual.table_schema = 'public'
+       AND actual.table_name = expected.table_name
+       AND actual.column_name = expected.column_name
+      WHERE actual.column_name IS NULL
+         OR actual.data_type IS DISTINCT FROM expected.data_type
+         OR actual.is_nullable IS DISTINCT FROM expected.is_nullable
+
+      UNION ALL
+
+      SELECT 'column default public.' || expected.table_name || '.' || expected.column_name
+      FROM required_defaults expected
+      LEFT JOIN information_schema.columns actual
+        ON actual.table_schema = 'public'
+       AND actual.table_name = expected.table_name
+       AND actual.column_name = expected.column_name
+      WHERE replace(actual.column_default, '::text', '') IS DISTINCT FROM expected.expected_default
+
+      UNION ALL
+
+      SELECT 'function public.reject_audit_history_mutation()' AS item
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_proc protected_function
+        JOIN pg_language function_language ON function_language.oid = protected_function.prolang
+        WHERE protected_function.oid = to_regprocedure('public.reject_audit_history_mutation()')
+          AND function_language.lanname = 'plpgsql'
+          AND NOT protected_function.prosecdef
+          AND protected_function.prosrc ILIKE '%RAISE EXCEPTION%'
+          AND protected_function.prosrc ILIKE '%append-only%'
+      )
+
+      UNION ALL
+
+      SELECT 'append-only trigger public.' || expected.table_name || '.' || expected.trigger_name
+      FROM required_append_only_triggers expected
+      WHERE (expected.table_name <> 'grade_history'
+             OR to_regclass('public.grade_history') IS NOT NULL)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM pg_trigger trigger_object
+          WHERE trigger_object.tgrelid = to_regclass('public.' || expected.table_name)
+            AND trigger_object.tgname = expected.trigger_name
+            AND trigger_object.tgtype = expected.trigger_type
+            AND trigger_object.tgenabled = 'A'
+            AND trigger_object.tgfoid = to_regprocedure('public.reject_audit_history_mutation()')
+            AND NOT trigger_object.tgisinternal
+        )
+
+      UNION ALL
+
+      SELECT 'Teacher Control trigger public.' || expected.trigger_name
+      FROM (VALUES
+        ('teacher_control_audit_events_append_only', 27),
+        ('teacher_control_audit_events_no_truncate', 34)
+      ) AS expected(trigger_name, trigger_type)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger trigger_object
+        WHERE trigger_object.tgrelid = to_regclass('public.teacher_control_audit_events')
+          AND trigger_object.tgname = expected.trigger_name
+          AND trigger_object.tgtype = expected.trigger_type
+          AND trigger_object.tgenabled = 'A'
+          AND trigger_object.tgfoid = to_regprocedure('public.prevent_teacher_control_history_mutation()')
+          AND NOT trigger_object.tgisinternal
+      )
+
+      UNION ALL
+
+      SELECT 'function public.prevent_teacher_control_history_mutation()'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_proc protected_function
+        JOIN pg_language function_language ON function_language.oid = protected_function.prolang
+        WHERE protected_function.oid = to_regprocedure('public.prevent_teacher_control_history_mutation()')
+          AND function_language.lanname = 'plpgsql'
+          AND NOT protected_function.prosecdef
+          AND protected_function.prosrc ILIKE '%RAISE EXCEPTION%'
+          AND protected_function.prosrc ILIKE '%append-only%'
+      )
+
+      UNION ALL
+
+      SELECT 'targeted destructive journal foreign keys'
+      WHERE EXISTS (
+        SELECT 1
+        FROM pg_constraint constraint_object
+        JOIN pg_class child ON child.oid = constraint_object.conrelid
+        JOIN pg_namespace child_schema ON child_schema.oid = child.relnamespace
+        JOIN pg_class parent ON parent.oid = constraint_object.confrelid
+        JOIN pg_namespace parent_schema ON parent_schema.oid = parent.relnamespace
+        JOIN pg_attribute child_column
+          ON child_column.attrelid = constraint_object.conrelid
+         AND child_column.attnum = constraint_object.conkey[1]
+        JOIN pg_attribute parent_column
+          ON parent_column.attrelid = constraint_object.confrelid
+         AND parent_column.attnum = constraint_object.confkey[1]
+        WHERE constraint_object.contype = 'f'
+          AND array_length(constraint_object.conkey, 1) = 1
+          AND array_length(constraint_object.confkey, 1) = 1
+          AND child_schema.nspname = 'public'
+          AND parent_schema.nspname = 'public'
+          AND (
+            (child.relname = 'audit_events' AND child_column.attname = 'actor_user_id'
+              AND parent.relname = 'users' AND parent_column.attname = 'id')
+            OR (child.relname = 'audit_events' AND child_column.attname = 'school_id'
+              AND parent.relname = 'schools' AND parent_column.attname = 'id')
+            OR (child.relname = 'user_login_events' AND child_column.attname = 'user_id'
+              AND parent.relname = 'users' AND parent_column.attname = 'id')
+            OR (child.relname = 'user_login_events' AND child_column.attname = 'school_id'
+              AND parent.relname = 'schools' AND parent_column.attname = 'id')
+            OR (child.relname = 'grade_history' AND child_column.attname = 'grade_id'
+              AND parent.relname = 'grades' AND parent_column.attname = 'id')
+            OR (child.relname = 'grade_history' AND child_column.attname = 'changed_by'
+              AND parent.relname = 'users' AND parent_column.attname = 'id')
+          )
+      )
+
+      UNION ALL
+
+      SELECT 'runtime role must not have CREATE on public'
+      WHERE has_schema_privilege(current_user, 'public', 'CREATE')
+
+      UNION ALL
+
+      SELECT 'runtime role lacks USAGE on public'
+      WHERE NOT has_schema_privilege(current_user, 'public', 'USAGE')
+
+      UNION ALL
+
+      SELECT 'runtime role has administrative attributes'
+      WHERE EXISTS (
+        SELECT 1
+        FROM pg_roles elevated_role
+        WHERE (elevated_role.rolsuper OR elevated_role.rolcreatedb OR elevated_role.rolcreaterole)
+          AND pg_has_role(current_user, elevated_role.oid, 'MEMBER')
+      )
+
+      UNION ALL
+
+      SELECT 'runtime role owns or inherits ownership of public objects'
+      WHERE EXISTS (
+        SELECT 1
+        FROM pg_class owned_object
+        JOIN pg_namespace object_schema ON object_schema.oid = owned_object.relnamespace
+        WHERE object_schema.nspname = 'public'
+          AND owned_object.relkind IN ('r', 'p', 'S', 'v', 'm')
+          AND pg_has_role(current_user, owned_object.relowner, 'MEMBER')
+      )
+
+      UNION ALL
+
+      SELECT 'runtime role can mutate append-only journal public.' || expected.table_name
+      FROM (VALUES
+        ('audit_events'),
+        ('user_login_events'),
+        ('teacher_control_audit_events'),
+        ('grade_history')
+      ) AS expected(table_name)
+      WHERE (expected.table_name <> 'grade_history'
+             OR to_regclass('public.grade_history') IS NOT NULL)
+        AND (
+          has_table_privilege(current_user, 'public.' || expected.table_name, 'UPDATE')
+          OR has_any_column_privilege(current_user, 'public.' || expected.table_name, 'UPDATE')
+          OR has_table_privilege(current_user, 'public.' || expected.table_name, 'DELETE')
+          OR has_table_privilege(current_user, 'public.' || expected.table_name, 'TRUNCATE')
+        )
+
+      UNION ALL
+
+      SELECT 'index public.' || expected.index_name
+      FROM required_indexes expected
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class index_object
+        JOIN pg_namespace index_schema ON index_schema.oid = index_object.relnamespace
+        JOIN pg_index index_definition ON index_definition.indexrelid = index_object.oid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE index_schema.nspname = 'public'
+          AND index_object.relname = expected.index_name
+          AND index_object.relkind = 'i'
+          AND table_schema.nspname = 'public'
+          AND indexed_table.relname = expected.table_name
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indisunique = expected.is_unique
+      )
+
+      UNION ALL
+
+      SELECT 'constraint public.' || expected.table_name || '.' || expected.constraint_name
+      FROM required_constraints expected
+      LEFT JOIN pg_constraint actual
+        ON actual.conrelid = to_regclass('public.' || expected.table_name)
+       AND actual.conname = expected.constraint_name
+      WHERE actual.oid IS NULL
+
+      UNION ALL
+
+      SELECT 'unique constraint definition public.' || expected.table_name || '.' || expected.constraint_name
+      FROM required_unique_constraints expected
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint constraint_object
+        WHERE constraint_object.conrelid = to_regclass('public.' || expected.table_name)
+          AND constraint_object.conname = expected.constraint_name
+          AND constraint_object.contype = 'u'
+          AND constraint_object.convalidated
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(constraint_object.conkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = constraint_object.conrelid
+             AND attribute.attnum = key_column.attnum
+            ORDER BY key_column.ordinal
+          ) = expected.key_columns
+      )
+
+      UNION ALL
+
+      SELECT 'unique index definition public.' || expected.index_name
+      FROM required_unique_indexes expected
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class index_object
+        JOIN pg_namespace index_schema ON index_schema.oid = index_object.relnamespace
+        JOIN pg_index index_definition ON index_definition.indexrelid = index_object.oid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        WHERE index_schema.nspname = 'public'
+          AND index_object.relname = expected.index_name
+          AND indexed_table.relnamespace = index_schema.oid
+          AND indexed_table.relname = expected.table_name
+          AND index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = expected.key_columns
+          AND (
+            (expected.predicate IS NULL AND index_definition.indpred IS NULL)
+            OR (
+              expected.predicate IS NOT NULL
+              AND btrim(regexp_replace(pg_get_expr(index_definition.indpred, index_definition.indrelid), '[[:space:]]+', ' ', 'g'), '()')
+                = expected.predicate
+            )
+          )
+      )
+
+      UNION ALL
+
+      SELECT 'sequence public.student_matricule_seq'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class sequence_object
+        JOIN pg_namespace sequence_schema ON sequence_schema.oid = sequence_object.relnamespace
+        WHERE sequence_schema.nspname = 'public'
+          AND sequence_object.relname = 'student_matricule_seq'
+          AND sequence_object.relkind = 'S'
+      )
+
+      UNION ALL
+
+      SELECT 'function public.assign_student_matricule()'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_proc assignment_function
+        JOIN pg_language function_language ON function_language.oid = assignment_function.prolang
+        WHERE assignment_function.oid = to_regprocedure('public.assign_student_matricule()')
+          AND function_language.lanname = 'plpgsql'
+          AND NOT assignment_function.prosecdef
+          AND assignment_function.prosrc ILIKE '%nextval%'
+          AND assignment_function.prosrc ILIKE '%matricule%'
+      )
+
+      UNION ALL
+
+      SELECT 'trigger public.students.assign_student_matricule_before_insert'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger trigger_object
+        WHERE trigger_object.tgrelid = to_regclass('public.students')
+          AND trigger_object.tgname = 'assign_student_matricule_before_insert'
+          AND trigger_object.tgfoid = to_regprocedure('public.assign_student_matricule()')
+          AND trigger_object.tgtype = 7
+          AND trigger_object.tgenabled IN ('O', 'A')
+          AND NOT trigger_object.tgisinternal
+      )
+
+      UNION ALL
+
+      SELECT 'NOT NULL public.students.matricule'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'students'
+          AND column_name = 'matricule'
+          AND is_nullable = 'NO'
+      )
+
+      UNION ALL
+
+      SELECT 'NOT NULL public.user_schools.role'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'user_schools'
+          AND column_name = 'role'
+          AND is_nullable = 'NO'
+      )
+    )
+    SELECT item FROM missing ORDER BY item
+  `);
+
+  if (rows.length > 0) {
+    const missingItems = rows.map((row: { item: string }) => row.item);
+    throw new Error(
+      `Restricted database runtime cannot start; required schema is missing or incompatible: ${missingItems.join(', ')}`,
+    );
   }
 }

@@ -21,11 +21,6 @@ const steps: TableStep[] = [
     deleteSql: 'delete from bulletin_lines',
   },
   {
-    table: 'grade_history',
-    description: 'Grade history entries',
-    deleteSql: 'delete from grade_history',
-  },
-  {
     table: 'grades',
     description: 'Grades',
     deleteSql: 'delete from grades',
@@ -151,6 +146,24 @@ async function countRows(table: string, deleteSql?: string): Promise<number> {
   return Number(result.rows[0]?.cnt ?? 0);
 }
 
+async function assertHistoricalConstraintsRemoved(): Promise<void> {
+  const result = await db.execute(sql`
+    select conname
+    from pg_constraint
+    where contype = 'f'
+      and conrelid in (
+        to_regclass('public.audit_events'),
+        to_regclass('public.user_login_events'),
+        to_regclass('public.grade_history')
+      )
+  `);
+  if (result.rows.length > 0) {
+    throw new Error(
+      'Cannot reset data while historical journal foreign keys remain. Apply the journal-preservation SQL first.'
+    );
+  }
+}
+
 async function confirmApply(): Promise<void> {
   if (!stdout.isTTY || !stdin.isTTY) {
     throw new Error('Apply mode requires an interactive terminal to confirm the destructive operation.');
@@ -174,6 +187,7 @@ async function run() {
   const mode = args.apply ? 'apply' : 'dryRun';
   console.log(`Running clear-all-data in ${mode} mode.`);
   console.log('This script will delete business data while preserving schema and system tables.');
+  console.log('Historical journals, including grade_history when present, are intentionally preserved.');
 
   const existingSteps: TableStep[] = [];
   for (const step of steps) {
@@ -205,10 +219,32 @@ async function run() {
     process.exit(0);
   }
 
+  await assertHistoricalConstraintsRemoved();
   await confirmApply();
 
   await db.transaction(async (tx) => {
     for (const step of existingSteps) {
+      if (step.table === 'users') {
+        await tx.execute(sql`
+          insert into audit_events (
+            actor_user_id, actor_role, actor_name, action,
+            resource_type, resource_id, school_id, school_name_snapshot,
+            module, result, source, description
+          )
+          select
+            null, 'system', current_user, 'delete',
+            'user', u.id, u.school_id, s.name,
+            'user_management', 'success', 'sql',
+            concat(
+              'Permanent account deletion by clear-all-data; user_id=', u.id,
+              '; role=', u.role
+            )
+          from users u
+          left join schools s on s.id = u.school_id
+          where u.role != 'super_admin'
+        `);
+      }
+
       const result = await tx.execute(sql.raw(`${step.deleteSql}`));
       const rowCount = typeof result.rowCount === 'number' ? result.rowCount : 'unknown';
       console.log(`Deleted ${rowCount} rows from ${step.table}`);

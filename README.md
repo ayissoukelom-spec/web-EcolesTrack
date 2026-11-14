@@ -19,6 +19,12 @@ View your app in AI Studio: https://ai.studio/apps/8a2efc86-53ff-4af9-a932-34f01
 3. Run the app:
    `npm run dev`
 
+## Restricted database runtime
+
+Set `ECOLETRACK_RESTRICTED_DB_RUNTIME=true` on the Web and mobile API processes only after an administrator has applied all required schema changes, completed the existing data backfills, and granted the application role its runtime privileges. In this mode, startup checks the required schema using read-only catalog queries and fails with a list of missing structures; it does not create or alter database objects. When the flag is unset or `false`, the existing startup initialization behavior is retained.
+
+Keep `SQL_HOST`, `SQL_PORT`, `SQL_USER`, `SQL_PASSWORD`, and `SQL_DB_NAME` configured per process. Use the application role for the running servers and supply administrative credentials only to separate migration or maintenance processes; do not copy production credentials into local `.env` files.
+
 ## Local tuition reminder test
 
 The Super Admin school page exposes the end-of-month reminder test only when the Web and mobile backend are running in development against the same loopback-hosted PostgreSQL database. Configure `ECOLETRACK_LOCAL_TUITION_REMINDER_TEST_ENABLED=true` in both processes and set `ECOLETRACK_LOCAL_TUITION_REMINDER_TEST_DATABASE_NAME` to the exact local `SQL_DB_NAME` in both environments; names containing `prod` or `stag` are rejected, and each server verifies the database name and loopback server address at runtime. PostgreSQL addresses with full-length host masks (`/32` for IPv4 and `/128` for IPv6) are accepted. Set `SQL_HOST` to `127.0.0.1`, `localhost` or `::1`, and `API_URL` to an HTTP loopback URL for the local mobile backend. The Web and mobile backend must use the same local-only `INTERNAL_SECRET`. Without `ECOLETRACK_LOCAL_TUITION_REMINDER_TEST_TARGETS`, the panel remains visible but sending is disabled.

@@ -28,7 +28,7 @@ import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
 import { db, withNotificationRecipientAccountLock } from './src/db/index.ts';
-import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema } from './src/db/helpers.ts';
+import { seedDatabaseIfEmpty, ensureEducationStructureSchema, ensureSchoolClassesTableExists, ensureClassHomeroomAssignmentsTableExists, ensureUsersTableSchema, ensureUserSchoolsTableExists, ensureSchoolsTableSchema, ensureTokenBlacklistTableExists, ensureStudentAcademicYearStatusesTableExists, ensureStudentMatriculesSchema, ensureAbsenceDeclarationsSchema, ensureAbsenceTeachingAssignmentsSchema, verifyRestrictedRuntimeSchema } from './src/db/helpers.ts';
 import { requireAuth, AuthRequest, assertSimulatedAuthConfiguration } from './src/middleware/auth.ts';
 import { buildContentSecurityPolicy } from './src/lib/securityPolicy.ts';
 import { shouldInitializeDatabaseAtStartup } from './src/lib/startupDatabasePolicy.ts';
@@ -43,6 +43,8 @@ import {
   hasAllExpectedGrades,
 } from './src/lib/groupedEvaluationVisibility.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
+
+const isRestrictedDatabaseRuntime = () => process.env.ECOLETRACK_RESTRICTED_DB_RUNTIME === 'true';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
 import { isEmailRequiredForRole, isUsersEmailUniqueViolation, normalizeEmail, normalizedEmailConflictCondition } from './src/lib/emailUniqueness.ts';
 import { canGrantUserFunction, isLocalSchoolRole } from './src/lib/localSchoolRoles.ts';
@@ -1812,7 +1814,15 @@ export async function createApp() {
     await fsPromises.mkdir(schoolLogoUploadStorageDir, { recursive: true });
   }
 
-  if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
+  if (isRestrictedDatabaseRuntime()) {
+    try {
+      await verifyRestrictedRuntimeSchema();
+      console.info('Restricted database runtime schema verified in read-only mode.');
+    } catch (error: any) {
+      console.error('Restricted database runtime schema verification failed:', error?.message || error);
+      throw error;
+    }
+  } else if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'production') {
     try {
       await ensureTokenBlacklistTableExists();
     } catch (err: any) {
@@ -6466,11 +6476,28 @@ export async function createApp() {
 
       await db.transaction(async (tx) => {
         await tx.execute(sql`LOCK TABLE user_schools IN SHARE ROW EXCLUSIVE MODE`);
-        const [school] = await tx.select({ id: schools.id })
+        const [school] = await tx.select({ id: schools.id, name: schools.name })
           .from(schools)
           .where(eq(schools.id, id))
           .for('update');
         if (!school) throw new SchoolDeletionNotFoundError('École introuvable.');
+
+        const historyConstraints = await tx.execute(sql`
+          select conname
+          from pg_constraint
+          where contype = 'f'
+            and conrelid in (
+              to_regclass('public.audit_events'),
+              to_regclass('public.user_login_events'),
+              to_regclass('public.grade_history')
+            )
+        `);
+        if (historyConstraints.rows.length > 0) {
+          throw new SchoolDeletionConflictError(
+            'AUDIT_HISTORY_SCHEMA_REQUIRED',
+            'La suppression est suspendue jusqu’à la suppression des clés étrangères des journaux historiques.',
+          );
+        }
 
         const [tuitionProgressHistory] = await tx.select({
           id: tuitionProgressReminderControls.id,
@@ -7233,9 +7260,6 @@ export async function createApp() {
           await tx.update(classes).set({ teacherId: null }).where(sql`${classes.id} IN ${classIds}`);
         }
 
-        console.log('Step 12/12: delete audit events linked directly to school');
-        await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
-
         console.log('Deleting remaining school records');
 
         if (classIds.length > 0) {
@@ -7250,8 +7274,22 @@ export async function createApp() {
         await tx.delete(students).where(eq(students.schoolId, id));
         await tx.delete(classes).where(eq(classes.schoolId, id));
         await tx.delete(academicYears).where(eq(academicYears.schoolId, id));
-        await tx.delete(auditEvents).where(eq(auditEvents.schoolId, id));
 
+        await tx.insert(auditEvents).values({
+          actorUserId: actor.id,
+          actorRole: actor.role,
+          actorEmail: actor.email ?? null,
+          actorName: actor.name ?? null,
+          action: 'delete',
+          resourceType: 'school',
+          resourceId: school.id,
+          schoolId: school.id,
+          schoolNameSnapshot: school.name,
+          module: 'school_management',
+          result: 'success',
+          source: 'web',
+          description: `Établissement « ${school.name} » (ID ${school.id}) supprimé par ${actor.email || actor.name}.`,
+        });
         await tx.delete(schools).where(eq(schools.id, id));
       }, { isolationLevel: 'serializable' });
 
@@ -16812,7 +16850,9 @@ export async function startServer() {
   const PORT = 3000;
   const app = await createApp();
 
-  if (shouldInitializeDatabaseAtStartup(process.env.NODE_ENV, process.env.ECOLETRACK_SKIP_LOCAL_DB_INIT)) {
+  if (isRestrictedDatabaseRuntime()) {
+    console.info('Restricted database runtime enabled; schema was verified without DDL.');
+  } else if (shouldInitializeDatabaseAtStartup(process.env.NODE_ENV, process.env.ECOLETRACK_SKIP_LOCAL_DB_INIT)) {
     console.log('Verifying if database needs seeding...');
     try {
       await ensureEducationStructureSchema();
