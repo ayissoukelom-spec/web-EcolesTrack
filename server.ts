@@ -1567,6 +1567,60 @@ function signInternalPayload(payload: any): { signature: string; timestamp: stri
   return { signature, timestamp };
 }
 
+async function relayParentDataInvalidation(
+  domain: 'attendance' | 'absence-declarations' | 'finance' | 'academics' | 'bulletins' | 'notifications',
+  recipients: Array<{ parentId: string; entityIds?: string[] }>,
+) {
+  const validRecipients = recipients.filter((recipient) => (
+    /^\d+$/.test(recipient.parentId)
+    && (!recipient.entityIds || recipient.entityIds.every((id) => /^\d+$/.test(id)))
+  ));
+  if (validRecipients.length === 0) return;
+
+  try {
+    const mobileApiBaseUrl = resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV);
+    const eventId = `${domain}-${crypto.randomUUID()}`;
+    for (let offset = 0; offset < validRecipients.length; offset += 200) {
+      const payload = {
+        domain,
+        eventId,
+        recipients: validRecipients.slice(offset, offset + 200),
+      };
+      try {
+        const { signature, timestamp } = signInternalPayload(payload);
+        const response = await fetch(`${mobileApiBaseUrl}/api/internal/data-invalidation`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Internal-Signature': signature,
+            'X-Internal-Timestamp': timestamp,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          console.error('Parent data invalidation relay failed', {
+            domain,
+            status: response.status,
+            parentCount: payload.recipients.length,
+          });
+        }
+      } catch (error) {
+        console.error('Parent data invalidation relay failed', {
+          domain,
+          parentCount: payload.recipients.length,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Parent data invalidation relay could not be initialized', {
+      domain,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
+}
+
 function sendInternalEvaluationNotification(payload: object) {
   return sendEvaluationNotification(
     payload,
@@ -10766,15 +10820,29 @@ export async function createApp() {
   const todayIsoDate = () => new Date().toISOString().slice(0, 10);
 
   const notifyAbsenceDeclarationParent = async (parentUserId: number, title: string, message: string, metadata: Record<string, unknown>) => {
-    await db.insert(notifications).values({ userId: parentUserId, title, body: message, type: 'absence' });
+    const invalidationEventId = `invalidate-absence-declarations-${String(metadata.declarationId)}-${String(metadata.status || 'received')}-${crypto.randomUUID()}`;
+    await db.insert(notifications).values({
+      userId: parentUserId,
+      title,
+      body: message,
+      type: 'absence',
+      dedupeKey: invalidationEventId,
+    });
     try {
       const payload = {
         parentId: parentUserId,
         title,
         message,
         category: 'absence',
-        metadata: { target: 'absence', ...metadata },
-        dedupeKey: `absence-declaration-${String(metadata.declarationId)}-${String(metadata.status || 'received')}-${Date.now()}`,
+        metadata: {
+          target: 'absence',
+          ...metadata,
+          dataInvalidation: {
+            domain: 'absence-declarations',
+            eventId: invalidationEventId,
+          },
+        },
+        dedupeKey: invalidationEventId,
       };
       const { signature, timestamp } = signInternalPayload(payload);
       await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`, {
@@ -11029,6 +11097,12 @@ export async function createApp() {
           studentId: result.body.studentId,
           status: 'RECEIVED',
         });
+        if (result.body.date <= todayIsoDate()) {
+          await relayParentDataInvalidation('attendance', [{
+            parentId: String(actor.id),
+            entityIds: [String(result.body.studentId)],
+          }]);
+        }
       }
       return res.status(result.status).json(result.body);
     } catch (error: any) {
@@ -11044,6 +11118,9 @@ export async function createApp() {
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may change their declarations' });
       if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
       const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'update', { ...req.body, id: req.params.id });
+      if (result.status === 200) {
+        await relayParentDataInvalidation('absence-declarations', [{ parentId: String(actor.id) }]);
+      }
       return res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('Failed to update absence declaration:', error?.message || error);
@@ -11058,6 +11135,9 @@ export async function createApp() {
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may cancel their declarations' });
       if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
       const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'cancel', { id: req.params.id });
+      if (result.status === 200) {
+        await relayParentDataInvalidation('absence-declarations', [{ parentId: String(actor.id) }]);
+      }
       return res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('Failed to cancel absence declaration:', error?.message || error);
@@ -11168,6 +11248,14 @@ export async function createApp() {
           studentId: result.body.studentId,
           status: 'RECEIVED',
         });
+        if (result.body.date <= todayIsoDate()) {
+          await relayParentDataInvalidation('attendance', [{
+            parentId: String(parentUserId),
+            entityIds: [String(result.body.studentId)],
+          }]);
+        }
+      } else if (['update', 'cancel'].includes(action) && result.status === 200) {
+        await relayParentDataInvalidation('absence-declarations', [{ parentId: String(parentUserId) }]);
       }
       return res.status(result.status).json(result.body);
     } catch (error: any) {
@@ -11649,6 +11737,7 @@ export async function createApp() {
 
       if (parentRecord?.userId) {
         const notificationTitle = `Retard enregistré pour ${student.firstName}`;
+        const invalidationEventId = `invalidate-attendance-late-${inserted.id}-student-${inserted.studentId}`;
         const periodName = inserted.period === 'morning'
           ? 'Matin'
           : inserted.period === 'afternoon'
@@ -11671,6 +11760,7 @@ export async function createApp() {
             title: notificationTitle,
             body: notificationBody,
             type: 'absence',
+            dedupeKey: invalidationEventId,
           });
         } catch (notificationInsertError) {
           console.error('Failed to insert late-arrival notification:', notificationInsertError);
@@ -11683,7 +11773,7 @@ export async function createApp() {
             message: notificationBody,
             category: 'absence',
             metadata: {
-              target: 'late-arrival',
+              target: 'absence',
               lateArrivalId: inserted.id,
               studentId: inserted.studentId,
               classId: inserted.classId,
@@ -11692,6 +11782,11 @@ export async function createApp() {
               lateMinutes: inserted.lateMinutes,
               subjectId: parsedSubjectId ?? null,
               subjectName: subjectName ?? null,
+              dataInvalidation: {
+                domain: 'attendance',
+                eventId: invalidationEventId,
+                entityIds: [String(inserted.studentId)],
+              },
             },
             dedupeKey: `late-arrival-${inserted.id}`,
           };
@@ -11753,6 +11848,10 @@ export async function createApp() {
         return res.status(400).json({ error: 'Expected start time and arrival time must use HH:mm format' });
       }
 
+      const [parentRecord] = await db.select({ userId: parents.userId })
+        .from(students)
+        .innerJoin(parents, eq(parents.id, students.parentId))
+        .where(eq(students.id, existing.studentId));
       const [updated] = await db.update(lateArrivals).set({
         expectedStartTime: nextExpectedStartTime,
         arrivalTime: nextArrivalTime,
@@ -11761,6 +11860,12 @@ export async function createApp() {
         updatedAt: new Date(),
       }).where(eq(lateArrivals.id, id)).returning();
 
+      if (updated && parentRecord?.userId) {
+        await relayParentDataInvalidation('attendance', [{
+          parentId: String(parentRecord.userId),
+          entityIds: [String(existing.studentId)],
+        }]);
+      }
       return res.json(updated);
     } catch (error: any) {
       console.error('❌ PUT /api/late-arrivals/:id ERROR:', error);
@@ -11798,7 +11903,17 @@ export async function createApp() {
         return res.status(409).json({ error: 'A late arrival with a justification history cannot be deleted' });
       }
 
+      const [parentRecord] = await db.select({ userId: parents.userId })
+        .from(students)
+        .innerJoin(parents, eq(parents.id, students.parentId))
+        .where(eq(students.id, existing.studentId));
       await db.delete(lateArrivals).where(eq(lateArrivals.id, id));
+      if (parentRecord?.userId) {
+        await relayParentDataInvalidation('attendance', [{
+          parentId: String(parentRecord.userId),
+          entityIds: [String(existing.studentId)],
+        }]);
+      }
       return res.status(204).send();
     } catch (error: any) {
       console.error('❌ DELETE /api/late-arrivals/:id ERROR:', error);
@@ -12695,6 +12810,7 @@ export async function createApp() {
         const messageBody = matchedDeclaration
           ? `L’absence constatée pour ${student.firstName} le ${formattedDate}${timeRange}${subjectText} est rattachée à une déclaration parentale.`
           : `Une absence a été signalée pour ${student.firstName} le ${formattedDate}${timeRange}${subjectText}${periodFallback}. Veuillez fournir un justificatif.`;
+        const invalidationEventId = `invalidate-attendance-absence-${result[0].id}-student-${studentId}`;
 
         // Insert the notification in DB using the same human-readable message
         await db.insert(notifications).values({
@@ -12702,6 +12818,7 @@ export async function createApp() {
           title: `Nouvelle absence pour ${student.firstName}`,
           body: messageBody,
           type: 'absence',
+          dedupeKey: invalidationEventId,
         });
 
         const notificationUrl = `${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/absence-notification`;
@@ -12721,6 +12838,11 @@ export async function createApp() {
             endTime: normalizedEndTime,
             subjectId: normalizedSubjectIds.length > 0 ? normalizedSubjectIds[0] : undefined,
             subjectName: subjectName,
+            dataInvalidation: {
+              domain: 'attendance',
+              eventId: invalidationEventId,
+              entityIds: [String(studentId)],
+            },
           },
           dedupeKey: `absence-${result[0].id}`,
         };
@@ -12846,6 +12968,10 @@ export async function createApp() {
         return res.status(404).json({ error: 'Absence not found' });
       }
 
+      await relayParentDataInvalidation('attendance', [{
+        parentId: String(actor.id),
+        entityIds: [String(absenceStudent.id)],
+      }]);
       res.json(updated[0]);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to validate absence justification' });
@@ -12939,12 +13065,14 @@ export async function createApp() {
         : [null];
 
       if (parentRecord?.userId) {
+        const invalidationEventId = `invalidate-attendance-absence-${reviewedAbsence.id}-${status}-${crypto.randomUUID()}-student-${student.id}`;
         try {
           await db.insert(notifications).values({
             userId: parentRecord.userId,
             title: reviewTitle,
             body: reviewMessage,
             type: 'absence',
+            dedupeKey: invalidationEventId,
           });
         } catch (notificationInsertError) {
           console.error('Failed to insert absence justification review notification:', notificationInsertError);
@@ -12967,6 +13095,11 @@ export async function createApp() {
               classId: absence.classId,
               status,
               rejectionReason: status === 'REJECTED' ? rejectionReason : null,
+              dataInvalidation: {
+                domain: 'attendance',
+                eventId: invalidationEventId,
+                entityIds: [String(student.id)],
+              },
             },
             dedupeKey: `absence-justification-review-${reviewedAbsence.id}-${status}-${dedupeReason}`,
           };
@@ -13112,12 +13245,14 @@ export async function createApp() {
       if (result.parentUserId) {
         const notificationTitle = "Justification d'absence validée après réexamen";
         const notificationMessage = `La justification de l'absence de ${result.student.firstName || "l'élève"} a été validée par l'établissement après vérification des justificatifs.`;
+        const invalidationEventId = `invalidate-attendance-absence-${result.absence.id}-reexamined-${crypto.randomUUID()}-student-${result.student.id}`;
         try {
           await db.insert(notifications).values({
             userId: result.parentUserId,
             title: notificationTitle,
             body: notificationMessage,
             type: 'absence',
+            dedupeKey: invalidationEventId,
           });
         } catch (notificationInsertError) {
           console.error('Failed to insert absence justification reexamination notification:', notificationInsertError);
@@ -13136,6 +13271,11 @@ export async function createApp() {
               classId: result.absence.classId,
               status: 'APPROVED',
               reexamined: true,
+              dataInvalidation: {
+                domain: 'attendance',
+                eventId: invalidationEventId,
+                entityIds: [String(result.student.id)],
+              },
             },
             dedupeKey: `absence-justification-reexamination-${result.absence.id}`,
           };
@@ -13239,6 +13379,10 @@ export async function createApp() {
         }
 
         filesCommitted = true;
+        await relayParentDataInvalidation('attendance', [{
+          parentId: String(parentId),
+          entityIds: [String(context.student.id)],
+        }]);
         return res.status(201).json({
           ...result.justification,
           files: persistedFiles.map((file, index) => ({
@@ -13432,6 +13576,10 @@ export async function createApp() {
           parent.schoolId ?? null,
           `Uploaded justification file ${uploadedFile.originalname} for absence ${absenceId}`,
         );
+        await relayParentDataInvalidation('attendance', [{
+          parentId: String(parentId),
+          entityIds: [String(absenceStudent.id)],
+        }]);
 
         return res.status(201).json({
           ...updated[0],
@@ -13560,6 +13708,12 @@ export async function createApp() {
         actor.schoolId ?? null,
         `Uploaded justification files ${auditText} for absence ${id}`,
       );
+      if (actor.role === 'parent' && actor.id != null) {
+        await relayParentDataInvalidation('attendance', [{
+          parentId: String(actor.id),
+          entityIds: [String(absenceStudent.id)],
+        }]);
+      }
 
       res.status(201).json({
         ...updated[0],
@@ -15449,6 +15603,7 @@ if (uniqueParentIds.length > 0) {
         }).returning();
         savedGrade = inserted[0];
       }
+      const gradeEventId = getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0);
 
       // Notification mobile parent après création de la note
       try {
@@ -15485,7 +15640,7 @@ if (uniqueParentIds.length > 0) {
                 evaluationId,
                 isGradeModification,
               },
-              dedupeKey: getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0),
+              dedupeKey: gradeEventId,
             };
             const { signature, timestamp } = signInternalPayload(gradeNotificationPayload);
             const response = await fetch(`${resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV)}/api/internal/grade-notification`, {
@@ -15572,6 +15727,7 @@ if (uniqueParentIds.length > 0) {
               evaluationName: evaluationRecord.title,
             }),
         type: 'grade',
+        dedupeKey: gradeEventId,
       });
         }
       }
@@ -15608,8 +15764,67 @@ if (uniqueParentIds.length > 0) {
         return res.json({ deletedEvaluations: 0, deletedGrades: 0 });
       }
 
+      const affectedGradeRows = await db
+        .select({
+          parentUserId: parents.userId,
+          studentId: grades.studentId,
+        })
+        .from(grades)
+        .innerJoin(students, eq(grades.studentId, students.id))
+        .innerJoin(parents, eq(students.parentId, parents.id))
+        .where(inArray(grades.evaluationId, evaluationIds));
+      const affectedRecipients = new Map<string, Set<string>>();
+      for (const row of affectedGradeRows) {
+        if (typeof row.parentUserId !== 'number'
+          || !Number.isSafeInteger(row.parentUserId)
+          || row.parentUserId <= 0) continue;
+        const parentId = String(row.parentUserId);
+        const childIds = affectedRecipients.get(parentId) ?? new Set<string>();
+        childIds.add(String(row.studentId));
+        affectedRecipients.set(parentId, childIds);
+      }
+
       const deletedGrades = await db.delete(grades).where(sql`${grades.evaluationId} IN ${evaluationIds}`);
       const deletedEvaluations = await db.delete(evaluations).where(sql`${evaluations.id} IN ${evaluationIds}`);
+
+      if ((deletedGrades.rowCount ?? 0) > 0 && affectedRecipients.size > 0) {
+        const eventId = `evaluation-delete-${crypto.randomUUID()}`;
+        const mobileApiBaseUrl = resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV);
+        const recipientList = Array.from(affectedRecipients, ([parentId, childIds]) => ({
+          parentId,
+          entityIds: childIds.size <= 100 ? Array.from(childIds) : [],
+        }));
+        for (let offset = 0; offset < recipientList.length; offset += 200) {
+          const payload = {
+            domain: 'grades',
+            eventId,
+            recipients: recipientList.slice(offset, offset + 200),
+          };
+          try {
+            const { signature, timestamp } = signInternalPayload(payload);
+            const response = await fetch(`${mobileApiBaseUrl}/api/internal/data-invalidation`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Internal-Signature': signature,
+                'X-Internal-Timestamp': timestamp,
+              },
+              body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+              console.error('Grade deletion invalidation relay failed', {
+                status: response.status,
+                parentCount: payload.recipients.length,
+              });
+            }
+          } catch (error) {
+            console.error('Grade deletion invalidation relay failed', {
+              parentCount: payload.recipients.length,
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+            });
+          }
+        }
+      }
 
       res.json({ deletedEvaluations: evaluationIds.length, deletedGrades: deletedGrades.rowCount ?? 0 });
     } catch (err: any) {
