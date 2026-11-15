@@ -669,7 +669,7 @@ export async function verifyRestrictedRuntimeSchema() {
         ('schools'), ('class_successions'), ('class_progressions'),
         ('class_exam_configurations'), ('exam_results'),
         ('student_academic_year_statuses'), ('school_classes'),
-        ('class_homeroom_assignments'), ('user_schools'), ('token_blacklist'),
+        ('class_homeroom_assignments'), ('user_schools'),
         ('absence_declarations'), ('absences'), ('teacher_class_subjects'),
         ('teachers'), ('academic_years'), ('subjects'),
         ('audit_events'), ('user_login_events'), ('teacher_control_audit_events')
@@ -725,9 +725,6 @@ export async function verifyRestrictedRuntimeSchema() {
         ('user_schools', 'user_id'), ('user_schools', 'school_id'),
         ('user_schools', 'role'), ('user_schools', 'is_active'),
         ('user_schools', 'created_at'),
-        ('token_blacklist', 'token'), ('token_blacklist', 'token_jti'),
-        ('token_blacklist', 'user_id'), ('token_blacklist', 'blacklisted_at'),
-        ('token_blacklist', 'expires_at'),
         ('absence_declarations', 'student_id'), ('absence_declarations', 'parent_id'),
         ('absence_declarations', 'date'), ('absence_declarations', 'status'),
         ('absences', 'declaration_id'), ('absences', 'teaching_assignment_id'),
@@ -808,7 +805,7 @@ export async function verifyRestrictedRuntimeSchema() {
         ('teacher_control_audit_events', 'created_at', 'timestamp with time zone', 'NO'),
         ('cycles', 'code', 'text', 'NO'),
         ('cycles', 'name', 'text', 'NO'),
-        ('cycles', 'is_active', 'boolean', 'YES'),
+        ('cycles', 'is_active', 'boolean', 'NO'),
         ('levels', 'cycle_id', 'integer', 'NO'),
         ('levels', 'code', 'text', 'NO'),
         ('levels', 'name', 'text', 'NO'),
@@ -863,11 +860,6 @@ export async function verifyRestrictedRuntimeSchema() {
         ('user_schools', 'user_id', 'integer', 'NO'),
         ('user_schools', 'school_id', 'integer', 'NO'),
         ('user_schools', 'role', 'text', 'NO'),
-        ('token_blacklist', 'token', 'text', 'NO'),
-        ('token_blacklist', 'token_jti', 'text', 'YES'),
-        ('token_blacklist', 'user_id', 'integer', 'YES'),
-        ('token_blacklist', 'blacklisted_at', 'timestamp without time zone', 'NO'),
-        ('token_blacklist', 'expires_at', 'timestamp without time zone', 'NO'),
         ('absence_declarations', 'student_id', 'integer', 'NO'),
         ('absence_declarations', 'parent_id', 'integer', 'NO'),
         ('absence_declarations', 'date', 'text', 'NO'),
@@ -889,9 +881,9 @@ export async function verifyRestrictedRuntimeSchema() {
         ('schools', 'promotion_threshold', '10.00'),
         ('school_terms', 'order_index', '1'),
         ('school_terms', 'is_active', 'true'),
+        ('cycles', 'is_active', 'true'),
         ('school_classes', 'status', '''pending'''),
         ('user_schools', 'is_active', 'true'),
-        ('token_blacklist', 'blacklisted_at', 'now()'),
         ('absence_declarations', 'status', '''RECEIVED'''),
         ('teacher_class_subjects', 'is_active', 'true')
     ),
@@ -912,7 +904,6 @@ export async function verifyRestrictedRuntimeSchema() {
         ('class_exam_configurations', 'class_exam_configurations_school_context_unique', true),
         ('class_exam_configurations', 'class_exam_configurations_global_context_unique', true),
         ('user_schools', 'user_schools_user_id_school_id_role_idx', true),
-        ('token_blacklist', 'token_blacklist_token_jti_idx', false),
         ('absence_declarations', 'absence_declarations_parent_date_idx', false),
         ('absence_declarations', 'absence_declarations_student_date_status_idx', false),
         ('absences', 'absences_declaration_id_idx', false),
@@ -938,22 +929,57 @@ export async function verifyRestrictedRuntimeSchema() {
         ('students', 'students_matricule_unique', ARRAY['matricule']::text[]),
         ('student_academic_year_statuses', 'student_academic_year_statuses_student_year_unique', ARRAY['student_id', 'academic_year_id']::text[])
     ),
+    catalog_tables AS (
+      SELECT relation.relname AS table_name
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace relation_schema
+        ON relation_schema.oid = relation.relnamespace
+      WHERE relation_schema.nspname = 'public'
+        AND relation.relkind IN ('r', 'p')
+    ),
+    catalog_columns AS (
+      SELECT
+        relation.relname AS table_name,
+        attribute.attname AS column_name,
+        CASE column_type.typname
+          WHEN 'bool' THEN 'boolean'
+          WHEN 'int2' THEN 'smallint'
+          WHEN 'int4' THEN 'integer'
+          WHEN 'int8' THEN 'bigint'
+          WHEN 'timestamp' THEN 'timestamp without time zone'
+          WHEN 'timestamptz' THEN 'timestamp with time zone'
+          ELSE pg_catalog.format_type(attribute.atttypid, NULL)
+        END AS data_type,
+        CASE WHEN attribute.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+        pg_catalog.pg_get_expr(column_default.adbin, column_default.adrelid) AS column_default
+      FROM pg_catalog.pg_attribute attribute
+      JOIN pg_catalog.pg_class relation
+        ON relation.oid = attribute.attrelid
+      JOIN pg_catalog.pg_namespace relation_schema
+        ON relation_schema.oid = relation.relnamespace
+      JOIN pg_catalog.pg_type column_type
+        ON column_type.oid = attribute.atttypid
+      LEFT JOIN pg_catalog.pg_attrdef column_default
+        ON column_default.adrelid = relation.oid
+       AND column_default.adnum = attribute.attnum
+      WHERE relation_schema.nspname = 'public'
+        AND relation.relkind IN ('r', 'p')
+        AND attribute.attnum > 0
+        AND NOT attribute.attisdropped
+    ),
     missing AS (
       SELECT 'table public.' || expected.table_name AS item
       FROM required_tables expected
-      LEFT JOIN information_schema.tables actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
-       AND actual.table_type = 'BASE TABLE'
+      LEFT JOIN catalog_tables actual
+        ON actual.table_name = expected.table_name
       WHERE actual.table_name IS NULL
 
       UNION ALL
 
       SELECT 'column public.' || expected.table_name || '.' || expected.column_name
       FROM required_columns expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE actual.column_name IS NULL
 
@@ -961,9 +987,8 @@ export async function verifyRestrictedRuntimeSchema() {
 
       SELECT 'column type/nullability public.' || expected.table_name || '.' || expected.column_name
       FROM required_column_shapes expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE actual.column_name IS NULL
          OR actual.data_type IS DISTINCT FROM expected.data_type
@@ -973,9 +998,8 @@ export async function verifyRestrictedRuntimeSchema() {
 
       SELECT 'column default public.' || expected.table_name || '.' || expected.column_name
       FROM required_defaults expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE replace(actual.column_default, '::text', '') IS DISTINCT FROM expected.expected_default
 
@@ -1261,11 +1285,10 @@ export async function verifyRestrictedRuntimeSchema() {
       SELECT 'NOT NULL public.students.matricule'
       WHERE NOT EXISTS (
         SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'students'
-          AND column_name = 'matricule'
-          AND is_nullable = 'NO'
+        FROM catalog_columns actual
+        WHERE actual.table_name = 'students'
+          AND actual.column_name = 'matricule'
+          AND actual.is_nullable = 'NO'
       )
 
       UNION ALL
@@ -1273,11 +1296,10 @@ export async function verifyRestrictedRuntimeSchema() {
       SELECT 'NOT NULL public.user_schools.role'
       WHERE NOT EXISTS (
         SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'user_schools'
-          AND column_name = 'role'
-          AND is_nullable = 'NO'
+        FROM catalog_columns actual
+        WHERE actual.table_name = 'user_schools'
+          AND actual.column_name = 'role'
+          AND actual.is_nullable = 'NO'
       )
     )
     SELECT item FROM missing ORDER BY item
