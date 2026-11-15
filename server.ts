@@ -3999,10 +3999,38 @@ export async function createApp() {
 
       const updatedUsers = isAddingFunction
         ? [targetUser]
-        : await db.update(users)
-          .set(updatedValues)
-          .where(eq(users.id, id))
-          .returning();
+        : await db.transaction(async (tx) => {
+          const [lockedUser] = await tx.select({
+            id: users.id,
+            role: users.role,
+          }).from(users)
+            .where(eq(users.id, id))
+            .for('update')
+            .limit(1);
+          if (!lockedUser) return [];
+
+          const [updatedUser] = await tx.update(users)
+            .set(updatedValues)
+            .where(eq(users.id, id))
+            .returning();
+          if (
+            updatedUser
+            && lockedUser.role !== role
+            && (lockedUser.role === 'parent' || role === 'parent')
+          ) {
+            await tx.execute(sql`
+              UPDATE mobile_parent_sessions
+              SET is_active = false,
+                  revoked_at = COALESCE(revoked_at, now()),
+                  family_revoked_at = COALESCE(family_revoked_at, now()),
+                  rotation_request_id = NULL,
+                  rotation_successor_ciphertext = NULL,
+                  rotation_recovery_expires_at = NULL
+              WHERE parent_id = ${String(id)}
+            `);
+          }
+          return updatedUser ? [updatedUser] : [];
+        });
 
       if (updatedUsers.length === 0) {
         return res.status(404).json({ error: 'User not found' });
@@ -4170,8 +4198,13 @@ export async function createApp() {
             if (targetUser.role === 'parent') {
               await tx.execute(sql`
                 UPDATE mobile_parent_sessions
-                SET is_active = false, revoked_at = now()
-                WHERE parent_id = ${String(id)} AND is_active = true
+                SET is_active = false,
+                    revoked_at = COALESCE(revoked_at, now()),
+                    family_revoked_at = COALESCE(family_revoked_at, now()),
+                    rotation_request_id = NULL,
+                    rotation_successor_ciphertext = NULL,
+                    rotation_recovery_expires_at = NULL
+                WHERE parent_id = ${String(id)}
               `);
             }
             await tx.insert(auditEvents).values({
@@ -4234,6 +4267,18 @@ export async function createApp() {
           operation: 'reactivate',
           allowedRoles: ['teacher', 'school_admin', 'parent'],
           mutation: async (tx, targetUser) => {
+            if (targetUser.role === 'parent') {
+              await tx.execute(sql`
+                UPDATE mobile_parent_sessions
+                SET is_active = false,
+                    revoked_at = COALESCE(revoked_at, now()),
+                    family_revoked_at = COALESCE(family_revoked_at, now()),
+                    rotation_request_id = NULL,
+                    rotation_successor_ciphertext = NULL,
+                    rotation_recovery_expires_at = NULL
+                WHERE parent_id = ${String(id)}
+              `);
+            }
             await tx.insert(auditEvents).values({
               actorUserId: actor.id ?? null,
               actorRole: actor.role,
@@ -4326,6 +4371,18 @@ export async function createApp() {
         userId,
         allowDisabledForAdministrativePasswordReset: true,
         mutation: async (_newGeneration, transaction) => {
+          if (targetUser.role === 'parent') {
+            await transaction.execute(sql`
+              UPDATE mobile_parent_sessions
+              SET is_active = false,
+                  revoked_at = COALESCE(revoked_at, now()),
+                  family_revoked_at = COALESCE(family_revoked_at, now()),
+                  rotation_request_id = NULL,
+                  rotation_successor_ciphertext = NULL,
+                  rotation_recovery_expires_at = NULL
+              WHERE parent_id = ${String(userId)}
+            `);
+          }
           await updateLocalAuthCredentials(transaction, {
             userId,
             values: {
@@ -4581,6 +4638,18 @@ export async function createApp() {
             values: { passwordHash: newHash, salt: newSalt, mustReset: false },
             expected: { passwordHash, salt, mustReset: Boolean(mustReset) },
           });
+          if (userRecord.role === 'parent') {
+            await transaction.execute(sql`
+              UPDATE mobile_parent_sessions
+              SET is_active = false,
+                  revoked_at = COALESCE(revoked_at, now()),
+                  family_revoked_at = COALESCE(family_revoked_at, now()),
+                  rotation_request_id = NULL,
+                  rotation_successor_ciphertext = NULL,
+                  rotation_recovery_expires_at = NULL
+              WHERE parent_id = ${String(userRecord.id)}
+            `);
+          }
           await transaction.insert(auditEvents).values({
             actorUserId: userRecord.id,
             actorRole: userRecord.role,
@@ -4966,8 +5035,32 @@ export async function createApp() {
         if (targetUser.role === 'super_admin') {
           return res.status(200).json({ userId: targetId, role, alreadyAssigned: true });
         }
-        const [updatedUser] = await db.update(users).set({ role: 'super_admin' })
-          .where(eq(users.id, targetId)).returning({ id: users.id });
+        const [updatedUser] = await db.transaction(async (tx) => {
+          const [lockedUser] = await tx.select({
+            id: users.id,
+            role: users.role,
+          }).from(users)
+            .where(eq(users.id, targetId))
+            .for('update')
+            .limit(1);
+          if (!lockedUser) return [];
+
+          const [updated] = await tx.update(users).set({ role: 'super_admin' })
+            .where(eq(users.id, targetId)).returning({ id: users.id });
+          if (updated && lockedUser.role === 'parent') {
+            await tx.execute(sql`
+              UPDATE mobile_parent_sessions
+              SET is_active = false,
+                  revoked_at = COALESCE(revoked_at, now()),
+                  family_revoked_at = COALESCE(family_revoked_at, now()),
+                  rotation_request_id = NULL,
+                  rotation_successor_ciphertext = NULL,
+                  rotation_recovery_expires_at = NULL
+              WHERE parent_id = ${String(targetId)}
+            `);
+          }
+          return updated ? [updated] : [];
+        });
         if (!updatedUser) return res.status(404).json({ error: 'User not found' });
         return res.status(201).json({ userId: targetId, role, alreadyAssigned: false });
       }
