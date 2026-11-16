@@ -12672,6 +12672,7 @@ export async function createApp() {
           lastName: students.lastName,
           birthDate: students.birthDate,
           gender: students.gender,
+          schoolId: students.schoolId,
           classId: students.classId,
           isActive: students.isActive,
           withdrawnAt: students.withdrawnAt,
