@@ -11,6 +11,11 @@ import {
   type SchoolTermPeriod,
   type ValidatedGroupedEvaluationPublication,
 } from './groupedEvaluationPublication.ts';
+import {
+  createAuditSnapshot,
+  type AuditEventActor,
+  type AuditEventInput,
+} from './auditEvents.ts';
 
 export interface GroupedPublicationContext extends GroupedEvaluationValidationContext {
   academicYearId: number;
@@ -26,6 +31,7 @@ export interface GroupedPublicationRecord {
 }
 
 export interface GroupedEvaluationPublicationTransaction {
+  appendAuditEvent?(event: AuditEventInput): Promise<void>;
   findPublication(
     schoolId: number,
     idempotencyKey: string,
@@ -246,6 +252,7 @@ export async function publishGroupedEvaluations(
     schoolId: number;
     authorUserId: number;
     request: GroupedEvaluationPublicationRequest;
+    auditActor?: AuditEventActor;
   },
   onPublished?: (event: GroupedEvaluationNotificationEvent) => Promise<void>,
 ): Promise<GroupedEvaluationPublicationResponse> {
@@ -345,6 +352,30 @@ export async function publishGroupedEvaluations(
       title,
       body,
     });
+    if (input.auditActor) {
+      if (!tx.appendAuditEvent) {
+        throw new Error('Grouped publication transaction must support audit events.');
+      }
+      await tx.appendAuditEvent({
+        actor: input.auditActor,
+        targetSchool: { id: schoolId },
+        module: 'evaluations',
+        action: 'publish',
+        resourceType: 'evaluation_publication',
+        resourceId: publication.id,
+        afterValues: createAuditSnapshot({
+          kind: value.kind,
+          startDate: value.startDate,
+          endDate: value.endDate,
+          evaluationCount: evaluationIds.length,
+          classCount: value.classIds.length,
+          subjectCount: value.subjectIds.length,
+        }, ['kind', 'startDate', 'endDate', 'evaluationCount', 'classCount', 'subjectCount']),
+        result: 'success',
+        source: 'web',
+        description: 'Grouped evaluations published.',
+      });
+    }
     return {
       response: publicationResponse({
         id: publication.id,

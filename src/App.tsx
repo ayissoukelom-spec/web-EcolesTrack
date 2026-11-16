@@ -9,7 +9,9 @@ import {
   SystemNotification,
   User,
   UserRole,
-  AuditEvent,
+  AuditEventDeactivationSummary,
+  AuditEventFilters,
+  AuditEventsPage,
   SubjectType,
   EducationLevel,
   AbsenceDeclaration,
@@ -39,6 +41,7 @@ import { useLateArrivals, type LateArrivalInput } from './hooks/useLateArrivals.
 import { createAbsenceRefreshSequence } from './lib/absenceRefresh.ts';
 import { reexamineAbsenceJustification } from './lib/absenceJustificationApi.ts';
 import { getEffectiveAbsenceJustificationStatus } from './lib/absenceJustificationStatus.ts';
+import { normalizeAuditEvents } from './lib/auditEventReader.ts';
 import type { LoginStats } from './hooks/useAdminDashboard.ts';
 import type { ClassAgeStats } from './lib/studentAgeStats.ts';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from './lib/evaluationUtils.ts';
@@ -148,6 +151,21 @@ function SidebarNavigationIcon({ children, testId }: { children: React.ReactNode
       {children}
     </span>
   );
+}
+
+function isAuditEventDeactivationSummary(value: unknown): value is AuditEventDeactivationSummary {
+  return value !== null
+    && typeof value === 'object'
+    && 'id' in value
+    && typeof value.id === 'number'
+    && 'action' in value
+    && typeof value.action === 'string'
+    && 'resourceType' in value
+    && value.resourceType === 'user'
+    && 'resourceId' in value
+    && typeof value.resourceId === 'number'
+    && 'createdAt' in value
+    && (typeof value.createdAt === 'string' || value.createdAt === null);
 }
 
 export default function App() {
@@ -275,6 +293,7 @@ export default function App() {
       setSummaryRecentGrades([]);
       setNotificationsList([]);
       setAuditEvents([]);
+      setAuditPage(null);
       setUsersList([]);
       setDisabledUsersList([]);
       setSubjectsList([]);
@@ -405,7 +424,8 @@ export default function App() {
     loginsByRole: [],
   });
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEventDeactivationSummary[]>([]);
+  const [auditPage, setAuditPage] = useState<AuditEventsPage | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [disabledUsersList, setDisabledUsersList] = useState<User[]>([]);
   const [subjectsList, setSubjectsList] = useState<any[]>([]);
@@ -462,22 +482,55 @@ export default function App() {
     return [];
   };
 
-  const fetchAuditEvents = async () => {
+  const fetchAuditEvents = async (filters: AuditEventFilters = {}) => {
     if (currentRole !== 'super_admin') {
-      setAuditEvents([]);
+      setAuditPage(null);
       return;
     }
 
     setIsAuditLoading(true);
     try {
-      const events = await apiFetch('/api/audit/events');
-      setAuditEvents(events);
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+      });
+      const response = await apiFetch(`/api/audit/events?${params.toString()}`);
+      if (!response || !Array.isArray(response.events)) {
+        throw new TypeError('Invalid audit events response.');
+      }
+      setAuditPage({
+        ...response,
+        events: normalizeAuditEvents(response.events),
+      });
     } catch (auditErr: any) {
       console.warn('Impossible de charger le journal d\'événements :', auditErr);
-      setAuditEvents([]);
+      setAuditPage(null);
       setErrorMsg('Impossible de charger le journal des actions.');
     } finally {
       setIsAuditLoading(false);
+    }
+  };
+
+  const fetchAccountDeactivationEvents = async (userIds: number[]) => {
+    if (currentRole !== 'super_admin') {
+      setAuditEvents([]);
+      return;
+    }
+    try {
+      const eventBatches = await Promise.all(
+        Array.from({ length: Math.ceil(userIds.length / 400) }, (_, index) => {
+          const batch = userIds.slice(index * 400, (index + 1) * 400);
+          const params = new URLSearchParams({ userIds: batch.join(',') });
+          return apiFetch(`/api/audit/deactivations?${params.toString()}`);
+        }),
+      );
+      const events = eventBatches.flat();
+      const summaries = events.filter(isAuditEventDeactivationSummary);
+      if (summaries.length !== events.length) throw new TypeError('Invalid account deactivation events response.');
+      setAuditEvents(summaries);
+    } catch (auditErr) {
+      console.warn('Impossible de charger les dates de désactivation :', auditErr);
+      setAuditEvents([]);
     }
   };
 
@@ -643,10 +696,13 @@ export default function App() {
       if (Array.isArray(map['/api/subject-types'])) setSubjectTypesList(map['/api/subject-types']);
       if (Array.isArray(map['/api/education/levels'])) setEducationLevels(map['/api/education/levels']);
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
-      if (disabledUsersEndpoint && Array.isArray(map[disabledUsersEndpoint])) {
-        setDisabledUsersList(map[disabledUsersEndpoint].filter((user: User) => (
+      const disabledAccountRows = disabledUsersEndpoint && Array.isArray(map[disabledUsersEndpoint])
+        ? map[disabledUsersEndpoint].filter((user: User) => (
           user.isDeleted === true && ['teacher', 'school_admin', 'parent'].includes(user.role)
-        )));
+        ))
+        : [];
+      if (disabledAccountRows.length > 0) {
+        setDisabledUsersList(disabledAccountRows);
       } else {
         setDisabledUsersList([]);
       }
@@ -657,9 +713,10 @@ export default function App() {
       }
 
       if (currentRole === 'super_admin') {
-        await fetchAuditEvents();
+        await fetchAccountDeactivationEvents(disabledAccountRows.map((user: User) => user.id));
       } else {
         setAuditEvents([]);
+        setAuditPage(null);
       }
     } catch (err: any) {
       const uiMessage = getUiErrorMessage(err, 'Impossible de charger les données EcoleTrack.');
@@ -2301,9 +2358,10 @@ export default function App() {
 
               {activeTab === 'audit' && currentRole === 'super_admin' && (
                 <AuditView
-                  auditEvents={auditEvents}
+                  page={auditPage}
                   isLoading={isAuditLoading}
                   onReload={fetchAuditEvents}
+                  schoolsList={schoolsList}
                 />
               )}
 

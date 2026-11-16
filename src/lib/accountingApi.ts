@@ -5,12 +5,17 @@ import { alias } from 'drizzle-orm/pg-core';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { db as defaultDb } from '../db/index.ts';
 import {
+  appendAuditEvent,
+  createAuditSnapshot,
+  type AuditEventExecutor,
+  type AuditSnapshot,
+} from './auditEvents.ts';
+import {
   accountingCategories,
   accountingFeeDefinitions,
   accountingScheduleTemplates,
   accountingTariffs,
   academicYears,
-  auditEvents,
   classes,
   financialAdjustmentAllocations,
   financialAdjustments,
@@ -271,23 +276,33 @@ const getSchoolId = async (
 };
 
 const addAudit = async (
-  tx: Parameters<Parameters<typeof defaultDb.transaction>[0]>[0],
+  tx: AuditEventExecutor,
   actor: AccountingActor,
   schoolId: number,
   action: string,
   resourceType: string,
   resourceId: number | null,
   description: string,
+  beforeValues?: AuditSnapshot | null,
+  afterValues?: AuditSnapshot | null,
 ) => {
-  await tx.insert(auditEvents).values({
-    actorUserId: actor.id ?? null,
-    actorRole: actor.role,
-    actorEmail: actor.email ?? null,
-    actorName: actor.name ?? null,
+  await appendAuditEvent(tx, {
+    actor: {
+      userId: actor.id ?? null,
+      role: actor.role,
+      email: actor.email ?? null,
+      name: actor.name ?? null,
+      activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+    },
+    targetSchool: { id: schoolId },
+    module: 'accounting',
     action,
     resourceType,
     resourceId,
-    schoolId,
+    beforeValues,
+    afterValues,
+    result: 'success',
+    source: 'web',
     description,
   });
 };
@@ -309,6 +324,12 @@ const getOrCreateAccountingCategory = async (
         isEnabled: true,
         updatedAt: new Date(),
       }).where(and(eq(accountingCategories.id, existing.id), eq(accountingCategories.schoolId, schoolId))).returning();
+      if (enabled) {
+        await addAudit(tx, actor, schoolId, 'enable', 'accounting_category', enabled.id,
+          'Accounting category enabled.',
+          createAuditSnapshot(existing, ['label', 'code', 'isEnabled']),
+          createAuditSnapshot(enabled, ['label', 'code', 'isEnabled']));
+      }
       return enabled ?? { ...existing, isEnabled: true };
     }
     return existing;
@@ -322,7 +343,10 @@ const getOrCreateAccountingCategory = async (
     isEnabled: true,
   }).onConflictDoNothing().returning();
   if (created) {
-    await addAudit(tx, actor, schoolId, 'create', 'accounting_category', created.id, `Created accounting fee label=${label.trim()}`);
+    await addAudit(tx, actor, schoolId, 'create', 'accounting_category', created.id,
+      'Accounting category created.',
+      null,
+      createAuditSnapshot(created, ['label', 'code', 'isEnabled']));
     return created;
   }
 
@@ -1017,9 +1041,12 @@ const ensureTariffObligation = async (
     'create',
     'financial_obligation',
     created.id,
-    initialTerms.individualized
-      ? `Charge created from configured tariff: category=tuition amount=${initialTerms.amount} XOF referenceAmount=${tariff.amount} XOF tariffId=${tariff.id} justification=${JSON.stringify(initialTuitionJustification)}`
-      : `Charge created from configured tariff: category=${category.code} amount=${initialTerms.amount}`,
+    'Charge created from configured tariff.',
+    null,
+    createAuditSnapshot(created, [
+      'studentId', 'academicYearId', 'classId', 'categoryId', 'tariffId', 'feeDefinitionId',
+      'label', 'amount', 'currency', 'classNameSnapshot', 'enrollmentKind', 'status',
+    ]),
   );
   return created;
 };
@@ -1904,9 +1931,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             dueDate: installment.dueDate,
           })));
           await addAudit(tx, actor, schoolId, 'create', 'financial_obligation', created.id,
-            row.discountAmount > 0
-              ? `Batch obligation created: category=tuition tariffId=${row.tariffId} referenceAmount=${row.referenceAmount} discountAmount=${row.discountAmount} amount=${row.amount} justification=${JSON.stringify(row.individualizationReason)} installments=${JSON.stringify(row.installments)}`
-              : `Batch obligation created: category=${row.categoryCode} amount=${row.amount} tariffId=${row.tariffId}`);
+            'Batch financial obligation created.',
+            null,
+            createAuditSnapshot(created, [
+              'studentId', 'academicYearId', 'classId', 'categoryId', 'tariffId', 'label',
+              'amount', 'currency', 'classNameSnapshot', 'enrollmentKind',
+            ]));
         }
         return {
           stale: false as const,
@@ -1999,13 +2029,20 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (!schoolId) return;
       const categoryId = asPositiveInt(req.params.id);
       if (!categoryId || typeof req.body?.isEnabled !== 'boolean') return res.status(400).json({ error: 'Invalid category update' });
-      const [updated] = await db.transaction(async (tx) => {
-        const [row] = await tx.update(accountingCategories).set({
+      const updated = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(accountingCategories).where(and(
+          eq(accountingCategories.id, categoryId),
+          eq(accountingCategories.schoolId, schoolId),
+        )).for('update');
+        if (!before) return null;
+        const [after] = await tx.update(accountingCategories).set({
           isEnabled: req.body.isEnabled,
           updatedAt: new Date(),
-        }).where(and(eq(accountingCategories.id, categoryId), eq(accountingCategories.schoolId, schoolId))).returning();
-        if (row) await addAudit(tx, actor, schoolId, 'update', 'accounting_category', row.id, `Category ${row.code} enabled=${row.isEnabled}`);
-        return [row];
+        }).where(eq(accountingCategories.id, categoryId)).returning();
+        if (after) await addAudit(tx, actor, schoolId, 'update', 'accounting_category', after.id, 'Accounting category updated.',
+          createAuditSnapshot(before, ['code', 'label', 'isEnabled']),
+          createAuditSnapshot(after, ['code', 'label', 'isEnabled']));
+        return after ?? null;
       });
       if (!updated) return res.status(404).json({ error: 'Category not found' });
       return res.json(updated);
@@ -2072,19 +2109,21 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         const [tariff] = await tx.select().from(accountingTariffs).where(and(
           eq(accountingTariffs.id, tariffId),
           eq(accountingTariffs.schoolId, schoolId),
-        ));
+        )).for('update');
         if (!tariff) return { notFound: true as const };
 
         const obligations = await tx.select({ id: financialObligations.id })
           .from(financialObligations)
           .where(eq(financialObligations.tariffId, tariffId));
         if (obligations.length > 0) {
-          await tx.update(accountingTariffs).set({ isEnabled: false, updatedAt: new Date() }).where(and(
+          const [archived] = await tx.update(accountingTariffs).set({ isEnabled: false, updatedAt: new Date() }).where(and(
             eq(accountingTariffs.id, tariffId),
             eq(accountingTariffs.schoolId, schoolId),
-          ));
+          )).returning();
           await addAudit(tx, actor, schoolId, 'archive', 'accounting_tariff', tariffId,
-            `Archived tariff ${tariffId}; retained ${obligations.length} financial obligation(s)`);
+            'Accounting tariff archived.',
+            createAuditSnapshot(tariff, ['classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled']),
+            createAuditSnapshot(archived, ['classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled']));
           return { notFound: false as const, archived: true };
         }
 
@@ -2093,7 +2132,8 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           eq(accountingTariffs.schoolId, schoolId),
         ));
         await addAudit(tx, actor, schoolId, 'delete', 'accounting_tariff', tariffId,
-          `Deleted unused tariff ${tariffId}`);
+          'Unused accounting tariff deleted.',
+          createAuditSnapshot(tariff, ['classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled']));
         return { notFound: false as const, archived: false };
       });
 
@@ -2228,6 +2268,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
               throw Object.assign(new Error('An enabled tariff range already overlaps these classes for this fee and year'), { statusCode: 409 });
             }
           }
+          const [before] = await tx.select().from(accountingTariffs).where(and(
+            eq(accountingTariffs.schoolId, schoolId),
+            eq(accountingTariffs.academicYearId, academicYearId),
+            eq(accountingTariffs.classId, classId),
+            eq(accountingTariffs.categoryId, category.id),
+          )).for('update');
           const [row] = await tx.insert(accountingTariffs).values({
             schoolId,
             academicYearId,
@@ -2241,7 +2287,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           }).onConflictDoNothing().returning();
           if (!row) return { duplicate: true as const, row: null };
           await addAudit(tx, actor, schoolId, 'create', 'accounting_tariff', row.id,
-            `Created tariff range ${classFromId}-${classToId} amount=${amount} year=${academicYearId}`);
+            'Accounting tariff range created.',
+            null,
+            createAuditSnapshot(row, [
+              'academicYearId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled',
+            ]));
           return { duplicate: false as const, row };
         }
         if (usesLabel) {
@@ -2267,7 +2317,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           }).onConflictDoNothing().returning();
           if (!row) return { duplicate: true as const, row: null };
           await addAudit(tx, actor, schoolId, 'create', 'accounting_tariff', row.id,
-            `Created tariff ${label} amount=${amount} class=${classId} year=${academicYearId}`);
+            'Accounting tariff created.',
+            null,
+            createAuditSnapshot(row, [
+              'academicYearId', 'classId', 'categoryId', 'label', 'amount', 'isEnabled',
+            ]));
           return { duplicate: false as const, row };
         }
 
@@ -2283,7 +2337,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           target: [accountingTariffs.schoolId, accountingTariffs.academicYearId, accountingTariffs.classId, accountingTariffs.categoryId],
           set: { label: tariffLabel, amount, isEnabled: true, updatedAt: new Date(), createdBy: actor.id ?? null },
         }).returning();
-        await addAudit(tx, actor, schoolId, 'upsert', 'accounting_tariff', row.id, `Tariff ${category.code} amount=${amount} class=${classId} year=${academicYearId}`);
+        await addAudit(tx, actor, schoolId, 'upsert', 'accounting_tariff', row.id, 'Accounting tariff saved.',
+          createAuditSnapshot(before, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']),
+          createAuditSnapshot(row, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']));
         return { duplicate: false as const, row };
       });
       if (saved.duplicate) return res.status(409).json({ error: 'A fee with this label is already configured for this class or range and school year. Use Modify instead.' });
@@ -2424,6 +2480,10 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             throw Object.assign(new Error('Un frais avec ce libellé existe déjà pour cette classe et cette année scolaire.'), { statusCode: 409 });
           }
         }
+        const [before] = await tx.select().from(accountingTariffs).where(and(
+          eq(accountingTariffs.id, tariffId),
+          eq(accountingTariffs.schoolId, schoolId),
+        )).for('update');
         const [row] = await tx.update(accountingTariffs).set({
           classId: isRange ? null : classId,
           classFromId: isRange ? classFromId : null,
@@ -2438,7 +2498,13 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           eq(accountingTariffs.schoolId, schoolId),
         )).returning();
         if (row) await addAudit(tx, actor, schoolId, 'update', 'accounting_tariff', row.id,
-          `Updated tariff ${isRange ? `range=${classFromId}-${classToId}` : `class=${classId}`} label=${tariffLabel} amount=${amount}`);
+          'Accounting tariff updated.',
+          createAuditSnapshot(before, [
+            'academicYearId', 'classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled',
+          ]),
+          createAuditSnapshot(row, [
+            'academicYearId', 'classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled',
+          ]));
         return [row];
       });
       if (!updated) return res.status(404).json({ error: 'Tariff not found' });
@@ -2535,7 +2601,13 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           });
         }
       }
-      const [saved] = await db.transaction(async (tx) => {
+      const saved = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(accountingScheduleTemplates).where(and(
+          eq(accountingScheduleTemplates.schoolId, schoolId),
+          eq(accountingScheduleTemplates.academicYearId, academicYearId),
+          eq(accountingScheduleTemplates.classId, classId),
+          eq(accountingScheduleTemplates.categoryId, categoryId),
+        )).for('update');
         const [row] = await tx.insert(accountingScheduleTemplates).values({
           schoolId, academicYearId, classId, categoryId, periodType, installments, createdBy: actor.id ?? null,
         }).onConflictDoUpdate({
@@ -2547,8 +2619,18 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           ],
           set: { periodType, installments, updatedAt: new Date(), createdBy: actor.id ?? null },
         }).returning();
-        await addAudit(tx, actor, schoolId, 'upsert', 'accounting_schedule', row.id, `Schedule ${periodType} configured for class=${classId} year=${academicYearId}`);
-        return [row];
+        await addAudit(tx, actor, schoolId, 'upsert', 'accounting_schedule', row.id, 'Accounting schedule saved.',
+          createAuditSnapshot({
+            periodType: before?.periodType ?? null,
+            installmentCount: Array.isArray(before?.installments) ? before.installments.length : null,
+            installments: before?.installments == null ? null : JSON.stringify(before.installments),
+          }, ['periodType', 'installmentCount', 'installments']),
+          createAuditSnapshot({
+            periodType: row.periodType,
+            installmentCount: Array.isArray(row.installments) ? row.installments.length : null,
+            installments: row.installments == null ? null : JSON.stringify(row.installments),
+          }, ['periodType', 'installmentCount', 'installments']));
+        return row;
       });
       return res.json(saved);
     } catch (error) {
@@ -2615,7 +2697,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           status: 'pending',
           proposedBy: actor.id ?? null,
         }).returning();
-        await addAudit(tx, actor, schoolId, 'create', 'accounting_fee_definition', row.id, `Custom fee proposed: ${label}`);
+        await addAudit(tx, actor, schoolId, 'create', 'accounting_fee_definition', row.id, 'Custom fee proposed.',
+          null,
+          createAuditSnapshot(row, [
+            'academicYearId', 'studentId', 'classId', 'categoryId', 'label', 'amount',
+            'isMandatory', 'dueDate', 'status',
+          ]));
         return [row];
       });
       return res.status(201).json(fee);
@@ -2651,22 +2738,26 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (!feeId || !['active', 'rejected'].includes(status)) {
         return res.status(400).json({ error: 'Invalid fee status update' });
       }
-      const [updated] = await db.transaction(async (tx) => {
+      const updated = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(accountingFeeDefinitions).where(and(
+          eq(accountingFeeDefinitions.id, feeId),
+          eq(accountingFeeDefinitions.schoolId, schoolId),
+          eq(accountingFeeDefinitions.status, 'pending'),
+        )).for('update');
+        if (!before) return null;
         const [fee] = await tx.update(accountingFeeDefinitions).set({
           status,
           validatedBy: actor.id ?? null,
           validatedAt: new Date(),
           updatedAt: new Date(),
-        }).where(and(
-          eq(accountingFeeDefinitions.id, feeId),
-          eq(accountingFeeDefinitions.schoolId, schoolId),
-          eq(accountingFeeDefinitions.status, 'pending'),
-        )).returning();
+        }).where(eq(accountingFeeDefinitions.id, feeId)).returning();
         if (fee) await addAudit(
           tx, actor, schoolId, status === 'active' ? 'approve' : 'reject',
-          'accounting_fee_definition', fee.id, `Custom fee ${status}: ${fee.label}`,
+          'accounting_fee_definition', fee.id, 'Custom fee status updated.',
+          createAuditSnapshot(before, ['status']),
+          createAuditSnapshot(fee, ['status']),
         );
-        return [fee];
+        return fee ?? null;
       });
       if (!updated) return res.status(409).json({ error: 'Fee not found or no longer pending' });
       return res.json(updated);
@@ -2885,9 +2976,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           'create',
           'financial_obligation',
           created.id,
-          initialTerms.individualized
-            ? `Obligation created: category=tuition amount=${amount} XOF referenceAmount=${referenceAmount} XOF tariffId=${tariff!.id} justification=${JSON.stringify(initialTuitionInput.justification)}`
-            : `Obligation created: category=${category!.code} amount=${amount}`,
+          'Financial obligation created.',
+          null,
+          createAuditSnapshot(created, [
+            'studentId', 'academicYearId', 'classId', 'categoryId', 'tariffId', 'feeDefinitionId',
+            'label', 'amount', 'currency', 'classNameSnapshot', 'enrollmentKind', 'status',
+          ]),
         );
         return { obligation: created, created: true };
       });
@@ -3796,8 +3890,12 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           receiptNumber,
           snapshot,
         }).returning();
-        await addAudit(tx, actor, schoolId, 'create', 'financial_payment', payment.id, `Payment recorded: amount=${amount} method=${method}`);
-        await addAudit(tx, actor, schoolId, 'create', 'financial_receipt', receipt.id, `Receipt issued: ${receiptNumber}`);
+        await addAudit(tx, actor, schoolId, 'create', 'financial_payment', payment.id, 'Payment recorded.',
+          null,
+          createAuditSnapshot(payment, ['studentId', 'academicYearId', 'amount', 'method', 'status', 'recordedBy']));
+        await addAudit(tx, actor, schoolId, 'create', 'financial_receipt', receipt.id, 'Receipt issued.',
+          null,
+          createAuditSnapshot(receipt, ['paymentId', 'receiptNumber', 'issuedAt']));
         const [parent] = await tx.select({ userId: parents.userId }).from(students)
           .innerJoin(parents, eq(parents.id, students.parentId))
           .where(eq(students.id, studentId));
@@ -5014,7 +5112,12 @@ async function handlePaymentAdjustment(
     }
     const result = await db.transaction(async (tx) => {
       await assertSchoolActiveInTransaction(tx, schoolId);
-      await tx.execute(sql`SELECT id FROM financial_payments WHERE id = ${paymentId} FOR UPDATE`);
+      const [paymentBefore] = await tx.select().from(financialPayments)
+        .where(eq(financialPayments.id, paymentId))
+        .for('update');
+      if (!paymentBefore || paymentBefore.schoolId !== schoolId) {
+        throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
+      }
       const [existing] = await tx.select().from(financialAdjustments).where(eq(
         financialAdjustments.sourceKey,
         kind === 'cancellation' ? `cancel:${paymentId}` : `refund:${paymentId}:${idempotencyKey}`,
@@ -5070,10 +5173,20 @@ async function handlePaymentAdjustment(
         left -= adjusted;
       }
       if (left) throw new Error('Adjustment allocation failed');
-      if (kind === 'cancellation') {
-        await tx.update(financialPayments).set({ status: 'cancelled' }).where(eq(financialPayments.id, paymentId));
-      }
-      await addAudit(tx, actor, schoolId, kind, 'financial_payment', paymentId, `${kind} recorded: amount=${adjustmentAmount}; reason=${reason}`);
+      const paymentAfter = kind === 'cancellation'
+        ? (await tx.update(financialPayments).set({ status: 'cancelled' })
+          .where(eq(financialPayments.id, paymentId)).returning())[0] ?? paymentBefore
+        : paymentBefore;
+      await addAudit(tx, actor, schoolId, kind, 'financial_payment', paymentId, `${kind} recorded.`,
+        createAuditSnapshot(paymentBefore, ['amount', 'method', 'status']),
+        createAuditSnapshot({
+          amount: paymentAfter.amount,
+          method: paymentAfter.method,
+          status: paymentAfter.status,
+          adjustmentId: adjustment.id,
+          adjustmentKind: adjustment.kind,
+          adjustmentAmount: adjustment.amount,
+        }, ['amount', 'method', 'status', 'adjustmentId', 'adjustmentKind', 'adjustmentAmount']));
       return { adjustment, duplicate: false };
     });
     return res.status(result.duplicate ? 200 : 201).json(result);

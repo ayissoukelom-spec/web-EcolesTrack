@@ -1,0 +1,177 @@
+export type AuditLabelKind = 'role' | 'module' | 'action' | 'resource' | 'result' | 'source';
+
+const fieldLabels: Record<string, string> = {
+  academicYearId: 'Année scolaire',
+  action: 'Opération',
+  address: 'Adresse',
+  amount: 'Montant',
+  average: 'Moyenne',
+  classId: 'Classe',
+  className: 'Nom de la classe',
+  coefficient: 'Coefficient',
+  createdAt: 'Date de création',
+  date: 'Date',
+  email: 'Courriel',
+  endDate: 'Date de fin',
+  evaluationId: 'Évaluation',
+  fee: 'Frais',
+  firstName: 'Prénom',
+  firstNames: 'Prénoms',
+  grade: 'Note',
+  id: 'Identifiant',
+  isActive: 'Actif',
+  isJustified: 'Justifié',
+  isPublished: 'Publié',
+  lastName: 'Nom',
+  name: 'Nom',
+  note: 'Note',
+  paidAmount: 'Montant payé',
+  paymentMethod: 'Mode de paiement',
+  phone: 'Téléphone',
+  publishedAt: 'Date de publication',
+  reason: 'Motif',
+  schoolId: 'Établissement',
+  schoolName: 'Nom de l’établissement',
+  score: 'Résultat',
+  startDate: 'Date de début',
+  status: 'Statut',
+  studentId: 'Élève',
+  subjectId: 'Matière',
+  subjectName: 'Nom de la matière',
+  teacherId: 'Enseignant',
+  updatedAt: 'Date de modification',
+};
+
+const labels: Record<AuditLabelKind, Record<string, string>> = {
+  role: {
+    super_admin: 'Super administrateur',
+    school_admin: 'Administrateur d’établissement',
+    teacher: 'Enseignant',
+    surveillant: 'Surveillant',
+    parent: 'Parent',
+    system: 'Système',
+  },
+  module: {
+    academic_periods: 'Périodes scolaires',
+    academic_years: 'Années scolaires',
+    absence_justifications: 'Justifications d’absence',
+    accounting: 'Comptabilité',
+    attendance: 'Absences et retards',
+    bulletin_management: 'Bulletins',
+    class_management: 'Gestion des classes',
+    class_progressions: 'Progression des classes',
+    class_successions: 'Parcours des classes',
+    education_structure: 'Structure pédagogique',
+    evaluation_management: 'Évaluations',
+    evaluations: 'Évaluations',
+    exam_results: 'Résultats d’examen',
+    grade_management: 'Notes et résultats',
+    grades: 'Notes et résultats',
+    late_arrival_justifications: 'Justifications de retard',
+    report_cards: 'Bulletins',
+    school_management: 'Établissements',
+    student_management: 'Élèves',
+    subject_management: 'Matières',
+    subjects: 'Matières',
+    teaching_assignments: 'Affectations pédagogiques',
+    user_management: 'Comptes utilisateurs',
+  },
+  action: {
+    activate: 'Activation',
+    approve: 'Approbation',
+    cancel: 'Annulation',
+    create: 'Création',
+    deactivate: 'Désactivation',
+    delete: 'Suppression',
+    lock: 'Verrouillage',
+    lock_student_creation: 'Verrouillage des inscriptions',
+    publish: 'Publication',
+    reactivate: 'Réactivation',
+    reject: 'Refus',
+    reopen: 'Réouverture',
+    review: 'Examen',
+    session_created_by_regularization: 'Session créée après régularisation',
+    session_revoked: 'Session révoquée',
+    suspend: 'Suspension',
+    submit: 'Soumission',
+    sync: 'Synchronisation',
+    unlock: 'Déverrouillage',
+    unlock_student_creation: 'Déverrouillage des inscriptions',
+    unpublish: 'Dépublication',
+    update: 'Modification',
+    validate: 'Validation',
+  },
+  resource: {
+    academic_year: 'Année scolaire',
+    absence: 'Absence',
+    absence_control: 'Contrôle des absences',
+    absence_declaration: 'Déclaration d’absence',
+    absence_justification: 'Justification d’absence',
+    bulletin: 'Bulletin',
+    bulletin_generation: 'Génération de bulletins',
+    class: 'Classe',
+    class_exam_configuration: 'Configuration d’examen',
+    class_homeroom_assignment: 'Association de professeur principal',
+    class_progression: 'Progression de classe',
+    class_succession: 'Parcours de classe',
+    evaluation: 'Évaluation',
+    evaluation_participation: 'Participation à une évaluation',
+    evaluation_publication: 'Publication d’évaluation',
+    exam_result: 'Résultat d’examen',
+    grade: 'Note',
+    late_arrival: 'Retard',
+    late_arrival_justification: 'Justification de retard',
+    school: 'Établissement',
+    school_class: 'Classe d’établissement',
+    school_logo: 'Logo d’établissement',
+    school_cycles: 'Cycles de l’établissement',
+    school_subject: 'Matière d’établissement',
+    school_period_type_approval: 'Approbation de période scolaire',
+    school_term: 'Période scolaire',
+    student: 'Élève',
+    subject: 'Matière',
+    subject_type: 'Type de matière',
+    teacher_class_assignment: 'Association enseignant-classe',
+    teacher_class_subject_assignment: 'Association enseignant-classe-matière',
+    teacher_class_subject_assignments: 'Associations enseignant-classe-matière',
+    teacher_subject_assignment: 'Association enseignant-matière',
+    user: 'Compte utilisateur',
+  },
+  result: {
+    denied: 'Refusée',
+    failure: 'Échouée',
+    success: 'Réussie',
+    unknown: 'Inconnu',
+  },
+  source: {
+    android: 'Application Android',
+    mobile: 'Application mobile',
+    system: 'Système',
+    web: 'Application Web',
+  },
+};
+
+export function translateAuditLabel(kind: AuditLabelKind, value: string | null | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) return 'Non renseigné';
+  return labels[kind][normalized] ?? normalized.replace(/[_-]+/g, ' ');
+}
+
+export function auditLabelFilterTerms(kind: AuditLabelKind, value: string): string[] {
+  const normalized = value.trim().toLocaleLowerCase('fr-FR');
+  if (!normalized) return [];
+  const matchingCodes = Object.entries(labels[kind])
+    .filter(([code, label]) => (
+      label.toLocaleLowerCase('fr-FR').includes(normalized)
+      || code.replace(/[_-]+/g, ' ').toLocaleLowerCase('fr-FR').includes(normalized)
+    ))
+    .map(([code]) => code);
+  return [...new Set([value, ...matchingCodes])];
+}
+
+export function translateAuditFieldName(value: string): string {
+  return fieldLabels[value] ?? value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/^./, (character) => character.toLocaleUpperCase('fr-FR'));
+}

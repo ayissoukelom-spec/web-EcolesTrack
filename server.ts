@@ -24,6 +24,7 @@ import path from 'path';
 import { promises as fsPromises } from 'fs';
 import crypto from 'crypto';
 import ExcelJS from 'exceljs';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
@@ -43,6 +44,13 @@ import {
   hasAllExpectedGrades,
 } from './src/lib/groupedEvaluationVisibility.ts';
 import { buildGradeNotificationMessage } from './src/lib/buildGradeNotificationMessage.ts';
+import {
+  appendAuditEvent,
+  appendAuditEventAfterRollback,
+  createAuditSnapshot,
+  type AuditEventInput,
+} from './src/lib/auditEvents.ts';
+import { auditLabelFilterTerms, translateAuditFieldName, translateAuditLabel } from './src/lib/auditEventLabels.ts';
 
 const isRestrictedDatabaseRuntime = () => process.env.ECOLETRACK_RESTRICTED_DB_RUNTIME === 'true';
 import { getGradeNotificationDedupeKey } from './src/lib/gradeNotification.ts';
@@ -154,7 +162,7 @@ import {
   tuitionProgressReminderControls,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, like } from 'drizzle-orm';
+import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, gte, like, type SQL } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -770,6 +778,7 @@ function createGroupedEvaluationPublicationRepository(): GroupedEvaluationPublic
         };
 
         const transaction: GroupedEvaluationPublicationTransaction = {
+          appendAuditEvent: (event) => appendAuditEvent(executor, event),
           findPublication: getPublication,
           getPublication,
           loadContext: async (schoolId, request): Promise<GroupedPublicationContext> => {
@@ -1178,8 +1187,24 @@ async function syncTeacherSubjectAssignments(
   schoolId: number,
   subjectIds: unknown,
   executor: TeacherCreationDatabaseExecutor = db,
+  actor?: ResolvedActor,
 ) {
   if (!Array.isArray(subjectIds)) return null;
+  if (!actor) throw new Error('An actor is required to synchronize teacher subject assignments.');
+  const failureEvent = {
+    ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'sync', 'teacher_subject_assignment', teacherId),
+    result: 'failure' as const,
+    description: 'Teacher subject assignment synchronization failed.',
+  };
+  if (executor === db) {
+    try {
+      return await db.transaction((tx) => syncTeacherSubjectAssignments(teacherId, schoolId, subjectIds, tx, actor));
+    } catch (businessError) {
+      await recordAuditOutcomeAfterRollback(failureEvent, businessError);
+      throw businessError;
+    }
+  }
+
   const requestedIds = Array.from(new Set(subjectIds
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0)));
@@ -1203,25 +1228,40 @@ async function syncTeacherSubjectAssignments(
   const existingAssignments = await executor.select().from(teacherSubjects).where(and(
     eq(teacherSubjects.teacherId, teacherId),
     eq(teacherSubjects.schoolId, schoolId),
-  ));
+  )).for('update');
   const approvedIds = new Set(approvedSubjects.map((subject) => subject.id));
   const existingIds = new Set(existingAssignments.map((assignment) => assignment.subjectId));
   for (const assignment of existingAssignments) {
     if (!approvedIds.has(assignment.subjectId)) {
-      await executor.delete(teacherSubjects).where(and(
+      const [deleted] = await executor.delete(teacherSubjects).where(and(
         eq(teacherSubjects.teacherId, teacherId),
         eq(teacherSubjects.schoolId, schoolId),
         eq(teacherSubjects.subjectId, assignment.subjectId),
-      ));
+      )).returning();
+      if (!deleted) throw new Error('Teacher subject assignment deletion did not return a row.');
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'delete', 'teacher_subject_assignment', deleted.id),
+        beforeValues: createAuditSnapshot(deleted, ['teacherId', 'schoolId', 'subjectId']),
+        result: 'success',
+        description: 'Teacher subject assignment removed.',
+      });
     }
   }
   const missingAssignments = approvedSubjects.filter((subject) => !existingIds.has(subject.id));
   if (missingAssignments.length > 0) {
-    await executor.insert(teacherSubjects).values(missingAssignments.map((subject) => ({
+    const createdAssignments = await executor.insert(teacherSubjects).values(missingAssignments.map((subject) => ({
       teacherId,
       schoolId,
       subjectId: subject.id,
-    })));
+    }))).returning();
+    for (const created of createdAssignments) {
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'create', 'teacher_subject_assignment', created.id),
+        afterValues: createAuditSnapshot(created, ['teacherId', 'schoolId', 'subjectId']),
+        result: 'success',
+        description: 'Teacher subject assignment created.',
+      });
+    }
   }
   return approvedSubjects;
 }
@@ -1355,28 +1395,298 @@ async function syncTeacherClassSubjectAssignments(
   assignments: Array<{ classId: number; subjectId: number }>,
   executor: TeacherCreationDatabaseExecutor = db,
   managedAssignments?: Array<{ classId: number; subjectId: number }>,
+  actor?: ResolvedActor,
 ) {
+  if (!actor) throw new Error('An actor is required to synchronize teacher assignments.');
+  const failureEvent = {
+    ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'sync', 'teacher_class_subject_assignments', teacherId),
+    result: 'failure' as const,
+    description: 'Teacher class-subject assignment synchronization failed.',
+  };
+  if (executor === db) {
+    try {
+      await db.transaction((tx) => syncTeacherClassSubjectAssignments(
+        teacherId,
+        schoolId,
+        assignments,
+        tx,
+        managedAssignments,
+        actor,
+      ));
+    } catch (businessError) {
+      await recordAuditOutcomeAfterRollback(failureEvent, businessError);
+      throw businessError;
+    }
+    return;
+  }
+
   const now = new Date();
   const existingAssignments = await executor.select().from(teacherClassSubjects).where(and(
     eq(teacherClassSubjects.teacherId, teacherId),
     eq(teacherClassSubjects.schoolId, schoolId),
-  ));
+  )).for('update');
   const changes = planTeacherTeachingAssignmentSync(existingAssignments, assignments, managedAssignments);
   for (const change of changes) {
     if (change.kind === 'deactivate' || change.kind === 'activate') {
-      await executor.update(teacherClassSubjects)
+      const before = existingAssignments.find((row) => row.id === change.id);
+      const [after] = await executor.update(teacherClassSubjects)
         .set({ isActive: change.kind === 'activate', updatedAt: now })
-        .where(eq(teacherClassSubjects.id, change.id));
+        .where(eq(teacherClassSubjects.id, change.id))
+        .returning();
+      if (!before || !after) throw new Error('Teacher assignment update did not return a row.');
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(
+          actor,
+          schoolId,
+          'teaching_assignments',
+          change.kind === 'activate' ? 'activate' : 'deactivate',
+          'teacher_class_subject_assignment',
+          after.id,
+        ),
+        beforeValues: createAuditSnapshot(before, ['teacherId', 'schoolId', 'classId', 'subjectId', 'isActive']),
+        afterValues: createAuditSnapshot(after, ['teacherId', 'schoolId', 'classId', 'subjectId', 'isActive']),
+        result: 'success',
+        description: change.kind === 'activate'
+          ? 'Teacher class-subject assignment activated.'
+          : 'Teacher class-subject assignment deactivated.',
+      });
     } else {
-      await executor.insert(teacherClassSubjects).values({
+      const [after] = await executor.insert(teacherClassSubjects).values({
         teacherId,
         schoolId,
         classId: change.assignment.classId,
         subjectId: change.assignment.subjectId,
         isActive: true,
         updatedAt: now,
+      }).returning();
+      if (!after) throw new Error('Teacher assignment insert did not return a row.');
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'create', 'teacher_class_subject_assignment', after.id),
+        afterValues: createAuditSnapshot(after, ['teacherId', 'schoolId', 'classId', 'subjectId', 'isActive']),
+        result: 'success',
+        description: 'Teacher class-subject assignment created.',
       });
     }
+  }
+}
+
+async function recordTeacherAssignmentDenial(
+  actor: ResolvedActor,
+  schoolId: number | null,
+  reason: string,
+) {
+  await recordAuditOutcomeAfterRollback({
+    ...createAuditEventContext(
+      actor,
+      schoolId,
+      'teaching_assignments',
+      'sync',
+      'teacher_class_subject_assignments',
+    ),
+    result: 'denied',
+    source: 'web',
+    reason,
+    description: 'Teacher class-subject assignment request denied.',
+  }, new Error(reason));
+}
+
+async function reconcileSchoolStructure(
+  executor: TeacherCreationDatabaseExecutor,
+  actor: ResolvedActor,
+  schoolId: number,
+  classNames: unknown,
+  subjectNames: unknown,
+) {
+  const normalizedClassNames = Array.isArray(classNames)
+    ? Array.from(new Set(classNames.map((value) => String(value ?? '').trim()).filter(Boolean)))
+    : [];
+  const normalizedSubjectNames = Array.isArray(subjectNames)
+    ? Array.from(new Set(subjectNames.map((value) => String(value ?? '').trim()).filter(Boolean)))
+    : [];
+
+  if (normalizedClassNames.length > 0) {
+    const [activeGlobalYear] = await executor.select().from(academicYears).where(and(
+      eq(academicYears.isActive, true),
+      sql`${academicYears.schoolId} IS NULL`,
+    )).limit(1);
+    let yearId = activeGlobalYear?.id;
+
+    if (!yearId) {
+      const [globalYear] = await executor.select().from(academicYears)
+        .where(sql`${academicYears.schoolId} IS NULL`)
+        .orderBy(desc(academicYears.id))
+        .limit(1);
+      yearId = globalYear?.id;
+    }
+
+    if (!yearId) {
+      const [anyYear] = await executor.select().from(academicYears)
+        .orderBy(desc(academicYears.id))
+        .limit(1);
+      yearId = anyYear?.id;
+    }
+    for (const className of normalizedClassNames) {
+      const [globalClass] = await executor.select().from(classes).where(and(
+        sql`${classes.schoolId} IS NULL`,
+        eq(classes.name, className),
+      )).limit(1).for('update');
+
+      if (globalClass) {
+        const [existingSchoolClass] = await executor.select().from(schoolClasses).where(and(
+          eq(schoolClasses.schoolId, schoolId),
+          eq(schoolClasses.classId, globalClass.id),
+        )).limit(1).for('update');
+        if (!existingSchoolClass) {
+          const [createdSchoolClass] = await executor.insert(schoolClasses).values({
+            schoolId,
+            classId: globalClass.id,
+            status: 'approved',
+          }).returning();
+          if (!createdSchoolClass) throw new Error('School class association insert did not return a row.');
+          await appendAuditEvent(executor, {
+            ...createAuditEventContext(actor, schoolId, 'class_management', 'create', 'school_class', createdSchoolClass.id),
+            afterValues: createAuditSnapshot(createdSchoolClass, ['schoolId', 'classId', 'status']),
+            result: 'success',
+            description: 'Class approved for school.',
+          });
+        }
+        continue;
+      }
+
+      if (!yearId) throw new Error('No academic year is available for school class reconciliation.');
+      const [existingLocalClass] = await executor.select().from(classes).where(and(
+        sql`${classes.schoolId} IS NOT NULL`,
+        eq(classes.academicYearId, yearId),
+        eq(classes.name, className),
+      )).limit(1).for('update');
+
+      if (existingLocalClass) {
+        const originalSchoolId = existingLocalClass.schoolId;
+        const [globalizedClass] = await executor.update(classes)
+          .set({ schoolId: null })
+          .where(eq(classes.id, existingLocalClass.id))
+          .returning();
+        if (!globalizedClass) throw new Error('Class reconciliation did not return an updated class.');
+        await appendAuditEvent(executor, {
+          ...createAuditEventContext(actor, schoolId, 'class_management', 'update', 'class', globalizedClass.id),
+          beforeValues: createAuditSnapshot(existingLocalClass, ['name', 'schoolId', 'academicYearId', 'levelId', 'progressionCode']),
+          afterValues: createAuditSnapshot(globalizedClass, ['name', 'schoolId', 'academicYearId', 'levelId', 'progressionCode']),
+          result: 'success',
+          description: 'School class reconciled with the global class catalog.',
+        });
+
+        const schoolIds = [schoolId, ...(originalSchoolId != null && originalSchoolId !== schoolId ? [originalSchoolId] : [])];
+        for (const linkedSchoolId of schoolIds) {
+          const [existingSchoolClass] = await executor.select().from(schoolClasses).where(and(
+            eq(schoolClasses.schoolId, linkedSchoolId),
+            eq(schoolClasses.classId, globalizedClass.id),
+          )).limit(1).for('update');
+          if (existingSchoolClass) continue;
+          const [createdSchoolClass] = await executor.insert(schoolClasses).values({
+            schoolId: linkedSchoolId,
+            classId: globalizedClass.id,
+            status: 'approved',
+          }).returning();
+          if (!createdSchoolClass) throw new Error('School class association insert did not return a row.');
+          await appendAuditEvent(executor, {
+            ...createAuditEventContext(actor, linkedSchoolId, 'class_management', 'create', 'school_class', createdSchoolClass.id),
+            afterValues: createAuditSnapshot(createdSchoolClass, ['schoolId', 'classId', 'status']),
+            result: 'success',
+            description: 'Class approved for school.',
+          });
+        }
+        continue;
+      }
+
+      const [createdClass] = await executor.insert(classes).values({
+        name: className,
+        schoolId: null,
+        academicYearId: yearId,
+        progressionCode: normalizeClassProgressionCode(className),
+      }).returning();
+      if (!createdClass) throw new Error('Class insert did not return a row.');
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(actor, schoolId, 'class_management', 'create', 'class', createdClass.id),
+        afterValues: createAuditSnapshot(createdClass, [
+          'name', 'schoolId', 'academicYearId', 'levelId', 'progressionCode',
+        ]),
+        result: 'success',
+        description: 'Class created during school reconciliation.',
+      });
+
+      const [createdSchoolClass] = await executor.insert(schoolClasses).values({
+        schoolId,
+        classId: createdClass.id,
+        status: 'approved',
+      }).returning();
+      if (!createdSchoolClass) throw new Error('School class association insert did not return a row.');
+      await appendAuditEvent(executor, {
+        ...createAuditEventContext(actor, schoolId, 'class_management', 'create', 'school_class', createdSchoolClass.id),
+        afterValues: createAuditSnapshot(createdSchoolClass, ['schoolId', 'classId', 'status']),
+        result: 'success',
+        description: 'Class approved for school.',
+      });
+    }
+  }
+
+  for (const subjectName of normalizedSubjectNames) {
+    const [globalSubject] = await executor.select().from(subjects).where(and(
+      sql`${subjects.schoolId} IS NULL`,
+      eq(subjects.name, subjectName),
+    )).limit(1).for('update');
+
+    if (globalSubject) {
+      const [existingSchoolSubject] = await executor.select().from(schoolSubjects).where(and(
+        eq(schoolSubjects.schoolId, schoolId),
+        eq(schoolSubjects.subjectId, globalSubject.id),
+      )).limit(1).for('update');
+      if (existingSchoolSubject?.status === 'rejected') {
+        const [approvedSchoolSubject] = await executor.update(schoolSubjects)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(eq(schoolSubjects.id, existingSchoolSubject.id))
+          .returning();
+        if (!approvedSchoolSubject) throw new Error('School subject approval did not return a row.');
+        await appendAuditEvent(executor, {
+          ...createAuditEventContext(actor, schoolId, 'subject_management', 'update', 'school_subject', approvedSchoolSubject.id),
+          beforeValues: createAuditSnapshot(existingSchoolSubject, ['schoolId', 'subjectId', 'status']),
+          afterValues: createAuditSnapshot(approvedSchoolSubject, ['schoolId', 'subjectId', 'status']),
+          result: 'success',
+          description: 'Subject approval status updated.',
+        });
+      } else if (!existingSchoolSubject) {
+        const [createdSchoolSubject] = await executor.insert(schoolSubjects).values({
+          schoolId,
+          subjectId: globalSubject.id,
+          status: 'approved',
+        }).returning();
+        if (!createdSchoolSubject) throw new Error('School subject association insert did not return a row.');
+        await appendAuditEvent(executor, {
+          ...createAuditEventContext(actor, schoolId, 'subject_management', 'create', 'school_subject', createdSchoolSubject.id),
+          afterValues: createAuditSnapshot(createdSchoolSubject, ['schoolId', 'subjectId', 'status']),
+          result: 'success',
+          description: 'Subject approved for school.',
+        });
+      }
+      continue;
+    }
+
+    const [existingLocalSubject] = await executor.select().from(subjects).where(and(
+      eq(subjects.schoolId, schoolId),
+      eq(subjects.name, subjectName),
+    )).limit(1).for('update');
+    if (existingLocalSubject) continue;
+
+    const [createdSubject] = await executor.insert(subjects).values({
+      name: subjectName,
+      schoolId,
+    }).returning();
+    if (!createdSubject) throw new Error('School subject insert did not return a row.');
+    await appendAuditEvent(executor, {
+      ...createAuditEventContext(actor, schoolId, 'subject_management', 'create', 'subject', createdSubject.id),
+      afterValues: createAuditSnapshot(createdSubject, ['name', 'schoolId', 'subjectTypeId']),
+      result: 'success',
+      description: 'School subject created during school reconciliation.',
+    });
   }
 }
 
@@ -1386,21 +1696,113 @@ async function syncTeacherClassMemberships(
   classIds: number[],
   executor: TeacherCreationDatabaseExecutor = db,
   managedClassIds?: number[],
+  actor?: ResolvedActor,
 ) {
+  if (!actor) throw new Error('An actor is required to synchronize teacher class memberships.');
+  const failureEvent = {
+    ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'sync', 'teacher_class_assignment', teacherId),
+    result: 'failure' as const,
+    description: 'Teacher class assignment synchronization failed.',
+  };
+  if (executor === db) {
+    try {
+      await db.transaction((tx) => syncTeacherClassMemberships(
+        teacherId,
+        schoolId,
+        classIds,
+        tx,
+        managedClassIds,
+        actor,
+      ));
+    } catch (businessError) {
+      await recordAuditOutcomeAfterRollback(failureEvent, businessError);
+      throw businessError;
+    }
+    return;
+  }
+
   const existingAssignments = await executor.select().from(classTeachers).where(and(
     eq(classTeachers.teacherId, teacherId),
     eq(classTeachers.schoolId, schoolId),
-  ));
+  )).for('update');
   const plan = planTeacherClassMembershipSync(existingAssignments, classIds, managedClassIds);
   for (const classId of plan.remove) {
-    await executor.delete(classTeachers).where(and(
+    const [before] = existingAssignments.filter((assignment) => assignment.classId === classId);
+    const [deleted] = await executor.delete(classTeachers).where(and(
       eq(classTeachers.teacherId, teacherId),
       eq(classTeachers.schoolId, schoolId),
       eq(classTeachers.classId, classId),
-    ));
+    )).returning();
+    if (!before || !deleted) throw new Error('Teacher class assignment deletion did not return a row.');
+    await appendAuditEvent(executor, {
+      ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'delete', 'teacher_class_assignment', deleted.id),
+      beforeValues: createAuditSnapshot(before, ['teacherId', 'schoolId', 'classId']),
+      result: 'success',
+      description: 'Teacher class assignment removed.',
+    });
   }
   for (const classId of plan.add) {
-    await executor.insert(classTeachers).values({ classId, teacherId, schoolId });
+    const [created] = await executor.insert(classTeachers).values({ classId, teacherId, schoolId }).returning();
+    if (!created) throw new Error('Teacher class assignment insert did not return a row.');
+    await appendAuditEvent(executor, {
+      ...createAuditEventContext(actor, schoolId, 'teaching_assignments', 'create', 'teacher_class_assignment', created.id),
+      afterValues: createAuditSnapshot(created, ['teacherId', 'schoolId', 'classId']),
+      result: 'success',
+      description: 'Teacher class assignment created.',
+    });
+  }
+}
+
+async function synchronizeTeacherAssignments(input: {
+  teacherId: number;
+  schoolId: number;
+  actor: ResolvedActor;
+  subjectIds?: number[];
+  teachingAssignments?: Array<{ classId: number; subjectId: number }> | null;
+  classIds?: number[];
+  managedTeachingAssignments?: Array<{ classId: number; subjectId: number }>;
+  managedClassIds?: number[];
+}) {
+  try {
+    await db.transaction(async (tx) => {
+      if (input.subjectIds !== undefined) {
+        await syncTeacherSubjectAssignments(input.teacherId, input.schoolId, input.subjectIds, tx, input.actor);
+      }
+      if (input.teachingAssignments != null) {
+        await syncTeacherClassSubjectAssignments(
+          input.teacherId,
+          input.schoolId,
+          input.teachingAssignments,
+          tx,
+          input.managedTeachingAssignments,
+          input.actor,
+        );
+      }
+      if (input.classIds !== undefined) {
+        await syncTeacherClassMemberships(
+          input.teacherId,
+          input.schoolId,
+          input.classIds,
+          tx,
+          input.managedClassIds,
+          input.actor,
+        );
+      }
+    });
+  } catch (businessError) {
+    await recordAuditOutcomeAfterRollback({
+      ...createAuditEventContext(
+        input.actor,
+        input.schoolId,
+        'teaching_assignments',
+        'sync',
+        'teacher_assignments',
+        input.teacherId,
+      ),
+      result: 'failure',
+      description: 'Teacher assignment synchronization failed.',
+    }, businessError);
+    throw businessError;
   }
 }
 
@@ -1547,6 +1949,49 @@ async function logAuditEvent(actor: any, action: string, resourceType: string, r
   } catch {
     console.error('Failed to persist audit event.');
   }
+}
+
+async function recordAuditOutcomeAfterRollback(
+  event: Omit<AuditEventInput, 'result'> & { result: 'denied' | 'failure' },
+  businessError: unknown,
+): Promise<void> {
+  const outcome = await appendAuditEventAfterRollback(db, event, businessError);
+  if (outcome.status === 'failed') {
+    console.error('Failed to persist audit outcome after rollback.', {
+      action: event.action,
+      resourceType: event.resourceType,
+      auditErrorName: outcome.auditError instanceof Error ? outcome.auditError.name : 'unknown',
+    });
+  }
+}
+
+function createAuditEventContext(
+  actor: ResolvedActor,
+  targetSchoolId: number | null,
+  module: string,
+  action: string,
+  resourceType: string,
+  resourceId: number | null = null,
+) {
+  return {
+    actor: {
+      userId: actor.id ?? null,
+      role: actor.role,
+      email: actor.email ?? null,
+      name: actor.name ?? null,
+      activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+    },
+    targetSchool: { id: targetSchoolId },
+    module,
+    action,
+    resourceType,
+    resourceId,
+    source: 'web',
+  };
+}
+
+function isPostgresUniqueViolation(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && 'code' in error && error.code === '23505';
 }
 
 /**
@@ -3394,7 +3839,20 @@ export async function createApp() {
       }
 
       const temporaryCredential = generateTemporaryLocalPassword();
-      const { user: createdUser, teacherProfile, teacherClassIds } = await db.transaction(async (tx) => {
+      const auditActor = {
+        userId: actor.id ?? null,
+        role: actor.role,
+        email: actor.email ?? null,
+        name: actor.name ?? null,
+        activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+      };
+      let creationResult: {
+        user: typeof users.$inferSelect;
+        teacherProfile: typeof teachers.$inferSelect | null;
+        teacherClassIds: number[];
+      };
+      try {
+        creationResult = await db.transaction(async (tx) => {
         const [newUser] = await tx.insert(users).values({
           uid: finalUid,
           email: normalizedEmail,
@@ -3413,6 +3871,9 @@ export async function createApp() {
           salt: temporaryCredential.salt,
           mustReset: true,
         });
+        if ((role === 'school_admin' || role === 'surveillant') && resolvedSchoolId != null) {
+          await upsertUserSchoolMembership(newUser.id, resolvedSchoolId, role, true, tx);
+        }
 
         let newTeacherProfile: typeof teachers.$inferSelect | null = null;
         let newTeacherClassIds: number[] = [];
@@ -3428,9 +3889,9 @@ export async function createApp() {
             .returning();
           newTeacherProfile = profile;
 
-          await syncTeacherSubjectAssignments(profile.id, resolvedSchoolId, effectiveSubjectIds ?? [], tx);
-          await syncTeacherClassSubjectAssignments(profile.id, resolvedSchoolId, normalizedTeachingAssignments ?? [], tx);
-          await syncTeacherClassMemberships(profile.id, resolvedSchoolId, effectiveClassIds ?? [], tx);
+          await syncTeacherSubjectAssignments(profile.id, resolvedSchoolId, effectiveSubjectIds ?? [], tx, actor);
+          await syncTeacherClassSubjectAssignments(profile.id, resolvedSchoolId, normalizedTeachingAssignments ?? [], tx, undefined, actor);
+          await syncTeacherClassMemberships(profile.id, resolvedSchoolId, effectiveClassIds ?? [], tx, undefined, actor);
 
           const assignments = await tx
             .select({ classId: classTeachers.classId })
@@ -3442,19 +3903,18 @@ export async function createApp() {
           newTeacherClassIds = assignments.map((assignment) => assignment.classId);
         }
 
-        if (role === 'teacher') {
-          await tx.insert(auditEvents).values({
-            actorUserId: actor.id ?? null,
-            actorRole: actor.role,
-            actorEmail: actor.email ?? null,
-            actorName: actor.name ?? null,
+        await appendAuditEvent(tx, {
+            actor: auditActor,
+            targetSchool: { id: resolvedSchoolId ?? null },
+            module: 'user_management',
             action: 'create',
             resourceType: 'user',
             resourceId: newUser.id,
-            schoolId: actor.schoolId ?? null,
-            description: `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created teacher account ${newUser.email}`,
-          }).returning();
-        }
+            afterValues: createAuditSnapshot(newUser, ['role', 'schoolId']),
+            result: 'success',
+            source: 'web',
+            description: role === 'teacher' ? 'Teacher account created.' : 'Account created.',
+          });
 
         let newParent: typeof parents.$inferSelect | null = null;
         if (role === 'parent') {
@@ -3497,13 +3957,23 @@ export async function createApp() {
           teacherClassIds: newTeacherClassIds,
         };
       });
+      } catch (businessError) {
+        const duplicateConflict = isUsersPhoneUniqueViolation(businessError)
+          || isUsersEmailUniqueViolation(businessError);
+        await recordAuditOutcomeAfterRollback({
+          actor: auditActor,
+          targetSchool: { id: resolvedSchoolId ?? null },
+          module: 'user_management',
+          action: 'create',
+          resourceType: 'user',
+          result: duplicateConflict ? 'denied' : 'failure',
+          source: 'web',
+          description: duplicateConflict ? 'Account creation was rejected by a uniqueness constraint.' : 'Account creation failed.',
+        }, businessError);
+        throw businessError;
+      }
+      const { user: createdUser, teacherProfile, teacherClassIds } = creationResult;
 
-      if (role === 'school_admin' && resolvedSchoolId != null) {
-        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
-      }
-      if (role === 'surveillant' && resolvedSchoolId != null) {
-        await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'surveillant', true);
-      }
       if (role === 'teacher') {
         // Log if inconsistency exists after creation
         try {
@@ -3511,10 +3981,6 @@ export async function createApp() {
         } catch (e) {
           /* ignore */
         }
-      }
-
-      if (role !== 'teacher') {
-        await logAuditEvent(actor, 'create', 'user', createdUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} created ${role} account ${createdUser.email}`);
       }
 
       // Build response with classIds for teachers
@@ -4071,27 +4537,21 @@ export async function createApp() {
         }
 
         const assignmentSchoolId = teacherProfileSchoolId;
-        if (teacherProfileId != null && assignmentSchoolId != null && normalizedTeachingAssignments) {
-          await syncTeacherClassSubjectAssignments(
-            teacherProfileId,
-            assignmentSchoolId,
-            normalizedTeachingAssignments,
-            db,
-            normalizedTeachingAssignmentScope ?? undefined,
-          );
-        }
-        if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(effectiveSubjectIds)) {
-          await syncTeacherSubjectAssignments(teacherProfileId, assignmentSchoolId, effectiveSubjectIds);
-        }
-
-        if (teacherProfileId != null && assignmentSchoolId != null && Array.isArray(effectiveClassIds)) {
-          await syncTeacherClassMemberships(
-            teacherProfileId,
-            assignmentSchoolId,
-            effectiveClassIds,
-            db,
-            normalizedClassSelectionScope ?? undefined,
-          );
+        if (teacherProfileId != null && assignmentSchoolId != null && (
+          normalizedTeachingAssignments != null
+          || Array.isArray(effectiveSubjectIds)
+          || Array.isArray(effectiveClassIds)
+        )) {
+          await synchronizeTeacherAssignments({
+            teacherId: teacherProfileId,
+            schoolId: assignmentSchoolId,
+            actor,
+            subjectIds: Array.isArray(effectiveSubjectIds) ? effectiveSubjectIds : undefined,
+            teachingAssignments: normalizedTeachingAssignments,
+            classIds: Array.isArray(effectiveClassIds) ? effectiveClassIds : undefined,
+            managedTeachingAssignments: normalizedTeachingAssignmentScope ?? undefined,
+            managedClassIds: normalizedClassSelectionScope ?? undefined,
+          });
         }
       } else if (!isAddingFunction && role === 'parent') {
         const parentValues: any = {
@@ -4135,8 +4595,22 @@ export async function createApp() {
       const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
       const diffDescription = isAddingFunction
         ? `Added ${additionalRole} function in school ${parsedSchoolId ?? targetUser.schoolId}.`
-        : formatUserUpdateDiff(targetUser, { email: effectiveEmail, name, role, schoolId: incomingSchoolId, phone, specialization });
-      await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} updated account ${updatedUser.email}. ${diffDescription}`);
+        : formatUserUpdateDiff(targetUser, {
+          email: updatedUser.email ?? null,
+          name: updatedUser.name ?? '',
+          role: updatedUser.role,
+          schoolId: updatedUser.schoolId,
+          phone: updatedUser.phone ?? undefined,
+          specialization: updatedUser.specialization,
+        });
+      await logAuditEvent(
+        actor,
+        'update',
+        'user',
+        updatedUser.id,
+        actor.schoolId ?? null,
+        `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} updated an account. ${diffDescription}`,
+      );
       
       // If teacher role, include classIds in response
       if (role === 'teacher') {
@@ -4319,18 +4793,596 @@ export async function createApp() {
     }
   });
 
-  // Audit events are visible only to super_admin
+  const auditPageSize = 25;
+  const auditExportLimit = 10000;
+  const auditEventReadColumns = {
+    id: auditEvents.id,
+    actorUserId: auditEvents.actorUserId,
+    actorRole: auditEvents.actorRole,
+    actorEmail: auditEvents.actorEmail,
+    actorName: auditEvents.actorName,
+    action: auditEvents.action,
+    resourceType: auditEvents.resourceType,
+    resourceId: auditEvents.resourceId,
+    schoolId: auditEvents.schoolId,
+    activeFunctionId: auditEvents.activeFunctionId,
+    activeFunctionName: auditEvents.activeFunctionName,
+    schoolNameSnapshot: auditEvents.schoolNameSnapshot,
+    occurredAt: auditEvents.occurredAt,
+    module: auditEvents.module,
+    result: auditEvents.result,
+    source: auditEvents.source,
+    beforeValues: auditEvents.beforeValues,
+    afterValues: auditEvents.afterValues,
+    ipAddress: auditEvents.ipAddress,
+    correlationId: auditEvents.correlationId,
+    reason: auditEvents.reason,
+    description: auditEvents.description,
+    createdAt: auditEvents.createdAt,
+  };
+  const auditSensitiveKeyTokens = new Set([
+    'password', 'passwd', 'passphrase', 'token', 'jwt', 'bearer', 'secret',
+    'credential', 'salt', 'hash', 'authorization', 'cookie', 'session',
+    'refresh', 'key', 'keys', 'auth', 'otp', 'mfa',
+  ]);
+  const isAuditRecord = (value: unknown): value is Record<string, unknown> => (
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+  );
+  const isSensitiveAuditKey = (key: string) => key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .some((token) => auditSensitiveKeyTokens.has(token) || token.startsWith('auth'));
+
+  const sanitizeAuditSnapshot = (value: unknown, depth = 0): unknown => {
+    if (depth >= 8 && (Array.isArray(value) || isAuditRecord(value))) return '[Contenu imbriqué masqué]';
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeAuditSnapshot(item, depth + 1));
+    }
+    if (!isAuditRecord(value)) return value;
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => key !== '$auditContext' && !isSensitiveAuditKey(key))
+      .map(([key, item]) => [key, sanitizeAuditSnapshot(item, depth + 1)]));
+  };
+  const redactAuditText = (value: string | null) => value?.replace(
+    /((?:password|passwd|passphrase|token|secret|api[_-]?key|authorization|cookie|refresh[_-]?token|session[_-]?token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+    '$1[masqué]',
+  ) ?? null;
+
+  const auditContextFromSnapshot = (value: unknown) => {
+    if (!isAuditRecord(value) || !isAuditRecord(value.$auditContext)) return null;
+    const context = value.$auditContext;
+    const schoolId = context.actorActiveSchoolId;
+    const schoolName = context.actorActiveSchoolName;
+    return {
+      actorActiveSchoolId: typeof schoolId === 'number' && Number.isInteger(schoolId) ? schoolId : null,
+      actorActiveSchoolName: typeof schoolName === 'string' ? schoolName : null,
+    };
+  };
+
+  const presentAuditEvent = (row: Omit<typeof auditEvents.$inferSelect, 'userAgent'>) => {
+    const auditContext = auditContextFromSnapshot(row.beforeValues);
+    const beforeValues = sanitizeAuditSnapshot(row.beforeValues);
+    const afterValues = sanitizeAuditSnapshot(row.afterValues);
+    return {
+      id: row.id,
+      actorUserId: row.actorUserId,
+      actorName: row.actorName,
+      actorEmail: row.actorEmail,
+      actorRole: row.actorRole,
+      activeFunctionId: row.activeFunctionId,
+      activeFunctionName: row.activeFunctionName,
+      action: row.action,
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      schoolId: row.schoolId,
+      schoolNameSnapshot: row.schoolNameSnapshot,
+      module: row.module,
+      result: row.result,
+      source: row.source,
+      beforeValues: isAuditRecord(beforeValues) && Object.keys(beforeValues).length > 0 ? beforeValues : null,
+      afterValues: isAuditRecord(afterValues) && Object.keys(afterValues).length > 0 ? afterValues : null,
+      auditContext,
+      reason: redactAuditText(row.reason),
+      correlationId: row.correlationId,
+      description: redactAuditText(row.description) ?? '',
+      occurredAt: row.occurredAt?.toISOString() ?? null,
+      createdAt: row.createdAt?.toISOString() ?? null,
+      ipAddress: row.ipAddress,
+    };
+  };
+
+  const readAuditQueryText = (value: unknown, field: string): string => {
+    if (value == null || value === '') return '';
+    if (typeof value !== 'string') throw new TypeError(`Le filtre « ${field} » est invalide.`);
+    const normalized = value.trim();
+    if (normalized.length > 120) throw new RangeError(`Le filtre « ${field} » est trop long.`);
+    return normalized;
+  };
+
+  const parseAuditDate = (value: string, field: string): Date | null => {
+    if (!value) return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new TypeError(`La date « ${field} » est invalide.`);
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new TypeError(`La date « ${field} » est invalide.`);
+    }
+    return parsed;
+  };
+
+  const parseAuditFilters = (query: Record<string, unknown>) => {
+    const schoolText = readAuditQueryText(query.schoolId, 'établissement');
+    let schoolId: number | null = null;
+    if (schoolText) {
+      schoolId = Number(schoolText);
+      if (!Number.isInteger(schoolId) || schoolId <= 0) throw new TypeError('Le filtre établissement est invalide.');
+    }
+    const from = parseAuditDate(readAuditQueryText(query.from, 'date de début'), 'de début');
+    const to = parseAuditDate(readAuditQueryText(query.to, 'date de fin'), 'de fin');
+    if (from && to && from > to) throw new TypeError('La date de début doit précéder ou correspondre à la date de fin.');
+    return {
+      schoolId,
+      user: readAuditQueryText(query.user, 'utilisateur'),
+      functionName: readAuditQueryText(query.function, 'fonction'),
+      module: readAuditQueryText(query.module, 'module'),
+      action: readAuditQueryText(query.action, 'opération'),
+      result: readAuditQueryText(query.result, 'résultat'),
+      from,
+      to,
+      resource: readAuditQueryText(query.resource, 'ressource'),
+      search: readAuditQueryText(query.search, 'recherche'),
+    };
+  };
+
+  const buildAuditWhere = (filters: ReturnType<typeof parseAuditFilters>) => {
+    const conditions: Array<SQL | undefined> = [];
+    if (filters.schoolId != null) {
+      conditions.push(or(
+        eq(auditEvents.schoolId, filters.schoolId),
+        and(
+          isNull(auditEvents.schoolId),
+          eq(auditEvents.resourceType, 'school'),
+          eq(auditEvents.resourceId, filters.schoolId),
+        ),
+      ));
+    }
+    if (filters.user) {
+      const pattern = `%${filters.user}%`;
+      conditions.push(or(
+        ilike(auditEvents.actorName, pattern),
+        ilike(auditEvents.actorEmail, pattern),
+        sql`${auditEvents.actorUserId}::text ILIKE ${pattern}`,
+      ));
+    }
+    if (filters.functionName) {
+      const terms = auditLabelFilterTerms('role', filters.functionName);
+      conditions.push(or(...terms.flatMap((term) => {
+        const pattern = `%${term}%`;
+        return [
+          ilike(auditEvents.activeFunctionName, pattern),
+          ilike(auditEvents.activeFunctionId, pattern),
+          ilike(auditEvents.actorRole, pattern),
+        ];
+      })));
+    }
+    if (filters.module) {
+      const terms = auditLabelFilterTerms('module', filters.module);
+      conditions.push(or(...terms.map((term) => ilike(auditEvents.module, `%${term}%`))));
+    }
+    if (filters.action) {
+      const terms = auditLabelFilterTerms('action', filters.action);
+      conditions.push(or(...terms.map((term) => ilike(auditEvents.action, `%${term}%`))));
+    }
+    if (filters.result === 'unknown') {
+      conditions.push(sql`${auditEvents.result} IS NULL OR lower(BTRIM(${auditEvents.result})) NOT IN ('success', 'denied', 'failure')`);
+    } else if (filters.result) {
+      conditions.push(eq(auditEvents.result, filters.result));
+    }
+    if (filters.resource) {
+      const terms = auditLabelFilterTerms('resource', filters.resource);
+      conditions.push(or(...terms.flatMap((term) => {
+        const pattern = `%${term}%`;
+        return [
+          ilike(auditEvents.resourceType, pattern),
+          sql`${auditEvents.resourceId}::text ILIKE ${pattern}`,
+        ];
+      })));
+    }
+    if (filters.from || filters.to) {
+      const eventTimestamp = sql<Date>`COALESCE(${auditEvents.occurredAt}, ${auditEvents.createdAt}::timestamptz)`;
+      if (filters.from) conditions.push(gte(eventTimestamp, filters.from));
+      if (filters.to) {
+        const exclusiveEnd = new Date(filters.to.getTime() + 24 * 60 * 60 * 1000);
+        conditions.push(sql`${eventTimestamp} < ${exclusiveEnd}`);
+      }
+    }
+    if (filters.search) {
+      const pattern = `%${filters.search}%`;
+      conditions.push(or(
+        ilike(auditEvents.description, pattern),
+        ilike(auditEvents.actorName, pattern),
+        ilike(auditEvents.actorEmail, pattern),
+        ilike(auditEvents.actorRole, pattern),
+        ilike(auditEvents.activeFunctionName, pattern),
+        ilike(auditEvents.module, pattern),
+        ilike(auditEvents.action, pattern),
+        ilike(auditEvents.resourceType, pattern),
+      ));
+    }
+    return and(...conditions);
+  };
+
+  const auditTimestampOrder = sql<Date>`COALESCE(${auditEvents.occurredAt}, ${auditEvents.createdAt}::timestamptz)`;
+  const requireSuperAdminForAudit = async (req: AuthRequest, res: express.Response) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthenticated' });
+      return false;
+    }
+    const actor = await resolveActor(req);
+    if (!actor || actor.role !== 'super_admin') {
+      res.status(403).json({ error: 'Forbidden' });
+      return false;
+    }
+    res.setHeader('Cache-Control', 'no-store, private');
+    return true;
+  };
+  const readAuditExportRows = async (filters: ReturnType<typeof parseAuditFilters>) => {
+    const where = buildAuditWhere(filters);
+    const [countRow] = await db.select({
+      total: sql<number>`count(*)::integer`,
+    }).from(auditEvents).where(where);
+    const total = Number(countRow?.total ?? 0);
+    if (total > auditExportLimit) {
+      const error = new RangeError(`L’export est limité à ${auditExportLimit} événements. Affinez les filtres.`);
+      (error as RangeError & { status?: number }).status = 413;
+      throw error;
+    }
+    const rows = await db.select(auditEventReadColumns).from(auditEvents)
+      .where(where)
+      .orderBy(desc(auditTimestampOrder), desc(auditEvents.id))
+      .limit(auditExportLimit);
+    return rows.map(presentAuditEvent);
+  };
+
+  const auditTimestampLabel = (event: ReturnType<typeof presentAuditEvent>) => {
+    const timestamp = event.occurredAt ?? event.createdAt;
+    if (!timestamp) return 'Non renseignée';
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? 'Non renseignée' : date.toLocaleString('fr-FR', { hour12: false });
+  };
+  const auditActorIdentity = (event: ReturnType<typeof presentAuditEvent>) => (
+    [event.actorName, event.actorEmail].filter(Boolean).join(' · ') || 'Identité inconnue'
+  );
+  const translateAuditSnapshotFields = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(translateAuditSnapshotFields);
+    if (!isAuditRecord(value)) return value;
+    const translated: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const label = translateAuditFieldName(key);
+      const uniqueLabel = Object.prototype.hasOwnProperty.call(translated, label) ? `${label} (${key})` : label;
+      translated[uniqueLabel] = translateAuditSnapshotFields(item);
+    }
+    return translated;
+  };
+  const auditSnapshotText = (value: unknown) => value == null
+    ? 'Non renseigné'
+    : JSON.stringify(translateAuditSnapshotFields(value), null, 2);
+
   app.get('/api/audit/events', requireAuth, async (req: AuthRequest, res) => {
     try {
-      if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      const actor = await resolveActor(req);
-      if (!actor || actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
+      if (!await requireSuperAdminForAudit(req, res)) return;
+      const filters = parseAuditFilters(req.query as Record<string, unknown>);
+      const pageText = readAuditQueryText(req.query.page, 'page');
+      const requestedPage = pageText ? Number(pageText) : 1;
+      if (!Number.isSafeInteger(requestedPage) || requestedPage < 1) throw new TypeError('Le numéro de page est invalide.');
+      const where = buildAuditWhere(filters);
+      const [summaryRow] = await db.select({
+        total: sql<number>`count(*)::integer`,
+        distinctUsers: sql<number>`count(distinct case
+          when ${auditEvents.actorUserId} is not null then 'id:' || ${auditEvents.actorUserId}::text
+          when ${auditEvents.actorEmail} is not null then 'email:' || lower(${auditEvents.actorEmail})
+          when ${auditEvents.actorName} is not null then 'name:' || lower(${auditEvents.actorName})
+        end)::integer`,
+        successful: sql<number>`count(*) filter (where ${auditEvents.result} = 'success')::integer`,
+        denied: sql<number>`count(*) filter (where ${auditEvents.result} = 'denied')::integer`,
+        failed: sql<number>`count(*) filter (where ${auditEvents.result} = 'failure')::integer`,
+        unknown: sql<number>`count(*) filter (where ${auditEvents.result} is null or lower(BTRIM(${auditEvents.result})) not in ('success', 'denied', 'failure'))::integer`,
+      }).from(auditEvents).where(where);
+      const total = Number(summaryRow?.total ?? 0);
+      const totalPages = Math.ceil(total / auditPageSize);
+      const page = Math.min(requestedPage, Math.max(totalPages, 1));
+      const rows = await db.select(auditEventReadColumns).from(auditEvents)
+        .where(where)
+        .orderBy(desc(auditTimestampOrder), desc(auditEvents.id))
+        .limit(auditPageSize)
+        .offset((page - 1) * auditPageSize);
 
-      const events = await db.select().from(auditEvents).orderBy(desc(auditEvents.createdAt));
-      res.json(events);
+      res.json({
+        events: rows.map(presentAuditEvent),
+        summary: {
+          total,
+          distinctUsers: Number(summaryRow?.distinctUsers ?? 0),
+          successful: Number(summaryRow?.successful ?? 0),
+          denied: Number(summaryRow?.denied ?? 0),
+          failed: Number(summaryRow?.failed ?? 0),
+          unknown: Number(summaryRow?.unknown ?? 0),
+        },
+        pagination: { page, pageSize: auditPageSize, total, totalPages },
+      });
     } catch (err: any) {
+      if (err instanceof TypeError || err instanceof RangeError) {
+        return res.status(400).json({ error: err.message });
+      }
       console.error('Failed fetching audit events:', err);
       res.status(500).json({ error: 'Failed to retrieve audit events' });
+    }
+  });
+
+  app.get('/api/audit/events/export.xlsx', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!await requireSuperAdminForAudit(req, res)) return;
+      const events = await readAuditExportRows(parseAuditFilters(req.query as Record<string, unknown>));
+      const excelText = (value: unknown) => {
+        const text = value == null ? '' : String(value);
+        return /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text;
+      };
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Journal des audits');
+      const columns = [
+        ['Identifiant', 'id'],
+        ['Date et heure', 'date'],
+        ['Identifiant de l’auteur', 'actorId'],
+        ['Auteur', 'actor'],
+        ['Rôle', 'role'],
+        ['Fonction', 'functionName'],
+        ['Établissement actif', 'activeSchool'],
+        ['Établissement concerné', 'targetSchool'],
+        ['Module', 'module'],
+        ['Opération', 'action'],
+        ['Ressource', 'resource'],
+        ['Résultat', 'result'],
+        ['Description', 'description'],
+        ['Motif', 'reason'],
+        ['Anciennes valeurs', 'beforeValues'],
+        ['Nouvelles valeurs', 'afterValues'],
+        ['Source', 'source'],
+        ['Adresse IP', 'ipAddress'],
+        ['Identifiant de corrélation', 'correlationId'],
+      ] as const;
+      worksheet.columns = columns.map(([header, key]) => ({ header, key, width: key === 'description' ? 42 : 24 }));
+      worksheet.addRows(events.map((event) => ({
+        id: event.id,
+        date: auditTimestampLabel(event),
+        actorId: event.actorUserId ?? '',
+        actor: excelText(auditActorIdentity(event)),
+        role: excelText(translateAuditLabel('role', event.actorRole)),
+        functionName: excelText(event.activeFunctionName || event.activeFunctionId || 'Non renseignée'),
+        activeSchool: excelText(event.auditContext?.actorActiveSchoolName
+          || (event.auditContext?.actorActiveSchoolId != null ? `Établissement #${event.auditContext.actorActiveSchoolId}` : 'Non renseigné')),
+        targetSchool: excelText(event.schoolNameSnapshot
+          || (event.schoolId != null ? `Établissement #${event.schoolId}` : event.resourceType === 'school' && event.resourceId != null
+            ? `Établissement #${event.resourceId}`
+            : 'Non renseigné')),
+        module: excelText(translateAuditLabel('module', event.module)),
+        action: excelText(translateAuditLabel('action', event.action)),
+        resource: excelText(`${translateAuditLabel('resource', event.resourceType)}${event.resourceId == null ? '' : ` #${event.resourceId}`}`),
+        result: excelText(translateAuditLabel('result', event.result?.trim() ? event.result : 'unknown')),
+        description: excelText(event.description),
+        reason: excelText(event.reason),
+        beforeValues: excelText(auditSnapshotText(event.beforeValues)),
+        afterValues: excelText(auditSnapshotText(event.afterValues)),
+        source: excelText(translateAuditLabel('source', event.source)),
+        ipAddress: excelText(event.ipAddress),
+        correlationId: excelText(event.correlationId),
+      })));
+      worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+      worksheet.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + columns.length)}1` };
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+      worksheet.eachRow((row) => row.eachCell((cell) => {
+        cell.alignment = { vertical: 'top', wrapText: true };
+      }));
+      const buffer = await workbook.xlsx.writeBuffer();
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="journal-audit-ecoletrack.xlsx"');
+      res.send(Buffer.from(buffer));
+    } catch (err: any) {
+      if (err instanceof RangeError && (err as RangeError & { status?: number }).status === 413) {
+        return res.status(413).json({ error: err.message });
+      }
+      if (err instanceof TypeError || err instanceof RangeError) {
+        return res.status(400).json({ error: err.message });
+      }
+      console.error('Failed exporting audit events to Excel:', err);
+      res.status(500).json({ error: 'Failed to export audit events' });
+    }
+  });
+
+  app.get('/api/audit/events/export.pdf', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!await requireSuperAdminForAudit(req, res)) return;
+      const events = await readAuditExportRows(parseAuditFilters(req.query as Record<string, unknown>));
+      const pdf = await PDFDocument.create();
+      pdf.setTitle('Journal des historiques EcoleTrack');
+      const regular = await pdf.embedFont(StandardFonts.Helvetica);
+      const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+      const pageWidth = 841.89;
+      const pageHeight = 595.28;
+      const margin = 32;
+      let page = pdf.addPage([pageWidth, pageHeight]);
+      let y = pageHeight - margin;
+      const pdfText = (value: string) => value
+        .replace(/[—–]/g, '-')
+        .replace(/[’‘]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/[^\x20-\xFF]/g, '?');
+      const addPage = () => {
+        page = pdf.addPage([pageWidth, pageHeight]);
+        y = pageHeight - margin;
+        page.drawText(pdfText('Journal des historiques EcoleTrack — suite'), {
+          x: margin,
+          y,
+          size: 15,
+          font: bold,
+          color: rgb(0.12, 0.18, 0.31),
+        });
+        y -= 28;
+      };
+      page.drawText('Journal des historiques EcoleTrack', {
+        x: margin,
+        y,
+        size: 18,
+        font: bold,
+        color: rgb(0.12, 0.18, 0.31),
+      });
+      y -= 26;
+      page.drawText(`Exporté le ${new Date().toLocaleString('fr-FR', { hour12: false })}`, {
+        x: margin,
+        y,
+        size: 9,
+        font: regular,
+        color: rgb(0.35, 0.39, 0.47),
+      });
+      y -= 22;
+
+      const addPdfField = (label: string, value: string, emphasized = false) => {
+        const font = emphasized ? bold : regular;
+        const size = emphasized ? 10 : 8.5;
+        const maxWidth = pageWidth - margin * 2;
+        const words = pdfText(`${label}: ${value || 'Non renseigné'}`).split(/\s+/).flatMap((word) => {
+          if (font.widthOfTextAtSize(word, size) <= maxWidth) return [word];
+          const chunks: string[] = [];
+          let chunk = '';
+          for (const character of word) {
+            const candidate = `${chunk}${character}`;
+            if (chunk && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+              chunks.push(chunk);
+              chunk = character;
+            } else {
+              chunk = candidate;
+            }
+          }
+          if (chunk) chunks.push(chunk);
+          return chunks;
+        });
+        let line = '';
+        const lines: string[] = [];
+        for (const word of words) {
+          const candidate = line ? `${line} ${word}` : word;
+          if (font.widthOfTextAtSize(candidate, size) <= maxWidth || !line) {
+            line = candidate;
+          } else {
+            lines.push(line);
+            line = word;
+          }
+        }
+        if (line) lines.push(line);
+        for (const text of lines) {
+          if (y < margin + 14) addPage();
+          page.drawText(text, {
+            x: margin,
+            y,
+            size,
+            font,
+            color: emphasized ? rgb(0.12, 0.18, 0.31) : rgb(0.22, 0.25, 0.31),
+          });
+          y -= emphasized ? 14 : 11;
+        }
+      };
+
+      for (const event of events) {
+        const actor = auditActorIdentity(event);
+        const activeSchool = event.auditContext?.actorActiveSchoolName
+          || (event.auditContext?.actorActiveSchoolId != null ? `Établissement #${event.auditContext.actorActiveSchoolId}` : 'Non renseigné');
+        const targetSchool = event.schoolNameSnapshot
+          || (event.schoolId != null ? `Établissement #${event.schoolId}` : event.resourceType === 'school' && event.resourceId != null
+            ? `Établissement #${event.resourceId}`
+            : 'Non renseigné');
+        if (y < margin + 14) addPage();
+        page.drawText(pdfText(`Événement #${event.id} — ${auditTimestampLabel(event)}`), {
+          x: margin,
+          y,
+          size: 10,
+          font: bold,
+          color: rgb(0.12, 0.18, 0.31),
+        });
+        y -= 14;
+        addPdfField('Identifiant de l’auteur', event.actorUserId == null ? 'Non renseigné' : String(event.actorUserId));
+        addPdfField('Auteur', actor);
+        addPdfField('Rôle effectif', translateAuditLabel('role', event.actorRole));
+        addPdfField('Fonction active', event.activeFunctionName || event.activeFunctionId || 'Non renseignée');
+        addPdfField('Établissement actif', activeSchool);
+        addPdfField('Établissement concerné', targetSchool);
+        addPdfField('Opération', `${translateAuditLabel('module', event.module)} — ${translateAuditLabel('action', event.action)}`);
+        addPdfField('Ressource', `${translateAuditLabel('resource', event.resourceType)}${event.resourceId == null ? '' : ` #${event.resourceId}`}`);
+        addPdfField('Résultat', translateAuditLabel('result', event.result?.trim() ? event.result : 'unknown'));
+        addPdfField('Description', event.description);
+        addPdfField('Motif', event.reason || 'Non renseigné');
+        addPdfField('Anciennes valeurs métier', auditSnapshotText(event.beforeValues));
+        addPdfField('Nouvelles valeurs métier', auditSnapshotText(event.afterValues));
+        addPdfField('Source', translateAuditLabel('source', event.source));
+        addPdfField('Adresse IP', event.ipAddress || 'Non renseignée');
+        addPdfField('Identifiant de corrélation', event.correlationId || 'Non renseigné');
+        y -= 7;
+        if (y < margin + 14) addPage();
+        page.drawLine({
+          start: { x: margin, y },
+          end: { x: pageWidth - margin, y },
+          thickness: 0.6,
+          color: rgb(0.78, 0.81, 0.86),
+        });
+        y -= 12;
+      }
+
+      const bytes = await pdf.save();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="journal-audit-ecoletrack.pdf"');
+      res.send(Buffer.from(bytes));
+    } catch (err: any) {
+      if (err instanceof RangeError && (err as RangeError & { status?: number }).status === 413) {
+        return res.status(413).json({ error: err.message });
+      }
+      if (err instanceof TypeError || err instanceof RangeError) {
+        return res.status(400).json({ error: err.message });
+      }
+      console.error('Failed exporting audit events to PDF:', err);
+      res.status(500).json({ error: 'Failed to export audit events' });
+    }
+  });
+
+  app.get('/api/audit/deactivations', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!await requireSuperAdminForAudit(req, res)) return;
+      if (typeof req.query.userIds !== 'string') {
+        return res.status(400).json({ error: 'A list of user IDs is required.' });
+      }
+      const userIds = req.query.userIds
+        .split(',')
+        .filter(Boolean)
+        .map((value) => Number(value));
+      if (userIds.length > 500 || userIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+        return res.status(400).json({ error: 'Invalid user ID list.' });
+      }
+      if (userIds.length === 0) return res.json([]);
+      const rows = await db.selectDistinctOn([auditEvents.resourceId]).from(auditEvents)
+        .where(and(
+          eq(auditEvents.resourceType, 'user'),
+          inArray(auditEvents.action, ['delete', 'deactivate']),
+          isNotNull(auditEvents.resourceId),
+          inArray(auditEvents.resourceId, userIds),
+        ))
+        .orderBy(auditEvents.resourceId, desc(auditEvents.id));
+      res.json(rows.map((row) => ({
+        id: row.id,
+        action: row.action,
+        resourceType: row.resourceType,
+        resourceId: row.resourceId,
+        createdAt: row.createdAt?.toISOString() ?? null,
+      })));
+    } catch (err) {
+      console.error('Failed fetching account deactivation events:', err);
+      res.status(500).json({ error: 'Failed to retrieve account deactivation events' });
     }
   });
 
@@ -4433,18 +5485,50 @@ export async function createApp() {
 
       if (!actor) return res.status(403).json({ error: 'Forbidden' });
       const actorIsOwner = actor.id && Number(actor.id) === id;
+      const userProfileAuditBase = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        module: 'user_management',
+        action: 'update',
+        resourceType: 'user',
+        resourceId: id,
+        source: 'web',
+      };
       if (!(actorIsOwner || ['super_admin', 'school_admin'].includes(actor.role))) {
+        await recordAuditOutcomeAfterRollback({
+          ...userProfileAuditBase,
+          targetSchool: { id: targetUser.schoolId ?? null },
+          result: 'denied',
+          description: 'User profile update was refused by the access policy.',
+        }, new Error('Insufficient account-update permissions.'));
         return res.status(403).json({ error: 'Forbidden' });
       }
 
       if (!actorIsOwner && actor.role === 'school_admin') {
         if (['super_admin', 'school_admin'].includes(targetUser.role)) {
+          await recordAuditOutcomeAfterRollback({
+            ...userProfileAuditBase,
+            targetSchool: { id: targetUser.schoolId ?? null },
+            result: 'denied',
+            description: 'School admin profile update was refused for an administrative account.',
+          }, new Error('School admins cannot modify administrative accounts.'));
           return res.status(403).json({ error: 'Forbidden: cannot modify admin accounts' });
         }
 
         if (actor.schoolId !== targetUser.schoolId) {
           const membership = await getActiveUserSchoolMembership(targetUser.id, actor.schoolId, targetUser.role);
           if (!membership) {
+            await recordAuditOutcomeAfterRollback({
+              ...userProfileAuditBase,
+              targetSchool: { id: targetUser.schoolId ?? null },
+              result: 'denied',
+              description: 'User profile update was refused outside the actor school.',
+            }, new Error('Target account is outside the actor school.'));
             return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
           }
         }
@@ -4523,33 +5607,101 @@ export async function createApp() {
         }
       }
 
-      if (Object.keys(updatedFields).length > 0) {
-        await db.update(users).set(updatedFields).where(eq(users.id, id));
+      const userUpdateEvent = {
+        ...userProfileAuditBase,
+        targetSchool: {
+          id: existingParent?.schoolId ?? parentCreationSchoolId ?? targetUser.schoolId ?? null,
+        },
+      };
+      let updatedUser: typeof users.$inferSelect | null;
+      try {
+        updatedUser = await db.transaction(async (tx) => {
+          const [currentUser] = await tx.select().from(users)
+            .where(eq(users.id, id))
+            .for('update');
+          if (!currentUser) return null;
+          if (currentUser.role !== targetUser.role || currentUser.schoolId !== targetUser.schoolId) {
+            throw new Error('User role or school changed during profile update.');
+          }
+
+          const [currentParent] = existingParent
+            ? await tx.select().from(parents)
+              .where(and(eq(parents.id, existingParent.id), eq(parents.userId, id)))
+              .for('update')
+            : [];
+          if (existingParent && !currentParent) {
+            throw new Error('Parent profile changed during profile update.');
+          }
+
+          let persistedUser = currentUser;
+          if (Object.keys(updatedFields).length > 0) {
+            const [updated] = await tx.update(users).set(updatedFields)
+              .where(eq(users.id, id))
+              .returning();
+            if (!updated) return null;
+            persistedUser = updated;
+          }
+
+          let persistedParent: typeof parents.$inferSelect | null = currentParent ?? null;
+          if (persistedUser.role === 'parent') {
+            const parentValues = {
+              phone: phone !== undefined
+                ? canonicalPhoneForUpdate ?? ''
+                : currentParent?.phone || canonicalizeUserPhone(persistedUser.phone) || '',
+              address: typeof address === 'string' ? address : currentParent?.address || '',
+            };
+            if (currentParent) {
+              const [updatedParent] = await tx.update(parents).set(parentValues)
+                .where(eq(parents.id, currentParent.id))
+                .returning();
+              if (!updatedParent) return null;
+              persistedParent = updatedParent;
+            } else if (parentCreationSchoolId != null) {
+              const [createdParent] = await tx.insert(parents).values({
+                userId: id,
+                schoolId: parentCreationSchoolId,
+                ...parentValues,
+              }).returning();
+              persistedParent = createdParent ?? null;
+            }
+          }
+
+          const beforeState = {
+            name: currentUser.name,
+            phone: currentUser.phone,
+            parentPhone: currentParent?.phone ?? null,
+            parentAddress: currentParent?.address ?? null,
+          };
+          const afterState = {
+            name: persistedUser.name,
+            phone: persistedUser.phone,
+            parentPhone: persistedParent?.phone ?? null,
+            parentAddress: persistedParent?.address ?? null,
+          };
+          const userAuditFields = (['name', 'phone', 'parentPhone', 'parentAddress'] as const)
+            .filter((field) => !Object.is(beforeState[field], afterState[field]));
+          await appendAuditEvent(tx, {
+            ...userUpdateEvent,
+            beforeValues: createAuditSnapshot(beforeState, userAuditFields),
+            afterValues: createAuditSnapshot(afterState, userAuditFields),
+            result: 'success',
+            description: 'User profile updated.',
+          });
+          return persistedUser;
+        });
+      } catch (businessError) {
+        const duplicateConflict = isUsersPhoneUniqueViolation(businessError);
+        await recordAuditOutcomeAfterRollback({
+          ...userUpdateEvent,
+          result: duplicateConflict ? 'denied' : 'failure',
+          description: duplicateConflict
+            ? 'User profile update was rejected by a uniqueness constraint.'
+            : 'User profile update failed.',
+        }, businessError);
+        throw businessError;
       }
 
-      // If the user is a parent, persist phone/address in parents table
-      const [updatedUserCandidate] = await db.select().from(users).where(eq(users.id, id));
-      if (updatedUserCandidate && updatedUserCandidate.role === 'parent') {
-        const parentValues: any = {
-          phone: phone !== undefined ? canonicalPhoneForUpdate ?? '' : existingParent?.phone || canonicalizeUserPhone(updatedUserCandidate.phone) || '',
-          address: typeof address === 'string' ? address : existingParent?.address || '',
-        };
-        if (existingParent) {
-          await db.update(parents).set(parentValues).where(and(
-            eq(parents.id, existingParent.id),
-            existingParent.schoolId == null
-              ? sql`${parents.schoolId} IS NULL`
-              : eq(parents.schoolId, existingParent.schoolId),
-          ));
-        } else if (parentCreationSchoolId != null) {
-          await db.insert(parents).values({ userId: id, schoolId: parentCreationSchoolId, ...parentValues });
-        }
-      }
-
-      const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
-
-      await logAuditEvent(actor, 'update', 'user', updatedUser.id, actor.schoolId ?? null, `${actor.role === 'school_admin' ? 'School admin' : actor.role === 'super_admin' ? 'Super admin' : 'User'} ${actor.email || actor.uid} updated account ${updatedUser.email}`);
-
+      if (!updatedUser) return res.status(404).json({ error: 'User not found' });
       res.json(toUserDto(updatedUser));
     } catch (err: any) {
       console.error('Error in self-update user:', err);
@@ -5187,15 +6339,23 @@ export async function createApp() {
           .set({ isSuspended })
           .where(eq(schools.id, schoolId))
           .returning();
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id ?? null,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name ?? null,
+        await appendAuditEvent(tx, {
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id: schoolId, name: school?.name ?? null },
+          module: 'school_management',
           action: isSuspended ? 'suspend' : 'reopen',
           resourceType: 'school',
           resourceId: schoolId,
-          schoolId,
+          beforeValues: createAuditSnapshot(lockedSchool, ['is_suspended']),
+          afterValues: createAuditSnapshot(school, ['isSuspended']),
+          result: 'success',
+          source: 'web',
           description: isSuspended
             ? `School ${schoolId} suspended by super administrator`
             : `School ${schoolId} reopened by super administrator`,
@@ -5645,27 +6805,85 @@ export async function createApp() {
         const actor = await resolveActor(req);
         if (!actor) return res.status(404).json({ error: 'User not found' });
         if (actor.role !== 'super_admin') {
+          await recordAuditOutcomeAfterRollback({
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id },
+            module: 'school_management',
+            action: val ? 'lock_student_creation' : 'unlock_student_creation',
+            resourceType: 'school',
+            resourceId: id,
+            result: 'denied',
+            source: 'web',
+            reason: 'insufficient_role',
+            description: 'Student creation lock update denied.',
+          }, new Error('Only a super admin may modify the student creation lock.'));
           return res.status(403).json({ error: 'Only super admin can modify school information' });
         }
 
-        const [existingSchool] = await db.select().from(schools).where(eq(schools.id, id));
-        if (!existingSchool) {
-          return res.status(404).json({ error: 'School not found' });
-        }
-
-        const result = await db.update(schools)
-          .set({ studentsCreationLocked: val })
-          .where(eq(schools.id, id))
-          .returning();
-
-        // Log audit event for lock/unlock
+        let updatedSchool: typeof schools.$inferSelect | null;
         try {
-          await logAuditEvent(actor, val ? 'lock_student_creation' : 'unlock_student_creation', 'school', id, id, `students_creation_locked: "${existingSchool.studentsCreationLocked ?? false}" → "${val}"`);
-        } catch (e: any) {
-          console.error('Audit log failed for school lock toggle:', e?.message || e);
+          updatedSchool = await db.transaction(async (tx) => {
+            const [existingSchool] = await tx.select().from(schools)
+              .where(eq(schools.id, id))
+              .for('update');
+            if (!existingSchool) return null;
+
+            const [result] = await tx.update(schools)
+              .set({ studentsCreationLocked: val })
+              .where(eq(schools.id, id))
+              .returning();
+            if (!result) return null;
+
+            await appendAuditEvent(tx, {
+              actor: {
+                userId: actor.id ?? null,
+                role: actor.role,
+                email: actor.email ?? null,
+                name: actor.name ?? null,
+                activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+              },
+              targetSchool: { id: result.id, name: result.name },
+              module: 'school_management',
+              action: val ? 'lock_student_creation' : 'unlock_student_creation',
+              resourceType: 'school',
+              resourceId: id,
+              beforeValues: createAuditSnapshot(existingSchool, ['studentsCreationLocked']),
+              afterValues: createAuditSnapshot(result, ['studentsCreationLocked']),
+              result: 'success',
+              source: 'web',
+              description: 'Student creation lock updated.',
+            });
+            return result;
+          });
+        } catch (businessError) {
+          await recordAuditOutcomeAfterRollback({
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id },
+            module: 'school_management',
+            action: val ? 'lock_student_creation' : 'unlock_student_creation',
+            resourceType: 'school',
+            resourceId: id,
+            result: 'failure',
+            source: 'web',
+            description: 'Student creation lock update failed.',
+          }, businessError);
+          throw businessError;
         }
 
-        return res.status(200).json(result[0]);
+        if (!updatedSchool) return res.status(404).json({ error: 'School not found' });
+        return res.status(200).json(updatedSchool);
       }
 
       const name = String(req.body?.name || '').trim();
@@ -5730,12 +6948,66 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
       if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id },
+          module: 'school_management',
+          action: 'update',
+          resourceType: 'school',
+          resourceId: id,
+          result: 'denied',
+          source: 'web',
+          reason: 'insufficient_role',
+          description: 'School update denied.',
+        }, new Error('Only school administrators may update a school.'));
         return res.status(403).json({ error: 'Only school administrators can modify school information' });
       }
       if (timeZone !== undefined && actor.role !== 'super_admin') {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id },
+          module: 'school_management',
+          action: 'update',
+          resourceType: 'school',
+          resourceId: id,
+          result: 'denied',
+          source: 'web',
+          reason: 'timezone_permission_required',
+          description: 'School time-zone update denied.',
+        }, new Error('Only a super admin may modify the school time zone.'));
         return res.status(403).json({ error: 'Only super admin can modify the school time zone' });
       }
       if (actor.role === 'school_admin' && actor.schoolId !== id) {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id },
+          module: 'school_management',
+          action: 'update',
+          resourceType: 'school',
+          resourceId: id,
+          result: 'denied',
+          source: 'web',
+          reason: 'outside_school_scope',
+          description: 'School update denied.',
+        }, new Error('School administrator attempted to update a different school.'));
         return res.status(403).json({ error: 'Cannot modify another school' });
       }
 
@@ -5758,225 +7030,81 @@ export async function createApp() {
       if (logoPathRaw !== undefined) {
         updatePayload.logoPath = logoPath == null ? null : buildSchoolLogoRelativePath(path.basename(logoPath));
       }
-      // Track changes for audit
-      const changes: string[] = [];
-      if (timeZone !== undefined && existingSchool.timeZone !== timeZone) {
-        changes.push(`time_zone: "${existingSchool.timeZone || ''}" → "${timeZone}"`);
-      }
-
       // allow updating the student creation lock (accept snake_case or camelCase)
       const studentsCreationLockedRaw = req.body?.students_creation_locked ?? req.body?.studentsCreationLocked;
       if (studentsCreationLockedRaw !== undefined) {
         const val = Boolean(studentsCreationLockedRaw);
         updatePayload.studentsCreationLocked = val;
-        if ((existingSchool.studentsCreationLocked ?? false) !== val) {
-          changes.push(`students_creation_locked: "${existingSchool.studentsCreationLocked ?? false}" → "${val}"`);
-        }
       }
 
-      const result = await db.update(schools)
-        .set(updatePayload)
-        .where(eq(schools.id, id))
-        .returning();
-      
-      if (result.length === 0) {
+      let updatedSchool: typeof schools.$inferSelect | null;
+      try {
+        updatedSchool = await db.transaction(async (tx) => {
+          const [currentSchool] = await tx.select().from(schools)
+            .where(eq(schools.id, id))
+            .for('update');
+          if (!currentSchool) return null;
+
+          const [updated] = await tx.update(schools)
+            .set(updatePayload)
+            .where(eq(schools.id, id))
+            .returning();
+          if (!updated) return null;
+          const changedContactFields = (['name', 'address', 'phone', 'phone2', 'email'] as const)
+            .filter((field) => !Object.is(currentSchool[field], updated[field]));
+          const schoolAuditFields = [
+            'studentsCreationLocked', 'timeZone', 'promotionThreshold', 'logoPath',
+            ...changedContactFields,
+          ] as const;
+
+          await appendAuditEvent(tx, {
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id: updated.id, name: updated.name },
+            module: 'school_management',
+            action: 'update',
+            resourceType: 'school',
+            resourceId: id,
+            beforeValues: createAuditSnapshot(currentSchool, schoolAuditFields),
+            afterValues: createAuditSnapshot(updated, schoolAuditFields),
+            result: 'success',
+            source: 'web',
+            description: 'School settings updated.',
+          });
+          await reconcileSchoolStructure(tx, actor, id, classNames, subjectNames);
+          return updated;
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id },
+          module: 'school_management',
+          action: 'update',
+          resourceType: 'school',
+          resourceId: id,
+          result: 'failure',
+          source: 'web',
+          description: 'School settings update failed.',
+        }, businessError);
+        throw businessError;
+      }
+
+      if (!updatedSchool) {
         return res.status(404).json({ error: 'School not found' });
       }
 
-      if (Array.isArray(classNames) && classNames.length > 0) {
-        try {
-          const normalizedClassNames = Array.from(
-            new Set(
-              classNames
-                .map((className: any) => String(className || '').trim())
-                .filter((name: string) => name)
-            )
-          );
-
-          const [globalActiveYear] = await db.select().from(academicYears).where(
-            and(eq(academicYears.isActive, true), sql`${academicYears.schoolId} IS NULL`)
-          ).limit(1);
-          let yearId = globalActiveYear?.id;
-
-          if (!yearId) {
-            const [globalYear] = await db.select().from(academicYears).where(sql`${academicYears.schoolId} IS NULL`).orderBy(desc(academicYears.id)).limit(1);
-            yearId = globalYear?.id;
-          }
-
-          if (!yearId) {
-            const [anyYear] = await db.select().from(academicYears).orderBy(desc(academicYears.id)).limit(1);
-            yearId = anyYear?.id;
-          }
-
-          if (!yearId) {
-            console.warn('No academic years exist yet; skipped class creation during school update because no global year was available.');
-          } else {
-            for (const trimmedClassName of normalizedClassNames) {
-              const [globalClass] = await db.select().from(classes).where(
-                and(
-                  sql`${classes.schoolId} IS NULL`,
-                  eq(classes.name, trimmedClassName)
-                )
-              ).limit(1);
-
-              if (globalClass) {
-                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
-                  and(
-                    eq(schoolClasses.schoolId, id),
-                    eq(schoolClasses.classId, globalClass.id)
-                  )
-                ).limit(1);
-
-                if (!existingSchoolClass) {
-                  await db.insert(schoolClasses).values({
-                    schoolId: id,
-                    classId: globalClass.id,
-                    status: 'approved',
-                  });
-                }
-                continue;
-              }
-
-              const [existingLocalClass] = await db.select().from(classes).where(
-                and(
-                  sql`${classes.schoolId} IS NOT NULL`,
-                  eq(classes.academicYearId, yearId),
-                  eq(classes.name, trimmedClassName)
-                )
-              ).limit(1);
-
-              if (existingLocalClass) {
-                const originalSchoolId = existingLocalClass.schoolId;
-                await db.update(classes).set({ schoolId: null }).where(eq(classes.id, existingLocalClass.id));
-
-                const [existingSchoolClass] = await db.select().from(schoolClasses).where(
-                  and(
-                    eq(schoolClasses.schoolId, id),
-                    eq(schoolClasses.classId, existingLocalClass.id)
-                  )
-                ).limit(1);
-
-                if (!existingSchoolClass) {
-                  await db.insert(schoolClasses).values({
-                    schoolId: id,
-                    classId: existingLocalClass.id,
-                    status: 'approved',
-                  });
-                }
-
-                if (originalSchoolId != null && originalSchoolId !== id) {
-                  const [existingOriginalSchoolClass] = await db.select().from(schoolClasses).where(
-                    and(
-                      eq(schoolClasses.schoolId, originalSchoolId),
-                      eq(schoolClasses.classId, existingLocalClass.id)
-                    )
-                  ).limit(1);
-
-                  if (!existingOriginalSchoolClass) {
-                    await db.insert(schoolClasses).values({
-                      schoolId: originalSchoolId,
-                      classId: existingLocalClass.id,
-                      status: 'approved',
-                    });
-                  }
-                }
-                continue;
-              }
-
-              try {
-                const [newClass] = await db.insert(classes).values({
-                  name: trimmedClassName,
-                  schoolId: null,
-                  academicYearId: yearId,
-                  progressionCode: normalizeClassProgressionCode(trimmedClassName),
-                }).returning();
-
-                await db.insert(schoolClasses).values({
-                  schoolId: id,
-                  classId: newClass.id,
-                  status: 'approved',
-                });
-              } catch (classErr: any) {
-                console.warn(`Warning: Could not create class "${trimmedClassName}" during school update:`, classErr?.message);
-              }
-            }
-          }
-        } catch (classCreationErr: any) {
-          console.warn('Warning: Could not create classes during school update:', classCreationErr?.message);
-        }
-      }
-
-      if (Array.isArray(subjectNames) && subjectNames.length > 0) {
-        try {
-          for (const subjectName of subjectNames) {
-            const trimmedSubjectName = String(subjectName || '').trim();
-            if (!trimmedSubjectName) continue;
-
-            const [globalSubject] = await db.select().from(subjects).where(
-              and(sql`${subjects.schoolId} IS NULL`, eq(subjects.name, trimmedSubjectName))
-            ).limit(1);
-
-            if (globalSubject) {
-              const subjectId = globalSubject.id;
-              const existingSchoolSubject = await db.select().from(schoolSubjects).where(
-                and(
-                  eq(schoolSubjects.schoolId, id),
-                  eq(schoolSubjects.subjectId, subjectId)
-                )
-              ).limit(1);
-              if (existingSchoolSubject.length > 0) {
-                if (existingSchoolSubject[0].status === 'rejected') {
-                  await db.update(schoolSubjects)
-                    .set({ status: 'approved', updatedAt: new Date() })
-                    .where(and(
-                      eq(schoolSubjects.schoolId, id),
-                      eq(schoolSubjects.subjectId, subjectId)
-                    ));
-                }
-                continue;
-              }
-
-              await db.insert(schoolSubjects).values({
-                schoolId: id,
-                subjectId,
-                status: 'approved',
-              });
-              continue;
-            }
-
-            const existingSubject = await db.select().from(subjects).where(and(eq(subjects.schoolId, id), eq(subjects.name, trimmedSubjectName))).limit(1);
-            if (existingSubject.length > 0) continue;
-
-            await db.insert(subjects).values({
-              name: trimmedSubjectName,
-              schoolId: id,
-            });
-          }
-        } catch (subjectCreationErr: any) {
-          console.warn('Warning: Could not create subjects during school update:', subjectCreationErr?.message);
-        }
-      }
-
-      if (name && name !== existingSchool.name) {
-        changes.push(`name: "${existingSchool.name}" → "${name}"`);
-      }
-      if (address && address !== existingSchool.address) {
-        changes.push(`address: "${existingSchool.address || ''}" → "${address}"`);
-      }
-      if (phone && phone !== existingSchool.phone) {
-        changes.push(`phone: "${existingSchool.phone || ''}" → "${phone}"`);
-      }
-      if (Array.isArray(classNames) && classNames.length > 0) {
-        const addedNames = classNames.map((n: any) => String(n || '').trim()).filter((n: string) => n);
-        if (addedNames.length > 0) {
-          changes.push(`classes ajoutées: ${addedNames.join(', ')}`);
-        }
-      }
-
-      const diffDescription = changes.length > 0 ? `Champs modifiés: ${changes.join('; ')}` : 'Aucun champ modifié détecté.';
-      await logAuditEvent(actor, 'update', 'school', id, id, `Super admin ${actor.email || actor.uid} updated school "${existingSchool.name}". ${diffDescription}`);
-      
-      res.json(result[0]);
+      res.json(updatedSchool);
     } catch (err: any) {
       console.error('Error updating school:', err);
       res.status(500).json({ error: 'Failed to update school' });
@@ -6016,47 +7144,94 @@ export async function createApp() {
         return res.status(403).json({ error: 'Cannot modify another school' });
       }
 
-      const [existingSchool] = await db.select({ id: schools.id, logoPath: schools.logoPath }).from(schools).where(eq(schools.id, id));
+      const [existingSchool] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, id));
       if (!existingSchool) return res.status(404).json({ error: 'School not found' });
 
       const uploadedFile = (req as any).file as Express.Multer.File | undefined;
       if (!uploadedFile) return res.status(400).json({ error: 'A PNG or JPG/JPEG logo file is required' });
 
-      let newLogoPath: string | null = null;
+      const persistedLogo = await persistUploadedFile({
+        originalname: uploadedFile.originalname,
+        buffer: uploadedFile.buffer,
+        mimetype: uploadedFile.mimetype,
+        size: uploadedFile.size,
+      }, 'school-logos');
+      const newLogoPath = buildSchoolLogoRelativePath(persistedLogo.storedReference);
+
+      let committedLogo: {
+        school: typeof schools.$inferSelect;
+        previousLogoPath: string | null;
+      };
       try {
-        const persistedLogo = await persistUploadedFile({
-          originalname: uploadedFile.originalname,
-          buffer: uploadedFile.buffer,
-          mimetype: uploadedFile.mimetype,
-          size: uploadedFile.size,
-        }, 'school-logos');
-        newLogoPath = buildSchoolLogoRelativePath(persistedLogo.storedReference);
+        committedLogo = await db.transaction(async (tx) => {
+          const [currentSchool] = await tx.select({
+            id: schools.id,
+            name: schools.name,
+            logoPath: schools.logoPath,
+          }).from(schools)
+            .where(eq(schools.id, id))
+            .for('update');
+          if (!currentSchool) throw new Error('School not found while updating logo.');
 
-        const [updatedSchool] = await db.update(schools)
-          .set({ logoPath: newLogoPath })
-          .where(eq(schools.id, id))
-          .returning();
+          const [updatedSchool] = await tx.update(schools)
+            .set({ logoPath: newLogoPath })
+            .where(eq(schools.id, id))
+            .returning();
+          if (!updatedSchool) throw new Error('School logo reference was not updated.');
 
-        if (!updatedSchool) {
-          throw new Error('School logo reference was not updated.');
-        }
-
-        if (existingSchool.logoPath && existingSchool.logoPath !== newLogoPath) {
-          await deleteStoredFile(existingSchool.logoPath, 'school-logos').catch((cleanupError: any) => {
-            console.warn('Failed to remove replaced school logo:', cleanupError?.message || cleanupError);
+          await appendAuditEvent(tx, {
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id: updatedSchool.id, name: currentSchool.name },
+            module: 'school_management',
+            action: 'update',
+            resourceType: 'school_logo',
+            resourceId: id,
+            beforeValues: createAuditSnapshot(currentSchool, ['logoPath']),
+            afterValues: createAuditSnapshot(updatedSchool, ['logoPath']),
+            result: 'success',
+            source: 'web',
+            description: 'School logo updated.',
           });
-        }
 
-        await logAuditEvent(actor, 'update', 'school_logo', id, id, `Updated school logo for school ${id}`);
-        return res.status(200).json({ id: updatedSchool.id, logoPath: updatedSchool.logoPath });
-      } catch (error) {
-        if (newLogoPath) {
-          await deleteStoredFile(newLogoPath, 'school-logos').catch((cleanupError: any) => {
-            console.warn('Failed to clean unreferenced school logo after upload failure:', cleanupError?.message || cleanupError);
-          });
-        }
-        throw error;
+          return { school: updatedSchool, previousLogoPath: currentSchool.logoPath };
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id },
+          module: 'school_management',
+          action: 'update',
+          resourceType: 'school_logo',
+          resourceId: id,
+          result: 'failure',
+          source: 'web',
+          description: 'School logo update failed.',
+        }, businessError);
+        await deleteStoredFile(newLogoPath, 'school-logos').catch((cleanupError: any) => {
+          console.warn('Failed to clean unreferenced school logo after database rollback:', cleanupError?.message || cleanupError);
+        });
+        throw businessError;
       }
+
+      if (committedLogo.previousLogoPath && committedLogo.previousLogoPath !== newLogoPath) {
+        await deleteStoredFile(committedLogo.previousLogoPath, 'school-logos').catch((cleanupError: any) => {
+          console.warn('Failed to remove replaced school logo:', cleanupError?.message || cleanupError);
+        });
+      }
+
+      return res.status(200).json({ id: committedLogo.school.id, logoPath: committedLogo.school.logoPath });
     } catch (err: any) {
       console.error('Failed to upload school logo:', err);
       return res.status(500).json({ error: 'Failed to upload school logo' });
@@ -6499,15 +7674,37 @@ export async function createApp() {
             }).returning();
 
             const selectedAcademicYearId = parsedAcademicYearId ?? classRow.academicYearId;
+            let createdStudentStatus: string | null = null;
             if (normalizedStudentStatus !== null) {
-              await tx.insert(studentAcademicYearStatuses).values({
+              const [statusRow] = await tx.insert(studentAcademicYearStatuses).values({
                 studentId: createdStudents[0].id,
                 academicYearId: selectedAcademicYearId,
                 status: normalizedStudentStatus,
-              });
+              }).returning();
+              createdStudentStatus = statusRow?.status ?? null;
             }
 
-            return createdStudents[0];
+            const createdStudent = createdStudents[0];
+            await appendAuditEvent(tx, {
+              ...createAuditEventContext(actor, createdStudent.schoolId, 'student_management', 'create', 'student', createdStudent.id),
+              afterValues: createAuditSnapshot({
+                id: createdStudent.id,
+                firstName: createdStudent.firstName,
+                lastName: createdStudent.lastName,
+                schoolId: createdStudent.schoolId,
+                classId: createdStudent.classId,
+                parentId: createdStudent.parentId,
+                schoolAdminId: createdStudent.schoolAdminId,
+                isActive: createdStudent.isActive,
+                studentStatus: createdStudentStatus,
+              }, [
+                'id', 'firstName', 'lastName', 'schoolId', 'classId', 'parentId', 'schoolAdminId', 'isActive', 'studentStatus',
+              ]),
+              result: 'success',
+              source: 'web',
+              description: 'Student created by batch import.',
+            });
+            return createdStudent;
           });
 
           inserted.push(result);
@@ -7368,20 +8565,23 @@ export async function createApp() {
         await tx.delete(classes).where(eq(classes.schoolId, id));
         await tx.delete(academicYears).where(eq(academicYears.schoolId, id));
 
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name ?? null,
+        await appendAuditEvent(tx, {
+          actor: {
+            userId: actor.id,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id: school.id, name: school.name },
+          module: 'school_management',
           action: 'delete',
           resourceType: 'school',
           resourceId: school.id,
-          schoolId: school.id,
-          schoolNameSnapshot: school.name,
-          module: 'school_management',
+          beforeValues: createAuditSnapshot(school, ['name']),
           result: 'success',
           source: 'web',
-          description: `Établissement « ${school.name} » (ID ${school.id}) supprimé par ${actor.email || actor.name}.`,
+          description: 'School deleted.',
         });
         await tx.delete(schools).where(eq(schools.id, id));
       }, { isolationLevel: 'serializable' });
@@ -7463,17 +8663,43 @@ export async function createApp() {
         return res.status(403).json({ error: 'Only super admin can create academic years' });
       }
 
-      // If making active, deactivate all other academic years globally
-      if (isActive) {
-        await db.update(academicYears).set({ isActive: false });
-      }
+      const createdYear = await db.transaction(async (tx) => {
+        if (isActive) {
+          const previousActiveYears = await tx.select().from(academicYears)
+            .where(eq(academicYears.isActive, true))
+            .for('update');
+          const deactivatedYears = await tx.update(academicYears)
+            .set({ isActive: false })
+            .where(eq(academicYears.isActive, true))
+            .returning();
+          for (const previousYear of previousActiveYears) {
+            const updatedYear = deactivatedYears.find((row) => row.id === previousYear.id);
+            if (!updatedYear) continue;
+            await appendAuditEvent(tx, {
+              ...createAuditEventContext(actor, null, 'academic_years', 'update', 'academic_year', previousYear.id),
+              beforeValues: createAuditSnapshot(previousYear, ['name', 'isActive', 'schoolId']),
+              afterValues: createAuditSnapshot(updatedYear, ['name', 'isActive', 'schoolId']),
+              result: 'success',
+              description: 'Academic year deactivated.',
+            });
+          }
+        }
 
-      const result = await db.insert(academicYears).values({
-        name,
-        schoolId: null,
-        isActive: isActive ?? true,
-      }).returning();
-      res.status(201).json(result[0]);
+        const [created] = await tx.insert(academicYears).values({
+          name,
+          schoolId: null,
+          isActive: isActive ?? true,
+        }).returning();
+        if (!created) throw new Error('Academic year insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, null, 'academic_years', 'create', 'academic_year', created.id),
+          afterValues: createAuditSnapshot(created, ['name', 'isActive', 'schoolId']),
+          result: 'success',
+          description: 'Academic year created.',
+        });
+        return created;
+      });
+      res.status(201).json(createdYear);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to write academic year' });
     }
@@ -7497,11 +8723,55 @@ export async function createApp() {
       const [targetYear] = await db.select().from(academicYears).where(eq(academicYears.id, id));
       if (!targetYear) return res.status(404).json({ error: 'Academic year not found' });
 
-      await db.update(academicYears).set({ isActive: false });
-      await db.update(academicYears).set({ isActive: true }).where(eq(academicYears.id, id));
+      const updatedYear = await db.transaction(async (tx) => {
+        const [currentYear] = await tx.select().from(academicYears)
+          .where(eq(academicYears.id, id))
+          .for('update');
+        if (!currentYear) return null;
 
-      const [updated] = await db.select().from(academicYears).where(eq(academicYears.id, id));
-      res.json(updated);
+        const previousActiveYears = await tx.select().from(academicYears)
+          .where(eq(academicYears.isActive, true))
+          .for('update');
+        const otherActiveYears = previousActiveYears.filter((year) => year.id !== id);
+        const deactivatedYears = otherActiveYears.length > 0
+          ? await tx.update(academicYears)
+            .set({ isActive: false })
+            .where(and(
+              eq(academicYears.isActive, true),
+              ne(academicYears.id, id),
+            ))
+            .returning()
+          : [];
+        for (const previousYear of otherActiveYears) {
+          const updatedPreviousYear = deactivatedYears.find((row) => row.id === previousYear.id);
+          if (!updatedPreviousYear) continue;
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(actor, null, 'academic_years', 'update', 'academic_year', previousYear.id),
+            beforeValues: createAuditSnapshot(previousYear, ['name', 'isActive', 'schoolId']),
+            afterValues: createAuditSnapshot(updatedPreviousYear, ['name', 'isActive', 'schoolId']),
+            result: 'success',
+            description: 'Academic year deactivated.',
+          });
+        }
+
+        const [updated] = await tx.update(academicYears)
+          .set({ isActive: true })
+          .where(and(eq(academicYears.id, id), eq(academicYears.isActive, false)))
+          .returning();
+        if (updated) {
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(actor, null, 'academic_years', 'update', 'academic_year', id),
+            beforeValues: createAuditSnapshot(currentYear, ['name', 'isActive', 'schoolId']),
+            afterValues: createAuditSnapshot(updated, ['name', 'isActive', 'schoolId']),
+            result: 'success',
+            description: 'Academic year activated.',
+          });
+          return updated;
+        }
+        return currentYear;
+      });
+      if (!updatedYear) return res.status(404).json({ error: 'Academic year not found' });
+      res.json(updatedYear);
     } catch (err: any) {
       console.error('Failed to activate academic year:', err);
       res.status(500).json({ error: 'Failed to activate academic year' });
@@ -7524,7 +8794,7 @@ export async function createApp() {
       }
 
       const deletionResult = await db.transaction(async (tx) => {
-        const [targetYear] = await tx.select({ id: academicYears.id })
+        const [targetYear] = await tx.select()
           .from(academicYears)
           .where(eq(academicYears.id, id))
           .for('update');
@@ -7538,6 +8808,12 @@ export async function createApp() {
         if (tuitionProgressHistory) return 'history_exists' as const;
 
         await tx.delete(academicYears).where(eq(academicYears.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, null, 'academic_years', 'delete', 'academic_year', id),
+          beforeValues: createAuditSnapshot(targetYear, ['name', 'isActive', 'schoolId']),
+          result: 'success',
+          description: 'Academic year deleted.',
+        });
         return 'deleted' as const;
       });
 
@@ -7622,11 +8898,36 @@ export async function createApp() {
       const availableCycles = await db.select().from(cycles).where(eq(cycles.isActive, true));
       const selectedCycles = availableCycles.filter((cycle) => requestedCodes.includes(cycle.code));
       if (selectedCycles.length !== requestedCodes.length) return res.status(400).json({ error: 'Unknown education cycle' });
-      await db.delete(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
-      if (selectedCycles.length > 0) {
-        await db.insert(schoolCycles).values(selectedCycles.map((cycle) => ({ schoolId, cycleId: cycle.id, isActive: true })));
-      }
-      return res.json(await db.select().from(schoolCycles).where(eq(schoolCycles.schoolId, schoolId)));
+      const updatedCycles = await db.transaction(async (tx) => {
+        const currentRows = await tx.select().from(schoolCycles)
+          .where(eq(schoolCycles.schoolId, schoolId))
+          .for('update');
+        const beforeState = {
+          cycleIds: currentRows.map((row) => row.cycleId).sort((left, right) => left - right).join(','),
+        };
+        await tx.delete(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
+        if (selectedCycles.length > 0) {
+          await tx.insert(schoolCycles).values(selectedCycles.map((cycle) => ({
+            schoolId,
+            cycleId: cycle.id,
+            isActive: true,
+          })));
+        }
+        const afterRows = await tx.select().from(schoolCycles)
+          .where(eq(schoolCycles.schoolId, schoolId));
+        const afterState = {
+          cycleIds: afterRows.map((row) => row.cycleId).sort((left, right) => left - right).join(','),
+        };
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'education_structure', 'update', 'school_cycles', schoolId),
+          beforeValues: createAuditSnapshot(beforeState, ['cycleIds']),
+          afterValues: createAuditSnapshot(afterState, ['cycleIds']),
+          result: 'success',
+          description: 'School education cycles updated.',
+        });
+        return afterRows;
+      });
+      return res.json(updatedCycles);
     } catch (err) {
       console.error('Failed to update school cycles:', err);
       return res.status(500).json({ error: 'Failed to update school cycles' });
@@ -7666,12 +8967,27 @@ export async function createApp() {
       }
 
       const status = decision === 'approve' ? 'approved' : 'rejected';
-      await db.insert(schoolPeriodTypeApprovals)
-        .values({ schoolId, periodType, status, updatedAt: new Date() })
-        .onConflictDoUpdate({
-          target: [schoolPeriodTypeApprovals.schoolId, schoolPeriodTypeApprovals.periodType],
-          set: { status, updatedAt: new Date() },
+      await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolPeriodTypeApprovals).where(and(
+          eq(schoolPeriodTypeApprovals.schoolId, schoolId),
+          eq(schoolPeriodTypeApprovals.periodType, periodType),
+        )).for('update');
+        const [after] = await tx.insert(schoolPeriodTypeApprovals)
+          .values({ schoolId, periodType, status, updatedAt: new Date() })
+          .onConflictDoUpdate({
+            target: [schoolPeriodTypeApprovals.schoolId, schoolPeriodTypeApprovals.periodType],
+            set: { status, updatedAt: new Date() },
+          })
+          .returning();
+        if (!after) throw new Error('Period type approval did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'academic_periods', 'update', 'school_period_type_approval', after.id ?? null),
+          beforeValues: createAuditSnapshot(before ?? null, ['periodType', 'status']),
+          afterValues: createAuditSnapshot(after, ['periodType', 'status']),
+          result: 'success',
+          description: `School period type ${decision}d.`,
         });
+      });
       return res.json((await getSchoolPeriodTypeStates(schoolId)).find((state) => state.periodType === periodType));
     } catch (error) {
       console.error('Failed to update school period type approval:', error);
@@ -7784,22 +9100,37 @@ export async function createApp() {
         schoolId: targetSchoolId,
       };
 
-      const sameContextTerms = await db.select().from(schoolTerms).where(and(
-        eq(schoolTerms.academicYearId, vals.academicYearId),
-        targetSchoolId == null ? sql`${schoolTerms.schoolId} IS NULL` : eq(schoolTerms.schoolId, targetSchoolId),
-        vals.cycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, vals.cycleId),
-      ));
-      const conflictingTerm = findConflictingSchoolTerm(sameContextTerms, {
-        academicYearId: vals.academicYearId,
-        schoolId: targetSchoolId,
-        cycleId: vals.cycleId,
-        startDate: vals.startDate ?? null,
-        endDate: vals.endDate ?? null,
-      });
-      if (conflictingTerm) return res.status(409).json({ error: 'A period with the same school year, cycle and overlapping dates already exists' });
+      const result = await db.transaction(async (tx) => {
+        const sameContextTerms = await tx.select().from(schoolTerms).where(and(
+          eq(schoolTerms.academicYearId, vals.academicYearId),
+          targetSchoolId == null ? sql`${schoolTerms.schoolId} IS NULL` : eq(schoolTerms.schoolId, targetSchoolId),
+          vals.cycleId == null ? sql`${schoolTerms.cycleId} IS NULL` : eq(schoolTerms.cycleId, vals.cycleId),
+        ));
+        const conflictingTerm = findConflictingSchoolTerm(sameContextTerms, {
+          academicYearId: vals.academicYearId,
+          schoolId: targetSchoolId,
+          cycleId: vals.cycleId,
+          startDate: vals.startDate ?? null,
+          endDate: vals.endDate ?? null,
+        });
+        if (conflictingTerm) return { kind: 'conflict' as const };
 
-      const inserted = await db.insert(schoolTerms).values(vals).returning();
-      res.status(201).json(inserted[0]);
+        const [created] = await tx.insert(schoolTerms).values(vals).returning();
+        if (!created) throw new Error('School term insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, targetSchoolId, 'academic_periods', 'create', 'school_term', created.id),
+          afterValues: createAuditSnapshot(created, [
+            'academicYearId', 'cycleId', 'periodType', 'name', 'startDate', 'endDate', 'orderIndex', 'isActive',
+          ]),
+          result: 'success',
+          description: 'Academic period created.',
+        });
+        return { kind: 'created' as const, row: created };
+      });
+      if (result.kind === 'conflict') {
+        return res.status(409).json({ error: 'A period with the same school year, cycle and overlapping dates already exists' });
+      }
+      res.status(201).json(result.row);
     } catch (err: any) {
       console.error('Failed to create school term:', err);
       if (err?.cause?.code === '23503') {
@@ -7872,9 +9203,31 @@ export async function createApp() {
         }
       }
 
-      await db.update(schoolTerms).set(updates).where(eq(schoolTerms.id, id));
-      const [row] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
-      res.json(row);
+      const updatedTerm = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolTerms)
+          .where(eq(schoolTerms.id, id))
+          .for('update');
+        if (!before) return null;
+        const [after] = await tx.update(schoolTerms)
+          .set(updates)
+          .where(eq(schoolTerms.id, id))
+          .returning();
+        if (!after) return null;
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, before.schoolId ?? null, 'academic_periods', 'update', 'school_term', id),
+          beforeValues: createAuditSnapshot(before, [
+            'academicYearId', 'cycleId', 'periodType', 'name', 'startDate', 'endDate', 'orderIndex', 'isActive',
+          ]),
+          afterValues: createAuditSnapshot(after, [
+            'academicYearId', 'cycleId', 'periodType', 'name', 'startDate', 'endDate', 'orderIndex', 'isActive',
+          ]),
+          result: 'success',
+          description: 'Academic period updated.',
+        });
+        return after;
+      });
+      if (!updatedTerm) return res.status(404).json({ error: 'Term not found' });
+      res.json(updatedTerm);
     } catch (err: any) {
       console.error('Failed to update school term:', err);
       res.status(500).json({ error: 'Failed to update school term' });
@@ -7890,9 +9243,23 @@ export async function createApp() {
       const id = Number(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-      const [existing] = await db.select().from(schoolTerms).where(eq(schoolTerms.id, id));
-      if (!existing) return res.status(404).json({ error: 'Term not found' });
-      await db.delete(schoolTerms).where(eq(schoolTerms.id, id));
+      const deleted = await db.transaction(async (tx) => {
+        const [existing] = await tx.select().from(schoolTerms)
+          .where(eq(schoolTerms.id, id))
+          .for('update');
+        if (!existing) return false;
+        await tx.delete(schoolTerms).where(eq(schoolTerms.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, existing.schoolId ?? null, 'academic_periods', 'delete', 'school_term', id),
+          beforeValues: createAuditSnapshot(existing, [
+            'academicYearId', 'cycleId', 'periodType', 'name', 'startDate', 'endDate', 'orderIndex', 'isActive',
+          ]),
+          result: 'success',
+          description: 'Academic period deleted.',
+        });
+        return true;
+      });
+      if (!deleted) return res.status(404).json({ error: 'Term not found' });
       res.json({ success: true });
     } catch (err: any) {
       console.error('Failed to delete school term:', err);
@@ -7970,15 +9337,32 @@ export async function createApp() {
         return res.status(400).json({ error: 'Valid distinct sourceCode and targetCode are required' });
       }
 
-      const existingRows = await db.select({ id: classProgressions.id })
-        .from(classProgressions)
-        .where(and(
-          eq(classProgressions.sourceCode, sourceCode),
-          cycleId == null ? sql`${classProgressions.cycleId} IS NULL` : eq(classProgressions.cycleId, cycleId),
-        ));
-      const [saved] = existingRows.length > 0
-        ? await db.update(classProgressions).set({ targetCode, isActive: true, updatedAt: new Date() }).where(eq(classProgressions.id, existingRows[0].id)).returning()
-        : await db.insert(classProgressions).values({ sourceCode, targetCode, cycleId, isActive: true }).returning();
+      const saved = await db.transaction(async (tx) => {
+        const existingRows = await tx.select().from(classProgressions)
+          .where(and(
+            eq(classProgressions.sourceCode, sourceCode),
+            cycleId == null ? sql`${classProgressions.cycleId} IS NULL` : eq(classProgressions.cycleId, cycleId),
+          ))
+          .for('update');
+        const before = existingRows[0] ?? null;
+        const [after] = before
+          ? await tx.update(classProgressions)
+            .set({ targetCode, isActive: true, updatedAt: new Date() })
+            .where(eq(classProgressions.id, before.id))
+            .returning()
+          : await tx.insert(classProgressions)
+            .values({ sourceCode, targetCode, cycleId, isActive: true })
+            .returning();
+        if (!after) throw new Error('Class progression upsert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, null, 'class_progressions', before ? 'update' : 'create', 'class_progression', after.id),
+          beforeValues: createAuditSnapshot(before, ['sourceCode', 'targetCode', 'cycleId', 'isActive']),
+          afterValues: createAuditSnapshot(after, ['sourceCode', 'targetCode', 'cycleId', 'isActive']),
+          result: 'success',
+          description: before ? 'Class progression updated.' : 'Class progression created.',
+        });
+        return after;
+      });
       return res.json(saved);
     } catch (err) {
       console.error('Failed to save global class progression:', err);
@@ -7993,7 +9377,24 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
-      await db.update(classProgressions).set({ isActive: false, updatedAt: new Date() }).where(eq(classProgressions.id, id));
+      await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(classProgressions)
+          .where(eq(classProgressions.id, id))
+          .for('update');
+        if (!before) return;
+        const [after] = await tx.update(classProgressions)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(eq(classProgressions.id, id))
+          .returning();
+        if (!after) return;
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, null, 'class_progressions', 'delete', 'class_progression', id),
+          beforeValues: createAuditSnapshot(before, ['sourceCode', 'targetCode', 'cycleId', 'isActive']),
+          afterValues: createAuditSnapshot(after, ['sourceCode', 'targetCode', 'cycleId', 'isActive']),
+          result: 'success',
+          description: 'Class progression deactivated.',
+        });
+      });
       return res.json({ success: true });
     } catch (err) {
       console.error('Failed to delete global class progression:', err);
@@ -8051,10 +9452,29 @@ export async function createApp() {
         return res.status(400).json({ error: 'Both classes must belong to the selected academic year' });
       }
 
-      const [saved] = await db.insert(classSuccessions).values({ schoolId, academicYearId, sourceClassId, targetClassId }).onConflictDoUpdate({
-        target: [classSuccessions.schoolId, classSuccessions.academicYearId, classSuccessions.sourceClassId],
-        set: { targetClassId, updatedAt: new Date() },
-      }).returning();
+      const saved = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(classSuccessions).where(and(
+          eq(classSuccessions.schoolId, schoolId),
+          eq(classSuccessions.academicYearId, academicYearId),
+          eq(classSuccessions.sourceClassId, sourceClassId),
+        )).for('update');
+        const [after] = await tx.insert(classSuccessions)
+          .values({ schoolId, academicYearId, sourceClassId, targetClassId })
+          .onConflictDoUpdate({
+            target: [classSuccessions.schoolId, classSuccessions.academicYearId, classSuccessions.sourceClassId],
+            set: { targetClassId, updatedAt: new Date() },
+          })
+          .returning();
+        if (!after) throw new Error('Class succession upsert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'class_successions', before ? 'update' : 'create', 'class_succession', after.id),
+          beforeValues: createAuditSnapshot(before, ['academicYearId', 'sourceClassId', 'targetClassId']),
+          afterValues: createAuditSnapshot(after, ['academicYearId', 'sourceClassId', 'targetClassId']),
+          result: 'success',
+          description: before ? 'Class succession updated.' : 'Class succession created.',
+        });
+        return after;
+      });
       return res.json(saved);
     } catch (err) {
       console.error('Failed to save class succession:', err);
@@ -8069,10 +9489,23 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const id = Number(req.params.id);
-      const [row] = await db.select({ id: classSuccessions.id, schoolId: classSuccessions.schoolId }).from(classSuccessions).where(eq(classSuccessions.id, id));
+      const row = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(classSuccessions)
+          .where(eq(classSuccessions.id, id))
+          .for('update');
+        if (!before) return null;
+        if (actor.role !== 'super_admin' && actor.schoolId !== before.schoolId) return { denied: true as const };
+        await tx.delete(classSuccessions).where(eq(classSuccessions.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, before.schoolId, 'class_successions', 'delete', 'class_succession', id),
+          beforeValues: createAuditSnapshot(before, ['academicYearId', 'sourceClassId', 'targetClassId']),
+          result: 'success',
+          description: 'Class succession deleted.',
+        });
+        return before;
+      });
       if (!row) return res.status(404).json({ error: 'Class succession not found' });
-      if (actor.role !== 'super_admin' && actor.schoolId !== row.schoolId) return res.status(403).json({ error: 'Forbidden' });
-      await db.delete(classSuccessions).where(eq(classSuccessions.id, id));
+      if ('denied' in row) return res.status(403).json({ error: 'Forbidden' });
       return res.json({ success: true });
     } catch (err) {
       console.error('Failed to delete class succession:', err);
@@ -8125,24 +9558,36 @@ export async function createApp() {
         const [approved] = await db.select({ id: schoolClasses.id }).from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId), eq(schoolClasses.status, 'approved')));
         if (!approved) return res.status(403).json({ error: 'Class is not approved for this school' });
       }
-      const existingRows = await db.select({ id: classExamConfigurations.id })
-        .from(classExamConfigurations)
-        .where(and(
-          eq(classExamConfigurations.classId, classId),
-          eq(classExamConfigurations.academicYearId, academicYearId),
-          eq(classExamConfigurations.examType, examType),
-          schoolId == null
-            ? sql`${classExamConfigurations.schoolId} IS NULL`
-            : eq(classExamConfigurations.schoolId, schoolId),
-        ));
-      const [saved] = existingRows.length > 0
-        ? await db.update(classExamConfigurations)
-          .set({ examType, isActive: true, updatedAt: new Date() })
-          .where(eq(classExamConfigurations.id, existingRows[0].id))
-          .returning()
-        : await db.insert(classExamConfigurations)
-          .values({ classId, schoolId, academicYearId, examType, isActive: true, updatedAt: new Date() })
-          .returning();
+      const saved = await db.transaction(async (tx) => {
+        const existingRows = await tx.select().from(classExamConfigurations)
+          .where(and(
+            eq(classExamConfigurations.classId, classId),
+            eq(classExamConfigurations.academicYearId, academicYearId),
+            eq(classExamConfigurations.examType, examType),
+            schoolId == null
+              ? sql`${classExamConfigurations.schoolId} IS NULL`
+              : eq(classExamConfigurations.schoolId, schoolId),
+          ))
+          .for('update');
+        const before = existingRows[0] ?? null;
+        const [after] = before
+          ? await tx.update(classExamConfigurations)
+            .set({ examType, isActive: true, updatedAt: new Date() })
+            .where(eq(classExamConfigurations.id, before.id))
+            .returning()
+          : await tx.insert(classExamConfigurations)
+            .values({ classId, schoolId, academicYearId, examType, isActive: true, updatedAt: new Date() })
+            .returning();
+        if (!after) throw new Error('Class exam configuration upsert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'evaluations', before ? 'update' : 'create', 'class_exam_configuration', after.id),
+          beforeValues: createAuditSnapshot(before, ['classId', 'academicYearId', 'examType', 'isActive']),
+          afterValues: createAuditSnapshot(after, ['classId', 'academicYearId', 'examType', 'isActive']),
+          result: 'success',
+          description: before ? 'Class exam configuration updated.' : 'Class exam configuration created.',
+        });
+        return after;
+      });
       return res.status(201).json(saved);
     } catch (error) {
       console.error('Failed to save class exam configuration:', error);
@@ -8155,10 +9600,30 @@ export async function createApp() {
       const actor = await resolveActor(req);
       const id = parsePositiveInteger(req.params.id);
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
-      const [configuration] = await db.select().from(classExamConfigurations).where(eq(classExamConfigurations.id, id));
-      if (!configuration) return res.status(404).json({ error: 'Exam configuration not found' });
-      if (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
-      await db.update(classExamConfigurations).set({ isActive: false, updatedAt: new Date() }).where(eq(classExamConfigurations.id, id));
+      const result = await db.transaction(async (tx) => {
+        const [configuration] = await tx.select().from(classExamConfigurations)
+          .where(eq(classExamConfigurations.id, id))
+          .for('update');
+        if (!configuration) return { kind: 'not_found' as const };
+        if (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId) {
+          return { kind: 'forbidden' as const };
+        }
+        const [updated] = await tx.update(classExamConfigurations)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(eq(classExamConfigurations.id, id))
+          .returning();
+        if (!updated) return { kind: 'not_found' as const };
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, configuration.schoolId ?? null, 'evaluations', 'delete', 'class_exam_configuration', id),
+          beforeValues: createAuditSnapshot(configuration, ['classId', 'academicYearId', 'examType', 'isActive']),
+          afterValues: createAuditSnapshot(updated, ['classId', 'academicYearId', 'examType', 'isActive']),
+          result: 'success',
+          description: 'Class exam configuration deactivated.',
+        });
+        return { kind: 'updated' as const };
+      });
+      if (result.kind === 'not_found') return res.status(404).json({ error: 'Exam configuration not found' });
+      if (result.kind === 'forbidden') return res.status(403).json({ error: 'Forbidden' });
       return res.json({ success: true });
     } catch (error) {
       console.error('Failed to delete class exam configuration:', error);
@@ -8206,11 +9671,34 @@ export async function createApp() {
       const actor = await resolveActor(req);
       const id = parsePositiveInteger(req.params.id);
       if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
-      const [row] = await db.select({ id: examResults.id, studentSchoolId: students.schoolId, studentIsActive: students.isActive }).from(examResults).innerJoin(students, eq(examResults.studentId, students.id)).where(eq(examResults.id, id));
-      if (!row) return res.status(404).json({ error: 'Exam result not found' });
-      if (actor.role === 'school_admin' && row.studentSchoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
-      if (row.studentIsActive !== true) return res.status(409).json({ error: 'Historical exam results for former students cannot be deleted' });
-      await db.delete(examResults).where(eq(examResults.id, id));
+      const deletionResult = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(examResults)
+          .where(eq(examResults.id, id))
+          .for('update');
+        if (!before) return { kind: 'not_found' as const };
+        const [student] = await tx.select({ schoolId: students.schoolId, isActive: students.isActive })
+          .from(students).where(eq(students.id, before.studentId));
+        if (!student) return { kind: 'not_found' as const };
+        if (actor.role === 'school_admin' && student.schoolId !== actor.schoolId) {
+          return { kind: 'forbidden' as const };
+        }
+        if (student.isActive !== true) return { kind: 'historical' as const };
+        await tx.delete(examResults).where(eq(examResults.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, student.schoolId, 'exam_results', 'delete', 'exam_result', id),
+          beforeValues: createAuditSnapshot(before, [
+            'studentId', 'academicYearId', 'examType', 'resultStatus', 'mention', 'examSession', 'recordedBy',
+          ]),
+          result: 'success',
+          description: 'Exam result deleted.',
+        });
+        return { kind: 'deleted' as const };
+      });
+      if (deletionResult.kind === 'not_found') return res.status(404).json({ error: 'Exam result not found' });
+      if (deletionResult.kind === 'forbidden') return res.status(403).json({ error: 'Forbidden' });
+      if (deletionResult.kind === 'historical') {
+        return res.status(409).json({ error: 'Historical exam results for former students cannot be deleted' });
+      }
       return res.json({ success: true });
     } catch (error) {
       console.error('Failed to delete exam result:', error);
@@ -8234,19 +9722,82 @@ export async function createApp() {
       const studentIds = entries.map((entry: any) => parsePositiveInteger(entry.studentId)).filter((id: number | null): id is number => id != null);
       const studentRows = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId, isActive: students.isActive }).from(students).where(inArray(students.id, studentIds));
       if (studentRows.length !== studentIds.length || studentRows.some((student) => student.isActive !== true || student.classId !== classId || (actor.role === 'school_admin' && student.schoolId !== actor.schoolId))) return res.status(403).json({ error: 'Every student must be active and belong to the configured class and school' });
-      const saved = [];
+      const validatedEntries: Array<{
+        studentId: number;
+        resultStatus: string;
+        mention: string | null;
+        examSession: string | null;
+      }> = [];
       for (const entry of entries) {
         const studentId = parsePositiveInteger(entry.studentId);
         if (studentId == null || !isExamResultStatus(entry.resultStatus)) return res.status(400).json({ error: 'Invalid studentId or resultStatus' });
         const mention = entry.mention == null || entry.mention === '' ? null : entry.mention;
         if (mention != null && !isExamMention(mention)) return res.status(400).json({ error: 'Invalid exam mention' });
-        const applicableMention = entry.resultStatus === 'ADMITTED' ? mention : null;
-        const [row] = await db.insert(examResults).values({ studentId, academicYearId, examType, resultStatus: entry.resultStatus, mention: applicableMention, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() }).onConflictDoUpdate({
-          target: [examResults.studentId, examResults.academicYearId, examResults.examType],
-          set: { resultStatus: entry.resultStatus, mention: applicableMention, examSession: entry.examSession ? String(entry.examSession) : null, recordedBy: actor.id ?? null, updatedAt: new Date() },
-        }).returning();
-        saved.push(row);
+        validatedEntries.push({
+          studentId,
+          resultStatus: entry.resultStatus,
+          mention: entry.resultStatus === 'ADMITTED' ? mention : null,
+          examSession: entry.examSession ? String(entry.examSession) : null,
+        });
       }
+      const saved = await db.transaction(async (tx) => {
+        const rows = [];
+        for (const entry of validatedEntries) {
+          const [before] = await tx.select().from(examResults).where(and(
+            eq(examResults.studentId, entry.studentId),
+            eq(examResults.academicYearId, academicYearId),
+            eq(examResults.examType, examType),
+          )).for('update');
+          const [after] = await tx.insert(examResults).values({
+            studentId: entry.studentId,
+            academicYearId,
+            examType,
+            resultStatus: entry.resultStatus,
+            mention: entry.mention,
+            examSession: entry.examSession,
+            recordedBy: actor.id ?? null,
+            updatedAt: new Date(),
+          }).onConflictDoUpdate({
+            target: [examResults.studentId, examResults.academicYearId, examResults.examType],
+            set: {
+              resultStatus: entry.resultStatus,
+              mention: entry.mention,
+              examSession: entry.examSession,
+              recordedBy: actor.id ?? null,
+              updatedAt: new Date(),
+            },
+          }).returning();
+          if (!after) throw new Error('Exam result upsert did not return a row.');
+          const studentContext = studentRows.find((student) => student.id === entry.studentId);
+          const studentSchoolId = studentContext?.schoolId ?? null;
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(
+              actor,
+              studentSchoolId,
+              'exam_results',
+              before ? 'update' : 'create',
+              'exam_result',
+              after.id,
+            ),
+            beforeValues: createAuditSnapshot(before ? {
+              ...before,
+              classId: studentContext?.classId ?? null,
+            } : null, [
+              'studentId', 'classId', 'academicYearId', 'examType', 'resultStatus', 'mention', 'examSession',
+            ]),
+            afterValues: createAuditSnapshot({
+              ...after,
+              classId: studentContext?.classId ?? null,
+            }, [
+              'studentId', 'classId', 'academicYearId', 'examType', 'resultStatus', 'mention', 'examSession',
+            ]),
+            result: 'success',
+            description: before ? 'Official student result updated.' : 'Official student result recorded.',
+          });
+          rows.push(after);
+        }
+        return rows;
+      });
       return res.json(saved);
     } catch (error) {
       console.error('Failed to save exam results:', error);
@@ -8907,56 +10458,87 @@ export async function createApp() {
       }
 
       try {
-        const [existingGlobalClass] = await db.select().from(classes).where(
-          and(
-            eq(classes.name, trimmedName),
-            sql`${classes.schoolId} IS NULL`,
-            eq(classes.academicYearId, Number(academicYearId))
-          )
-        ).limit(1);
+        const result = await db.transaction(async (tx) => {
+          const [existingGlobalClass] = await tx.select().from(classes).where(
+            and(
+              eq(classes.name, trimmedName),
+              sql`${classes.schoolId} IS NULL`,
+              eq(classes.academicYearId, Number(academicYearId))
+            )
+          ).limit(1).for('update');
 
-        let classRow = existingGlobalClass;
+          let classRow = existingGlobalClass;
+          if (!classRow) {
+            const [createdClass] = await tx.insert(classes).values({
+              name: trimmedName,
+              schoolId: null,
+              academicYearId: Number(academicYearId),
+              levelId: resolvedLevelId,
+              progressionCode: normalizeClassProgressionCode(trimmedName),
+              teacherId: null,
+            }).returning();
+            if (!createdClass) throw new Error('Class insert did not return a row.');
+            classRow = createdClass;
+            await appendAuditEvent(tx, {
+              ...createAuditEventContext(actor, resolvedSchoolId, 'class_management', 'create', 'class', classRow.id),
+              afterValues: createAuditSnapshot(classRow, [
+                'name', 'schoolId', 'academicYearId', 'levelId', 'progressionCode', 'teacherId',
+              ]),
+              result: 'success',
+              description: 'Class created.',
+            });
+          } else if (classRow.levelId == null && resolvedLevelId != null) {
+            const beforeClass = classRow;
+            const [updatedClass] = await tx.update(classes)
+              .set({ levelId: resolvedLevelId })
+              .where(eq(classes.id, classRow.id))
+              .returning();
+            if (!updatedClass) throw new Error('Class level update did not return a row.');
+            classRow = updatedClass;
+            await appendAuditEvent(tx, {
+              ...createAuditEventContext(actor, resolvedSchoolId, 'class_management', 'update', 'class', classRow.id),
+              beforeValues: createAuditSnapshot(beforeClass, ['name', 'schoolId', 'academicYearId', 'levelId']),
+              afterValues: createAuditSnapshot(classRow, ['name', 'schoolId', 'academicYearId', 'levelId']),
+              result: 'success',
+              description: 'Class level assigned.',
+            });
+          } else if (resolvedLevelId != null && classRow.levelId != null && classRow.levelId !== resolvedLevelId) {
+            return { kind: 'level_conflict' as const };
+          }
 
-        if (!classRow) {
-          const [createdClass] = await db.insert(classes).values({
-            name: trimmedName,
-            schoolId: null,
-            academicYearId: Number(academicYearId),
-            levelId: resolvedLevelId,
-            progressionCode: normalizeClassProgressionCode(trimmedName),
-            teacherId: null,
-          }).returning();
-          classRow = createdClass;
-        } else if (classRow.levelId == null && resolvedLevelId != null) {
-          const [updatedClass] = await db.update(classes).set({ levelId: resolvedLevelId }).where(eq(classes.id, classRow.id)).returning();
-          classRow = updatedClass;
-        } else if (resolvedLevelId != null && classRow.levelId != null && classRow.levelId !== resolvedLevelId) {
+          if (resolvedSchoolId != null) {
+            const normalizedSchoolId = Number(resolvedSchoolId);
+            const [existingSchoolClass] = await tx.select().from(schoolClasses).where(
+              and(
+                eq(schoolClasses.schoolId, normalizedSchoolId),
+                eq(schoolClasses.classId, classRow.id)
+              )
+            ).limit(1).for('update');
+            if (!existingSchoolClass) {
+              const [createdSchoolClass] = await tx.insert(schoolClasses).values({
+                schoolId: normalizedSchoolId,
+                classId: classRow.id,
+                status: 'approved',
+              }).returning();
+              if (!createdSchoolClass) throw new Error('School class association insert did not return a row.');
+              await appendAuditEvent(tx, {
+                ...createAuditEventContext(actor, normalizedSchoolId, 'class_management', 'create', 'school_class', createdSchoolClass.id),
+                afterValues: createAuditSnapshot(createdSchoolClass, ['schoolId', 'classId', 'status']),
+                result: 'success',
+                description: 'Class approved for school.',
+              });
+            }
+          }
+
+          return {
+            kind: 'created' as const,
+            classRecord: { ...classRow, schoolId: classRow.schoolId ?? null, status: 'approved' },
+          };
+        });
+        if (result.kind === 'level_conflict') {
           return res.status(409).json({ error: 'Class level conflicts with the existing global class' });
         }
-
-        if (classRow && resolvedSchoolId != null) {
-          const normalizedSchoolId = Number(resolvedSchoolId);
-          const [existingSchoolClass] = await db.select().from(schoolClasses).where(
-            and(
-              eq(schoolClasses.schoolId, normalizedSchoolId),
-              eq(schoolClasses.classId, classRow.id)
-            )
-          ).limit(1);
-
-          if (!existingSchoolClass) {
-            await db.insert(schoolClasses).values({
-              schoolId: normalizedSchoolId,
-              classId: classRow.id,
-              status: 'approved',
-            });
-          }
-        }
-
-        res.status(201).json({
-          ...classRow,
-          schoolId: classRow.schoolId ?? null,
-          status: 'approved',
-        });
+        res.status(201).json(result.classRecord);
       } catch (insertErr: any) {
         // Postgres unique violation
         if (insertErr && insertErr.code === '23505') {
@@ -9001,17 +10583,31 @@ export async function createApp() {
         return res.status(409).json({ error: 'Class already belongs to another school' });
       }
 
-      const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
-      if (existing[0]) {
-        const [updated] = await db.update(schoolClasses)
-          .set({ status: 'approved', updatedAt: new Date() })
-          .where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)))
-          .returning();
-        return res.json(updated);
-      }
-
-      const [created] = await db.insert(schoolClasses).values({ schoolId, classId, status: 'approved' }).returning();
-      res.status(201).json(created);
+      const result = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolClasses).where(and(
+          eq(schoolClasses.schoolId, schoolId),
+          eq(schoolClasses.classId, classId),
+        )).for('update');
+        const [after] = before
+          ? await tx.update(schoolClasses)
+            .set({ status: 'approved', updatedAt: new Date() })
+            .where(eq(schoolClasses.id, before.id))
+            .returning()
+          : await tx.insert(schoolClasses)
+            .values({ schoolId, classId, status: 'approved' })
+            .returning();
+        if (!after) throw new Error('School class approval did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'class_management', before ? 'update' : 'create', 'school_class', after.id),
+          beforeValues: createAuditSnapshot(before, ['schoolId', 'classId', 'status']),
+          afterValues: createAuditSnapshot(after, ['schoolId', 'classId', 'status']),
+          result: 'success',
+          description: 'Class approval status updated.',
+        });
+        return { row: after, created: !before };
+      });
+      if (result.created) return res.status(201).json(result.row);
+      return res.json(result.row);
     } catch (err: any) {
       console.error('Error approving class:', err);
       res.status(500).json({ error: 'Failed to approve class' });
@@ -9043,17 +10639,31 @@ export async function createApp() {
         return res.status(409).json({ error: 'Class belongs to another school' });
       }
 
-      const existing = await db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)));
-      if (existing[0]) {
-        const [updated] = await db.update(schoolClasses)
-          .set({ status: 'rejected', updatedAt: new Date() })
-          .where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.classId, classId)))
-          .returning();
-        return res.json(updated);
-      }
-
-      const [created] = await db.insert(schoolClasses).values({ schoolId, classId, status: 'rejected' }).returning();
-      res.status(201).json(created);
+      const result = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolClasses).where(and(
+          eq(schoolClasses.schoolId, schoolId),
+          eq(schoolClasses.classId, classId),
+        )).for('update');
+        const [after] = before
+          ? await tx.update(schoolClasses)
+            .set({ status: 'rejected', updatedAt: new Date() })
+            .where(eq(schoolClasses.id, before.id))
+            .returning()
+          : await tx.insert(schoolClasses)
+            .values({ schoolId, classId, status: 'rejected' })
+            .returning();
+        if (!after) throw new Error('School class rejection did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'class_management', before ? 'update' : 'create', 'school_class', after.id),
+          beforeValues: createAuditSnapshot(before, ['schoolId', 'classId', 'status']),
+          afterValues: createAuditSnapshot(after, ['schoolId', 'classId', 'status']),
+          result: 'success',
+          description: 'Class approval status updated.',
+        });
+        return { row: after, created: !before };
+      });
+      if (result.created) return res.status(201).json(result.row);
+      return res.json(result.row);
     } catch (err: any) {
       console.error('Error rejecting class:', err);
       res.status(500).json({ error: 'Failed to reject class' });
@@ -9068,52 +10678,194 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Load the class to check its school
-      const [classToDelete] = await db.select().from(classes).where(eq(classes.id, id));
-      if (!classToDelete) return res.status(404).json({ error: 'Class not found' });
-
       // Only super_admin or school_admin may delete classes.
       if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
         return res.status(403).json({ error: 'Forbidden: only super_admin or school_admin can delete classes' });
       }
 
-      if (actor.role === 'school_admin') {
-        if (!actor.schoolId) {
-          return res.status(403).json({ error: 'Forbidden: school_admin must have a schoolId' });
+      const deletionResult = await db.transaction(async (tx) => {
+        const [classToDelete] = await tx.select().from(classes)
+          .where(eq(classes.id, id))
+          .for('update');
+        if (!classToDelete) return { kind: 'not_found' as const };
+        if (actor.role === 'school_admin') {
+          if (!actor.schoolId) return { kind: 'forbidden' as const, missingSchool: true as const };
+          if (classToDelete.schoolId !== actor.schoolId) return { kind: 'forbidden' as const, missingSchool: false as const };
         }
-        if (classToDelete.schoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Cannot delete class in another school' });
-        }
-      }
 
-      const [accountingHistory] = await db.select({ id: financialObligations.id })
-        .from(financialObligations)
-        .where(eq(financialObligations.classId, id))
-        .limit(1);
-      const [accountingTariff] = await db.select({ id: accountingTariffs.id })
-        .from(accountingTariffs)
-        .where(or(
-          eq(accountingTariffs.classId, id),
-          eq(accountingTariffs.classFromId, id),
-          eq(accountingTariffs.classToId, id),
-        ))
-        .limit(1);
-      const [accountingFee] = await db.select({ id: accountingFeeDefinitions.id })
-        .from(accountingFeeDefinitions)
-        .where(eq(accountingFeeDefinitions.classId, id))
-        .limit(1);
-      if (accountingHistory || accountingTariff || accountingFee) {
+        const [accountingHistory] = await tx.select({ id: financialObligations.id })
+          .from(financialObligations)
+          .where(eq(financialObligations.classId, id))
+          .limit(1);
+        const [accountingTariff] = await tx.select({ id: accountingTariffs.id })
+          .from(accountingTariffs)
+          .where(or(
+            eq(accountingTariffs.classId, id),
+            eq(accountingTariffs.classFromId, id),
+            eq(accountingTariffs.classToId, id),
+          ))
+          .limit(1);
+        const [accountingFee] = await tx.select({ id: accountingFeeDefinitions.id })
+          .from(accountingFeeDefinitions)
+          .where(eq(accountingFeeDefinitions.classId, id))
+          .limit(1);
+        if (accountingHistory || accountingTariff || accountingFee) return { kind: 'accounting_reference' as const };
+
+        await tx.delete(classes).where(eq(classes.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, classToDelete.schoolId ?? null, 'class_management', 'delete', 'class', id),
+          beforeValues: createAuditSnapshot(classToDelete, ['name', 'schoolId', 'academicYearId', 'levelId', 'progressionCode', 'teacherId']),
+          result: 'success',
+          description: 'Class deleted.',
+        });
+        return { kind: 'deleted' as const };
+      });
+      if (deletionResult.kind === 'not_found') return res.status(404).json({ error: 'Class not found' });
+      if (deletionResult.kind === 'forbidden') {
+        return res.status(403).json({
+          error: deletionResult.missingSchool
+            ? 'Forbidden: school_admin must have a schoolId'
+            : 'Cannot delete class in another school',
+        });
+      }
+      if (deletionResult.kind === 'accounting_reference') {
         return res.status(409).json({
           error: 'Cette classe est référencée par des données comptables et ne peut pas être supprimée.',
         });
       }
-
-      await db.delete(classes).where(eq(classes.id, id));
       res.json({ message: 'Class deleted successfully' });
     } catch (err: any) {
       res.status(500).json({ error: 'Cannot delete class due to linked data (absence / marks)' });
     }
   });
+
+  const updateClassHomeroomAssignment = async (
+    actor: ResolvedActor,
+    schoolId: number,
+    classId: number,
+    requestedTeacherId: number | null,
+    clearClassTeacherWithoutAssignment = false,
+  ) => {
+    const assignmentEvent = {
+      actor: {
+        userId: actor.id ?? null,
+        role: actor.role,
+        email: actor.email ?? null,
+        name: actor.name ?? null,
+        activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+      },
+      targetSchool: { id: schoolId },
+      module: 'class_management',
+      action: 'update',
+      resourceType: 'class_homeroom_assignment',
+      resourceId: classId,
+      source: 'web',
+    };
+
+    try {
+      return await db.transaction(async (tx) => {
+        const [currentClass] = await tx.select().from(classes)
+          .where(eq(classes.id, classId))
+          .for('update');
+        if (!currentClass) return { kind: 'not_found' as const };
+        if (currentClass.schoolId != null && currentClass.schoolId !== schoolId) {
+          return { kind: 'conflict' as const };
+        }
+
+        if (currentClass.schoolId == null) {
+          const [approvedClass] = await tx.select({ id: schoolClasses.id }).from(schoolClasses).where(and(
+            eq(schoolClasses.classId, classId),
+            eq(schoolClasses.schoolId, schoolId),
+            eq(schoolClasses.status, 'approved'),
+          )).for('update');
+          if (!approvedClass) return { kind: 'conflict' as const };
+        }
+
+        const [currentAssignment] = await tx.select().from(classHomeroomAssignments).where(and(
+          eq(classHomeroomAssignments.schoolId, schoolId),
+          eq(classHomeroomAssignments.classId, classId),
+        )).for('update');
+        const beforeState = {
+          teacherId: currentAssignment?.teacherId ?? null,
+          classTeacherId: currentClass.teacherId ?? null,
+        };
+        let persistedClassTeacherId = currentClass.teacherId ?? null;
+
+        if (requestedTeacherId == null) {
+          if (currentAssignment) {
+            await tx.delete(classHomeroomAssignments)
+              .where(eq(classHomeroomAssignments.id, currentAssignment.id));
+          }
+          const shouldClearClassTeacher = currentClass.schoolId === schoolId
+            && (clearClassTeacherWithoutAssignment
+              || (currentAssignment != null && currentClass.teacherId === currentAssignment.teacherId));
+          if (shouldClearClassTeacher) {
+            const [updatedClass] = await tx.update(classes)
+              .set({ teacherId: null })
+              .where(eq(classes.id, classId))
+              .returning();
+            if (!updatedClass) throw new Error('Class teacher assignment was not removed.');
+            persistedClassTeacherId = updatedClass.teacherId ?? null;
+          }
+        } else {
+          const [currentTeacher] = await tx.select({
+            id: teachers.id,
+            userId: teachers.userId,
+            schoolId: teachers.schoolId,
+          }).from(teachers).where(eq(teachers.id, requestedTeacherId));
+          if (!currentTeacher) return { kind: 'conflict' as const };
+          if (currentTeacher.schoolId !== schoolId) {
+            const [membership] = await tx.select({ id: userSchools.id }).from(userSchools).where(and(
+              eq(userSchools.userId, currentTeacher.userId),
+              eq(userSchools.schoolId, schoolId),
+              eq(userSchools.role, 'teacher'),
+            ));
+            if (!membership) return { kind: 'conflict' as const };
+          }
+
+          const values = { schoolId, classId, teacherId: requestedTeacherId, updatedAt: new Date() };
+          if (currentAssignment) {
+            await tx.update(classHomeroomAssignments)
+              .set(values)
+              .where(eq(classHomeroomAssignments.id, currentAssignment.id));
+          } else {
+            await tx.insert(classHomeroomAssignments).values(values);
+          }
+          if (currentClass.schoolId === schoolId) {
+            const [updatedClass] = await tx.update(classes)
+              .set({ teacherId: requestedTeacherId })
+              .where(eq(classes.id, classId))
+              .returning();
+            if (!updatedClass) throw new Error('Class teacher assignment was not updated.');
+            persistedClassTeacherId = updatedClass.teacherId ?? null;
+          }
+        }
+
+        const afterState = {
+          teacherId: requestedTeacherId,
+          classTeacherId: persistedClassTeacherId,
+        };
+        await appendAuditEvent(tx, {
+          ...assignmentEvent,
+          beforeValues: createAuditSnapshot(beforeState, ['teacherId', 'classTeacherId']),
+          afterValues: createAuditSnapshot(afterState, ['teacherId', 'classTeacherId']),
+          result: 'success',
+          description: requestedTeacherId == null ? 'Homeroom teacher removed.' : 'Homeroom teacher assigned.',
+        });
+        return {
+          kind: 'updated' as const,
+          classRecord: { ...currentClass, teacherId: persistedClassTeacherId },
+        };
+      });
+    } catch (businessError) {
+      await recordAuditOutcomeAfterRollback({
+        ...assignmentEvent,
+        result: 'failure',
+        description: 'Homeroom assignment update failed.',
+      }, businessError);
+      throw businessError;
+    }
+  };
 
   // PUT /api/classes/:id - Update class principal teacher
   app.put('/api/classes/:id', requireAuth, async (req: AuthRequest, res) => {
@@ -9176,34 +10928,20 @@ export async function createApp() {
           return res.status(400).json({ error: 'Teacher does not belong to the same school as the class' });
         }
 
-        // Update class with new teacher
-        const [updated] = await db.update(classes).set({ teacherId: parsedTeacherId }).where(eq(classes.id, id)).returning();
-        const [existingHomeroom] = await db.select({ id: classHomeroomAssignments.id })
-          .from(classHomeroomAssignments)
-          .where(and(
-            eq(classHomeroomAssignments.classId, id),
-            eq(classHomeroomAssignments.schoolId, classToUpdate.schoolId),
-          ));
-        if (existingHomeroom) {
-          await db.update(classHomeroomAssignments).set({ teacherId: parsedTeacherId, updatedAt: new Date() })
-            .where(eq(classHomeroomAssignments.id, existingHomeroom.id));
-        } else {
-          await db.insert(classHomeroomAssignments).values({
-            schoolId: classToUpdate.schoolId,
-            classId: id,
-            teacherId: parsedTeacherId,
-            updatedAt: new Date(),
-          });
+        const requestedTeacherId = parsedTeacherId;
+        const updateResult = await updateClassHomeroomAssignment(actor, classToUpdate.schoolId, id, requestedTeacherId);
+        if (updateResult.kind === 'not_found') return res.status(404).json({ error: 'Class not found' });
+        if (updateResult.kind === 'conflict') {
+          return res.status(409).json({ error: 'Class or teacher assignment changed concurrently; reload before retrying' });
         }
-        return res.json(updated);
+        return res.json(updateResult.classRecord);
       } else {
-        // Clear the teacher assignment if teacherId is null/undefined
-        const [updated] = await db.update(classes).set({ teacherId: null }).where(eq(classes.id, id)).returning();
-        await db.delete(classHomeroomAssignments).where(and(
-          eq(classHomeroomAssignments.classId, id),
-          eq(classHomeroomAssignments.schoolId, classToUpdate.schoolId),
-        ));
-        return res.json(updated);
+        const updateResult = await updateClassHomeroomAssignment(actor, classToUpdate.schoolId, id, null, true);
+        if (updateResult.kind === 'not_found') return res.status(404).json({ error: 'Class not found' });
+        if (updateResult.kind === 'conflict') {
+          return res.status(409).json({ error: 'Class or teacher assignment changed concurrently; reload before retrying' });
+        }
+        return res.json(updateResult.classRecord);
       }
     } catch (err: any) {
       console.error('Error updating class:', err);
@@ -9217,8 +10955,36 @@ export async function createApp() {
       const schoolId = parsePositiveInteger(req.params.schoolId);
       const classId = parsePositiveInteger(req.params.classId);
       if (!actor || schoolId == null || classId == null) return res.status(403).json({ error: 'Forbidden' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Cannot assign a homeroom teacher outside your school' });
+      const assignmentDeniedEvent = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        targetSchool: { id: schoolId },
+        module: 'class_management',
+        action: 'update',
+        resourceType: 'class_homeroom_assignment',
+        resourceId: classId,
+        source: 'web',
+        result: 'denied' as const,
+      };
+      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+        await recordAuditOutcomeAfterRollback({
+          ...assignmentDeniedEvent,
+          description: 'Homeroom assignment was refused for an unauthorized role.',
+        }, new Error('Unauthorized role.'));
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+        await recordAuditOutcomeAfterRollback({
+          ...assignmentDeniedEvent,
+          description: 'Homeroom assignment was refused outside the actor school.',
+        }, new Error('School scope mismatch.'));
+        return res.status(403).json({ error: 'Cannot assign a homeroom teacher outside your school' });
+      }
 
       const requestedTeacherId = req.body?.teacherId == null || req.body.teacherId === ''
         ? null
@@ -9257,35 +11023,11 @@ export async function createApp() {
         }
       }
 
-      const [existingAssignment] = await db.select().from(classHomeroomAssignments).where(and(
-        eq(classHomeroomAssignments.schoolId, schoolId),
-        eq(classHomeroomAssignments.classId, classId),
-      ));
-      if (requestedTeacherId == null) {
-        await db.delete(classHomeroomAssignments).where(and(
-          eq(classHomeroomAssignments.schoolId, schoolId),
-          eq(classHomeroomAssignments.classId, classId),
-        ));
-        if (classRow.schoolId === schoolId && existingAssignment && classRow.id != null) {
-          await db.update(classes).set({ teacherId: null }).where(and(
-            eq(classes.id, classId),
-            eq(classes.teacherId, existingAssignment.teacherId),
-          ));
-        }
-      } else {
-        const values = { schoolId, classId, teacherId: requestedTeacherId, updatedAt: new Date() };
-        if (existingAssignment) {
-          await db.update(classHomeroomAssignments).set(values).where(eq(classHomeroomAssignments.id, existingAssignment.id));
-        } else {
-          await db.insert(classHomeroomAssignments).values(values);
-        }
-        if (classRow.schoolId === schoolId) {
-          await db.update(classes).set({ teacherId: requestedTeacherId }).where(eq(classes.id, classId));
-        }
+      const assignmentResult = await updateClassHomeroomAssignment(actor, schoolId, classId, requestedTeacherId);
+      if (assignmentResult.kind === 'not_found') return res.status(404).json({ error: 'Class not found' });
+      if (assignmentResult.kind === 'conflict') {
+        return res.status(409).json({ error: 'Class or teacher assignment changed concurrently; reload before retrying' });
       }
-
-      await logAuditEvent(actor, 'update', 'class_homeroom_assignment', classId, schoolId,
-        requestedTeacherId == null ? 'Homeroom teacher removed' : `Homeroom teacher set to ${requestedTeacherId}`);
       return res.json({ classId, schoolId, teacherId: requestedTeacherId });
     } catch (error) {
       console.error('Failed to update homeroom assignment:', error);
@@ -9575,6 +11317,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (!['super_admin', 'school_admin'].includes(actor.role)) {
+        await recordTeacherAssignmentDenial(actor, actor.schoolId, 'insufficient_role');
         return res.status(403).json({ error: 'Forbidden: only admin roles can create teachers' });
       }
 
@@ -9625,9 +11368,11 @@ export async function createApp() {
 
       if (actor.role === 'school_admin') {
         if (actor.schoolId == null) {
+          await recordTeacherAssignmentDenial(actor, null, 'missing_school_context');
           return res.status(403).json({ error: 'Forbidden: missing school context' });
         }
         if (parsedSchoolId !== actor.schoolId) {
+          await recordTeacherAssignmentDenial(actor, parsedSchoolId, 'outside_school_scope');
           return res.status(403).json({ error: 'Cannot create teacher in another school' });
         }
       }
@@ -9666,8 +11411,14 @@ export async function createApp() {
       }).returning();
 
       const createdTeacher = teacherResult[0];
-      await syncTeacherSubjectAssignments(createdTeacher.id, parsedSchoolId, effectiveSubjectIds);
-      await syncTeacherClassSubjectAssignments(createdTeacher.id, parsedSchoolId, validatedTeachingAssignments);
+      await synchronizeTeacherAssignments({
+        teacherId: createdTeacher.id,
+        schoolId: parsedSchoolId,
+        actor,
+        subjectIds: effectiveSubjectIds,
+        teachingAssignments: validatedTeachingAssignments,
+        classIds: effectiveClassIds,
+      });
       if (parsedSchoolId != null) {
         try {
           await db.insert(userSchools).values({
@@ -9687,8 +11438,6 @@ export async function createApp() {
       } catch (e) {
         /* ignore */
       }
-
-      await syncTeacherClassMemberships(createdTeacher.id, parsedSchoolId, effectiveClassIds);
 
       // Fetch classIds for the response
       let classIdsForResponse: number[] = [];
@@ -10415,9 +12164,46 @@ export async function createApp() {
                 isActive: true,
               });
             }
+            await appendAuditEvent(tx, {
+              actor: {
+                userId: actor.id ?? null,
+                role: actor.role,
+                email: actor.email ?? null,
+                name: actor.name ?? null,
+                activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+              },
+              targetSchool: { id: schoolId },
+              module: 'user_management',
+              action: 'import',
+              resourceType: 'user',
+              resourceId: newUser.id,
+              afterValues: createAuditSnapshot(newUser, ['role', 'schoolId']),
+              result: 'success',
+              source: 'web',
+              description: 'Parent account imported.',
+            });
             return { createdUser: newUser, parentId: newParent.id };
           }));
         } catch (err: any) {
+          const duplicateConflict = isUsersPhoneUniqueViolation(err) || isUsersEmailUniqueViolation(err);
+          await recordAuditOutcomeAfterRollback({
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id: schoolId },
+            module: 'user_management',
+            action: 'import',
+            resourceType: 'user',
+            result: duplicateConflict ? 'denied' : 'failure',
+            source: 'web',
+            description: duplicateConflict
+              ? 'Parent account import was rejected by a uniqueness constraint.'
+              : 'Parent account import failed.',
+          }, err);
           if (isUsersPhoneUniqueViolation(err)) {
             addRowError(DUPLICATE_PHONE_ERROR.message);
             continue;
@@ -10435,9 +12221,6 @@ export async function createApp() {
           temporaryPassword: temporaryCredential.temporaryPassword,
         });
       }
-
-      // audit
-      await logAuditEvent(actor, 'import', 'parents_batch', null, actor.schoolId ?? null, `Imported ${inserted.length} parents, ${errors.length} errors`);
 
       res.json({ insertedCount: inserted.length, errors, inserted });
     } catch (err: any) {
@@ -10686,10 +12469,30 @@ export async function createApp() {
           enrolledAt: parsedEnrolledAt,
         }).returning();
 
-        await tx.insert(studentAcademicYearStatuses).values({
+        const [createdStatus] = await tx.insert(studentAcademicYearStatuses).values({
           studentId: student.id,
           academicYearId: selectedAcademicYearId,
           status: normalizedStudentStatus,
+        }).returning();
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, student.schoolId, 'student_management', 'create', 'student', student.id),
+          afterValues: createAuditSnapshot({
+            id: student.id,
+            firstName: student.firstName,
+            lastName: student.lastName,
+            schoolId: student.schoolId,
+            classId: student.classId,
+            parentId: student.parentId,
+            schoolAdminId: student.schoolAdminId,
+            isActive: student.isActive,
+            enrolledAt: student.enrolledAt,
+            studentStatus: createdStatus?.status ?? null,
+          }, [
+            'id', 'firstName', 'lastName', 'schoolId', 'classId', 'parentId', 'schoolAdminId',
+            'isActive', 'enrolledAt', 'studentStatus',
+          ]),
+          result: 'success',
+          description: 'Student created.',
         });
 
         return { duplicate: false as const, student };
@@ -10745,13 +12548,61 @@ export async function createApp() {
         }
         if (existingStudent.classId == null) return res.status(200).json(existingStudent);
 
-        const [detachedStudent] = await db
-          .update(students)
-          .set({ classId: null, isActive: false, withdrawnAt: new Date() })
-          .where(eq(students.id, studentId))
-          .returning();
-        await logAuditEvent(actor, 'update', 'student', studentId, existingStudent.schoolId, 'Student removed from current class');
-        return res.status(200).json(detachedStudent);
+        const detachEvent = {
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id: existingStudent.schoolId ?? null },
+          module: 'student_management',
+          action: 'update',
+          resourceType: 'student',
+          resourceId: studentId,
+          source: 'web',
+        };
+        let detachResult: { kind: 'updated'; student: typeof students.$inferSelect } | { kind: 'not_found' | 'conflict' };
+        try {
+          detachResult = await db.transaction(async (tx) => {
+            const [currentStudent] = await tx.select().from(students)
+              .where(eq(students.id, studentId))
+              .for('update');
+            if (!currentStudent) return { kind: 'not_found' as const };
+            if (actor.role === 'school_admin' && currentStudent.schoolId !== actor.schoolId) {
+              return { kind: 'conflict' as const };
+            }
+            if (currentStudent.classId == null) {
+              return { kind: 'updated' as const, student: currentStudent };
+            }
+
+            const [detachedStudent] = await tx.update(students)
+              .set({ classId: null, isActive: false, withdrawnAt: new Date() })
+              .where(eq(students.id, studentId))
+              .returning();
+            if (!detachedStudent) return { kind: 'not_found' as const };
+
+            await appendAuditEvent(tx, {
+              ...detachEvent,
+              beforeValues: createAuditSnapshot(currentStudent, ['schoolId', 'classId', 'isActive', 'withdrawnAt']),
+              afterValues: createAuditSnapshot(detachedStudent, ['schoolId', 'classId', 'isActive', 'withdrawnAt']),
+              result: 'success',
+              description: 'Student withdrawn from the current class.',
+            });
+            return { kind: 'updated' as const, student: detachedStudent };
+          });
+        } catch (businessError) {
+          await recordAuditOutcomeAfterRollback({
+            ...detachEvent,
+            result: 'failure',
+            description: 'Student withdrawal failed.',
+          }, businessError);
+          throw businessError;
+        }
+        if (detachResult.kind === 'not_found') return res.status(404).json({ error: 'Student not found' });
+        if (detachResult.kind === 'conflict') return res.status(409).json({ error: 'Student scope changed; reload before retrying' });
+        return res.status(200).json(detachResult.student);
       }
 
       if (!normalizedFirstName || !lastName || parentId == null) {
@@ -10874,18 +12725,17 @@ export async function createApp() {
         }
       }
 
-      const changes: string[] = [];
-      if (existingStudent.firstName !== normalizedFirstName) changes.push(`firstName: "${existingStudent.firstName}" → "${normalizedFirstName}"`);
-      if (existingStudent.lastName !== normalizedLastName) changes.push(`lastName: "${existingStudent.lastName}" → "${normalizedLastName}"`);
-      if (existingStudent.birthDate !== birthDate) changes.push(`birthDate: "${existingStudent.birthDate}" → "${birthDate}"`);
-      if (existingStudent.gender !== newGender) changes.push(`gender: "${existingStudent.gender ?? ''}" → "${newGender ?? ''}"`);
-      if (existingStudent.schoolId !== resolvedSchoolId) changes.push(`schoolId: ${existingStudent.schoolId} → ${resolvedSchoolId}`);
-      if (existingStudent.classId !== parsedClassId) changes.push(`classId: ${existingStudent.classId ?? 'null'} → ${parsedClassId ?? 'null'}`);
-      if (existingStudent.parentId !== parsedParentId) changes.push(`parentId: ${existingStudent.parentId} → ${parsedParentId}`);
-      if ((existingStudent.schoolAdminId ?? null) !== parsedSchoolAdminId) changes.push(`schoolAdminId: ${existingStudent.schoolAdminId ?? 'null'} → ${parsedSchoolAdminId}`);
-      if (statusWasProvided && (existingStatusRow?.status ?? null) !== newStudentStatus) changes.push(`studentStatus: "${existingStatusRow?.status ?? ''}" → "${newStudentStatus ?? ''}"`);
+      const hasStudentChanges = existingStudent.firstName !== normalizedFirstName
+        || existingStudent.lastName !== normalizedLastName
+        || existingStudent.birthDate !== birthDate
+        || existingStudent.gender !== newGender
+        || existingStudent.schoolId !== resolvedSchoolId
+        || existingStudent.classId !== parsedClassId
+        || existingStudent.parentId !== parsedParentId
+        || (existingStudent.schoolAdminId ?? null) !== parsedSchoolAdminId
+        || (statusWasProvided && (existingStatusRow?.status ?? null) !== newStudentStatus);
 
-      if (changes.length === 0) {
+      if (!hasStudentChanges) {
         return res.status(200).json(existingStudent);
       }
 
@@ -10899,39 +12749,122 @@ export async function createApp() {
         parentId: parsedParentId,
         schoolAdminId: parsedSchoolAdminId,
       };
-      const result = statusWasProvided
-        ? await db.transaction(async (tx) => {
-          const updated = await tx
-            .update(students)
+      const studentAuditBase = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        targetSchool: { id: resolvedSchoolId ?? null },
+        module: 'student_management',
+        action: 'update',
+        resourceType: 'student',
+        resourceId: studentId,
+        source: 'web',
+      };
+      let updateResult:
+        | { kind: 'updated'; student: typeof students.$inferSelect }
+        | { kind: 'not_found' | 'conflict' };
+      try {
+        updateResult = await db.transaction(async (tx) => {
+          const [currentStudent] = await tx.select().from(students)
+            .where(eq(students.id, studentId))
+            .for('update');
+          if (!currentStudent) return { kind: 'not_found' as const };
+          if (currentStudent.firstName !== existingStudent.firstName
+            || currentStudent.lastName !== existingStudent.lastName
+            || currentStudent.birthDate !== existingStudent.birthDate
+            || currentStudent.gender !== existingStudent.gender
+            || currentStudent.schoolId !== existingStudent.schoolId
+            || currentStudent.classId !== existingStudent.classId
+            || currentStudent.parentId !== existingStudent.parentId
+            || currentStudent.schoolAdminId !== existingStudent.schoolAdminId
+            || currentStudent.isActive !== existingStudent.isActive
+            || currentStudent.withdrawnAt?.getTime() !== existingStudent.withdrawnAt?.getTime()) {
+            return { kind: 'conflict' as const };
+          }
+
+          const [currentStatusRow] = await tx
+            .select({ status: studentAcademicYearStatuses.status })
+            .from(studentAcademicYearStatuses)
+            .where(and(
+              eq(studentAcademicYearStatuses.studentId, studentId),
+              eq(studentAcademicYearStatuses.academicYearId, selectedAcademicYearId),
+            ))
+            .for('update');
+          if (statusWasProvided
+            && (currentStatusRow?.status ?? null) !== (existingStatusRow?.status ?? null)) {
+            return { kind: 'conflict' as const };
+          }
+
+          const [updatedStudent] = await tx.update(students)
             .set(studentValues)
             .where(eq(students.id, studentId))
             .returning();
-          await tx.insert(studentAcademicYearStatuses).values({
-            studentId,
-            academicYearId: selectedAcademicYearId,
-            status: newStudentStatus,
-          }).onConflictDoUpdate({
-            target: [studentAcademicYearStatuses.studentId, studentAcademicYearStatuses.academicYearId],
-            set: { status: newStudentStatus, updatedAt: new Date() },
+          if (!updatedStudent) return { kind: 'not_found' as const };
+          if (statusWasProvided) {
+            await tx.insert(studentAcademicYearStatuses).values({
+              studentId,
+              academicYearId: selectedAcademicYearId,
+              status: newStudentStatus,
+            }).onConflictDoUpdate({
+              target: [studentAcademicYearStatuses.studentId, studentAcademicYearStatuses.academicYearId],
+              set: { status: newStudentStatus, updatedAt: new Date() },
+            });
+          }
+
+          const beforeState = {
+            firstName: currentStudent.firstName,
+            lastName: currentStudent.lastName,
+            schoolId: currentStudent.schoolId,
+            classId: currentStudent.classId,
+            parentId: currentStudent.parentId,
+            schoolAdminId: currentStudent.schoolAdminId,
+            isActive: currentStudent.isActive,
+            studentStatus: currentStatusRow?.status ?? null,
+          };
+          const afterState = {
+            firstName: updatedStudent.firstName,
+            lastName: updatedStudent.lastName,
+            schoolId: updatedStudent.schoolId,
+            classId: updatedStudent.classId,
+            parentId: updatedStudent.parentId,
+            schoolAdminId: updatedStudent.schoolAdminId,
+            isActive: updatedStudent.isActive,
+            studentStatus: statusWasProvided ? newStudentStatus : currentStatusRow?.status ?? null,
+          };
+          const changedIdentityFields = (['firstName', 'lastName'] as const)
+            .filter((field) => !Object.is(beforeState[field], afterState[field]));
+          const studentAuditFields = [
+            ...changedIdentityFields,
+            'schoolId', 'classId', 'parentId', 'schoolAdminId', 'isActive', 'studentStatus',
+          ] as const;
+          await appendAuditEvent(tx, {
+            ...studentAuditBase,
+            targetSchool: { id: updatedStudent.schoolId ?? null },
+            beforeValues: createAuditSnapshot(beforeState, studentAuditFields),
+            afterValues: createAuditSnapshot(afterState, studentAuditFields),
+            result: 'success',
+            description: 'Student record updated.',
           });
-          return updated;
-        })
-        : await db
-          .update(students)
-          .set(studentValues)
-          .where(eq(students.id, studentId))
-          .returning();
+          return { kind: 'updated' as const, student: updatedStudent };
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          ...studentAuditBase,
+          result: 'failure',
+          description: 'Student update failed.',
+        }, businessError);
+        throw businessError;
+      }
 
-      await logAuditEvent(
-        actor,
-        'update',
-        'student',
-        studentId,
-        resolvedSchoolId ?? null,
-        `Student updated: ${changes.join('; ')}`
-      );
-
-      res.status(200).json(result[0]);
+      if (updateResult.kind === 'not_found') return res.status(404).json({ error: 'Student not found' });
+      if (updateResult.kind === 'conflict') {
+        return res.status(409).json({ error: 'Student changed concurrently; reload before retrying' });
+      }
+      res.status(200).json(updateResult.student);
     } catch (err: any) {
       console.error('Error updating student:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -10991,6 +12924,7 @@ export async function createApp() {
   };
 
   const runParentDeclarationAction = async (
+    actor: ResolvedActor | null,
     parentUserId: number,
     schoolId: number,
     action: string,
@@ -11001,6 +12935,18 @@ export async function createApp() {
       eq(parents.schoolId, schoolId),
     ));
     if (!parentRecord) return { status: 404, body: { error: 'Parent profile not found' } };
+    const [parentUser] = actor ? [] : await db.select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+    }).from(users).where(eq(users.id, parentUserId));
+    const auditActor: ResolvedActor = actor ?? {
+      id: parentUser?.id ?? parentUserId,
+      role: 'parent',
+      schoolId,
+      email: parentUser?.email ?? null,
+      name: parentUser?.name ?? null,
+    };
     const childStudentIds = await getParentChildStudentIds(parentUserId, schoolId);
 
     if (action === 'list') {
@@ -11068,25 +13014,46 @@ export async function createApp() {
           body: { error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED', schoolId: targetStudent.schoolId },
         };
       }
-      const [created] = await db.insert(absenceDeclarations).values({
-        studentId,
-        parentId: parentRecord.id,
-        date,
-        startTime,
-        endTime,
-        reason: reason || null,
-        status: 'RECEIVED',
-      }).returning();
-      if (date <= todayIsoDate()) {
-        await db.update(absences).set({ declarationId: created.id }).where(and(
-          eq(absences.studentId, studentId),
-          eq(absences.date, date),
-          sql`${absences.declarationId} IS NULL`,
-          sql`${absences.startTime} < ${endTime}`,
-          sql`${absences.endTime} > ${startTime}`,
-        ));
-      }
-      return { status: 201, body: created };
+      const creationResult = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(absenceDeclarations).values({
+          studentId,
+          parentId: parentRecord.id,
+          date,
+          startTime,
+          endTime,
+          reason: reason || null,
+          status: 'RECEIVED',
+        }).returning();
+        if (!created) throw new Error('Absence declaration insert did not return a row.');
+        let linkedAbsenceCount = 0;
+        if (date <= todayIsoDate()) {
+          const linkedAbsences = await tx.update(absences).set({ declarationId: created.id }).where(and(
+            eq(absences.studentId, studentId),
+            eq(absences.date, date),
+            sql`${absences.declarationId} IS NULL`,
+            sql`${absences.startTime} < ${endTime}`,
+            sql`${absences.endTime} > ${startTime}`,
+          )).returning({ id: absences.id });
+          linkedAbsenceCount = linkedAbsences.length;
+        }
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(auditActor, schoolId, 'attendance', 'create', 'absence_declaration', created.id),
+          afterValues: createAuditSnapshot({
+            id: created.id,
+            studentId: created.studentId,
+            parentId: created.parentId,
+            date: created.date,
+            startTime: created.startTime,
+            endTime: created.endTime,
+            status: created.status,
+            linkedAbsenceCount,
+          }, ['id', 'studentId', 'parentId', 'date', 'startTime', 'endTime', 'status', 'linkedAbsenceCount']),
+          result: 'success',
+          description: 'Absence declaration submitted.',
+        });
+        return created;
+      });
+      return { status: 201, body: creationResult };
     }
 
     const declarationId = Number(input?.id);
@@ -11128,30 +13095,71 @@ export async function createApp() {
       if (!['RECEIVED', 'ACCEPTED'].includes(declaration.status)) {
         return { status: 409, body: { error: 'This declaration can no longer be changed' } };
       }
-      const [updated] = await db.update(absenceDeclarations).set({
-        studentId,
-        date,
-        startTime,
-        endTime,
-        reason: reason || null,
-        status: declaration.status === 'ACCEPTED' ? 'RECEIVED' : declaration.status,
-        rejectionReason: null,
-        reviewedBy: null,
-        reviewedAt: null,
-        updatedAt: new Date(),
-      }).where(eq(absenceDeclarations.id, declarationId)).returning();
-      return { status: 200, body: updated };
     }
 
     if (action === 'cancel') {
       if (!['RECEIVED', 'ACCEPTED'].includes(declaration.status)) {
         return { status: 409, body: { error: 'This declaration can no longer be cancelled' } };
       }
-      const [cancelled] = await db.update(absenceDeclarations).set({
-        status: 'CANCELLED',
-        updatedAt: new Date(),
-      }).where(eq(absenceDeclarations.id, declarationId)).returning();
-      return { status: 200, body: cancelled };
+    }
+
+    if (action === 'update' || action === 'cancel') {
+      return db.transaction(async (tx) => {
+        const [before] = await tx.select().from(absenceDeclarations).where(and(
+          eq(absenceDeclarations.id, declarationId),
+          eq(absenceDeclarations.parentId, parentRecord.id),
+        )).for('update');
+        if (!before) return { status: 404, body: { error: 'Declaration not found' } };
+        if (!childStudentIds.includes(before.studentId)) {
+          return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
+        }
+        if (before.date < todayIsoDate()) {
+          return { status: 409, body: { error: 'A past declaration cannot be changed' } };
+        }
+        const [linkedAbsence] = await tx.select({ id: absences.id }).from(absences)
+          .where(eq(absences.declarationId, declarationId))
+          .limit(1);
+        if (linkedAbsence) {
+          return { status: 409, body: { error: 'A declaration linked to a recorded absence cannot be changed' } };
+        }
+        if (!['RECEIVED', 'ACCEPTED'].includes(before.status)) {
+          return { status: 409, body: { error: 'This declaration can no longer be changed' } };
+        }
+
+        const [after] = await tx.update(absenceDeclarations).set(action === 'update'
+          ? {
+            studentId,
+            date,
+            startTime,
+            endTime,
+            reason: reason || null,
+            status: before.status === 'ACCEPTED' ? 'RECEIVED' : before.status,
+            rejectionReason: null,
+            reviewedBy: null,
+            reviewedAt: null,
+            updatedAt: new Date(),
+          }
+          : {
+            status: 'CANCELLED',
+            updatedAt: new Date(),
+          }).where(eq(absenceDeclarations.id, declarationId)).returning();
+        if (!after) return { status: 404, body: { error: 'Declaration not found' } };
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(
+            auditActor,
+            schoolId,
+            'attendance',
+            action,
+            'absence_declaration',
+            declarationId,
+          ),
+          beforeValues: createAuditSnapshot(before, ['studentId', 'parentId', 'date', 'startTime', 'endTime', 'status']),
+          afterValues: createAuditSnapshot(after, ['studentId', 'parentId', 'date', 'startTime', 'endTime', 'status']),
+          result: 'success',
+          description: action === 'update' ? 'Absence declaration updated.' : 'Absence declaration cancelled.',
+        });
+        return { status: 200, body: after };
+      });
     }
 
     return { status: 400, body: { error: 'Unsupported declaration action' } };
@@ -11164,7 +13172,7 @@ export async function createApp() {
       if (actor.role === 'parent') {
         if (!actor.id) return res.json([]);
         if (actor.schoolId == null) return res.json([]);
-        const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'list', {});
+        const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'list', {});
         return res.status(result.status).json(result.body);
       }
       if (!['super_admin', 'school_admin', 'surveillant', 'teacher'].includes(actor.role)) {
@@ -11221,7 +13229,7 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may declare future absences' });
       if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
-      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'create', req.body);
+      const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'create', req.body);
       if (result.status === 201) {
         await notifyAbsenceDeclarationParent(actor.id, 'Déclaration d’absence reçue', 'Votre déclaration d’absence a été transmise à l’établissement.', {
           declarationId: result.body.id,
@@ -11248,7 +13256,7 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may change their declarations' });
       if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
-      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'update', { ...req.body, id: req.params.id });
+      const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'update', { ...req.body, id: req.params.id });
       if (result.status === 200) {
         await relayParentDataInvalidation('absence-declarations', [{ parentId: String(actor.id) }]);
       }
@@ -11265,7 +13273,7 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role !== 'parent' || !actor.id) return res.status(403).json({ error: 'Only parents may cancel their declarations' });
       if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
-      const result: any = await runParentDeclarationAction(actor.id, actor.schoolId, 'cancel', { id: req.params.id });
+      const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'cancel', { id: req.params.id });
       if (result.status === 200) {
         await relayParentDataInvalidation('absence-declarations', [{ parentId: String(actor.id) }]);
       }
@@ -11326,7 +13334,7 @@ export async function createApp() {
         }
 
         const results = await Promise.all(schoolIds.map((schoolId) => (
-          runParentDeclarationAction(parentUserId, schoolId, 'list', {})
+          runParentDeclarationAction(null, parentUserId, schoolId, 'list', {})
         )));
         const failedResult = results.find((result) => result.status !== 200);
         if (failedResult) return res.status(failedResult.status).json(failedResult.body);
@@ -11372,7 +13380,7 @@ export async function createApp() {
         }
       }
 
-      const result: any = await runParentDeclarationAction(parentUserId, schoolId, action, input);
+      const result: any = await runParentDeclarationAction(null, parentUserId, schoolId, action, input);
       if (action === 'create' && result.status === 201) {
         await notifyAbsenceDeclarationParent(parentUserId, 'Déclaration d’absence reçue', 'Votre déclaration d’absence a été transmise à l’établissement.', {
           declarationId: result.body.id,
@@ -11635,19 +13643,56 @@ export async function createApp() {
         return res.status(409).json({ error: 'An absence already exists for the same context; no contradictory absence-control record can be created' });
       }
 
-      const [inserted] = await db.insert(absenceControls).values({
-        schoolId: actor.schoolId,
-        classId: normalClassId,
-        teacherId: teacherRow.id,
-        date: parsedDate,
-        period: normalizedPeriod,
-        subjectId: normalizedSubjectId,
-        startTime: normalizedStartTime,
-        endTime: normalizedEndTime,
-        controlType: 'none',
-      }).returning();
+      const absenceControlEvent = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        targetSchool: { id: actor.schoolId },
+        module: 'attendance',
+        action: 'create',
+        resourceType: 'absence_control',
+        source: 'web',
+      };
+      let inserted: typeof absenceControls.$inferSelect;
+      try {
+        inserted = await db.transaction(async (tx) => {
+          const [created] = await tx.insert(absenceControls).values({
+            schoolId: actor.schoolId,
+            classId: normalClassId,
+            teacherId: teacherRow.id,
+            date: parsedDate,
+            period: normalizedPeriod,
+            subjectId: normalizedSubjectId,
+            startTime: normalizedStartTime,
+            endTime: normalizedEndTime,
+            controlType: 'none',
+          }).returning();
+          if (!created) throw new Error('Absence control was not inserted.');
 
-      await logAuditEvent(actor, 'create', 'absence_control', inserted.id, actor.schoolId ?? null, `Teacher registered absence-control none for class=${normalClassId} date=${parsedDate}`);
+          await appendAuditEvent(tx, {
+            ...absenceControlEvent,
+            resourceId: created.id,
+            afterValues: createAuditSnapshot(created, [
+              'schoolId', 'classId', 'teacherId', 'date', 'period', 'subjectId', 'startTime', 'endTime', 'controlType',
+            ]),
+            result: 'success',
+            description: 'Teacher registered an absence control with no absent students.',
+          });
+          return created;
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          ...absenceControlEvent,
+          result: 'failure',
+          description: 'Absence control creation failed.',
+        }, businessError);
+        throw businessError;
+      }
+
       return res.status(201).json(inserted);
     } catch (error: any) {
       console.error('❌ POST /api/absence-controls ERROR:', error);
@@ -11833,28 +13878,43 @@ export async function createApp() {
         return res.status(403).json({ error: 'Teacher is not assigned to this class and subject combination' });
       }
 
-      const existingDuplicate = await db.select().from(lateArrivals).where(and(
-        eq(lateArrivals.studentId, parsedStudentId),
-        eq(lateArrivals.classId, parsedClassId),
-        eq(lateArrivals.date, parsedDate),
-        eq(lateArrivals.period, normalizedPeriod),
-      ));
-      if (existingDuplicate.length > 0) {
+      const creationResult = await db.transaction(async (tx) => {
+        const [existingDuplicate] = await tx.select().from(lateArrivals).where(and(
+          eq(lateArrivals.studentId, parsedStudentId),
+          eq(lateArrivals.classId, parsedClassId),
+          eq(lateArrivals.date, parsedDate),
+          eq(lateArrivals.period, normalizedPeriod),
+        )).for('update');
+        if (existingDuplicate) return { kind: 'duplicate' as const };
+
+        const [inserted] = await tx.insert(lateArrivals).values({
+          studentId: parsedStudentId,
+          classId: parsedClassId,
+          teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
+          date: parsedDate,
+          period: normalizedPeriod,
+          expectedStartTime: normalizedExpectedStartTime,
+          arrivalTime: normalizedArrivalTime,
+          lateMinutes,
+          reason: typeof reason === 'string' && reason.trim() ? reason.trim() : null,
+          createdBy: actor.id ?? null,
+        }).returning();
+        if (!inserted) throw new Error('Late-arrival insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, student.schoolId ?? null, 'attendance', 'create', 'late_arrival', inserted.id),
+          afterValues: createAuditSnapshot(inserted, [
+            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'expectedStartTime', 'arrivalTime', 'lateMinutes',
+          ]),
+          result: 'success',
+          description: 'Late arrival recorded.',
+        });
+        return { kind: 'created' as const, row: inserted };
+      });
+      if (creationResult.kind === 'duplicate') {
         return res.status(409).json({ error: 'A late arrival already exists for this student/class/date/period' });
       }
-
-      const [inserted] = await db.insert(lateArrivals).values({
-        studentId: parsedStudentId,
-        classId: parsedClassId,
-        teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
-        date: parsedDate,
-        period: normalizedPeriod,
-        expectedStartTime: normalizedExpectedStartTime,
-        arrivalTime: normalizedArrivalTime,
-        lateMinutes,
-        reason: typeof reason === 'string' && reason.trim() ? reason.trim() : null,
-        createdBy: actor.id ?? null,
-      }).returning();
+      const inserted = creationResult.row;
 
       let subjectName: string | undefined;
       if (parsedSubjectId != null && Number.isInteger(parsedSubjectId) && parsedSubjectId > 0) {
@@ -11983,15 +14043,40 @@ export async function createApp() {
         .from(students)
         .innerJoin(parents, eq(parents.id, students.parentId))
         .where(eq(students.id, existing.studentId));
-      const [updated] = await db.update(lateArrivals).set({
-        expectedStartTime: nextExpectedStartTime,
-        arrivalTime: nextArrivalTime,
-        lateMinutes: nextLateMinutes,
-        reason: nextReason,
-        updatedAt: new Date(),
-      }).where(eq(lateArrivals.id, id)).returning();
+      const updated = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(lateArrivals)
+          .where(eq(lateArrivals.id, id))
+          .for('update');
+        if (!before) return null;
+        const [after] = await tx.update(lateArrivals).set({
+          expectedStartTime: nextExpectedStartTime,
+          arrivalTime: nextArrivalTime,
+          lateMinutes: nextLateMinutes,
+          reason: nextReason,
+          updatedAt: new Date(),
+        }).where(eq(lateArrivals.id, id)).returning();
+        if (!after) return null;
+        const [studentSchool] = await tx.select({ schoolId: students.schoolId })
+          .from(students)
+          .where(eq(students.id, before.studentId));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, studentSchool?.schoolId ?? null, 'attendance', 'update', 'late_arrival', id),
+          beforeValues: createAuditSnapshot(before, [
+            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'expectedStartTime', 'arrivalTime', 'lateMinutes',
+          ]),
+          afterValues: createAuditSnapshot(after, [
+            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'expectedStartTime', 'arrivalTime', 'lateMinutes',
+          ]),
+          result: 'success',
+          description: 'Late arrival updated.',
+        });
+        return after;
+      });
 
-      if (updated && parentRecord?.userId) {
+      if (!updated) return res.status(404).json({ error: 'Late arrival not found' });
+      if (parentRecord?.userId) {
         await relayParentDataInvalidation('attendance', [{
           parentId: String(parentRecord.userId),
           entityIds: [String(existing.studentId)],
@@ -12038,7 +14123,43 @@ export async function createApp() {
         .from(students)
         .innerJoin(parents, eq(parents.id, students.parentId))
         .where(eq(students.id, existing.studentId));
-      await db.delete(lateArrivals).where(eq(lateArrivals.id, id));
+      const deletionResult = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(lateArrivals)
+          .where(eq(lateArrivals.id, id))
+          .for('update');
+        if (!before) return { kind: 'not_found' as const };
+        const [justification] = await tx.select({ id: lateArrivalJustifications.id })
+          .from(lateArrivalJustifications)
+          .where(eq(lateArrivalJustifications.lateArrivalId, id))
+          .limit(1);
+        if (justification) return { kind: 'has_justification' as const };
+        if (!await canManageLateArrival(actor, before.studentId, before.classId)) return { kind: 'forbidden' as const };
+        if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, before)) {
+          const scope = await getTeacherAuthorizationScope(actor);
+          if (before.teachingAssignmentId != null || !scope?.homeroomClassIds.has(before.classId)) {
+            return { kind: 'forbidden' as const };
+          }
+        }
+        const [studentSchool] = await tx.select({ schoolId: students.schoolId })
+          .from(students)
+          .where(eq(students.id, before.studentId));
+        await tx.delete(lateArrivals).where(eq(lateArrivals.id, id));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, studentSchool?.schoolId ?? null, 'attendance', 'delete', 'late_arrival', id),
+          beforeValues: createAuditSnapshot(before, [
+            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'expectedStartTime', 'arrivalTime', 'lateMinutes',
+          ]),
+          result: 'success',
+          description: 'Late arrival deleted.',
+        });
+        return { kind: 'deleted' as const };
+      });
+      if (deletionResult.kind === 'not_found') return res.status(404).json({ error: 'Late arrival not found' });
+      if (deletionResult.kind === 'has_justification') {
+        return res.status(409).json({ error: 'A late arrival with a justification history cannot be deleted' });
+      }
+      if (deletionResult.kind === 'forbidden') return res.status(403).json({ error: 'Cannot delete a late arrival outside the actor scope' });
       if (parentRecord?.userId) {
         await relayParentDataInvalidation('attendance', [{
           parentId: String(parentRecord.userId),
@@ -12194,15 +14315,21 @@ export async function createApp() {
         uploadedBy: actor.id ?? null,
       })));
     }
-    await tx.insert(auditEvents).values({
-      actorUserId: actor.id ?? null,
-      actorRole: actor.role,
-      actorEmail: actor.email ?? null,
-      actorName: actor.name ?? null,
+    await appendAuditEvent(tx, {
+      actor: {
+        userId: actor.id ?? null,
+        role: actor.role,
+        email: actor.email ?? null,
+        name: actor.name ?? null,
+        activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+      },
+      targetSchool: { id: context.student.schoolId ?? null },
+      module: 'late_arrival_justifications',
       action: 'submit_late_arrival_justification',
       resourceType: 'late_arrival_justification',
       resourceId: lateArrivalId,
-      schoolId: context.student.schoolId ?? null,
+      result: 'success',
+      source: 'web',
       description: 'Parent submitted a late-arrival justification (revision 1)',
     });
     return { kind: 'created' as const, justification };
@@ -12466,15 +14593,21 @@ export async function createApp() {
     context: LateArrivalJustificationContext,
     action: string,
     description: string,
-  ) => tx.insert(auditEvents).values({
-    actorUserId: actor.id ?? null,
-    actorRole: actor.role,
-    actorEmail: actor.email ?? null,
-    actorName: actor.name ?? null,
+  ) => appendAuditEvent(tx, {
+    actor: {
+      userId: actor.id ?? null,
+      role: actor.role,
+      email: actor.email ?? null,
+      name: actor.name ?? null,
+      activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+    },
+    targetSchool: { id: context.student.schoolId ?? null },
+    module: 'late_arrival_justifications',
     action,
     resourceType: 'late_arrival_justification',
     resourceId: context.lateArrival.id,
-    schoolId: context.student.schoolId ?? null,
+    result: 'success',
+    source: 'web',
     description,
   });
 
@@ -12871,29 +15004,41 @@ export async function createApp() {
         }
       }
 
-      const [matchedDeclaration] = typeof date === 'string' && date <= todayIsoDate()
-        ? await db.select().from(absenceDeclarations).where(and(
-          eq(absenceDeclarations.studentId, parseInt(studentId, 10)),
-          eq(absenceDeclarations.date, date),
-          inArray(absenceDeclarations.status, ['RECEIVED', 'ACCEPTED', 'REFUSED']),
-          sql`${absenceDeclarations.startTime} < ${normalizedEndTime}`,
-          sql`${absenceDeclarations.endTime} > ${normalizedStartTime}`,
-        )).limit(1)
-        : [];
-
-      const result = await db.insert(absences).values({
-        studentId: parseInt(studentId),
-        classId: canonicalTeachingAssignment?.classId ?? parseInt(classId),
-        teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
-        date,
-        period: derivedPeriod,
-        subjectId: canonicalTeachingAssignment?.subjectId ?? normalizedSubjectIds[0] ?? null,
-        startTime: normalizedStartTime,
-        endTime: normalizedEndTime,
-        isJustified: isJustified || false,
-        justificationReason,
-        declarationId: matchedDeclaration?.id,
-      }).returning();
+      const { absence: createdAbsence, matchedDeclaration } = await db.transaction(async (tx) => {
+        const [matchedDeclaration] = typeof date === 'string' && date <= todayIsoDate()
+          ? await tx.select().from(absenceDeclarations).where(and(
+            eq(absenceDeclarations.studentId, parseInt(studentId, 10)),
+            eq(absenceDeclarations.date, date),
+            inArray(absenceDeclarations.status, ['RECEIVED', 'ACCEPTED', 'REFUSED']),
+            sql`${absenceDeclarations.startTime} < ${normalizedEndTime}`,
+            sql`${absenceDeclarations.endTime} > ${normalizedStartTime}`,
+          )).limit(1)
+          : [];
+        const [absence] = await tx.insert(absences).values({
+          studentId: parseInt(studentId),
+          classId: canonicalTeachingAssignment?.classId ?? parseInt(classId),
+          teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
+          date,
+          period: derivedPeriod,
+          subjectId: canonicalTeachingAssignment?.subjectId ?? normalizedSubjectIds[0] ?? null,
+          startTime: normalizedStartTime,
+          endTime: normalizedEndTime,
+          isJustified: isJustified || false,
+          justificationReason,
+          declarationId: matchedDeclaration?.id,
+        }).returning();
+        if (!absence) throw new Error('Absence insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, student.schoolId, 'attendance', 'create', 'absence', absence.id),
+          afterValues: createAuditSnapshot(absence, [
+            'id', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'subjectId', 'startTime', 'endTime', 'isJustified', 'justificationStatus', 'declarationId',
+          ]),
+          result: 'success',
+          description: 'Absence recorded.',
+        });
+        return { absence, matchedDeclaration };
+      });
 
       // Automatically create a simulated notification for the Parent of this student
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
@@ -12941,7 +15086,7 @@ export async function createApp() {
         const messageBody = matchedDeclaration
           ? `L’absence constatée pour ${student.firstName} le ${formattedDate}${timeRange}${subjectText} est rattachée à une déclaration parentale.`
           : `Une absence a été signalée pour ${student.firstName} le ${formattedDate}${timeRange}${subjectText}${periodFallback}. Veuillez fournir un justificatif.`;
-        const invalidationEventId = `invalidate-attendance-absence-${result[0].id}-student-${studentId}`;
+        const invalidationEventId = `invalidate-attendance-absence-${createdAbsence.id}-student-${studentId}`;
 
         // Insert the notification in DB using the same human-readable message
         await db.insert(notifications).values({
@@ -12960,7 +15105,7 @@ export async function createApp() {
           category: "absence",
           metadata: {
             target: "absence",
-            absenceId: result[0].id,
+            absenceId: createdAbsence.id,
             declarationId: matchedDeclaration?.id,
             studentId,
             classId,
@@ -12975,7 +15120,7 @@ export async function createApp() {
               entityIds: [String(studentId)],
             },
           },
-          dedupeKey: `absence-${result[0].id}`,
+          dedupeKey: `absence-${createdAbsence.id}`,
         };
         try {
           const { signature, timestamp } = signInternalPayload(notificationPayload);
@@ -12994,7 +15139,7 @@ export async function createApp() {
         }
       }
 
-      res.status(201).json(result[0]);
+      res.status(201).json(createdAbsence);
     } catch (error: any) {
       console.error('Absence creation failed');
       res.status(500).json({ error: 'Internal server error' });
@@ -13074,36 +15219,42 @@ export async function createApp() {
         return respondJustificationAlreadyRejected(res);
       }
 
-      const updated = await db.update(absences)
-        .set({
-          isJustified: false,
-          justificationReason,
-          justificationStatus: 'PENDING',
-          rejectionReason: null,
-          reviewedBy: null,
-          reviewedAt: null,
-        })
-        .where(and(
-          eq(absences.id, id),
-          sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
-        ))
-        .returning();
+      const justificationResult = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(absences)
+          .where(eq(absences.id, id))
+          .for('update');
+        if (!before) return { kind: 'not_found' as const };
+        if (before.justificationStatus === 'REJECTED') return { kind: 'rejected' as const };
+        const [after] = await tx.update(absences)
+          .set({
+            isJustified: false,
+            justificationReason,
+            justificationStatus: 'PENDING',
+            rejectionReason: null,
+            reviewedBy: null,
+            reviewedAt: null,
+          })
+          .where(eq(absences.id, id))
+          .returning();
+        if (!after) return { kind: 'not_found' as const };
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, absenceStudent.schoolId, 'absence_justifications', 'submit', 'absence_justification', id),
+          beforeValues: createAuditSnapshot(before, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
+          afterValues: createAuditSnapshot(after, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
+          result: 'success',
+          description: 'Absence justification submitted.',
+        });
+        return { kind: 'saved' as const, absence: after };
+      });
 
-      if (!updated[0]) {
-        const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
-          .from(absences)
-          .where(eq(absences.id, id));
-        if (latestAbsence?.justificationStatus === 'REJECTED') {
-          return respondJustificationAlreadyRejected(res);
-        }
-        return res.status(404).json({ error: 'Absence not found' });
-      }
+      if (justificationResult.kind === 'rejected') return respondJustificationAlreadyRejected(res);
+      if (justificationResult.kind === 'not_found') return res.status(404).json({ error: 'Absence not found' });
 
       await relayParentDataInvalidation('attendance', [{
         parentId: String(actor.id),
         entityIds: [String(absenceStudent.id)],
       }]);
-      res.json(updated[0]);
+      res.json(justificationResult.absence);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to validate absence justification' });
     }
@@ -13156,27 +15307,42 @@ export async function createApp() {
         return res.status(403).json({ error: 'Not authorized to review justifications' });
       }
 
-      const isAlreadyFinalAndEquivalent =
-        absence.justificationStatus === status &&
-        absence.isJustified === (status === 'APPROVED') &&
-        (
-          status === 'APPROVED' ||
-          (absence.rejectionReason ?? '') === (rejectionReason || '')
-        );
+      const reviewResult = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(absences)
+          .where(eq(absences.id, id))
+          .for('update');
+        if (!before) return { kind: 'not_found' as const };
+        const isAlreadyFinalAndEquivalent =
+          before.justificationStatus === status &&
+          before.isJustified === (status === 'APPROVED') &&
+          (
+            status === 'APPROVED' ||
+            (before.rejectionReason ?? '') === (rejectionReason || '')
+          );
+        if (isAlreadyFinalAndEquivalent) {
+          return { kind: 'unchanged' as const, absence: before };
+        }
 
-      if (isAlreadyFinalAndEquivalent) {
-        return res.json(absence);
-      }
-
-      const updated = await db.update(absences).set({
-        justificationStatus: status,
-        isJustified: status === 'APPROVED',
-        rejectionReason: status === 'REJECTED' ? rejectionReason : null,
-        reviewedBy: actor.id ?? null,
-        reviewedAt: new Date(),
-      }).where(eq(absences.id, id)).returning();
-
-      const reviewedAbsence = updated[0] ?? absence;
+        const [after] = await tx.update(absences).set({
+          justificationStatus: status,
+          isJustified: status === 'APPROVED',
+          rejectionReason: status === 'REJECTED' ? rejectionReason : null,
+          reviewedBy: actor.id ?? null,
+          reviewedAt: new Date(),
+        }).where(eq(absences.id, id)).returning();
+        if (!after) return { kind: 'not_found' as const };
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, student.schoolId, 'absence_justifications', 'review', 'absence_justification', id),
+          beforeValues: createAuditSnapshot(before, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
+          afterValues: createAuditSnapshot(after, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
+          result: 'success',
+          description: 'Absence justification reviewed.',
+        });
+        return { kind: 'updated' as const, absence: after };
+      });
+      if (reviewResult.kind === 'not_found') return res.status(404).json({ error: 'Absence not found' });
+      if (reviewResult.kind === 'unchanged') return res.json(reviewResult.absence);
+      const reviewedAbsence = reviewResult.absence;
       const studentName = student.firstName || 'l\'élève';
 
       const reviewTitle = status === 'APPROVED'
@@ -13312,17 +15478,24 @@ export async function createApp() {
           reviewerRole: previousReviewer?.role ?? 'unknown',
         };
 
-        await tx.insert(auditEvents).values({
-          actorUserId: absence.reviewedBy ?? null,
-          actorRole: previousReviewer?.role ?? 'unknown',
-          actorEmail: previousReviewer?.email ?? null,
-          actorName: previousReviewer?.name ?? null,
+        await appendAuditEvent(tx, {
+          actor: {
+            userId: absence.reviewedBy ?? null,
+            role: previousReviewer?.role ?? 'unknown',
+            email: previousReviewer?.email ?? null,
+            name: previousReviewer?.name ?? null,
+          },
+          targetSchool: { id: student.schoolId },
+          module: 'absence_justifications',
           action: 'preserve_rejected_justification_decision',
           resourceType: 'absence_justification',
           resourceId: id,
-          schoolId: student.schoolId,
-          description: `Décision initiale de refus conservée avant réexamen : ${JSON.stringify(originalDecision)}`,
+          beforeValues: createAuditSnapshot(originalDecision, ['status']),
+          result: 'success',
+          source: 'web',
+          occurredAt: reviewedAt,
           createdAt: reviewedAt,
+          description: 'Initial rejected decision preserved before re-examination.',
         });
 
         const [updatedAbsence] = await tx.update(absences).set({
@@ -13337,17 +15510,26 @@ export async function createApp() {
         )).returning();
         if (!updatedAbsence) throw transitionLost;
 
-        await tx.insert(auditEvents).values({
-          actorUserId: actor.id ?? null,
-          actorRole: actor.role,
-          actorEmail: actor.email ?? null,
-          actorName: actor.name ?? null,
+        await appendAuditEvent(tx, {
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id: student.schoolId },
+          module: 'absence_justifications',
           action: 'approve_rejected_justification_after_reexamination',
           resourceType: 'absence_justification',
           resourceId: id,
-          schoolId: student.schoolId,
-          description: `Justification acceptée après vérification physique des pièces. Décision initiale : ${JSON.stringify(originalDecision)}`,
+          beforeValues: createAuditSnapshot(originalDecision, ['status']),
+          afterValues: createAuditSnapshot(updatedAbsence, ['justificationStatus', 'isJustified']),
+          result: 'success',
+          source: 'web',
+          occurredAt: reviewedAt,
           createdAt: reviewedAt,
+          description: 'Justification approved after physical document verification.',
         });
 
         const [parentRecord] = student.parentId != null
@@ -13510,10 +15692,16 @@ export async function createApp() {
         }
 
         filesCommitted = true;
-        await relayParentDataInvalidation('attendance', [{
-          parentId: String(parentId),
-          entityIds: [String(context.student.id)],
-        }]);
+        try {
+          await relayParentDataInvalidation('attendance', [{
+            parentId: String(parentId),
+            entityIds: [String(context.student.id)],
+          }]);
+        } catch (invalidationError) {
+          console.error('Parent data invalidation failed after late-arrival justification commit.', {
+            errorName: invalidationError instanceof Error ? invalidationError.name : 'unknown',
+          });
+        }
         return res.status(201).json({
           ...result.justification,
           files: persistedFiles.map((file, index) => ({
@@ -13662,61 +15850,118 @@ export async function createApp() {
       let persisted = false;
 
       try {
-        const updated = await db.update(absences)
-          .set({ isJustified: false, justificationReason, justificationStatus: 'PENDING', rejectionReason: null, reviewedBy: null, reviewedAt: null })
-          .where(and(
-            eq(absences.id, absenceId),
-            sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
-          ))
-          .returning();
+        const actor: ResolvedActor = {
+          id: parent.id,
+          uid: parent.uid,
+          email: parent.email,
+          name: parent.name,
+          role: parent.role,
+          schoolId: absenceStudent.schoolId,
+        };
+        let submissionResult:
+          | { kind: 'saved'; absence: typeof absences.$inferSelect; files: typeof absenceJustifications.$inferSelect[] }
+          | { kind: 'rejected' | 'not_found' };
+        try {
+          submissionResult = await db.transaction(async (tx) => {
+            const [currentAbsence] = await tx.select().from(absences)
+              .where(eq(absences.id, absenceId))
+              .for('update');
+            if (!currentAbsence) return { kind: 'not_found' as const };
+            if (currentAbsence.justificationStatus === 'REJECTED') return { kind: 'rejected' as const };
 
-        if (!updated[0]) {
-          const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
-            .from(absences)
-            .where(eq(absences.id, absenceId));
+            const [updatedAbsence] = await tx.update(absences)
+              .set({
+                isJustified: false,
+                justificationReason,
+                justificationStatus: 'PENDING',
+                rejectionReason: null,
+                reviewedBy: null,
+                reviewedAt: null,
+              })
+              .where(eq(absences.id, absenceId))
+              .returning();
+            if (!updatedAbsence) return { kind: 'not_found' as const };
+
+            const insertedFiles = await tx.insert(absenceJustifications).values({
+              absenceId,
+              fileName: uploadedFile.originalname,
+              filePath: storedFileName,
+              mimeType: uploadedFile.mimetype,
+              fileSize: Number(uploadedFile.size),
+              uploadedBy: parentId,
+            }).returning();
+
+            await appendAuditEvent(tx, {
+              actor: {
+                userId: actor.id ?? null,
+                role: actor.role,
+                email: actor.email ?? null,
+                name: actor.name ?? null,
+                activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+              },
+              targetSchool: { id: absenceStudent.schoolId },
+              module: 'absence_justifications',
+              action: 'create',
+              resourceType: 'absence_justification',
+              resourceId: absenceId,
+              beforeValues: createAuditSnapshot(currentAbsence, ['isJustified', 'justificationStatus']),
+              afterValues: createAuditSnapshot(updatedAbsence, ['isJustified', 'justificationStatus']),
+              result: 'success',
+              source: 'mobile_api',
+              description: 'Parent submitted an absence justification file.',
+            });
+            return { kind: 'saved' as const, absence: updatedAbsence, files: insertedFiles };
+          });
+        } catch (businessError) {
+          await recordAuditOutcomeAfterRollback({
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id: absenceStudent.schoolId },
+            module: 'absence_justifications',
+            action: 'create',
+            resourceType: 'absence_justification',
+            resourceId: absenceId,
+            result: 'failure',
+            source: 'mobile_api',
+            description: 'Parent absence justification submission failed.',
+          }, businessError);
+          throw businessError;
+        }
+
+        if (submissionResult.kind === 'rejected') {
           await deleteStoredFile(storedFileName, 'absence-justifications').catch((cleanupError) => {
             console.warn('Failed to clean unreferenced internal justification upload:', cleanupError);
           });
-          if (latestAbsence?.justificationStatus === 'REJECTED') {
-            return respondJustificationAlreadyRejected(res);
-          }
+          return respondJustificationAlreadyRejected(res);
+        }
+        if (submissionResult.kind === 'not_found') {
+          await deleteStoredFile(storedFileName, 'absence-justifications').catch((cleanupError) => {
+            console.warn('Failed to clean unreferenced internal justification upload:', cleanupError);
+          });
           return res.status(404).json({ error: 'Absence not found' });
         }
-
-        const inserted = await db.insert(absenceJustifications).values({
-          absenceId,
-          fileName: uploadedFile.originalname,
-          filePath: storedFileName,
-          mimeType: uploadedFile.mimetype,
-          fileSize: Number(uploadedFile.size),
-          uploadedBy: parentId,
-        }).returning();
         persisted = true;
-
-        const actor = {
-          ...parent,
-          uid: parent.uid,
-          role: parent.role,
-          schoolId: parent.schoolId ?? null,
-        } as any;
-        await logAuditEvent(
-          actor,
-          'create',
-          'absence_justification',
-          absenceId,
-          parent.schoolId ?? null,
-          `Uploaded justification file ${uploadedFile.originalname} for absence ${absenceId}`,
-        );
-        await relayParentDataInvalidation('attendance', [{
-          parentId: String(parentId),
-          entityIds: [String(absenceStudent.id)],
-        }]);
+        try {
+          await relayParentDataInvalidation('attendance', [{
+            parentId: String(parentId),
+            entityIds: [String(absenceStudent.id)],
+          }]);
+        } catch (invalidationError) {
+          console.error('Parent data invalidation failed after absence justification commit.', {
+            errorName: invalidationError instanceof Error ? invalidationError.name : 'unknown',
+          });
+        }
 
         return res.status(201).json({
-          ...updated[0],
-          justificationFileId: inserted[0]?.id ?? null,
-          justificationFileName: inserted[0]?.fileName ?? null,
-          justificationFilesCount: inserted.length,
+          ...submissionResult.absence,
+          justificationFileId: submissionResult.files[0]?.id ?? null,
+          justificationFileName: submissionResult.files[0]?.fileName ?? null,
+          justificationFilesCount: submissionResult.files.length,
         });
       } catch (error) {
         if (!persisted) {
@@ -13788,69 +16033,107 @@ export async function createApp() {
       }
 
       if (absence.justificationStatus === 'REJECTED') {
-        await cleanupUploadedJustificationFiles(fileList);
         return respondJustificationAlreadyRejected(res);
       }
 
-      const updated = await db.update(absences)
-        .set({
-          isJustified: false,
-          justificationReason,
-          justificationStatus: 'PENDING',
-          rejectionReason: null,
-          reviewedBy: null,
-          reviewedAt: null,
-        })
-        .where(and(
-          eq(absences.id, id),
-          sql`${absences.justificationStatus} IS DISTINCT FROM 'REJECTED'`,
-        ))
-        .returning();
+      let submissionResult:
+        | { kind: 'saved'; absence: typeof absences.$inferSelect; files: typeof absenceJustifications.$inferSelect[] }
+        | { kind: 'rejected' | 'not_found' };
+      try {
+        submissionResult = await db.transaction(async (tx) => {
+          const [currentAbsence] = await tx.select().from(absences)
+            .where(eq(absences.id, id))
+            .for('update');
+          if (!currentAbsence) return { kind: 'not_found' as const };
+          if (currentAbsence.justificationStatus === 'REJECTED') return { kind: 'rejected' as const };
 
-      if (!updated[0]) {
-        const [latestAbsence] = await db.select({ justificationStatus: absences.justificationStatus })
-          .from(absences)
-          .where(eq(absences.id, id));
-        await cleanupUploadedJustificationFiles(fileList);
-        if (latestAbsence?.justificationStatus === 'REJECTED') {
-          return respondJustificationAlreadyRejected(res);
-        }
-        return res.status(404).json({ error: 'Absence not found' });
+          const [updatedAbsence] = await tx.update(absences)
+            .set({
+              isJustified: false,
+              justificationReason,
+              justificationStatus: 'PENDING',
+              rejectionReason: null,
+              reviewedBy: null,
+              reviewedAt: null,
+            })
+            .where(eq(absences.id, id))
+            .returning();
+          if (!updatedAbsence) return { kind: 'not_found' as const };
+
+          const insertedFiles = await tx.insert(absenceJustifications).values(
+            fileList.map((file: any) => ({
+              absenceId: id,
+              fileName: file.originalname,
+              filePath: file.filename,
+              mimeType: file.mimetype,
+              fileSize: Number(file.size),
+              uploadedBy: actor.id,
+            })),
+          ).returning();
+
+          await appendAuditEvent(tx, {
+            actor: {
+              userId: actor.id ?? null,
+              role: actor.role,
+              email: actor.email ?? null,
+              name: actor.name ?? null,
+              activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+            },
+            targetSchool: { id: absenceStudent.schoolId },
+            module: 'absence_justifications',
+            action: 'create',
+            resourceType: 'absence_justification',
+            resourceId: id,
+            beforeValues: createAuditSnapshot(currentAbsence, ['isJustified', 'justificationStatus']),
+            afterValues: createAuditSnapshot(updatedAbsence, ['isJustified', 'justificationStatus']),
+            result: 'success',
+            source: 'web',
+            description: 'Absence justification files submitted.',
+          });
+          return { kind: 'saved' as const, absence: updatedAbsence, files: insertedFiles };
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          actor: {
+            userId: actor.id ?? null,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
+          targetSchool: { id: absenceStudent.schoolId },
+          module: 'absence_justifications',
+          action: 'create',
+          resourceType: 'absence_justification',
+          resourceId: id,
+          result: 'failure',
+          source: 'web',
+          description: 'Absence justification submission failed.',
+        }, businessError);
+        throw businessError;
       }
 
-      const inserted = await db.insert(absenceJustifications).values(
-        fileList.map((file: any) => ({
-          absenceId: id,
-          fileName: file.originalname,
-          filePath: file.filename,
-          mimeType: file.mimetype,
-          fileSize: Number(file.size),
-          uploadedBy: req.user!.id!,
-        }))
-      ).returning();
-      justificationRowsCommitted = inserted.length > 0;
-
-      const auditText = fileList.map((file: any) => file.originalname).join(', ');
-      await logAuditEvent(
-        actor,
-        'create',
-        'absence_justification',
-        id,
-        actor.schoolId ?? null,
-        `Uploaded justification files ${auditText} for absence ${id}`,
-      );
+      if (submissionResult.kind === 'rejected') return respondJustificationAlreadyRejected(res);
+      if (submissionResult.kind === 'not_found') return res.status(404).json({ error: 'Absence not found' });
+      justificationRowsCommitted = true;
       if (actor.role === 'parent' && actor.id != null) {
-        await relayParentDataInvalidation('attendance', [{
-          parentId: String(actor.id),
-          entityIds: [String(absenceStudent.id)],
-        }]);
+        try {
+          await relayParentDataInvalidation('attendance', [{
+            parentId: String(actor.id),
+            entityIds: [String(absenceStudent.id)],
+          }]);
+        } catch (invalidationError) {
+          console.error('Parent data invalidation failed after absence justification commit.', {
+            errorName: invalidationError instanceof Error ? invalidationError.name : 'unknown',
+          });
+        }
       }
 
       res.status(201).json({
-        ...updated[0],
-        justificationFileId: inserted[0]?.id ?? null,
-        justificationFileName: inserted[0]?.fileName ?? null,
-        justificationFilesCount: inserted.length,
+        ...submissionResult.absence,
+        justificationFileId: submissionResult.files[0]?.id ?? null,
+        justificationFileName: submissionResult.files[0]?.fileName ?? null,
+        justificationFilesCount: submissionResult.files.length,
       });
     } catch (err: any) {
       console.error('Failed to upload absence justification:', err);
@@ -13985,18 +16268,65 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid sortOrder' });
       }
 
-      const [duplicate] = await db.select({ id: subjectTypes.id })
-        .from(subjectTypes)
-        .where(eq(subjectTypes.name, normalizedName));
-      if (duplicate) return res.status(409).json({ error: 'Subject type already exists' });
+      const subjectTypeEvent = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        module: 'subject_management',
+        action: 'create',
+        resourceType: 'subject_type',
+        source: 'web',
+      };
+      let creationResult:
+        | { kind: 'created'; subjectType: typeof subjectTypes.$inferSelect }
+        | { kind: 'duplicate' };
+      try {
+        creationResult = await db.transaction(async (tx) => {
+          const [duplicate] = await tx.select({ id: subjectTypes.id })
+            .from(subjectTypes)
+            .where(eq(subjectTypes.name, normalizedName));
+          if (duplicate) return { kind: 'duplicate' as const };
 
-      const [created] = await db.insert(subjectTypes).values({
-        name: normalizedName,
-        description: description == null ? null : String(description).trim(),
-        sortOrder: sortOrder === undefined ? undefined : Number(sortOrder),
-      }).returning();
+          const [created] = await tx.insert(subjectTypes).values({
+            name: normalizedName,
+            description: description == null ? null : String(description).trim(),
+            sortOrder: sortOrder === undefined ? undefined : Number(sortOrder),
+          }).returning();
+          if (!created) throw new Error('Subject type was not inserted.');
 
-      await logAuditEvent(actor, 'create', 'subject_type', created.id, null, `Created subject type "${created.name}"`);
+          await appendAuditEvent(tx, {
+            ...subjectTypeEvent,
+            resourceId: created.id,
+            afterValues: createAuditSnapshot(created, ['name', 'description', 'sortOrder']),
+            result: 'success',
+            description: 'Subject type created.',
+          });
+          return { kind: 'created' as const, subjectType: created };
+        });
+      } catch (businessError) {
+        const duplicateConflict = isPostgresUniqueViolation(businessError);
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: duplicateConflict ? 'denied' : 'failure',
+          description: duplicateConflict
+            ? 'Duplicate subject type creation was rejected.'
+            : 'Subject type creation failed.',
+        }, businessError);
+        throw businessError;
+      }
+      if (creationResult.kind === 'duplicate') {
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: 'denied',
+          description: 'Duplicate subject type creation was rejected.',
+        }, new Error('Subject type already exists.'));
+        return res.status(409).json({ error: 'Subject type already exists' });
+      }
+      const created = creationResult.subjectType;
       res.status(201).json(created);
     } catch (err: any) {
       if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists' });
@@ -14020,36 +16350,88 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid subject type ID' });
       }
 
-      const [existing] = await db.select().from(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
-      if (!existing) return res.status(404).json({ error: 'Subject type not found' });
-
       const { name, description, sortOrder } = req.body ?? {};
-      const nextName = name === undefined ? existing.name : (typeof name === 'string' ? name.trim() : '');
-      if (!nextName) return res.status(400).json({ error: 'Invalid name' });
+      if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+        return res.status(400).json({ error: 'Invalid name' });
+      }
       if (sortOrder !== undefined && (!Number.isInteger(Number(sortOrder)) || Number(sortOrder) < 0)) {
         return res.status(400).json({ error: 'Invalid sortOrder' });
       }
 
-      const [duplicate] = await db.select({ id: subjectTypes.id })
-        .from(subjectTypes)
-        .where(and(
-          eq(subjectTypes.name, nextName),
-          sql`${subjectTypes.id} <> ${subjectTypeId}`,
-        ));
-      if (duplicate) return res.status(409).json({ error: 'Subject type already exists' });
+      const subjectTypeEvent = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        module: 'subject_management',
+        action: 'update',
+        resourceType: 'subject_type',
+        resourceId: subjectTypeId,
+        source: 'web',
+      };
+      let updateResult:
+        | { kind: 'updated'; subjectType: typeof subjectTypes.$inferSelect }
+        | { kind: 'not_found' | 'duplicate' };
+      try {
+        updateResult = await db.transaction(async (tx) => {
+          const [existing] = await tx.select().from(subjectTypes)
+            .where(eq(subjectTypes.id, subjectTypeId))
+            .for('update');
+          if (!existing) return { kind: 'not_found' as const };
 
-      const [updated] = await db.update(subjectTypes)
-        .set({
-          name: nextName,
-          description: description === undefined ? existing.description : (description == null ? null : String(description).trim()),
-          sortOrder: sortOrder === undefined ? existing.sortOrder : Number(sortOrder),
-          updatedAt: new Date(),
-        })
-        .where(eq(subjectTypes.id, subjectTypeId))
-        .returning();
+          const nextName = name === undefined ? existing.name : name.trim();
+          const [duplicate] = await tx.select({ id: subjectTypes.id })
+            .from(subjectTypes)
+            .where(and(
+              eq(subjectTypes.name, nextName),
+              sql`${subjectTypes.id} <> ${subjectTypeId}`,
+            ));
+          if (duplicate) return { kind: 'duplicate' as const };
 
-      await logAuditEvent(actor, 'update', 'subject_type', subjectTypeId, null, `Updated subject type "${updated.name}"`);
-      res.json(updated);
+          const [updated] = await tx.update(subjectTypes)
+            .set({
+              name: nextName,
+              description: description === undefined ? existing.description : (description == null ? null : String(description).trim()),
+              sortOrder: sortOrder === undefined ? existing.sortOrder : Number(sortOrder),
+              updatedAt: new Date(),
+            })
+            .where(eq(subjectTypes.id, subjectTypeId))
+            .returning();
+          if (!updated) return { kind: 'not_found' as const };
+
+          await appendAuditEvent(tx, {
+            ...subjectTypeEvent,
+            beforeValues: createAuditSnapshot(existing, ['name', 'description', 'sortOrder']),
+            afterValues: createAuditSnapshot(updated, ['name', 'description', 'sortOrder']),
+            result: 'success',
+            description: 'Subject type updated.',
+          });
+          return { kind: 'updated' as const, subjectType: updated };
+        });
+      } catch (businessError) {
+        const duplicateConflict = isPostgresUniqueViolation(businessError);
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: duplicateConflict ? 'denied' : 'failure',
+          description: duplicateConflict
+            ? 'Duplicate subject type update was rejected.'
+            : 'Subject type update failed.',
+        }, businessError);
+        throw businessError;
+      }
+      if (updateResult.kind === 'not_found') return res.status(404).json({ error: 'Subject type not found' });
+      if (updateResult.kind === 'duplicate') {
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: 'denied',
+          description: 'Duplicate subject type update was rejected.',
+        }, new Error('Subject type already exists.'));
+        return res.status(409).json({ error: 'Subject type already exists' });
+      }
+      res.json(updateResult.subjectType);
     } catch (err: any) {
       if (err?.code === '23505') return res.status(409).json({ error: 'Subject type already exists' });
       console.error('Error updating subject type:', err);
@@ -14072,21 +16454,66 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid subject type ID' });
       }
 
-      const [existing] = await db.select().from(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
-      if (!existing) return res.status(404).json({ error: 'Subject type not found' });
+      const subjectTypeEvent = {
+        actor: {
+          userId: actor.id ?? null,
+          role: actor.role,
+          email: actor.email ?? null,
+          name: actor.name ?? null,
+          activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+        },
+        module: 'subject_management',
+        action: 'delete',
+        resourceType: 'subject_type',
+        resourceId: subjectTypeId,
+        source: 'web',
+      };
+      let deletionResult:
+        | { kind: 'deleted'; subjectType: typeof subjectTypes.$inferSelect }
+        | { kind: 'not_found' | 'in_use' };
+      try {
+        deletionResult = await db.transaction(async (tx) => {
+          const [existing] = await tx.select().from(subjectTypes)
+            .where(eq(subjectTypes.id, subjectTypeId))
+            .for('update');
+          if (!existing) return { kind: 'not_found' as const };
 
-      const [subjectUsage] = await db.select({ count: sql<number>`count(*)::int` })
-        .from(subjects)
-        .where(eq(subjects.subjectTypeId, subjectTypeId));
-      const [schoolSubjectUsage] = await db.select({ count: sql<number>`count(*)::int` })
-        .from(schoolSubjects)
-        .where(eq(schoolSubjects.subjectTypeId, subjectTypeId));
-      if (Number(subjectUsage?.count ?? 0) > 0 || Number(schoolSubjectUsage?.count ?? 0) > 0) {
+          const [subjectUsage] = await tx.select({ count: sql<number>`count(*)::int` })
+            .from(subjects)
+            .where(eq(subjects.subjectTypeId, subjectTypeId));
+          const [schoolSubjectUsage] = await tx.select({ count: sql<number>`count(*)::int` })
+            .from(schoolSubjects)
+            .where(eq(schoolSubjects.subjectTypeId, subjectTypeId));
+          if (Number(subjectUsage?.count ?? 0) > 0 || Number(schoolSubjectUsage?.count ?? 0) > 0) {
+            return { kind: 'in_use' as const };
+          }
+
+          await tx.delete(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
+          await appendAuditEvent(tx, {
+            ...subjectTypeEvent,
+            beforeValues: createAuditSnapshot(existing, ['name', 'description', 'sortOrder']),
+            result: 'success',
+            description: 'Subject type deleted.',
+          });
+          return { kind: 'deleted' as const, subjectType: existing };
+        });
+      } catch (businessError) {
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: 'failure',
+          description: 'Subject type deletion failed.',
+        }, businessError);
+        throw businessError;
+      }
+      if (deletionResult.kind === 'not_found') return res.status(404).json({ error: 'Subject type not found' });
+      if (deletionResult.kind === 'in_use') {
+        await recordAuditOutcomeAfterRollback({
+          ...subjectTypeEvent,
+          result: 'denied',
+          description: 'Subject type deletion was refused because it is still in use.',
+        }, new Error('Subject type is used by existing subjects.'));
         return res.status(409).json({ error: 'Subject type is used by existing subjects' });
       }
-
-      await db.delete(subjectTypes).where(eq(subjectTypes.id, subjectTypeId));
-      await logAuditEvent(actor, 'delete', 'subject_type', subjectTypeId, null, `Deleted subject type "${existing.name}"`);
       res.json({ success: true, message: 'Subject type deleted' });
     } catch (err: any) {
       console.error('Error deleting subject type:', err);
@@ -14328,15 +16755,24 @@ export async function createApp() {
         finalSubjectTypeId = null;
       }
 
-      const [newSubject] = await db
-        .insert(subjects)
-        .values({
-          schoolId: finalSchoolId != null ? Number(finalSchoolId) : null,
-          subjectTypeId: finalSubjectTypeId,
-          name: name.trim(),
-          code: code ? code.trim() : undefined,
-        })
-        .returning();
+      const newSubject = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(subjects)
+          .values({
+            schoolId: finalSchoolId != null ? Number(finalSchoolId) : null,
+            subjectTypeId: finalSubjectTypeId,
+            name: name.trim(),
+            code: code ? code.trim() : undefined,
+          })
+          .returning();
+        if (!created) throw new Error('Subject insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, created.schoolId ?? null, 'subjects', 'create', 'subject', created.id),
+          afterValues: createAuditSnapshot(created, ['name', 'code', 'schoolId', 'subjectTypeId']),
+          result: 'success',
+          description: 'Subject created.',
+        });
+        return created;
+      });
 
       res.status(201).json({
         ...newSubject,
@@ -14399,6 +16835,28 @@ export async function createApp() {
       } = {
         updatedAt: new Date(),
       };
+      const updateSchoolSubjectType = async (targetSchoolId: number, subjectTypeId: number | null) => db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolSubjects).where(and(
+          eq(schoolSubjects.schoolId, targetSchoolId),
+          eq(schoolSubjects.subjectId, subjectId),
+        )).for('update');
+        if (!before) return null;
+        const [after] = await tx.update(schoolSubjects)
+          .set({ subjectTypeId, updatedAt: new Date() })
+          .where(eq(schoolSubjects.id, before.id))
+          .returning();
+        if (!after) throw new Error('School subject type update did not return a row.');
+        if (before.subjectTypeId !== after.subjectTypeId) {
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(actor, targetSchoolId, 'subjects', 'update', 'school_subject', after.id),
+            beforeValues: createAuditSnapshot(before, ['subjectId', 'subjectTypeId', 'status']),
+            afterValues: createAuditSnapshot(after, ['subjectId', 'subjectTypeId', 'status']),
+            result: 'success',
+            description: 'School subject type updated.',
+          });
+        }
+        return after;
+      });
       if (name !== undefined && actor.role !== 'school_admin') {
         updateValues.name = name.trim();
       }
@@ -14430,9 +16888,7 @@ export async function createApp() {
           if (bodySubjectTypeId === null || bodySubjectTypeId === '') {
             if (subject.schoolId === null) {
               if (relation) {
-                await db.update(schoolSubjects)
-                  .set({ subjectTypeId: null, updatedAt: new Date() })
-                  .where(and(eq(schoolSubjects.schoolId, targetSchoolId), eq(schoolSubjects.subjectId, subjectId)));
+                await updateSchoolSubjectType(targetSchoolId, null);
               }
               res.json({ ...subject, subjectTypeId: null, schoolId: subject.schoolId ?? null, status: relation?.status ?? 'approved' });
               return;
@@ -14451,9 +16907,7 @@ export async function createApp() {
 
             if (subject.schoolId === null) {
               if (relation) {
-                await db.update(schoolSubjects)
-                  .set({ subjectTypeId: parsedSubjectTypeId, updatedAt: new Date() })
-                  .where(and(eq(schoolSubjects.schoolId, targetSchoolId), eq(schoolSubjects.subjectId, subjectId)));
+                await updateSchoolSubjectType(targetSchoolId, parsedSubjectTypeId);
               } else {
                 return res.status(403).json({ error: 'Global subject is not approved for your school' });
               }
@@ -14490,12 +16944,26 @@ export async function createApp() {
         }
       }
 
-      const [updatedSubject] = await db
-        .update(subjects)
-        .set(updateValues)
-        .where(eq(subjects.id, subjectId))
-        .returning();
-
+      const updatedSubject = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(subjects)
+          .where(eq(subjects.id, subjectId))
+          .for('update');
+        if (!before) return null;
+        const [after] = await tx.update(subjects)
+          .set(updateValues)
+          .where(eq(subjects.id, subjectId))
+          .returning();
+        if (!after) return null;
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, after.schoolId ?? null, 'subjects', 'update', 'subject', subjectId),
+          beforeValues: createAuditSnapshot(before, ['name', 'code', 'schoolId', 'subjectTypeId']),
+          afterValues: createAuditSnapshot(after, ['name', 'code', 'schoolId', 'subjectTypeId']),
+          result: 'success',
+          description: 'Subject updated.',
+        });
+        return after;
+      });
+      if (!updatedSubject) return res.status(404).json({ error: 'Subject not found' });
       res.json(updatedSubject);
     } catch (err: any) {
       console.error('Error updating subject:', err);
@@ -14519,16 +16987,36 @@ export async function createApp() {
       const subjectId = Number(req.params.id);
       if (!subjectId) return res.status(400).json({ error: 'Invalid subject ID' });
 
-      const [subject] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
-      if (!subject) return res.status(404).json({ error: 'Subject not found' });
-
-      // Check access: school_admin can only delete subjects in their school
-      if (actor.role === 'school_admin' && subject.schoolId !== actor.schoolId) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-
-      await db.delete(schoolSubjects).where(eq(schoolSubjects.subjectId, subjectId));
-      await db.delete(subjects).where(eq(subjects.id, subjectId));
+      const deleteResult = await db.transaction(async (tx) => {
+        const [subject] = await tx.select().from(subjects)
+          .where(eq(subjects.id, subjectId))
+          .for('update');
+        if (!subject) return { kind: 'not_found' as const };
+        if (actor.role === 'school_admin' && subject.schoolId !== actor.schoolId) {
+          return { kind: 'forbidden' as const };
+        }
+        const schoolLinks = await tx.select().from(schoolSubjects)
+          .where(eq(schoolSubjects.subjectId, subjectId))
+          .for('update');
+        await tx.delete(schoolSubjects).where(eq(schoolSubjects.subjectId, subjectId));
+        await tx.delete(subjects).where(eq(subjects.id, subjectId));
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, subject.schoolId ?? null, 'subjects', 'delete', 'subject', subjectId),
+          beforeValues: createAuditSnapshot({
+            name: subject.name,
+            code: subject.code,
+            schoolId: subject.schoolId,
+            subjectTypeId: subject.subjectTypeId,
+            schoolAssignmentCount: schoolLinks.length,
+          }, ['name', 'code', 'schoolId', 'subjectTypeId', 'schoolAssignmentCount']),
+          afterValues: createAuditSnapshot({ deleted: true }, ['deleted']),
+          result: 'success',
+          description: 'Subject deleted.',
+        });
+        return { kind: 'deleted' as const };
+      });
+      if (deleteResult.kind === 'not_found') return res.status(404).json({ error: 'Subject not found' });
+      if (deleteResult.kind === 'forbidden') return res.status(403).json({ error: 'Forbidden' });
 
       res.json({ success: true, message: 'Subject deleted' });
     } catch (err: any) {
@@ -14569,17 +17057,31 @@ export async function createApp() {
         return res.status(409).json({ error: 'Subject belongs to another school' });
       }
 
-      const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));
-      if (existing[0]) {
-        const [updated] = await db.update(schoolSubjects)
-          .set({ status: 'approved', updatedAt: new Date() })
-          .where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)))
-          .returning();
-        return res.json(updated);
-      }
-
-      const [created] = await db.insert(schoolSubjects).values({ schoolId, subjectId, status: 'approved' }).returning();
-      res.status(201).json(created);
+      const result = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolSubjects).where(and(
+          eq(schoolSubjects.schoolId, schoolId),
+          eq(schoolSubjects.subjectId, subjectId),
+        )).for('update');
+        const [after] = before
+          ? await tx.update(schoolSubjects)
+            .set({ status: 'approved', updatedAt: new Date() })
+            .where(eq(schoolSubjects.id, before.id))
+            .returning()
+          : await tx.insert(schoolSubjects)
+            .values({ schoolId, subjectId, status: 'approved' })
+            .returning();
+        if (!after) throw new Error('School subject approval did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'subjects', before ? 'update' : 'create', 'school_subject', after.id),
+          beforeValues: createAuditSnapshot(before, ['subjectId', 'subjectTypeId', 'status']),
+          afterValues: createAuditSnapshot(after, ['subjectId', 'subjectTypeId', 'status']),
+          result: 'success',
+          description: 'Subject approval status updated.',
+        });
+        return { row: after, created: !before };
+      });
+      if (result.created) return res.status(201).json(result.row);
+      return res.json(result.row);
     } catch (err: any) {
       console.error('Error approving subject:', err);
       res.status(500).json({ error: 'Failed to approve subject' });
@@ -14605,17 +17107,31 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const existing = await db.select().from(schoolSubjects).where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)));
-      if (existing[0]) {
-        const [updated] = await db.update(schoolSubjects)
-          .set({ status: 'rejected', updatedAt: new Date() })
-          .where(and(eq(schoolSubjects.schoolId, schoolId), eq(schoolSubjects.subjectId, subjectId)))
-          .returning();
-        return res.json(updated);
-      }
-
-      const [created] = await db.insert(schoolSubjects).values({ schoolId, subjectId, status: 'rejected' }).returning();
-      res.status(201).json(created);
+      const result = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(schoolSubjects).where(and(
+          eq(schoolSubjects.schoolId, schoolId),
+          eq(schoolSubjects.subjectId, subjectId),
+        )).for('update');
+        const [after] = before
+          ? await tx.update(schoolSubjects)
+            .set({ status: 'rejected', updatedAt: new Date() })
+            .where(eq(schoolSubjects.id, before.id))
+            .returning()
+          : await tx.insert(schoolSubjects)
+            .values({ schoolId, subjectId, status: 'rejected' })
+            .returning();
+        if (!after) throw new Error('School subject rejection did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, schoolId, 'subjects', before ? 'update' : 'create', 'school_subject', after.id),
+          beforeValues: createAuditSnapshot(before, ['subjectId', 'subjectTypeId', 'status']),
+          afterValues: createAuditSnapshot(after, ['subjectId', 'subjectTypeId', 'status']),
+          result: 'success',
+          description: 'Subject approval status updated.',
+        });
+        return { row: after, created: !before };
+      });
+      if (result.created) return res.status(201).json(result.row);
+      return res.json(result.row);
     } catch (err: any) {
       console.error('Error rejecting subject:', err);
       res.status(500).json({ error: 'Failed to reject subject' });
@@ -14871,6 +17387,13 @@ export async function createApp() {
         {
           schoolId,
           authorUserId: actor.id,
+          auditActor: {
+            userId: actor.id,
+            role: actor.role,
+            email: actor.email ?? null,
+            name: actor.name ?? null,
+            activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+          },
           request: {
             kind: body.kind,
             startDate: body.startDate,
@@ -15054,10 +17577,26 @@ export async function createApp() {
         }
       }
 
-      const [updated] = await db.update(evaluations)
-        .set({ countInBulletin })
-        .where(eq(evaluations.id, evaluationId))
-        .returning({ id: evaluations.id, countInBulletin: evaluations.countInBulletin });
+      const updated = await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(evaluations)
+          .where(eq(evaluations.id, evaluationId))
+          .for('update');
+        if (!before) return null;
+        const [after] = await tx.update(evaluations)
+          .set({ countInBulletin })
+          .where(eq(evaluations.id, evaluationId))
+          .returning();
+        if (!after) return null;
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, after.schoolId ?? null, 'evaluations', 'update', 'evaluation', evaluationId),
+          beforeValues: createAuditSnapshot(before, ['countInBulletin']),
+          afterValues: createAuditSnapshot(after, ['countInBulletin']),
+          result: 'success',
+          description: 'Evaluation bulletin inclusion updated.',
+        });
+        return { id: after.id, countInBulletin: after.countInBulletin };
+      });
+      if (!updated) return res.status(404).json({ error: 'Evaluation not found' });
       return res.json(updated);
     } catch (err: any) {
       console.error('PUT /api/evaluations/:id/bulletin-status error:', err);
@@ -15347,6 +17886,15 @@ export async function createApp() {
           date,
         }).returning();
         if (!createdEvaluation) throw new Error('Evaluation insert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, evaluationSchoolId, 'evaluations', 'create', 'evaluation', createdEvaluation.id),
+          afterValues: createAuditSnapshot(createdEvaluation, [
+            'classId', 'teacherId', 'termId', 'subjectId', 'type', 'title', 'sequenceNumber',
+            'coefficient', 'maxScore', 'countInBulletin', 'date',
+          ]),
+          result: 'success',
+          description: 'Evaluation created.',
+        });
         return { createdEvaluation, generatedName };
       });
       const baseClassStudentParentsQuery = db
@@ -15477,30 +18025,46 @@ if (uniqueParentIds.length > 0) {
         }
       }
 
-      await db.execute(sql`
-        INSERT INTO evaluation_participations (evaluation_id, student_id, status, created_at, updated_at)
-        VALUES (${parsedEvaluationId}, ${parsedStudentId}, ${normalizedStatus}, NOW(), NOW())
-        ON CONFLICT (evaluation_id, student_id)
-        DO UPDATE SET status = ${normalizedStatus}, updated_at = NOW()
-      `);
+      await db.transaction(async (tx) => {
+        const [before] = await tx.select().from(evaluationParticipations).where(and(
+          eq(evaluationParticipations.evaluationId, parsedEvaluationId),
+          eq(evaluationParticipations.studentId, parsedStudentId),
+        )).for('update');
+        const [after] = await tx.insert(evaluationParticipations)
+          .values({ evaluationId: parsedEvaluationId, studentId: parsedStudentId, status: normalizedStatus })
+          .onConflictDoUpdate({
+            target: [evaluationParticipations.evaluationId, evaluationParticipations.studentId],
+            set: { status: normalizedStatus, updatedAt: new Date() },
+          })
+          .returning();
+        if (!after) throw new Error('Evaluation participation upsert did not return a row.');
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, evaluation.schoolId ?? null, 'evaluations', before ? 'update' : 'create', 'evaluation_participation', after.id),
+          beforeValues: createAuditSnapshot(before, ['evaluationId', 'studentId', 'status']),
+          afterValues: createAuditSnapshot(after, ['evaluationId', 'studentId', 'status']),
+          result: 'success',
+          description: before ? 'Evaluation participation updated.' : 'Evaluation participation recorded.',
+        });
 
-      const studentRows = await db.select().from(students).where(and(
-        eq(students.classId, evaluation.classId),
-        eq(students.schoolId, evaluation.schoolId!),
-        eq(students.isActive, true),
-      ));
-      const participationRows = await db.select().from(evaluationParticipations).where(eq(evaluationParticipations.evaluationId, parsedEvaluationId));
-      const completedCount = participationRows.filter((row: any) => row.status === 'graded' || row.status === 'absent').length;
-      const eligibleCount = studentRows.length;
+        const studentRows = await tx.select().from(students).where(and(
+          eq(students.classId, evaluation.classId),
+          eq(students.schoolId, evaluation.schoolId!),
+          eq(students.isActive, true),
+        ));
+        const participationRows = await tx.select().from(evaluationParticipations)
+          .where(eq(evaluationParticipations.evaluationId, parsedEvaluationId));
+        const completedCount = participationRows.filter((row) => row.status === 'graded' || row.status === 'absent').length;
+        const eligibleCount = studentRows.length;
 
-      if (eligibleCount > 0 && completedCount >= eligibleCount) {
-        await db.delete(notifications).where(
-          and(
-            eq(notifications.evaluationId, parsedEvaluationId),
-            eq(notifications.type, 'info')
-          ) as any
-        );
-      }
+        if (eligibleCount > 0 && completedCount >= eligibleCount) {
+          await tx.delete(notifications).where(
+            and(
+              eq(notifications.evaluationId, parsedEvaluationId),
+              eq(notifications.type, 'info')
+            ) as any
+          );
+        }
+      });
 
       return res.status(200).json({ ok: true });
     } catch (err: any) {
@@ -15699,41 +18263,73 @@ if (uniqueParentIds.length > 0) {
         }
       }
 
-      // Check if grade already exists for this evaluation/student
-      const existing = await db
-        .select()
-        .from(grades)
-        .where(
-          and(
-            eq(grades.evaluationId, parseInt(evaluationId)),
-            eq(grades.studentId, parseInt(studentId))
-          )
-        );
+      const gradeWriteAuditContext = createAuditEventContext(
+        actor,
+        evaluation.schoolId ?? null,
+        'grades',
+        'upsert',
+        'grade',
+      );
+      const gradeWrite = await db.transaction(async (tx) => {
+        const [evaluationContext] = await tx.select({
+          classId: evaluations.classId,
+          subject: evaluations.subject,
+        }).from(evaluations).where(eq(evaluations.id, Number(evaluationId)));
+        if (!evaluationContext) throw new Error('Evaluation not found while saving grade.');
+        const [before] = await tx.select().from(grades).where(and(
+          eq(grades.evaluationId, parseInt(evaluationId)),
+          eq(grades.studentId, parseInt(studentId)),
+        )).for('update');
+        if (before && actor.role === 'teacher') return { kind: 'teacher_duplicate' as const };
 
-      let savedGrade;
-      if (existing.length > 0) {
-        if (actor.role === 'teacher') {
-          const message = 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.';
-          return res.status(403).json({ error: message });
-        }
-        isGradeModification = true;
-
-        const updated = await db
-          .update(grades)
-          .set({ score: String(score), remarks, editCount: (existing[0].editCount ?? 0) + 1 })
-          .where(eq(grades.id, existing[0].id))
-          .returning();
-        savedGrade = updated[0];
-      } else {
-        const inserted = await db.insert(grades).values({
-          evaluationId: parseInt(evaluationId),
-          studentId: parseInt(studentId),
-          score: String(score),
-          remarks,
-          editCount: 0,
-        }).returning();
-        savedGrade = inserted[0];
+        const [after] = before
+          ? await tx.update(grades)
+            .set({ score: String(score), remarks, editCount: (before.editCount ?? 0) + 1 })
+            .where(eq(grades.id, before.id))
+            .returning()
+          : await tx.insert(grades).values({
+            evaluationId: parseInt(evaluationId),
+            studentId: parseInt(studentId),
+            score: String(score),
+            remarks,
+            editCount: 0,
+          }).returning();
+        if (!after) throw new Error('Grade upsert did not return a row.');
+        const gradeSnapshot = (grade: typeof after | null) => createAuditSnapshot(grade ? {
+          studentId: grade.studentId,
+          evaluationId: grade.evaluationId,
+          classId: evaluationContext.classId,
+          subject: evaluationContext.subject,
+          score: grade.score,
+          editCount: grade.editCount,
+        } : null, ['studentId', 'evaluationId', 'classId', 'subject', 'score', 'editCount']);
+        await appendAuditEvent(tx, {
+          ...createAuditEventContext(actor, evaluation.schoolId ?? null, before ? 'update' : 'create', 'grade', after.id),
+          beforeValues: gradeSnapshot(before ?? null),
+          afterValues: gradeSnapshot(after),
+          result: 'success',
+          description: before ? 'Student grade updated.' : 'Student grade recorded.',
+        });
+        return { kind: 'saved' as const, grade: after, modified: Boolean(before) };
+      }).catch(async (businessError) => {
+        await recordAuditOutcomeAfterRollback({
+          ...gradeWriteAuditContext,
+          result: 'failure',
+          description: 'Grade write failed after validation.',
+        }, businessError);
+        throw businessError;
+      });
+      if (gradeWrite.kind === 'teacher_duplicate') {
+        await recordAuditOutcomeAfterRollback({
+          ...gradeWriteAuditContext,
+          result: 'denied',
+          description: 'Teacher attempted to modify an existing grade.',
+        }, new Error('Teachers cannot modify an existing grade.'));
+        const message = 'Cette note a déjà été saisie. Pour toute modification, veuillez contacter le school admin.';
+        return res.status(403).json({ error: message });
       }
+      const savedGrade = gradeWrite.grade;
+      isGradeModification = gradeWrite.modified;
       const gradeEventId = getGradeNotificationDedupeKey(savedGrade.id, savedGrade.editCount ?? 0);
 
       // Notification mobile parent après création de la note
@@ -15915,10 +18511,81 @@ if (uniqueParentIds.length > 0) {
         affectedRecipients.set(parentId, childIds);
       }
 
-      const deletedGrades = await db.delete(grades).where(sql`${grades.evaluationId} IN ${evaluationIds}`);
-      const deletedEvaluations = await db.delete(evaluations).where(sql`${evaluations.id} IN ${evaluationIds}`);
+      const deletionResult = await db.transaction(async (tx) => {
+        const currentEvaluations = await tx.select().from(evaluations)
+          .where(actor.role === 'school_admin'
+            ? and(inArray(evaluations.id, evaluationIds), eq(evaluations.schoolId, actor.schoolId!))
+            : inArray(evaluations.id, evaluationIds))
+          .for('update');
+        const currentIds = currentEvaluations.map((evaluation) => evaluation.id);
+        if (currentIds.length === 0) return { evaluations: [], deletedGradeCount: 0 };
+        const deletedGradeRows = await tx.delete(grades)
+          .where(inArray(grades.evaluationId, currentIds))
+          .returning({
+            id: grades.id,
+            studentId: grades.studentId,
+            evaluationId: grades.evaluationId,
+            score: grades.score,
+            editCount: grades.editCount,
+          });
+        const deletedEvaluationRows = await tx.delete(evaluations)
+          .where(inArray(evaluations.id, currentIds))
+          .returning();
+        const gradeCounts = new Map<number, number>();
+        for (const row of deletedGradeRows) {
+          gradeCounts.set(row.evaluationId, (gradeCounts.get(row.evaluationId) ?? 0) + 1);
+          const evaluation = currentEvaluations.find((item) => item.id === row.evaluationId);
+          if (!evaluation) throw new Error('Deleted grade has no matching evaluation context.');
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(
+              actor,
+              evaluation.schoolId,
+              'grades',
+              'delete',
+              'grade',
+              row.id,
+            ),
+            beforeValues: createAuditSnapshot({
+              studentId: row.studentId,
+              evaluationId: row.evaluationId,
+              classId: evaluation.classId,
+              subject: evaluation.subject,
+              score: row.score,
+              editCount: row.editCount,
+            }, ['studentId', 'evaluationId', 'classId', 'subject', 'score', 'editCount']),
+            result: 'success',
+            description: 'Student grade deleted with its evaluation.',
+          });
+        }
+        for (const evaluation of deletedEvaluationRows) {
+          await appendAuditEvent(tx, {
+            ...createAuditEventContext(
+              actor,
+              evaluation.schoolId,
+              'evaluations',
+              'delete',
+              'evaluation',
+              evaluation.id,
+            ),
+            beforeValues: createAuditSnapshot(evaluation, [
+              'classId', 'subjectId', 'date',
+            ]),
+            afterValues: createAuditSnapshot({
+              deletedGradeCount: gradeCounts.get(evaluation.id) ?? 0,
+            }, ['deletedGradeCount']),
+            result: 'success',
+            description: 'Evaluation and its grades deleted.',
+          });
+        }
+        return {
+          evaluations: deletedEvaluationRows,
+          deletedGradeCount: deletedGradeRows.length,
+        };
+      });
+      const deletedEvaluationCount = deletionResult.evaluations.length;
+      const deletedGradeCount = deletionResult.deletedGradeCount;
 
-      if ((deletedGrades.rowCount ?? 0) > 0 && affectedRecipients.size > 0) {
+      if (deletedGradeCount > 0 && affectedRecipients.size > 0) {
         const eventId = `evaluation-delete-${crypto.randomUUID()}`;
         const mobileApiBaseUrl = resolveMobileApiBaseUrl(process.env.API_URL, process.env.NODE_ENV);
         const recipientList = Array.from(affectedRecipients, ([parentId, childIds]) => ({
@@ -15957,7 +18624,7 @@ if (uniqueParentIds.length > 0) {
         }
       }
 
-      res.json({ deletedEvaluations: evaluationIds.length, deletedGrades: deletedGrades.rowCount ?? 0 });
+      res.json({ deletedEvaluations: deletedEvaluationCount, deletedGrades: deletedGradeCount });
     } catch (err: any) {
       console.error('Failed to delete evaluations and grades:', err);
       res.status(500).json({ error: 'Failed to delete evaluations' });

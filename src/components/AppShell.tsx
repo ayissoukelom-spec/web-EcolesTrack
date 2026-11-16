@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { AcademicYear, AuditEvent, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
+import type { AcademicYear, AuditEventFilters, AuditEventsPage, Class, Parent, School, Student, SystemNotification, Teacher, User, UserRole } from '../types.ts';
 import { apiFetch, clearSimulatedRole, clearSimulatedUser, getUiErrorMessage, setSimulatedRole, setSimulatedUser, findTeacherProfileFromSimulatedUser } from '../lib/api.ts';
 import { upsertGradeInList } from '../lib/gradeState';
+import { normalizeAuditEvents } from '../lib/auditEventReader.ts';
 import { useAuth } from '../contexts/AuthContext.tsx';
 import { countOverdueEvaluations, isEvaluationArchived, isEvaluationLockedBySchoolAdmin, isEvaluationArchivedForSchoolAdminByAge } from '../lib/evaluationUtils.ts';
 import AppLayout from './AppLayout.tsx';
@@ -42,7 +43,7 @@ export default function AppShell() {
   const [evaluationsList, setEvaluationsList] = useState<any[]>([]);
   const [gradesList, setGradesList] = useState<any[]>([]);
   const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditPage, setAuditPage] = useState<AuditEventsPage | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
   const [approvedSubjectsList, setApprovedSubjectsList] = useState<any[]>([]);
 
@@ -76,19 +77,29 @@ export default function AppShell() {
     .map((assignment) => assignment.classId);
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
-  const fetchAuditEvents = async () => {
+  const fetchAuditEvents = async (filters: AuditEventFilters = {}) => {
     if (currentRole !== 'super_admin') {
-      setAuditEvents([]);
+      setAuditPage(null);
       return;
     }
 
     setIsAuditLoading(true);
     try {
-      const events = await apiFetch('/api/audit/events');
-      setAuditEvents(events);
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+      });
+      const response = await apiFetch(`/api/audit/events?${params.toString()}`);
+      if (!response || !Array.isArray(response.events)) {
+        throw new TypeError('Invalid audit events response.');
+      }
+      setAuditPage({
+        ...response,
+        events: normalizeAuditEvents(response.events),
+      });
     } catch (auditErr: any) {
       console.warn('Impossible de charger le journal d\'événements :', auditErr);
-      setAuditEvents([]);
+      setAuditPage(null);
       setErrorMsg('Impossible de charger le journal des actions.');
     } finally {
       setIsAuditLoading(false);
@@ -130,7 +141,7 @@ export default function AppShell() {
       if (currentRole === 'super_admin') {
         await fetchAuditEvents();
       } else {
-        setAuditEvents([]);
+        setAuditPage(null);
       }
     } catch (err: any) {
       console.error('Error hydrating EcoleTrack database:', err);
@@ -532,7 +543,7 @@ export default function AppShell() {
     }
 
     if (activeTab === 'audit' && currentRole === 'super_admin') {
-      return <AuditView auditEvents={auditEvents} isLoading={isAuditLoading} onReload={fetchAuditEvents} />;
+      return <AuditView page={auditPage} isLoading={isAuditLoading} onReload={fetchAuditEvents} schoolsList={schoolsList} />;
     }
 
     if (activeTab === 'accounting' && (currentRole === 'super_admin' || currentRole === 'school_admin')) {

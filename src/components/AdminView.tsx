@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext.tsx';
 import AdminModal from './AdminModal';
 import SubjectsView from './SubjectsView';
 import LocalTuitionProgressReminderTestPanel from './LocalTuitionProgressReminderTestPanel.tsx';
-import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, AuditEvent, getTeacherDisplayName } from '../types.ts';
+import { School, AcademicYear, Class, Teacher, Student, Parent, SystemNotification, User, UserRole, Subject, SubjectType, EducationLevel, AuditEventDeactivationSummary, getTeacherDisplayName } from '../types.ts';
 import {
   Building2,
   Calendar,
@@ -419,7 +419,7 @@ interface AdminViewProps {
   parentsList: Parent[];
   usersList: User[];
   disabledUsersList?: User[];
-  auditEvents?: AuditEvent[];
+  auditEvents?: AuditEventDeactivationSummary[];
   subjectsList?: any[];
   subjectTypesList?: SubjectType[];
   approvedSubjectsList?: any[];
@@ -1378,7 +1378,7 @@ export default function AdminView({
   const accountsForDisplay = userRole === 'super_admin'
     ? [...usersList.filter((user) => !user.isDeleted), ...disabledUsersList]
     : usersList.filter((user) => !user.isDeleted);
-  const latestDeactivationByUserId = new Map<number, AuditEvent>();
+  const latestDeactivationByUserId = new Map<number, AuditEventDeactivationSummary>();
   auditEvents.forEach((event) => {
     if (!['delete', 'deactivate'].includes(event.action)
       || event.resourceType !== 'user'

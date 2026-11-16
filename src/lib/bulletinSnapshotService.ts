@@ -43,6 +43,12 @@ import {
   unjustifiedLateArrivalCondition,
   validateBulletinTermPeriod,
 } from './bulletinAttendance';
+import {
+  appendAuditEvent as writeAuditEvent,
+  createAuditSnapshot,
+  type AuditEventActor,
+  type AuditEventInput,
+} from './auditEvents.ts';
 
 export interface BulletinLineSnapshotInput {
   subjectId: number | null;
@@ -147,6 +153,7 @@ export interface BulletinSnapshotResult {
 }
 
 export interface BulletinSnapshotContext {
+  appendAuditEvent?(event: AuditEventInput): Promise<void>;
   getStudentById(studentId: number): Promise<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string } | null>;
   getClassById(classId: number): Promise<{ id: number; academicYearId: number } | null>;
   getTermById(termId: number): Promise<{
@@ -914,6 +921,9 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
   transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {
     return db.transaction(async (tx) => {
       const ctx: BulletinSnapshotContext = {
+        async appendAuditEvent(event) {
+          await writeAuditEvent(tx, event);
+        },
         async getStudentById(studentId) {
           const [row] = await tx.select({
             id: students.id,
@@ -1083,10 +1093,22 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
 });
 
 interface RegisterBulletinGenerateRouteOptions {
-  resolveActor: (req: any) => Promise<{ role?: string; schoolId?: number | null } | null>;
+  resolveActor: (req: any) => Promise<{
+    id?: number | null;
+    role: string;
+    schoolId?: number | null;
+    email?: string | null;
+    name?: string | null;
+  } | null>;
   verifyMiddleware?: express.RequestHandler;
   accessMiddleware?: express.RequestHandler;
-  generateHandler?: (studentId: number, termId: number, persistence?: BulletinSnapshotPersistence, generationId?: number | null) => Promise<BulletinSnapshotResult>;
+  generateHandler?: (
+    studentId: number,
+    termId: number,
+    persistence?: BulletinSnapshotPersistence,
+    generationId?: number | null,
+    auditActor?: AuditEventActor,
+  ) => Promise<BulletinSnapshotResult>;
   resolveAvailableTerm?: typeof resolveSchoolTermForClass;
 }
 
@@ -1126,12 +1148,36 @@ const createBulletinGeneration = async (payload: {
 const updateBulletinGeneration = async (generationId: number, values: {
   completedCount: number;
   status: 'completed' | 'incomplete' | 'failed';
-}) => {
-  await db.update(bulletinGenerations).set({
-    completedCount: values.completedCount,
-    status: values.status,
-    completedAt: values.status === 'completed' ? new Date() : null,
-  }).where(eq(bulletinGenerations.id, generationId));
+}, audit?: { actor: AuditEventActor; schoolId: number | null }) => {
+  await db.transaction(async (tx) => {
+    const [before] = await tx.select().from(bulletinGenerations)
+      .where(eq(bulletinGenerations.id, generationId))
+      .for('update');
+    if (!before) throw new Error('Bulletin generation record was not found.');
+    const [after] = await tx.update(bulletinGenerations).set({
+      completedCount: values.completedCount,
+      status: values.status,
+      completedAt: values.status === 'completed' ? new Date() : null,
+    }).where(eq(bulletinGenerations.id, generationId)).returning();
+    if (!after || !audit) return;
+    await writeAuditEvent(tx, {
+      actor: audit.actor,
+      targetSchool: { id: audit.schoolId },
+      module: 'report_cards',
+      action: 'generation_result',
+      resourceType: 'bulletin_generation',
+      resourceId: after.id,
+      beforeValues: createAuditSnapshot(before, ['generationType', 'classId', 'termId', 'expectedCount', 'completedCount', 'status']),
+      afterValues: createAuditSnapshot(after, ['generationType', 'classId', 'termId', 'expectedCount', 'completedCount', 'status']),
+      result: values.status === 'completed' ? 'success' : values.status === 'incomplete' ? 'partial' : 'failure',
+      source: 'web',
+      description: values.status === 'completed'
+        ? 'Bulletin generation completed.'
+        : values.status === 'incomplete'
+          ? 'Bulletin generation partially completed.'
+          : 'Bulletin generation failed.',
+    });
+  });
 };
 
 export const registerBulletinGenerateRoute = (
@@ -1142,16 +1188,26 @@ export const registerBulletinGenerateRoute = (
     resolveActor,
     verifyMiddleware = verifyToken as any,
     accessMiddleware = requireBulletinSuperAdmin as any,
-    generateHandler = async (studentId, termId, persistence, generationId) => generateBulletinSnapshot(studentId, termId, generationId, persistence),
+    generateHandler = async (studentId, termId, persistence, generationId, auditActor) => generateBulletinSnapshot(studentId, termId, generationId, persistence, auditActor),
     resolveAvailableTerm = resolveSchoolTermForClass,
   } = options;
 
   app.post('/api/bulletins/generate', verifyMiddleware, accessMiddleware, async (req: any, res) => {
     let generationId: number | null = null;
+    let auditActor: AuditEventActor | undefined;
+    let auditSchoolId: number | null = null;
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
+      const currentAuditActor: AuditEventActor = {
+        userId: actor.id ?? null,
+        role: actor.role,
+        email: actor.email ?? null,
+        name: actor.name ?? null,
+        activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+      };
+      auditActor = currentAuditActor;
 
       const studentId = Number(req.body?.studentId);
       const termId = Number(req.body?.termId);
@@ -1186,6 +1242,7 @@ export const registerBulletinGenerateRoute = (
           }
           const schoolId = studentRecord.schoolId ?? classRecord.schoolId ?? actor.schoolId ?? null;
           if (schoolId == null) return res.status(400).json({ error: 'School context is required to generate this bulletin' });
+          auditSchoolId = schoolId;
           if (!(await isApprovedClassForSchool(classRecord.id, schoolId))) {
             return res.status(403).json({ error: 'Class is not approved for the student school' });
           }
@@ -1417,9 +1474,14 @@ export const registerBulletinGenerateRoute = (
         },
       };
 
-      const result = await generateHandler(studentId, termId, persistence, generationId);
+      const result = await generateHandler(studentId, termId, persistence, generationId, {
+        ...currentAuditActor,
+      });
       if (generationId != null) {
-        await updateBulletinGeneration(generationId, { completedCount: 1, status: 'completed' });
+        await updateBulletinGeneration(generationId, { completedCount: 1, status: 'completed' }, {
+          actor: currentAuditActor,
+          schoolId: auditSchoolId,
+        });
       }
       const createdId = (result as BulletinSnapshotResult & { id?: number }).id ?? result.bulletinId;
       return res.status(201).json({
@@ -1442,7 +1504,9 @@ export const registerBulletinGenerateRoute = (
         return res.status(err.statusCode).json({ error: err.message, code: err.code, schoolId: err.schoolId });
       }
       if (generationId != null) {
-        await updateBulletinGeneration(generationId, { completedCount: 0, status: 'failed' }).catch(() => undefined);
+        await updateBulletinGeneration(generationId, { completedCount: 0, status: 'failed' },
+          auditActor ? { actor: auditActor, schoolId: auditSchoolId } : undefined)
+          .catch((auditError) => console.error('Failed to record bulletin generation failure:', auditError));
       }
       if (err instanceof InvalidBulletinTermPeriodError) {
         return res.status(400).json({ error: err.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
@@ -1462,10 +1526,20 @@ export const registerBulletinGenerateRoute = (
   app.post('/api/bulletins/generate-class', verifyMiddleware, accessMiddleware, async (req: any, res) => {
     let generationId: number | null = null;
     let completedCount = 0;
+    let auditActor: AuditEventActor | undefined;
+    let auditSchoolId: number | null = null;
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
+      const currentAuditActor: AuditEventActor = {
+        userId: actor.id ?? null,
+        role: actor.role,
+        email: actor.email ?? null,
+        name: actor.name ?? null,
+        activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
+      };
+      auditActor = currentAuditActor;
 
       const classId = Number(req.body?.classId);
       const termId = Number(req.body?.termId);
@@ -1505,6 +1579,7 @@ export const registerBulletinGenerateRoute = (
           ? [actor.schoolId]
           : Array.from(new Set(classStudents.map((student: any) => Number(student.schoolId)).filter((id: number) => Number.isInteger(id) && id > 0)));
       if (schoolIds.length === 0) return res.status(400).json({ error: 'School context is required to generate class bulletins' });
+      auditSchoolId = schoolIds.length === 1 ? schoolIds[0] : null;
       if (actor.role === 'school_admin' && (schoolIds.length !== 1 || schoolIds[0] !== actor.schoolId)) {
         return res.status(403).json({ error: 'Class bulletins must stay within the actor school' });
       }
@@ -1573,7 +1648,9 @@ export const registerBulletinGenerateRoute = (
       const generatedBulletins: Array<{ id: number; studentId: number }> = [];
       for (const studentId of studentIds) {
         try {
-          const result = await generateBulletinSnapshot(studentId, termId, generationId, persistence);
+          const result = await generateBulletinSnapshot(studentId, termId, generationId, persistence, {
+            ...currentAuditActor,
+          });
           bulletinIds.push(result.bulletinId);
           generatedBulletins.push({ id: result.bulletinId, studentId });
         } catch (error: any) {
@@ -1588,7 +1665,10 @@ export const registerBulletinGenerateRoute = (
         : completedCount === 0
           ? 'failed'
           : 'incomplete';
-      await updateBulletinGeneration(generationId, { completedCount, status });
+      await updateBulletinGeneration(generationId, { completedCount, status }, {
+        actor: currentAuditActor,
+        schoolId: auditSchoolId,
+      });
 
       return res.status(status === 'failed' ? 500 : 201).json({
         generationId,
@@ -1603,7 +1683,9 @@ export const registerBulletinGenerateRoute = (
         return res.status(err.statusCode).json({ error: err.message, code: err.code, schoolId: err.schoolId });
       }
       if (generationId != null) {
-        await updateBulletinGeneration(generationId, { completedCount, status: 'failed' }).catch(() => undefined);
+        await updateBulletinGeneration(generationId, { completedCount, status: 'failed' },
+          auditActor ? { actor: auditActor, schoolId: auditSchoolId } : undefined)
+          .catch((auditError) => console.error('Failed to record bulletin generation failure:', auditError));
       }
       if (err instanceof InvalidBulletinTermPeriodError) {
         return res.status(400).json({ error: err.message, code: 'INVALID_BULLETIN_TERM_PERIOD' });
@@ -1619,6 +1701,7 @@ export const generateBulletinSnapshot = async (
   termId: number,
   generationIdOrPersistence: number | null | BulletinSnapshotPersistence = null,
   persistence: BulletinSnapshotPersistence = createDbBulletinSnapshotPersistence(),
+  auditActor?: AuditEventActor,
 ): Promise<BulletinSnapshotResult> => {
   const generationId = typeof generationIdOrPersistence === 'object'
     ? null
@@ -1713,6 +1796,7 @@ export const generateBulletinSnapshot = async (
       ? classAverages.reduce((sum, average) => sum + average, 0) / classAverages.length
       : null;
 
+    const generatedAt = new Date();
     const inserted = await ctx.insertBulletin({
       studentId: student.id,
       classId: student.classId,
@@ -1733,10 +1817,35 @@ export const generateBulletinSnapshot = async (
       rank,
       mention: resolveMention(finalAverage),
       appreciation: resolveAppreciation(finalAverage, term.periodType),
-      generatedAt: new Date(),
+      generatedAt,
     });
 
     await ctx.insertBulletinLines(inserted.id, lines);
+    if (auditActor) {
+      if (!ctx.appendAuditEvent) {
+        throw new Error('Bulletin persistence must support transactional audit events.');
+      }
+      await ctx.appendAuditEvent({
+        actor: auditActor,
+        targetSchool: { id: student.schoolId },
+        module: 'report_cards',
+        action: 'generate',
+        resourceType: 'bulletin',
+        resourceId: inserted.id,
+        afterValues: createAuditSnapshot({
+          studentId: student.id,
+          classId: student.classId,
+          termId: term.id,
+          average: finalAverage == null ? null : Number(finalAverage.toFixed(4)),
+          rank,
+          mention: resolveMention(finalAverage),
+          generatedAt,
+        }, ['studentId', 'classId', 'termId', 'average', 'rank', 'mention', 'generatedAt']),
+        result: 'success',
+        source: 'web',
+        description: 'Bulletin generated.',
+      });
+    }
 
     return {
       bulletinId: inserted.id,

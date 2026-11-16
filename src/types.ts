@@ -359,17 +359,72 @@ export interface NotificationAttachment {
 export interface AuditEvent {
   id: number;
   actorUserId?: number | null;
-  actorName?: string;
-  actorEmail?: string;
+  actorName?: string | null;
+  actorEmail?: string | null;
   actorRole: UserRole | string;
+  activeFunctionId?: string | null;
+  activeFunctionName?: string | null;
   action: string;
   resourceType: string;
   resourceId?: number | null;
   schoolId?: number | null;
   schoolNameSnapshot?: string | null;
+  module?: string | null;
+  result?: string | null;
+  source?: string | null;
+  beforeValues?: Record<string, unknown> | null;
+  afterValues?: Record<string, unknown> | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  auditContext?: {
+    actorActiveSchoolId?: number | null;
+    actorActiveSchoolName?: string | null;
+  } | null;
+  reason?: string | null;
+  correlationId?: string | null;
   description: string;
-  createdAt?: string;
+  createdAt?: string | null;
   occurredAt?: string | null;
+}
+
+export interface AuditEventFilters {
+  page?: number;
+  schoolId?: number | '';
+  user?: string;
+  function?: string;
+  module?: string;
+  action?: string;
+  result?: string;
+  from?: string;
+  to?: string;
+  resource?: string;
+  search?: string;
+}
+
+export interface AuditEventsPage {
+  events: AuditEvent[];
+  summary: {
+    total: number;
+    distinctUsers: number;
+    successful: number;
+    denied: number;
+    failed: number;
+    unknown: number;
+  };
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface AuditEventDeactivationSummary {
+  id: number;
+  action: string;
+  resourceType: string;
+  resourceId: number;
+  createdAt: string | null;
 }
 
 export interface BulletinListItem {
