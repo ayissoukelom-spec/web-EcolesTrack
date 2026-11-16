@@ -175,6 +175,7 @@ export default function App() {
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
+  const previousSuperAdminSchoolFilterIdRef = useRef(superAdminSchoolFilterId);
   const dataRefreshSequenceRef = useRef(0);
   const dataScopeRef = useRef('');
   dataScopeRef.current = `${currentRole}:${currentRole === 'super_admin' ? superAdminSchoolFilterId ?? 'all' : currentSchoolId ?? 'none'}`;
@@ -767,28 +768,108 @@ export default function App() {
     }
   };
 
+  const refreshSuperAdminSchoolData = async () => {
+    if (currentRole !== 'super_admin') return;
+
+    const requestId = ++dataRefreshSequenceRef.current;
+    const requestScope = dataScopeRef.current;
+    const isCurrentRequest = () => requestId === dataRefreshSequenceRef.current
+      && requestScope === dataScopeRef.current;
+    const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
+    const withSchoolFilter = (endpoint: string) => {
+      if (superAdminSchoolFilterId == null) return endpoint;
+      const separator = endpoint.includes('?') ? '&' : '?';
+      return `${endpoint}${separator}schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`;
+    };
+    const endpointRoutes = [
+      { key: 'academicYears', url: withSchoolFilter('/api/academic-years') },
+      { key: 'classes', url: withSchoolFilter('/api/classes') },
+      { key: 'teachers', url: withSchoolFilter('/api/teachers') },
+      { key: 'students', url: withSchoolFilter('/api/students?includeFormer=true') },
+      { key: 'parents', url: withSchoolFilter('/api/parents') },
+      { key: 'absences', url: withSchoolFilter('/api/absences') },
+      { key: 'absenceDeclarations', url: withSchoolFilter('/api/absence-declarations') },
+      { key: 'lateArrivals', url: withSchoolFilter('/api/late-arrivals') },
+      { key: 'absenceControls', url: withSchoolFilter('/api/absence-controls') },
+      { key: 'evaluations', url: withSchoolFilter('/api/evaluations') },
+      { key: 'grades', url: withSchoolFilter('/api/grades') },
+      { key: 'notifications', url: withSchoolFilter('/api/notifications') },
+      { key: 'subjects', url: withSchoolFilter('/api/subjects') },
+      { key: 'approvedSubjects', url: withSchoolFilter('/api/subjects?approvedOnly=true') },
+    ];
+
+    setIsSyncing(false);
+    setErrorMsg(null);
+    try {
+      const [summary, results, lateArrivalJustifications] = await Promise.all([
+        apiFetch(withSchoolFilter('/api/dashboard/summary')),
+        Promise.all(endpointRoutes.map(({ url }) =>
+          apiFetch(url).catch((error) => ({ __error: true, error })),
+        )),
+        fetchLateArrivalJustifications(superAdminSchoolFilterId ?? undefined)
+          .catch((error) => ({ __error: true, error })),
+      ]);
+      if (!isCurrentRequest()) return;
+
+      const failedResult = results.find((result) => !Array.isArray(result) || result?.__error);
+      if (failedResult) {
+        throw failedResult.error ?? new TypeError('Invalid school-scoped data response.');
+      }
+      if (!Array.isArray(lateArrivalJustifications)) {
+        throw lateArrivalJustifications?.error ?? new TypeError('Invalid late-arrival justifications response.');
+      }
+      if (!summary || typeof summary !== 'object') {
+        throw new TypeError('Invalid dashboard summary response.');
+      }
+
+      const map = Object.fromEntries(endpointRoutes.map(({ key }, index) => [key, results[index]]));
+      if ('stats' in summary) setStats((prev) => ({ ...prev, ...summary.stats }));
+      if ('absenceStatusCounts' in summary) {
+        setStats((prev) => ({
+          ...prev,
+          absenceStatusCounts: summary.absenceStatusCounts || prev.absenceStatusCounts,
+        }));
+      }
+      if ('absenceDeclarationStats' in summary) setAbsenceDeclarationStats(summary.absenceDeclarationStats);
+      if ('absenceJustificationStats' in summary) setAbsenceJustificationStats(summary.absenceJustificationStats);
+      if ('recentGrades' in summary) setSummaryRecentGrades(summary.recentGrades);
+      if ('recentAbsences' in summary) setSummaryRecentAbsences(summary.recentAbsences);
+      setChartData(Array.isArray(summary.chartData) ? summary.chartData : []);
+      setAgeStatsByClass(Array.isArray(summary.ageStatsByClass) ? summary.ageStatsByClass : []);
+      setAgeStatsAsOf(typeof summary.ageStatsAsOf === 'string' ? summary.ageStatsAsOf : '');
+
+      setYearsList(map.academicYears);
+      setClassesList(map.classes);
+      setTeachersList(map.teachers);
+      setStudentsList(normalizeStudentsPayload(map.students));
+      setParentsList(map.parents);
+      if (absenceRefreshSequenceRef.current.isLatest(absenceRefreshRequestId)) {
+        setAbsencesList(map.absences);
+      }
+      setAbsenceDeclarationsList(map.absenceDeclarations);
+      setLateArrivals(map.lateArrivals);
+      setAbsenceControlsList(map.absenceControls);
+      setEvaluationsList(map.evaluations);
+      setGradesList(map.grades);
+      setNotificationsList(map.notifications);
+      setSubjectsList(map.subjects);
+      setApprovedSubjectsList(map.approvedSubjects);
+      const selectedSchoolLateArrivalIds = new Set(map.lateArrivals.map((arrival: any) => arrival.id));
+      setLateArrivalJustificationsList(
+        lateArrivalJustifications.filter((item) => selectedSchoolLateArrivalIds.has(item.lateArrival.id)),
+      );
+      setLoadedDataScope(requestScope);
+    } catch (error: any) {
+      if (!isCurrentRequest()) return;
+      console.error('Failed to refresh Super Admin school-scoped data:', error);
+      setErrorMsg(getUiErrorMessage(error, 'Impossible d’actualiser les données de l’établissement.'));
+    }
+  };
+
   const refreshGrades = async () => {
     const grades = await apiFetch('/api/grades');
     if (Array.isArray(grades)) setGradesList(grades);
   };
-
-  // When Super Admin selects a school filter, fetch classes annotated for that school
-  // so that global classes approved for the school have their `status` populated.
-  useEffect(() => {
-    if (currentRole !== 'super_admin') return;
-    const schoolId = superAdminSchoolFilterId;
-    const endpoint = schoolId ? `/api/classes?schoolId=${schoolId}` : '/api/classes';
-    let cancelled = false;
-    (async () => {
-      try {
-        const payload = await apiFetch(endpoint);
-        if (!cancelled) setClassesList(Array.isArray(payload) ? payload : []);
-      } catch (err: any) {
-        if (!cancelled) console.warn('Failed to load classes for super admin school filter', err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [superAdminSchoolFilterId, currentRole]);
 
   useEffect(() => {
     logTeachersPayload('AFTER_SET_TEACHERSLIST', teachersList);
@@ -805,7 +886,17 @@ export default function App() {
     if (currentRole === 'super_admin' || activeSchoolId != null) {
       fetchAllData();
     }
-  }, [activeSchoolId, currentRole, role, superAdminSchoolFilterId]);
+  }, [activeSchoolId, currentRole, role]);
+
+  useEffect(() => {
+    if (currentRole !== 'super_admin') {
+      previousSuperAdminSchoolFilterIdRef.current = superAdminSchoolFilterId;
+      return;
+    }
+    if (previousSuperAdminSchoolFilterIdRef.current === superAdminSchoolFilterId) return;
+    previousSuperAdminSchoolFilterIdRef.current = superAdminSchoolFilterId;
+    void refreshSuperAdminSchoolData();
+  }, [currentRole, superAdminSchoolFilterId]);
 
   useEffect(() => {
     setPendingRegularizationsCount(0);
