@@ -21,6 +21,7 @@ interface LateArrivalEntry {
   studentName?: string;
   classId: number;
   className?: string;
+  schoolId?: number | null;
   date: string;
   period: 'morning' | 'afternoon' | 'all_day';
   expectedStartTime: string;
@@ -46,6 +47,7 @@ type PresenceEvent =
 
 interface AbsenceViewProps {
   userRole: UserRole;
+  schoolFilterId?: number | null;
   absencesList: Absence[];
   absenceDeclarationsList?: AbsenceDeclaration[];
   lateArrivalsList?: LateArrivalEntry[];
@@ -80,12 +82,13 @@ interface AbsenceViewProps {
 
 export default function AbsenceView({
   userRole,
-  absencesList,
-  absenceDeclarationsList = [],
-  lateArrivalsList = [],
+  schoolFilterId,
+  absencesList: allAbsencesList,
+  absenceDeclarationsList: allAbsenceDeclarationsList = [],
+  lateArrivalsList: allLateArrivalsList = [],
   lateArrivalJustificationsList = [],
-  studentsList,
-  classesList,
+  studentsList: allStudentsList,
+  classesList: allClassesList,
   schoolsList,
   teachersList,
   approvedSubjectsList,
@@ -110,6 +113,23 @@ export default function AbsenceView({
   onJustifyAbsence,
   onRecordAbsenceControl,
 }: AbsenceViewProps) {
+  const selectedSchoolId = userRole === 'super_admin' ? schoolFilterId ?? null : null;
+  const absencesList = selectedSchoolId == null
+    ? allAbsencesList
+    : allAbsencesList.filter((absence) => absence.schoolId === selectedSchoolId);
+  const absenceDeclarationsList = selectedSchoolId == null
+    ? allAbsenceDeclarationsList
+    : allAbsenceDeclarationsList.filter((declaration) => declaration.schoolId === selectedSchoolId);
+  const lateArrivalsList = selectedSchoolId == null
+    ? allLateArrivalsList
+    : allLateArrivalsList.filter((arrival) => arrival.schoolId === selectedSchoolId);
+  const studentsList = selectedSchoolId == null
+    ? allStudentsList
+    : allStudentsList.filter((student) => student.schoolId === selectedSchoolId);
+  const classesList = selectedSchoolId == null
+    ? allClassesList
+    : allClassesList.filter((klass) => klass.schoolId === selectedSchoolId
+      || (klass.schoolId == null && klass.status?.toLowerCase() === 'approved'));
   const sortedClasses = sortClasses(classesList || []);
   const activeTeacherAssignments = userRole === 'teacher'
     ? teacherTeachingAssignments.filter((assignment) => assignment.isActive === true)
@@ -960,12 +980,9 @@ export default function AbsenceView({
     )) return false;
     if (filterStatus === 'late' && event.kind !== 'late') return false;
     if (filterStatus === 'absent' && event.kind !== 'absence') return false;
+    if (filterSchool && Number(event.schoolId) !== Number(filterSchool)) return false;
 
     if (event.kind === 'late') {
-      if (filterSchool) {
-        const cls = classesList.find((c) => c.id === event.classId);
-        if (!cls || !isClassInSelectedSchool(cls, filterSchool)) return false;
-      }
       if (filterClass && String(event.classId) !== filterClass) return false;
 
       if (searchQuery.trim()) {
@@ -983,10 +1000,6 @@ export default function AbsenceView({
       return true;
     }
 
-    if (filterSchool) {
-      const cls = classesList.find((c) => c.id === event.classId);
-      if (!cls || !isClassInSelectedSchool(cls, filterSchool)) return false;
-    }
     if (filterClass && String(event.classId) !== filterClass) return false;
 
     if (searchQuery.trim()) {
@@ -1733,6 +1746,7 @@ export default function AbsenceView({
             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px] font-bold border-b border-slate-100">
               <tr>
                 <th className="px-6 py-4">Élève</th>
+                {userRole === 'super_admin' && <th className="px-6 py-4">Établissement historique</th>}
                 <th className="px-6 py-4">Classe</th>
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4">Horaires</th>
@@ -1746,6 +1760,13 @@ export default function AbsenceView({
               {sortedFilteredAbsences.map((abs) => (
                 <tr key={`${abs.kind}-${abs.id}`} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-6 py-4 font-bold text-slate-800">{abs.studentName}</td>
+                  {userRole === 'super_admin' && (
+                    <td className="px-6 py-4 text-slate-500">
+                      {abs.schoolId == null
+                        ? 'Établissement historique inconnu'
+                        : schoolsList.find((school) => school.id === abs.schoolId)?.name ?? `École ${abs.schoolId}`}
+                    </td>
+                  )}
                   <td className="px-6 py-4 text-slate-500 font-semibold">{abs.className}</td>
                   <td className="px-6 py-4 text-slate-600">
                     <span className="font-mono text-xs">{abs.date}</span> (

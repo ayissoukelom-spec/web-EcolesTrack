@@ -12,7 +12,8 @@ interface NotificationViewProps {
   usersList: User[];
   classesList: Class[];
   studentsList: Student[];
-  onSendNotification: (data: { title: string; body: string; type: string; userId?: number; classId?: number; files?: File[] }) => void;
+  schoolFilterId?: number | null;
+  onSendNotification: (data: { title: string; body: string; type: string; userId?: number; classId?: number; schoolId?: number; files?: File[] }) => void;
   onMarkAllAsRead: () => void;
   onNotificationRead?: () => void;
 }
@@ -23,6 +24,7 @@ export default function NotificationView({
   usersList,
   classesList,
   studentsList,
+  schoolFilterId,
   onSendNotification,
   onMarkAllAsRead,
   onNotificationRead,
@@ -46,10 +48,28 @@ export default function NotificationView({
   const [downloadingAttachmentKeys, setDownloadingAttachmentKeys] = useState<Set<string>>(() => new Set());
   const downloadingAttachmentKeysRef = useRef(new Set<string>());
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const activeParentIds = useMemo(() => new Set(studentsList.filter((student) => student.isActive !== false && student.parentId != null).map((student) => student.parentId!)), [studentsList]);
+  const [recipientScopeError, setRecipientScopeError] = useState<string | null>(null);
+  const scopedSchoolId = userRole === 'super_admin' ? schoolFilterId ?? null : null;
+  const visibleStudents = useMemo(
+    () => scopedSchoolId == null ? studentsList : studentsList.filter((student) => student.schoolId === scopedSchoolId),
+    [scopedSchoolId, studentsList],
+  );
+  const visibleClasses = useMemo(
+    () => scopedSchoolId == null
+      ? classesList
+      : classesList.filter((klass) => klass.schoolId === scopedSchoolId
+        || (klass.schoolId == null && klass.status?.toLowerCase() === 'approved')),
+    [classesList, scopedSchoolId],
+  );
+  const activeParentIds = useMemo(() => new Set(visibleStudents.filter((student) => student.isActive !== false && student.parentId != null).map((student) => student.parentId!)), [visibleStudents]);
 
   const handleBroadcast = (e: React.FormEvent) => {
     e.preventDefault();
+    if (userRole === 'super_admin' && notifForm.recipientMode === 'class' && scopedSchoolId == null) {
+      setRecipientScopeError('Sélectionnez une école avant d’envoyer une notification à une classe.');
+      return;
+    }
+    setRecipientScopeError(null);
     setIsSending(true);
 
     onSendNotification({
@@ -58,6 +78,7 @@ export default function NotificationView({
       type: notifForm.type,
       userId: notifForm.recipientMode === 'individual' && selectedParent ? selectedParent.userId : undefined,
       classId: notifForm.recipientMode === 'class' && notifForm.classId ? parseInt(notifForm.classId) : undefined,
+      schoolId: scopedSchoolId ?? undefined,
       files: attachedFiles.length > 0 ? attachedFiles : undefined,
     });
 
@@ -78,6 +99,14 @@ export default function NotificationView({
   };
 
   useEffect(() => {
+    parentSearchRequestRef.current += 1;
+    setParentSearchResults([]);
+    setSelectedParent(null);
+    setNotifForm((previous) => ({ ...previous, classId: '', userId: '' }));
+    setRecipientScopeError(null);
+  }, [scopedSchoolId]);
+
+  useEffect(() => {
     if (notifForm.recipientMode !== 'individual') {
       setParentSearchResults([]);
       setIsParentSearchLoading(false);
@@ -94,7 +123,9 @@ export default function NotificationView({
 
     const timeoutId = window.setTimeout(() => {
       setIsParentSearchLoading(true);
-      apiFetch(`/api/parents?q=${encodeURIComponent(query)}`)
+      const params = new URLSearchParams({ q: query });
+      if (scopedSchoolId != null) params.set('schoolId', String(scopedSchoolId));
+      apiFetch(`/api/parents?${params.toString()}`)
         .then((results) => {
           if (requestId === parentSearchRequestRef.current) {
             setParentSearchResults((Array.isArray(results) ? results : []).filter((parent: Parent) =>
@@ -111,13 +142,13 @@ export default function NotificationView({
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [notifForm.recipientMode, parentSearchQuery, activeParentIds]);
+  }, [notifForm.recipientMode, parentSearchQuery, activeParentIds, scopedSchoolId]);
 
   const parentLabel = (parent: Parent) => String(parent.name || `${parent.firstName || ''} ${parent.lastName || ''}`).trim() || `Parent #${parent.id}`;
   const parentStudentLabel = (parent: Parent) => [parent.studentFirstName, parent.studentLastName].filter(Boolean).join(' ').trim();
   const selectedClassParentCount = notifForm.classId
     ? new Set(
-      studentsList
+      visibleStudents
         .filter((student) => student.isActive !== false && String(student.classId) === notifForm.classId && student.parentId != null)
         .map((student) => student.parentId),
     ).size
@@ -461,6 +492,7 @@ export default function NotificationView({
                           checked={notifForm.recipientMode === mode}
                           onChange={() => {
                             setNotifForm({ ...notifForm, recipientMode: mode, userId: '', classId: '' });
+                            setRecipientScopeError(null);
                             setParentSearchQuery('');
                             setParentSearchResults([]);
                             setSelectedParent(null);
@@ -471,6 +503,7 @@ export default function NotificationView({
                       </label>
                     ))}
                   </div>
+                  {recipientScopeError && <p role="alert" className="text-xs font-semibold text-rose-600">{recipientScopeError}</p>}
 
                   {notifForm.recipientMode === 'class' && (
                     <>
@@ -482,7 +515,7 @@ export default function NotificationView({
                         required
                       >
                         <option value="">Sélectionner une classe</option>
-                        {classesList.map((klass) => (
+                        {visibleClasses.map((klass) => (
                           <option key={klass.id} value={klass.id}>{klass.name}</option>
                         ))}
                       </select>

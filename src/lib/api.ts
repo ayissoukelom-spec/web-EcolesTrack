@@ -600,13 +600,15 @@ export interface LateArrivalJustificationDetail {
   }>;
 }
 
-export async function fetchLateArrivalJustifications(): Promise<LateArrivalJustificationListItem[]> {
+export async function fetchLateArrivalJustifications(schoolId?: number): Promise<LateArrivalJustificationListItem[]> {
   const pageSize = 200;
   const justifications: LateArrivalJustificationListItem[] = [];
   let offset = 0;
 
   while (true) {
-    const page = await apiFetch(`/api/late-arrival-justifications?limit=${pageSize}&offset=${offset}`);
+    const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
+    if (schoolId != null) params.set('schoolId', String(schoolId));
+    const page = await apiFetch(`/api/late-arrival-justifications?${params.toString()}`);
     if (!Array.isArray(page)) throw new Error('Réponse invalide lors du chargement des justifications de retard.');
     justifications.push(...page);
     if (page.length < pageSize) return justifications;
@@ -658,6 +660,7 @@ export async function fetchBulletinsList(filters: BulletinListFilters): Promise<
   const params = new URLSearchParams();
   params.set('page', String(filters.page));
   params.set('pageSize', String(filters.pageSize));
+  if (filters.schoolId) params.set('schoolId', String(filters.schoolId));
   if (filters.classId) params.set('classId', String(filters.classId));
   if (filters.studentId) params.set('studentId', String(filters.studentId));
   if (filters.termId) params.set('termId', String(filters.termId));

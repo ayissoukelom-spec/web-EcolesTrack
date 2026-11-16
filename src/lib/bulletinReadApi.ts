@@ -204,6 +204,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         classId: bulletins.classId,
         className: classes.name,
         schoolYearId: bulletins.schoolYearId,
+        schoolId: academicYears.schoolId,
         schoolYearName: academicYears.name,
         termId: bulletins.termId,
         termName: schoolTerms.name,
@@ -265,6 +266,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         classId: bulletins.classId,
         className: classes.name,
         schoolYearId: bulletins.schoolYearId,
+        schoolId: academicYears.schoolId,
         schoolYearName: academicYears.name,
         termId: bulletins.termId,
         termName: schoolTerms.name,
@@ -331,6 +333,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         .where(and(
           eq(absences.studentId, header.studentId),
           eq(absences.classId, header.classId),
+          header.schoolId != null ? eq(absences.schoolId, header.schoolId) : sql`false`,
           sql`${absences.date} >= ${termStartDate}`,
           sql`${absences.date} <= ${termEndDate}`,
           unjustifiedAbsenceCondition(),
@@ -342,6 +345,7 @@ export const createDbBulletinReadService = (): BulletinReadService => ({
         .where(and(
           eq(lateArrivals.studentId, header.studentId),
           eq(lateArrivals.classId, header.classId),
+          header.schoolId != null ? eq(lateArrivals.schoolId, header.schoolId) : sql`false`,
           sql`${lateArrivals.date} >= ${termStartDate}`,
           sql`${lateArrivals.date} <= ${termEndDate}`,
           unjustifiedLateArrivalCondition(),

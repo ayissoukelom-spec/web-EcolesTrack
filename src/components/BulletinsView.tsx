@@ -32,6 +32,8 @@ import {
 
 interface BulletinsViewProps {
   schoolsList: School[];
+  schoolFilterId?: number | null;
+  onSchoolFilterChange?: (schoolId: number | null) => void;
   classesList: Class[];
   studentsList: Student[];
   evaluationsList: Evaluation[];
@@ -70,10 +72,12 @@ const toParentListItem = (detail: BulletinDetail): BulletinListItem => ({
 
 export default function BulletinsView({
   schoolsList,
+  schoolFilterId,
+  onSchoolFilterChange,
   classesList,
-  studentsList,
-  evaluationsList,
-  gradesList,
+  studentsList: allStudentsList,
+  evaluationsList: allEvaluationsList,
+  gradesList: allGradesList,
   teacherClassIds = [],
 }: BulletinsViewProps) {
   const { role, user: simulated, activeSchoolId } = useAuth();
@@ -82,6 +86,18 @@ export default function BulletinsView({
   const canList = currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'super_admin' || currentRole === 'teacher' || currentRole === 'parent';
   const isTeacher = currentRole === 'teacher';
   const isParent = currentRole === 'parent';
+  const selectedSchoolId = currentRole === 'super_admin' ? schoolFilterId ?? null : null;
+  const studentsList = selectedSchoolId == null
+    ? allStudentsList
+    : allStudentsList.filter((student) => student.schoolId === selectedSchoolId);
+  const evaluationsList = selectedSchoolId == null
+    ? allEvaluationsList
+    : allEvaluationsList.filter((evaluation) => evaluation.schoolId === selectedSchoolId);
+  const evaluationIds = new Set(evaluationsList.map((evaluation) => evaluation.id));
+  const studentIds = new Set(studentsList.map((student) => student.id));
+  const gradesList = selectedSchoolId == null
+    ? allGradesList
+    : allGradesList.filter((grade) => evaluationIds.has(grade.evaluationId) && studentIds.has(grade.studentId));
 
   const [filters, setFilters] = useState<{ classId?: number; studentId?: number; termId?: number }>({});
   const [page, setPage] = useState(1);
@@ -89,7 +105,14 @@ export default function BulletinsView({
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([]);
-  const [generateSchoolId, setGenerateSchoolId] = useState<string>('');
+  const [localGenerateSchoolId, setLocalGenerateSchoolId] = useState<string>('');
+  const generateSchoolId = currentRole === 'super_admin' && schoolFilterId !== undefined
+    ? schoolFilterId == null ? '' : String(schoolFilterId)
+    : localGenerateSchoolId;
+  const updateGenerateSchoolId = (value: string) => {
+    setLocalGenerateSchoolId(value);
+    onSchoolFilterChange?.(value ? Number(value) : null);
+  };
   const [generateClassId, setGenerateClassId] = useState<string>('');
   const [generateStudentId, setGenerateStudentId] = useState<string>('');
   const [generateTermId, setGenerateTermId] = useState<string>('');
@@ -98,6 +121,11 @@ export default function BulletinsView({
   const [schoolScopedClassesError, setSchoolScopedClassesError] = useState<string | null>(null);
   const schoolClassesRequestRef = useRef(0);
   const [lookupIdInput, setLookupIdInput] = useState('');
+  useEffect(() => {
+    setGenerateClassId('');
+    setGenerateStudentId('');
+    setGenerateTermId('');
+  }, [generateSchoolId]);
   const [parentKnownItems, setParentKnownItems] = useState<BulletinListItem[]>([]);
   const [lastGeneratedClassSummary, setLastGeneratedClassSummary] = useState<Array<{ id: number; studentName: string; className: string; termName: string }>>([]);
   const [lastGeneratedClassIds, setLastGeneratedClassIds] = useState<number[]>([]);
@@ -107,9 +135,13 @@ export default function BulletinsView({
   const allEvaluationsCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   const visibleClasses = useMemo(() => {
-    if (!isTeacher) return classesList;
-    return classesList.filter((c) => teacherClassIds.includes(c.id));
-  }, [classesList, isTeacher, teacherClassIds]);
+    const schoolScopedClasses = selectedSchoolId == null
+      ? classesList
+      : classesList.filter((klass) => klass.schoolId === selectedSchoolId
+        || (klass.schoolId == null && klass.status?.toLowerCase() === 'approved'));
+    if (!isTeacher) return schoolScopedClasses;
+    return schoolScopedClasses.filter((c) => teacherClassIds.includes(c.id));
+  }, [classesList, isTeacher, selectedSchoolId, teacherClassIds]);
 
   const visibleStudents = useMemo(() => {
     const scopedByClass = filters.classId
@@ -118,7 +150,7 @@ export default function BulletinsView({
 
     if (!isTeacher) return scopedByClass;
     return scopedByClass.filter((s) => teacherClassIds.includes(s.classId));
-  }, [filters.classId, isTeacher, studentsList, teacherClassIds]);
+  }, [filters.classId, isTeacher, selectedSchoolId, studentsList, teacherClassIds]);
 
   const visibleStudentIds = useMemo(() => new Set(visibleStudents.map((student) => student.id)), [visibleStudents]);
 
@@ -403,15 +435,23 @@ export default function BulletinsView({
   const listFilters = useMemo<BulletinListFilters>(() => ({
     page,
     pageSize,
+    schoolId: selectedSchoolId ?? undefined,
     classId: filters.classId,
     studentId: filters.studentId,
     termId: filters.termId,
-  }), [filters.classId, filters.studentId, filters.termId, page, pageSize]);
+  }), [filters.classId, filters.studentId, filters.termId, page, pageSize, selectedSchoolId]);
 
   const listHook = useBulletinsList({ enabled: canList, filters: listFilters });
   const detailHook = useBulletinDetail();
   const generateHook = useGenerateBulletin();
   const pdfHook = useDownloadBulletinPDF();
+
+  useEffect(() => {
+    setSelectedId(null);
+    setSelectedBatchIds([]);
+    setPage(1);
+    detailHook.reset();
+  }, [detailHook.reset, selectedSchoolId]);
 
   const liveNotesForDetail = useMemo(() => {
     const detail = detailHook.detail;
@@ -689,7 +729,9 @@ export default function BulletinsView({
   const renderedItems = canList
     ? (isTeacher
       ? listHook.items.filter((item) => teacherClassIds.includes(item.classId) && visibleStudentIds.has(item.studentId))
-      : listHook.items)
+      : selectedSchoolId != null
+        ? listHook.items.filter((item) => visibleStudentIds.has(item.studentId))
+        : listHook.items)
     : parentKnownItems;
   const total = canList ? listHook.total : parentKnownItems.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -738,9 +780,10 @@ export default function BulletinsView({
         generateClassStudentsCount={generateStudents.filter((student) => String(student.classId) === generateClassId).length}
         compositionValidationMessage={compositionValidationMessage}
         onGenerateSchoolChange={(value) => {
-          setGenerateSchoolId(value);
+          updateGenerateSchoolId(value);
           setGenerateClassId('');
           setGenerateStudentId('');
+          setGenerateTermId('');
         }}
         onGenerateClassChange={(value) => {
           setGenerateClassId(value);

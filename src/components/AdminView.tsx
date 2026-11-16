@@ -460,6 +460,8 @@ interface AdminViewProps {
   onApproveSubject?: (id: number) => Promise<any>;
   onRejectSubject?: (id: number) => Promise<any>;
   currentSchoolId?: number | null;
+  schoolFilterId?: number | null;
+  onSchoolFilterChange?: (schoolId: number | null) => void;
 }
 
 export default function AdminView({
@@ -513,6 +515,8 @@ export default function AdminView({
   onRejectClass,
   onRefreshClasses,
   currentSchoolId,
+  schoolFilterId,
+  onSchoolFilterChange,
 }: AdminViewProps) {
   const hasSchoolAdminWorkspace = userRole === 'school_admin' || userRole === 'school_accountant';
   const canManageAccounts = userRole === 'super_admin' || userRole === 'school_admin';
@@ -589,7 +593,14 @@ export default function AdminView({
   const [downloadingAdminActions, setDownloadingAdminActions] = useState<Set<string>>(() => new Set());
   const downloadingAdminActionsRef = useRef(new Set<string>());
   const [searchQuery, setSearchQuery] = useState('');
-  const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
+  const [localSuperAdminSchoolFilterId, setLocalSuperAdminSchoolFilterId] = useState<number | null>(null);
+  const superAdminSchoolFilterId = schoolFilterId !== undefined
+    ? schoolFilterId
+    : localSuperAdminSchoolFilterId;
+  const updateSuperAdminSchoolFilter = (nextSchoolId: number | null) => {
+    if (schoolFilterId === undefined) setLocalSuperAdminSchoolFilterId(nextSchoolId);
+    onSchoolFilterChange?.(nextSchoolId);
+  };
   const [accountRoleFilter, setAccountRoleFilter] = useState<string>('');
   const [accountStatusFilter, setAccountStatusFilter] = useState<'active' | 'disabled'>('active');
   const [accountCreationDateFilter, setAccountCreationDateFilter] = useState<string>('');
@@ -5820,7 +5831,7 @@ export default function AdminView({
                       <select
                         className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
                         value={superAdminSchoolFilterId ?? ''}
-                        onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                        onChange={(e) => updateSuperAdminSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
                       >
                         <option value="">Toutes les écoles</option>
                         {schoolsList.map((school) => (
@@ -6171,7 +6182,7 @@ export default function AdminView({
                   <select
                     className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
                     value={superAdminSchoolFilterId ?? ''}
-                    onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                    onChange={(e) => updateSuperAdminSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
                   >
                     <option value="">Toutes les écoles</option>
                     {schoolsList.map((school) => (
@@ -6506,7 +6517,7 @@ export default function AdminView({
                         value={superAdminSchoolFilterId ?? ''}
                         onChange={(e) => {
                           const value = e.target.value ? parseInt(e.target.value, 10) : null;
-                          setSuperAdminSchoolFilterId(value);
+                          updateSuperAdminSchoolFilter(value);
                           setStudentClassFilterId(null);
                         }}
                       >
@@ -6702,7 +6713,7 @@ export default function AdminView({
                       id="parent-school-filter"
                       className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600"
                       value={superAdminSchoolFilterId ?? ''}
-                      onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                      onChange={(e) => updateSuperAdminSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
                     >
                       <option value="">Toutes les écoles</option>
                       {schoolsList.map((school) => (
@@ -6868,7 +6879,7 @@ export default function AdminView({
                       id="account-school-filter"
                       className="w-full sm:w-auto px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs sm:text-sm"
                       value={superAdminSchoolFilterId ?? ''}
-                      onChange={(e) => setSuperAdminSchoolFilterId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                      onChange={(e) => updateSuperAdminSchoolFilter(e.target.value ? parseInt(e.target.value, 10) : null)}
                     >
                       <option value="">Toutes les écoles</option>
                       {schoolsList.map((school) => (

@@ -589,6 +589,7 @@ export const gradeHistory = pgTable('grade_history', {
 // 11. Parent-declared future absences, kept separate from recorded absences.
 export const absenceDeclarations = pgTable('absence_declarations', {
   id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   parentId: integer('parent_id').references(() => parents.id, { onDelete: 'cascade' }).notNull(),
   date: text('date').notNull(),
@@ -601,11 +602,14 @@ export const absenceDeclarations = pgTable('absence_declarations', {
   reviewedAt: timestamp('reviewed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  absenceDeclarationSchoolDateIdx: index('absence_declarations_school_date_idx').on(table.schoolId, table.date),
+}));
 
 // 11. Absences
 export const absences = pgTable('absences', {
   id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   teachingAssignmentId: integer('teaching_assignment_id').references(() => teacherClassSubjects.id, { onDelete: 'set null' }),
@@ -622,10 +626,13 @@ export const absences = pgTable('absences', {
   reviewedAt: timestamp('reviewed_at'),
   declarationId: integer('declaration_id').references(() => absenceDeclarations.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (table) => ({
+  absenceSchoolDateIdx: index('absences_school_date_idx').on(table.schoolId, table.date),
+}));
 
 export const lateArrivals = pgTable('late_arrivals', {
   id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id),
   studentId: integer('student_id').references(() => students.id, { onDelete: 'cascade' }).notNull(),
   classId: integer('class_id').references(() => classes.id, { onDelete: 'cascade' }).notNull(),
   teachingAssignmentId: integer('teaching_assignment_id').references(() => teacherClassSubjects.id, { onDelete: 'set null' }),
@@ -646,6 +653,7 @@ export const lateArrivals = pgTable('late_arrivals', {
     table.period,
   ),
   lateArrivalTeachingAssignmentIdx: index('late_arrivals_teaching_assignment_id_idx').on(table.teachingAssignmentId),
+  lateArrivalSchoolDateIdx: index('late_arrivals_school_date_idx').on(table.schoolId, table.date),
 }));
 
 export const lateArrivalJustifications = pgTable('late_arrival_justifications', {

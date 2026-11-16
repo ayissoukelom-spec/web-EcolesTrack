@@ -163,7 +163,7 @@ import {
   tuitionProgressReminderControls,
   userLoginEvents,
 } from './src/db/schema.ts';
-import { eq, and, or, sql, desc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, gte, like, type SQL } from 'drizzle-orm';
+import { eq, and, or, sql, desc, asc, notInArray, inArray, ilike, ne, isNotNull, isNull, exists, lte, gte, like, type SQL } from 'drizzle-orm';
 import studentAccess from './src/lib/studentAccess.ts';
 import { getTeacherHomeroomScopes, getTeacherReadableClassIds, getTeacherReadableStudentIds } from './src/lib/homeroomAccess.ts';
 import { canTeacherReadEvaluation, canTeacherWriteEvaluation, getTeacherAuthorizationScope, getTeacherReadableStudentIds as getScopedTeacherReadableStudentIds } from './src/lib/teacherAuthorization.ts';
@@ -212,7 +212,7 @@ import { isExamMention } from './src/lib/examMention.ts';
 import { selectPreferredClassExamConfiguration } from './src/lib/classExamConfiguration.ts';
 import { normalizeFirstName } from './src/lib/studentImport.ts';
 import { canTeacherAccessAbsence } from './src/lib/absenceTeachingAccess.ts';
-import { getParentChildStudentIds } from './src/lib/parentStudentAccess.ts';
+import { getParentChildStudentIds, getParentLinkedStudentIds } from './src/lib/parentStudentAccess.ts';
 import { buildClassAgeStats } from './src/lib/studentAgeStats.ts';
 import { SCHOOL_SUSPENDED_MESSAGE } from './src/lib/schoolSuspensionMessage.ts';
 import { deleteStoredFile, getFileStorageConfig, persistUploadedFile, readStoredFile, resolveStoredLocalPath, sanitizeFileName, streamStoredFileToResponse } from './src/lib/fileStorage.ts';
@@ -9014,9 +9014,23 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null && req.query.schoolId !== 'unknown'
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && req.query.schoolId !== 'unknown'
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+
       let list: any[];
       if (actor.role === 'super_admin') {
-        list = await db.select().from(academicYears);
+        list = requestedSchoolId == null
+          ? await db.select().from(academicYears)
+          : await db.select().from(academicYears).where(or(
+              sql`${academicYears.schoolId} IS NULL`,
+              eq(academicYears.schoolId, requestedSchoolId),
+            ));
       } else if (isSchoolOperationsRole(actor.role)) {
         list = actor.schoolId == null
           ? []
@@ -10375,6 +10389,7 @@ export async function createApp() {
       const classAbsences = await db.select({
         id: absences.id,
         studentId: absences.studentId,
+        schoolId: absences.schoolId,
         studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
         date: absences.date,
         period: absences.period,
@@ -10386,11 +10401,12 @@ export async function createApp() {
         .from(absences)
         .innerJoin(students, eq(students.id, absences.studentId))
         .leftJoin(subjects, eq(subjects.id, absences.subjectId))
-        .where(and(eq(absences.classId, classId), eq(students.schoolId, schoolId)))
+        .where(and(eq(absences.classId, classId), eq(absences.schoolId, schoolId)))
         .orderBy(desc(absences.date));
       const classLateArrivals = await db.select({
         id: lateArrivals.id,
         studentId: lateArrivals.studentId,
+        schoolId: lateArrivals.schoolId,
         teachingAssignmentId: lateArrivals.teachingAssignmentId,
         studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
         date: lateArrivals.date,
@@ -10402,7 +10418,7 @@ export async function createApp() {
       })
         .from(lateArrivals)
         .innerJoin(students, eq(students.id, lateArrivals.studentId))
-        .where(and(eq(lateArrivals.classId, classId), eq(students.schoolId, schoolId)))
+        .where(and(eq(lateArrivals.classId, classId), eq(lateArrivals.schoolId, schoolId)))
         .orderBy(desc(lateArrivals.date));
 
       const classBulletins = await db.select({
@@ -10673,6 +10689,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'School context is required' });
       }
 
+      let parentClassSchoolPairs: Set<string> | null = null;
       let query = db
         .select(schoolScopedSelect)
         .from(classes)
@@ -12640,6 +12657,13 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       const includeFormer = req.query.includeFormer === 'true';
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       let query = db
         .select({
@@ -12648,7 +12672,6 @@ export async function createApp() {
           lastName: students.lastName,
           birthDate: students.birthDate,
           gender: students.gender,
-          schoolId: students.schoolId,
           classId: students.classId,
           isActive: students.isActive,
           withdrawnAt: students.withdrawnAt,
@@ -12662,8 +12685,20 @@ export async function createApp() {
           enrolledAt: students.enrolledAt,
         })
         .from(students)
-        .leftJoin(classes, eq(students.classId, classes.id))
-        .leftJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+        .leftJoin(classes, and(
+          eq(students.classId, classes.id),
+          or(
+            eq(classes.schoolId, students.schoolId),
+            and(
+              isNull(classes.schoolId),
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${students.schoolId} AND sc.status = 'approved')`,
+            ),
+          ),
+        ))
+        .leftJoin(academicYears, and(
+          eq(classes.academicYearId, academicYears.id),
+          or(isNull(academicYears.schoolId), eq(academicYears.schoolId, students.schoolId)),
+        ))
         .leftJoin(parents, eq(students.parentId, parents.id))
         .leftJoin(users, eq(parents.userId, users.id));
       const queryConditions: Array<ReturnType<typeof eq>> = [];
@@ -12697,6 +12732,8 @@ export async function createApp() {
         } else {
           return res.json([]);
         }
+      } else if (requestedSchoolId != null) {
+        queryConditions.push(eq(students.schoolId, requestedSchoolId));
       }
 
       if (!includeFormer) queryConditions.push(eq(students.isActive, true));
@@ -13302,6 +13339,125 @@ export async function createApp() {
     return `${year}-${month}-${day}`;
   };
   const serverTodayIsoDate = (timeZone = 'Africa/Lome') => formatDateInTimeZone(new Date(), timeZone);
+  const resolveAttendanceSchoolIdForNewEvent = async (
+    date: string,
+    currentSchoolId: number | null,
+    studentId: number,
+    classId: number,
+    teachingAssignmentId?: number | null,
+  ): Promise<number | null> => {
+    if (!isDeclarationDate(date)) return null;
+    if (date >= serverTodayIsoDate()) {
+      return Number.isInteger(currentSchoolId) && currentSchoolId! > 0 ? currentSchoolId : null;
+    }
+
+    const history = await db.select({
+      action: auditEvents.action,
+      occurredAt: auditEvents.occurredAt,
+      beforeValues: auditEvents.beforeValues,
+      afterValues: auditEvents.afterValues,
+    }).from(auditEvents).where(and(
+      eq(auditEvents.resourceType, 'student'),
+      eq(auditEvents.resourceId, studentId),
+      eq(auditEvents.result, 'success'),
+    )).orderBy(asc(auditEvents.occurredAt), asc(auditEvents.id));
+
+    const getPositiveInteger = (values: Record<string, unknown> | null, key: string) => {
+      const value = values?.[key];
+      return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+    };
+    const created = history.find((event) => event.action === 'create');
+    const creationPredatesEvent = !!created?.occurredAt
+      && formatDateInTimeZone(created.occurredAt, 'Africa/Lome') < date;
+    let historicalSchoolId: number | null = creationPredatesEvent && created?.afterValues
+      ? getPositiveInteger(created.afterValues, 'schoolId')
+      : null;
+    let historicalClassId: number | null = creationPredatesEvent && created?.afterValues
+      ? getPositiveInteger(created.afterValues, 'classId')
+      : null;
+    let auditStateIsContinuous = historicalSchoolId != null && historicalClassId != null;
+
+    for (const event of history) {
+      if (event === created) continue;
+      if (!event.occurredAt) {
+        auditStateIsContinuous = false;
+        continue;
+      }
+      const eventDate = formatDateInTimeZone(event.occurredAt, 'Africa/Lome');
+      if (eventDate > date) break;
+      if (event.action === 'delete') return null;
+      if (event.action !== 'update') continue;
+
+      const beforeSchoolId = getPositiveInteger(event.beforeValues, 'schoolId');
+      const afterSchoolId = getPositiveInteger(event.afterValues, 'schoolId');
+      const beforeClassId = getPositiveInteger(event.beforeValues, 'classId');
+      const afterClassId = getPositiveInteger(event.afterValues, 'classId');
+      if (eventDate === date
+        && (beforeSchoolId !== afterSchoolId || beforeClassId !== afterClassId)) return null;
+      if (auditStateIsContinuous
+        && beforeSchoolId != null && beforeClassId != null
+        && (beforeSchoolId !== historicalSchoolId || beforeClassId !== historicalClassId)) return null;
+      if (afterSchoolId == null || afterClassId == null) {
+        auditStateIsContinuous = false;
+        continue;
+      }
+      historicalSchoolId = afterSchoolId;
+      historicalClassId = afterClassId;
+      auditStateIsContinuous = true;
+    }
+
+    const candidateSchoolIds = new Set<number>();
+    if (auditStateIsContinuous && historicalSchoolId != null && historicalClassId === classId) {
+      candidateSchoolIds.add(historicalSchoolId);
+    } else if (auditStateIsContinuous && historicalClassId !== classId) {
+      return null;
+    }
+
+    if (teachingAssignmentId != null && (!created || creationPredatesEvent)) {
+      const [assignment] = await db.select({
+        schoolId: teacherClassSubjects.schoolId,
+        classId: teacherClassSubjects.classId,
+        createdAt: teacherClassSubjects.createdAt,
+      }).from(teacherClassSubjects).where(eq(teacherClassSubjects.id, teachingAssignmentId));
+      if (assignment) {
+        if (assignment.classId !== classId
+          || formatDateInTimeZone(assignment.createdAt, 'Africa/Lome') >= date) return null;
+        candidateSchoolIds.add(assignment.schoolId);
+      }
+    }
+
+    const existingAbsences = await db.select({ schoolId: absences.schoolId }).from(absences).where(and(
+      eq(absences.studentId, studentId),
+      eq(absences.classId, classId),
+      eq(absences.date, date),
+      isNotNull(absences.schoolId),
+    ));
+    for (const existingAbsence of existingAbsences) {
+      if (existingAbsence.schoolId != null) candidateSchoolIds.add(existingAbsence.schoolId);
+    }
+
+    const existingLateArrivals = await db.select({ schoolId: lateArrivals.schoolId }).from(lateArrivals).where(and(
+      eq(lateArrivals.studentId, studentId),
+      eq(lateArrivals.classId, classId),
+      eq(lateArrivals.date, date),
+      isNotNull(lateArrivals.schoolId),
+    ));
+    for (const existingLateArrival of existingLateArrivals) {
+      if (existingLateArrival.schoolId != null) candidateSchoolIds.add(existingLateArrival.schoolId);
+    }
+
+    const existingDeclarations = await db.select({ schoolId: absenceDeclarations.schoolId })
+      .from(absenceDeclarations).where(and(
+        eq(absenceDeclarations.studentId, studentId),
+        eq(absenceDeclarations.date, date),
+        isNotNull(absenceDeclarations.schoolId),
+      ));
+    for (const declaration of existingDeclarations) {
+      if (declaration.schoolId != null) candidateSchoolIds.add(declaration.schoolId);
+    }
+
+    return candidateSchoolIds.size === 1 ? Array.from(candidateSchoolIds)[0] : null;
+  };
   const absencePastDateError = {
     error: 'Vous ne pouvez pas déclarer une absence pour une date passée. Veuillez sélectionner la date du jour ou une date ultérieure.',
     code: 'ABSENCE_DATE_IN_PAST',
@@ -13354,10 +13510,19 @@ export async function createApp() {
     action: string,
     input: any,
   ): Promise<{ status: number; body: any }> => {
-    const [parentRecord] = await db.select({ id: parents.id }).from(parents).where(and(
-      eq(parents.userId, parentUserId),
-      eq(parents.schoolId, schoolId),
-    ));
+    const declarationIdInput = Number(input?.id);
+    const parentRecords = action === 'update' || action === 'cancel'
+      ? await db.select({ id: parents.id }).from(absenceDeclarations)
+        .innerJoin(parents, eq(parents.id, absenceDeclarations.parentId))
+        .where(and(
+          eq(absenceDeclarations.id, declarationIdInput),
+          eq(parents.userId, parentUserId),
+        )).limit(1)
+      : await db.select({ id: parents.id }).from(parents).where(and(
+        eq(parents.userId, parentUserId),
+        eq(parents.schoolId, schoolId),
+      )).limit(1);
+    const [parentRecord] = parentRecords;
     if (!parentRecord) return { status: 404, body: { error: 'Parent profile not found' } };
     const [parentUser] = actor ? [] : await db.select({
       id: users.id,
@@ -13374,14 +13539,13 @@ export async function createApp() {
     const childStudentIds = await getParentChildStudentIds(parentUserId, schoolId);
 
     if (action === 'list') {
-      if (childStudentIds.length === 0) return { status: 200, body: [] };
       const rows = await db.select({
         id: absenceDeclarations.id,
         studentId: absenceDeclarations.studentId,
         studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
         classId: students.classId,
         className: classes.name,
-        schoolId: students.schoolId,
+        schoolId: absenceDeclarations.schoolId,
         date: absenceDeclarations.date,
         startTime: absenceDeclarations.startTime,
         endTime: absenceDeclarations.endTime,
@@ -13395,7 +13559,6 @@ export async function createApp() {
         .leftJoin(classes, eq(classes.id, students.classId))
         .where(and(
           eq(absenceDeclarations.parentId, parentRecord.id),
-          inArray(absenceDeclarations.studentId, childStudentIds),
         ))
         .orderBy(desc(absenceDeclarations.date), desc(absenceDeclarations.createdAt));
       const rowSchoolIds = Array.from(new Set(rows.map((row) => row.schoolId)
@@ -13435,6 +13598,24 @@ export async function createApp() {
       const [targetStudent] = await db.select({
         schoolId: students.schoolId,
       }).from(students).where(eq(students.id, studentId));
+      const eventSchoolId = await resolveAttendanceSchoolIdForNewEvent(
+        date,
+        targetStudent?.schoolId ?? null,
+        studentId,
+        parsePositiveInteger(classId) ?? 0,
+      );
+      if (eventSchoolId == null) {
+        return {
+          status: 409,
+          body: {
+            error: 'L’établissement historique de cette déclaration ne peut pas être vérifié.',
+            code: 'HISTORICAL_SCHOOL_NOT_VERIFIABLE',
+          },
+        };
+      }
+      if (eventSchoolId !== schoolId) {
+        return { status: 403, body: { error: 'The declaration school does not match the authenticated parent context' } };
+      }
       if (targetStudent?.schoolId != null && await isSchoolSuspended(targetStudent.schoolId)) {
         return {
           status: 423,
@@ -13443,6 +13624,7 @@ export async function createApp() {
       }
       const creationResult = await db.transaction(async (tx) => {
         const [created] = await tx.insert(absenceDeclarations).values({
+          schoolId: eventSchoolId,
           studentId,
           parentId: parentRecord.id,
           date,
@@ -13456,6 +13638,7 @@ export async function createApp() {
         if (date <= serverTodayIsoDate()) {
           const linkedAbsences = await tx.update(absences).set({ declarationId: created.id }).where(and(
             eq(absences.studentId, studentId),
+            eq(absences.schoolId, eventSchoolId),
             eq(absences.date, date),
             sql`${absences.declarationId} IS NULL`,
             sql`${absences.startTime} < ${endTime}`,
@@ -13469,12 +13652,13 @@ export async function createApp() {
             id: created.id,
             studentId: created.studentId,
             parentId: created.parentId,
+            schoolId: created.schoolId,
             date: created.date,
             startTime: created.startTime,
             endTime: created.endTime,
             status: created.status,
             linkedAbsenceCount,
-          }, ['id', 'studentId', 'parentId', 'date', 'startTime', 'endTime', 'status', 'linkedAbsenceCount']),
+          }, ['id', 'studentId', 'parentId', 'schoolId', 'date', 'startTime', 'endTime', 'status', 'linkedAbsenceCount']),
           result: 'success',
           description: 'Absence declaration submitted.',
         });
@@ -13492,7 +13676,7 @@ export async function createApp() {
       eq(absenceDeclarations.parentId, parentRecord.id),
     ));
     if (!declaration) return { status: 404, body: { error: 'Declaration not found' } };
-    if (!childStudentIds.includes(declaration.studentId)) {
+    if (action === 'update' && !childStudentIds.includes(declaration.studentId)) {
       return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
     }
     if (action === 'update' && date < serverTodayIsoDate() && date !== declaration.date) {
@@ -13522,6 +13706,23 @@ export async function createApp() {
       if (!['RECEIVED', 'ACCEPTED'].includes(declaration.status)) {
         return { status: 409, body: { error: 'This declaration can no longer be changed' } };
       }
+      const [targetStudent] = await db.select({
+        schoolId: students.schoolId,
+        parentUserId: parents.userId,
+      })
+        .from(students)
+        .leftJoin(parents, eq(parents.id, students.parentId))
+        .where(eq(students.id, studentId));
+      if (declaration.schoolId == null || targetStudent?.schoolId !== declaration.schoolId
+        || targetStudent.parentUserId !== parentUserId) {
+        return {
+          status: 409,
+          body: {
+            error: 'Une déclaration ne peut pas être déplacée vers un autre établissement.',
+            code: 'HISTORICAL_SCHOOL_IMMUTABLE',
+          },
+        };
+      }
     }
 
     if (action === 'cancel') {
@@ -13537,7 +13738,7 @@ export async function createApp() {
           eq(absenceDeclarations.parentId, parentRecord.id),
         )).for('update');
         if (!before) return { status: 404, body: { error: 'Declaration not found' } };
-        if (!childStudentIds.includes(before.studentId)) {
+        if (action === 'update' && !childStudentIds.includes(before.studentId)) {
           return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
         }
         if (action === 'update' && date < serverTodayIsoDate() && date !== before.date) {
@@ -13580,8 +13781,8 @@ export async function createApp() {
             'absence_declaration',
             declarationId,
           ),
-          beforeValues: createAuditSnapshot(before, ['studentId', 'parentId', 'date', 'startTime', 'endTime', 'status']),
-          afterValues: createAuditSnapshot(after, ['studentId', 'parentId', 'date', 'startTime', 'endTime', 'status']),
+          beforeValues: createAuditSnapshot(before, ['studentId', 'parentId', 'schoolId', 'date', 'startTime', 'endTime', 'status']),
+          afterValues: createAuditSnapshot(after, ['studentId', 'parentId', 'schoolId', 'date', 'startTime', 'endTime', 'status']),
           result: 'success',
           description: action === 'update' ? 'Absence declaration updated.' : 'Absence declaration cancelled.',
         });
@@ -13598,9 +13799,15 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'parent') {
         if (!actor.id) return res.json([]);
-        if (actor.schoolId == null) return res.json([]);
-        const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'list', {});
-        return res.status(result.status).json(result.body);
+        const parentProfiles = await db.select({ schoolId: parents.schoolId }).from(parents)
+          .where(eq(parents.userId, actor.id));
+        const results = await Promise.all(Array.from(new Set(parentProfiles.map((profile) => profile.schoolId)
+          .filter((schoolId): schoolId is number => schoolId != null)))
+          .map((schoolId) => runParentDeclarationAction(actor, actor.id!, schoolId, 'list', {})));
+        const failedResult = results.find((result) => result.status !== 200);
+        if (failedResult) return res.status(failedResult.status).json(failedResult.body);
+        return res.json(results.flatMap((result) => result.body)
+          .sort((left, right) => right.date.localeCompare(left.date)));
       }
       if (!['super_admin', 'school_admin', 'school_accountant', 'surveillant', 'teacher'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to view absence declarations' });
@@ -13612,9 +13819,9 @@ export async function createApp() {
         studentId: absenceDeclarations.studentId,
         studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
         parentName: users.name,
-        classId: students.classId,
+        classId: classes.id,
         className: classes.name,
-        schoolId: students.schoolId,
+        schoolId: absenceDeclarations.schoolId,
         date: absenceDeclarations.date,
         startTime: absenceDeclarations.startTime,
         endTime: absenceDeclarations.endTime,
@@ -13628,19 +13835,37 @@ export async function createApp() {
         .innerJoin(students, eq(students.id, absenceDeclarations.studentId))
         .innerJoin(parents, eq(parents.id, absenceDeclarations.parentId))
         .innerJoin(users, eq(users.id, parents.userId))
-        .leftJoin(classes, eq(classes.id, students.classId));
+        .leftJoin(classes, and(
+          eq(classes.id, students.classId),
+          eq(students.schoolId, parents.schoolId),
+          or(
+            eq(classes.schoolId, parents.schoolId),
+            and(
+              isNull(classes.schoolId),
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${parents.schoolId} AND sc.status = 'approved')`,
+            ),
+          ),
+        ));
 
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && req.query.schoolId != null) {
+        const requestedSchoolId = Number(req.query.schoolId);
+        if (req.query.schoolId !== 'unknown' && (!Number.isInteger(requestedSchoolId) || requestedSchoolId <= 0)) {
+          return res.status(400).json({ error: 'Invalid schoolId' });
+        }
+        query = query.where(req.query.schoolId === 'unknown'
+          ? isNull(absenceDeclarations.schoolId)
+          : eq(absenceDeclarations.schoolId, requestedSchoolId)) as any;
+      } else if (actor.role !== 'super_admin') {
         if (actor.schoolId == null) return res.json([]);
         if (actor.role === 'teacher') {
           const classIds = await getTeacherReadableScopedClassIds(actor);
           if (!classIds.length) return res.json([]);
           query = query.where(and(
-            eq(students.schoolId, actor.schoolId),
+            eq(absenceDeclarations.schoolId, actor.schoolId),
             inArray(students.classId, classIds),
           )) as any;
         } else {
-          query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+          query = query.where(eq(absenceDeclarations.schoolId, actor.schoolId)) as any;
         }
       }
       return res.json(await query.orderBy(desc(absenceDeclarations.date), desc(absenceDeclarations.createdAt)));
@@ -13732,6 +13957,13 @@ export async function createApp() {
     try {
       const parentUserId = Number(req.body?.parentUserId);
       if (!Number.isInteger(parentUserId) || parentUserId <= 0) return res.status(400).json({ error: 'Invalid parent identity' });
+      const [authenticatedParent] = await db.select({ id: users.id })
+        .from(users).where(and(
+          eq(users.id, parentUserId),
+          eq(users.role, 'parent'),
+          eq(users.isDeleted, false),
+        ));
+      if (!authenticatedParent) return res.status(403).json({ error: 'Invalid parent identity' });
       const action = String(req.body?.action || '');
       const input = req.body?.input && typeof req.body.input === 'object' && !Array.isArray(req.body.input)
         ? req.body.input
@@ -13739,18 +13971,10 @@ export async function createApp() {
       const suppliedSchoolId = req.body?.schoolId ?? input.schoolId;
 
       if (action === 'list') {
-        const [parentProfiles, parentMemberships] = await Promise.all([
-          db.select({ schoolId: parents.schoolId }).from(parents).where(eq(parents.userId, parentUserId)),
-          db.select({ schoolId: userSchools.schoolId }).from(userSchools).where(and(
-            eq(userSchools.userId, parentUserId),
-            eq(userSchools.role, 'parent'),
-            sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
-          )),
-        ]);
-        const membershipSchoolIds = new Set(parentMemberships.map((membership) => membership.schoolId));
-        let schoolIds = Array.from(new Set(parentProfiles
-          .map((profile) => profile.schoolId)
-          .filter((schoolId): schoolId is number => schoolId != null && membershipSchoolIds.has(schoolId))));
+        const parentProfiles = await db.select({ schoolId: parents.schoolId }).from(parents)
+          .where(eq(parents.userId, parentUserId));
+        let schoolIds = Array.from(new Set(parentProfiles.map((profile) => profile.schoolId)
+          .filter((schoolId): schoolId is number => schoolId != null)));
 
         if (suppliedSchoolId != null) {
           const requestedSchoolId = Number(suppliedSchoolId);
@@ -13787,15 +14011,13 @@ export async function createApp() {
         if (!Number.isInteger(declarationId) || declarationId <= 0) {
           return res.status(400).json({ error: 'Invalid declaration id' });
         }
-        const [declaration] = await db.select({ studentId: absenceDeclarations.studentId })
+        const [declaration] = await db.select({ schoolId: absenceDeclarations.schoolId })
           .from(absenceDeclarations).where(eq(absenceDeclarations.id, declarationId));
         if (!declaration) return res.status(404).json({ error: 'Declaration not found' });
-        const [student] = await db.select({ schoolId: students.schoolId })
-          .from(students).where(eq(students.id, declaration.studentId));
-        if (!student || student.schoolId == null) {
+        if (declaration.schoolId == null) {
           return res.status(403).json({ error: 'Declaration student is no longer currently linked to this parent' });
         }
-        schoolId = student.schoolId;
+        schoolId = declaration.schoolId;
       } else {
         return res.status(400).json({ error: 'Unsupported declaration action' });
       }
@@ -13835,16 +14057,9 @@ export async function createApp() {
       .from(students).where(eq(students.id, declaration.studentId));
     if (!student) return null;
     if (actor.role === 'super_admin') return student;
-    if (actor.schoolId == null || student.schoolId !== actor.schoolId) return null;
+    if (actor.schoolId == null || declaration.schoolId !== actor.schoolId) return null;
     if (actor.role === 'teacher') return null;
-    if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
-      if (student.classId == null) return student;
-      return (await isApprovedClassForSchool(student.classId, actor.schoolId)) ||
-        (await db.select({ id: classes.id }).from(classes).where(and(
-          eq(classes.id, student.classId),
-          eq(classes.schoolId, actor.schoolId),
-        ))).length > 0 ? student : null;
-    }
+    if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') return student;
     return null;
   };
 
@@ -13876,6 +14091,7 @@ export async function createApp() {
 
       if (declaration.date <= serverTodayIsoDate()) {
         await db.update(absences).set({ declarationId: declaration.id }).where(and(
+          eq(absences.schoolId, declaration.schoolId!),
           eq(absences.studentId, declaration.studentId),
           eq(absences.date, declaration.date),
           sql`${absences.declarationId} IS NULL`,
@@ -13947,7 +14163,13 @@ export async function createApp() {
       if (actor.role === 'parent') return res.status(403).json({ error: 'Parents cannot view school absence controls' });
 
       let query = db.select().from(absenceControls);
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && req.query.schoolId != null) {
+        const requestedSchoolId = Number(req.query.schoolId);
+        if (!Number.isInteger(requestedSchoolId) || requestedSchoolId <= 0) {
+          return res.status(400).json({ error: 'Invalid schoolId' });
+        }
+        query = query.where(eq(absenceControls.schoolId, requestedSchoolId)) as any;
+      } else if (actor.role !== 'super_admin') {
         if (actor.schoolId == null) return res.json([]);
 
         if (actor.role === 'teacher') {
@@ -14058,7 +14280,7 @@ export async function createApp() {
       const conflictingAbsence = await db.select({ id: absences.id }).from(absences)
         .innerJoin(students, eq(students.id, absences.studentId))
         .where(and(
-        eq(students.schoolId, actor.schoolId),
+        eq(absences.schoolId, actor.schoolId),
         eq(absences.classId, normalClassId),
         eq(absences.date, parsedDate),
         normalizedSubjectId != null ? eq(absences.subjectId, normalizedSubjectId) : sql`${absences.subjectId} IS NULL`,
@@ -14147,20 +14369,23 @@ export async function createApp() {
     return Math.max(0, arrivalMinutes - expectedMinutes);
   };
 
-  const canManageLateArrival = async (actor: any, studentId: number, classId: number) => {
-    const [student] = await db.select().from(students).where(eq(students.id, studentId));
-    const [classRecord] = await db.select().from(classes).where(eq(classes.id, classId));
-    if (!student || !classRecord || student.isActive !== true || student.classId !== classId || actor.role === 'parent') return false;
-    if (actor.role === 'super_admin') return true;
+  const canManageLateArrival = async (actor: any, lateArrival: typeof lateArrivals.$inferSelect) => {
+    const [classRecord] = await db.select().from(classes).where(eq(classes.id, lateArrival.classId));
+    if (!classRecord || lateArrival.schoolId == null || actor.role === 'parent') return false;
+    if (actor.role === 'super_admin') {
+      return classRecord.schoolId === lateArrival.schoolId
+        || await isApprovedClassForSchool(lateArrival.classId, lateArrival.schoolId);
+    }
 
-    const classBelongsToSchool = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(classId, actor.schoolId);
-    if (actor.schoolId == null || student.schoolId !== actor.schoolId || !classBelongsToSchool) return false;
+    const classBelongsToSchool = actor.schoolId != null
+      && (classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(lateArrival.classId, actor.schoolId));
+    if (actor.schoolId == null || lateArrival.schoolId !== actor.schoolId || !classBelongsToSchool) return false;
     if (actor.role !== 'teacher') return true;
 
     const scope = await getTeacherAuthorizationScope(actor);
     return !!scope && (
-      scope.teachingClassIds.has(classId)
-      || scope.homeroomClassIds.has(classId)
+      scope.teachingClassIds.has(lateArrival.classId)
+      || scope.homeroomClassIds.has(lateArrival.classId)
     );
   };
 
@@ -14184,11 +14409,19 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       let query = db
         .select({
           id: lateArrivals.id,
           studentId: lateArrivals.studentId,
+          schoolId: lateArrivals.schoolId,
           studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           classId: lateArrivals.classId,
           className: classes.name,
@@ -14201,7 +14434,6 @@ export async function createApp() {
           createdBy: lateArrivals.createdBy,
           createdAt: lateArrivals.createdAt,
           updatedAt: lateArrivals.updatedAt,
-          schoolId: students.schoolId,
           justificationId: lateArrivalJustifications.id,
           justificationStatus: lateArrivalJustifications.status,
           justificationReason: lateArrivalJustifications.justificationReason,
@@ -14212,9 +14444,13 @@ export async function createApp() {
         .innerJoin(classes, eq(lateArrivals.classId, classes.id))
         .leftJoin(lateArrivalJustifications, eq(lateArrivalJustifications.lateArrivalId, lateArrivals.id));
 
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && requestedSchoolId != null) {
+        query = query.where(eq(lateArrivals.schoolId, requestedSchoolId)) as any;
+      } else if (actor.role === 'super_admin' && req.query.schoolId === 'unknown') {
+        query = query.where(isNull(lateArrivals.schoolId)) as any;
+      } else if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+          const childStudentIds = await getParentLinkedStudentIds(actor.id);
           if (childStudentIds.length === 0) return res.json([]);
           query = query.where(inArray(lateArrivals.studentId, childStudentIds)) as any;
         } else if (actor.role === 'teacher') {
@@ -14224,7 +14460,7 @@ export async function createApp() {
           const homeroomClassIds = assignmentContext ? Array.from(assignmentContext.homeroomClassIds) : [];
           if (teacherAssignmentIds.length === 0 && homeroomClassIds.length === 0) return res.json([]);
           query = query.where(and(
-            eq(students.schoolId, actor.schoolId),
+            eq(lateArrivals.schoolId, actor.schoolId),
             or(
               ...(teacherAssignmentIds.length > 0 ? [inArray(lateArrivals.teachingAssignmentId, teacherAssignmentIds)] : []),
               ...(homeroomClassIds.length > 0 ? [and(
@@ -14235,7 +14471,7 @@ export async function createApp() {
           )) as any;
         } else {
           if (actor.schoolId) {
-            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+            query = query.where(eq(lateArrivals.schoolId, actor.schoolId)) as any;
           } else {
             return res.json([]);
           }
@@ -14306,6 +14542,18 @@ export async function createApp() {
       }
 
       const creationResult = await db.transaction(async (tx) => {
+        const eventSchoolId = await resolveAttendanceSchoolIdForNewEvent(
+          parsedDate,
+          student.schoolId,
+          parsedStudentId,
+          parsedClassId,
+          canonicalTeachingAssignment?.id ?? null,
+          canonicalTeachingAssignment?.id ?? null,
+        );
+        if (eventSchoolId == null) return { kind: 'historical_school_unknown' as const };
+        if (actor.role !== 'super_admin' && eventSchoolId !== actor.schoolId) {
+          return { kind: 'historical_school_forbidden' as const };
+        }
         const [existingDuplicate] = await tx.select().from(lateArrivals).where(and(
           eq(lateArrivals.studentId, parsedStudentId),
           eq(lateArrivals.classId, parsedClassId),
@@ -14315,6 +14563,7 @@ export async function createApp() {
         if (existingDuplicate) return { kind: 'duplicate' as const };
 
         const [inserted] = await tx.insert(lateArrivals).values({
+          schoolId: eventSchoolId,
           studentId: parsedStudentId,
           classId: parsedClassId,
           teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
@@ -14328,9 +14577,9 @@ export async function createApp() {
         }).returning();
         if (!inserted) throw new Error('Late-arrival insert did not return a row.');
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, student.schoolId ?? null, 'attendance', 'create', 'late_arrival', inserted.id),
+          ...createAuditEventContext(actor, eventSchoolId, 'attendance', 'create', 'late_arrival', inserted.id),
           afterValues: createAuditSnapshot(inserted, [
-            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'schoolId', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
             'expectedStartTime', 'arrivalTime', 'lateMinutes',
           ]),
           result: 'success',
@@ -14338,6 +14587,15 @@ export async function createApp() {
         });
         return { kind: 'created' as const, row: inserted };
       });
+      if (creationResult.kind === 'historical_school_unknown') {
+        return res.status(409).json({
+          error: 'L’établissement historique de ce retard ne peut pas être vérifié.',
+          code: 'HISTORICAL_SCHOOL_NOT_VERIFIABLE',
+        });
+      }
+      if (creationResult.kind === 'historical_school_forbidden') {
+        return res.status(403).json({ error: 'Cannot record a late arrival outside the historical school scope' });
+      }
       if (creationResult.kind === 'duplicate') {
         return res.status(409).json({ error: 'A late arrival already exists for this student/class/date/period' });
       }
@@ -14446,7 +14704,7 @@ export async function createApp() {
       if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role) && actor.role !== 'teacher' && actor.role !== 'surveillant') {
         return res.status(403).json({ error: 'Not authorized to update late arrivals' });
       }
-      if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
+      if (!await canManageLateArrival(actor, existing)) {
         return res.status(403).json({ error: 'Cannot update a late arrival outside the actor scope' });
       }
       if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, existing)) {
@@ -14483,17 +14741,14 @@ export async function createApp() {
           updatedAt: new Date(),
         }).where(eq(lateArrivals.id, id)).returning();
         if (!after) return null;
-        const [studentSchool] = await tx.select({ schoolId: students.schoolId })
-          .from(students)
-          .where(eq(students.id, before.studentId));
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, studentSchool?.schoolId ?? null, 'attendance', 'update', 'late_arrival', id),
+          ...createAuditEventContext(actor, before.schoolId, 'attendance', 'update', 'late_arrival', id),
           beforeValues: createAuditSnapshot(before, [
-            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'schoolId', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
             'expectedStartTime', 'arrivalTime', 'lateMinutes',
           ]),
           afterValues: createAuditSnapshot(after, [
-            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'schoolId', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
             'expectedStartTime', 'arrivalTime', 'lateMinutes',
           ]),
           result: 'success',
@@ -14533,7 +14788,7 @@ export async function createApp() {
       const [existingJustification] = await db.select({ id: lateArrivalJustifications.id })
         .from(lateArrivalJustifications)
         .where(eq(lateArrivalJustifications.lateArrivalId, id));
-      if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
+      if (!await canManageLateArrival(actor, existing)) {
         return res.status(403).json({ error: 'Cannot delete a late arrival outside the actor scope' });
       }
       if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, existing)) {
@@ -14560,21 +14815,18 @@ export async function createApp() {
           .where(eq(lateArrivalJustifications.lateArrivalId, id))
           .limit(1);
         if (justification) return { kind: 'has_justification' as const };
-        if (!await canManageLateArrival(actor, before.studentId, before.classId)) return { kind: 'forbidden' as const };
+        if (!await canManageLateArrival(actor, before)) return { kind: 'forbidden' as const };
         if (actor.role === 'teacher' && !await getTeacherLateArrivalAssignment(actor, before)) {
           const scope = await getTeacherAuthorizationScope(actor);
           if (before.teachingAssignmentId != null || !scope?.homeroomClassIds.has(before.classId)) {
             return { kind: 'forbidden' as const };
           }
         }
-        const [studentSchool] = await tx.select({ schoolId: students.schoolId })
-          .from(students)
-          .where(eq(students.id, before.studentId));
         await tx.delete(lateArrivals).where(eq(lateArrivals.id, id));
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, studentSchool?.schoolId ?? null, 'attendance', 'delete', 'late_arrival', id),
+          ...createAuditEventContext(actor, before.schoolId, 'attendance', 'delete', 'late_arrival', id),
           beforeValues: createAuditSnapshot(before, [
-            'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'schoolId', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
             'expectedStartTime', 'arrivalTime', 'lateMinutes',
           ]),
           result: 'success',
@@ -14611,7 +14863,7 @@ export async function createApp() {
     if (!lateArrival) return null;
     const [student] = await db.select().from(students).where(eq(students.id, lateArrival.studentId));
     const [classRecord] = await db.select().from(classes).where(eq(classes.id, lateArrival.classId));
-    if (!student || !classRecord || student.classId !== lateArrival.classId) return null;
+    if (!student || !classRecord) return null;
     return { lateArrival, student, classRecord };
   };
 
@@ -14620,16 +14872,15 @@ export async function createApp() {
     allowSuperAdminRead = false,
   ): Promise<(context: LateArrivalJustificationContext) => Promise<boolean>> => {
     if (actor.role === 'parent') {
-      const studentIds = new Set(await getParentChildStudentIds(actor.id, actor.schoolId));
-      return async ({ lateArrival, student }) => studentIds.has(lateArrival.studentId)
-        && student.schoolId === actor.schoolId;
+      const studentIds = new Set(await getParentLinkedStudentIds(actor.id));
+      return async ({ lateArrival }) => studentIds.has(lateArrival.studentId);
     }
 
     if (actor.role === 'teacher') {
       const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
       if (!assignmentContext) return async () => false;
       return async ({ lateArrival, student, classRecord }) => {
-        if (student.isActive !== true || student.schoolId !== assignmentContext.schoolId
+        if (lateArrival.schoolId !== assignmentContext.schoolId
           || lateArrival.classId !== classRecord.id) return false;
         if (lateArrival.teachingAssignmentId != null) {
           return assignmentContext.assignments.some((assignment) =>
@@ -14648,8 +14899,7 @@ export async function createApp() {
         return async () => false;
       }
       return async ({ lateArrival, student, classRecord }) => (
-        student.isActive === true
-        && student.schoolId === actor.schoolId
+        lateArrival.schoolId === actor.schoolId
         && lateArrival.classId === classRecord.id
         && (classRecord.schoolId === actor.schoolId
           || await isApprovedClassForSchool(lateArrival.classId, actor.schoolId))
@@ -14750,7 +15000,7 @@ export async function createApp() {
         name: actor.name ?? null,
         activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
       },
-      targetSchool: { id: context.student.schoolId ?? null },
+      targetSchool: { id: context.lateArrival.schoolId ?? null },
       module: 'late_arrival_justifications',
       action: 'submit_late_arrival_justification',
       resourceType: 'late_arrival_justification',
@@ -14828,6 +15078,14 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null && req.query.schoolId !== 'unknown'
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && req.query.schoolId !== 'unknown'
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
       const status = typeof req.query.status === 'string' ? req.query.status.trim().toUpperCase() : '';
       if (status && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
         return res.status(400).json({ error: 'Invalid justification status filter' });
@@ -14842,19 +15100,19 @@ export async function createApp() {
       const conditions: any[] = [];
       if (status) conditions.push(eq(lateArrivalJustifications.status, status as 'PENDING' | 'APPROVED' | 'REJECTED'));
       if (actor.role === 'parent') {
-        const studentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        const studentIds = await getParentLinkedStudentIds(actor.id);
         if (studentIds.length === 0) return res.json([]);
         conditions.push(inArray(lateArrivals.studentId, studentIds));
       } else if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
         if (actor.schoolId == null) return res.json([]);
-        conditions.push(eq(students.schoolId, actor.schoolId));
+        conditions.push(eq(lateArrivals.schoolId, actor.schoolId));
       } else if (actor.role === 'teacher') {
         const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
         if (!assignmentContext) return res.json([]);
         const assignmentIds = assignmentContext.assignments.map((assignment) => assignment.id);
         const homeroomClassIds = Array.from(assignmentContext.homeroomClassIds);
         if (assignmentIds.length === 0 && homeroomClassIds.length === 0) return res.json([]);
-        conditions.push(eq(students.schoolId, assignmentContext.schoolId));
+        conditions.push(eq(lateArrivals.schoolId, assignmentContext.schoolId));
         conditions.push(or(
           ...(assignmentIds.length > 0 ? [inArray(lateArrivals.teachingAssignmentId, assignmentIds)] : []),
           ...(homeroomClassIds.length > 0 ? [and(
@@ -14862,6 +15120,8 @@ export async function createApp() {
             isNull(lateArrivals.teachingAssignmentId),
           )] : []),
         )!);
+      } else if (actor.role === 'super_admin' && requestedSchoolId != null) {
+        conditions.push(eq(lateArrivals.schoolId, requestedSchoolId));
       } else if (actor.role !== 'super_admin') {
         return res.status(403).json({ error: 'Not authorized to view late-arrival justifications' });
       }
@@ -15212,6 +15472,13 @@ export async function createApp() {
       
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       let query = db
         .select({
@@ -15256,9 +15523,13 @@ export async function createApp() {
         .leftJoin(subjects, eq(absences.subjectId, subjects.id))
         .innerJoin(parents, eq(students.parentId, parents.id));
 
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && requestedSchoolId != null) {
+        query = query.where(eq(absences.schoolId, requestedSchoolId)) as any;
+      } else if (actor.role === 'super_admin' && req.query.schoolId === 'unknown') {
+        query = query.where(isNull(absences.schoolId)) as any;
+      } else if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
-          const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+          const childStudentIds = await getParentLinkedStudentIds(actor.id);
 
           if (childStudentIds.length === 0) {
             return res.json([]);
@@ -15275,18 +15546,18 @@ export async function createApp() {
           ]));
           if (permittedAbsenceClassIds.length === 0) return res.json([]);
           query = query.where(and(
-            eq(students.schoolId, actor.schoolId),
+            eq(absences.schoolId, actor.schoolId),
             inArray(absences.classId, permittedAbsenceClassIds),
           )) as any;
         } else if (actor.role === 'surveillant') {
           if (actor.schoolId) {
-            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+            query = query.where(eq(absences.schoolId, actor.schoolId)) as any;
           } else {
             return res.json([]);
           }
         } else {
           if (actor.schoolId) {
-            query = query.where(eq(students.schoolId, actor.schoolId)) as any;
+            query = query.where(eq(absences.schoolId, actor.schoolId)) as any;
           } else {
             return res.json([]);
           }
@@ -15378,13 +15649,19 @@ export async function createApp() {
 
       const [classRecord] = await db.select().from(classes).where(eq(classes.id, parseInt(classId)));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
+      const classBelongsToStudentSchool = classRecord.schoolId === student.schoolId
+        || await isApprovedClassForSchool(parseInt(classId), student.schoolId);
+      if (!classBelongsToStudentSchool) {
+        return res.status(403).json({ error: 'Student and class must belong to the same school' });
+      }
 
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to record absences' });
       }
 
-      const classBelongsToSchool = classRecord.schoolId === actor.schoolId
-        || await isApprovedClassForSchool(parseInt(classId), actor.schoolId);
+      const classBelongsToSchool = actor.schoolId != null
+        && (classRecord.schoolId === actor.schoolId
+          || await isApprovedClassForSchool(parseInt(classId), actor.schoolId));
       if (actor.role !== 'super_admin' && (
         actor.schoolId == null
         || student.schoolId !== actor.schoolId
@@ -15431,9 +15708,24 @@ export async function createApp() {
         }
       }
 
-      const { absence: createdAbsence, matchedDeclaration } = await db.transaction(async (tx) => {
+      const creationResult = await db.transaction(async (tx) => {
+        const eventSchoolId = await resolveAttendanceSchoolIdForNewEvent(
+          String(date),
+          student.schoolId,
+          student.id,
+          canonicalTeachingAssignment?.classId ?? parseInt(classId, 10),
+          canonicalTeachingAssignment?.id ?? null,
+          canonicalTeachingAssignment?.id ?? null,
+        );
+        if (eventSchoolId == null) {
+          return { kind: 'historical_school_unknown' as const };
+        }
+        if (actor.role !== 'super_admin' && eventSchoolId !== actor.schoolId) {
+          return { kind: 'historical_school_forbidden' as const };
+        }
         const [matchedDeclaration] = typeof date === 'string' && date <= serverTodayIsoDate()
           ? await tx.select().from(absenceDeclarations).where(and(
+            eq(absenceDeclarations.schoolId, eventSchoolId),
             eq(absenceDeclarations.studentId, parseInt(studentId, 10)),
             eq(absenceDeclarations.date, date),
             inArray(absenceDeclarations.status, ['RECEIVED', 'ACCEPTED', 'REFUSED']),
@@ -15442,6 +15734,7 @@ export async function createApp() {
           )).limit(1)
           : [];
         const [absence] = await tx.insert(absences).values({
+          schoolId: eventSchoolId,
           studentId: parseInt(studentId),
           classId: canonicalTeachingAssignment?.classId ?? parseInt(classId),
           teachingAssignmentId: canonicalTeachingAssignment?.id ?? null,
@@ -15456,16 +15749,26 @@ export async function createApp() {
         }).returning();
         if (!absence) throw new Error('Absence insert did not return a row.');
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, student.schoolId, 'attendance', 'create', 'absence', absence.id),
+          ...createAuditEventContext(actor, eventSchoolId, 'attendance', 'create', 'absence', absence.id),
           afterValues: createAuditSnapshot(absence, [
-            'id', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
+            'id', 'schoolId', 'studentId', 'classId', 'teachingAssignmentId', 'date', 'period',
             'subjectId', 'startTime', 'endTime', 'isJustified', 'justificationStatus', 'declarationId',
           ]),
           result: 'success',
           description: 'Absence recorded.',
         });
-        return { absence, matchedDeclaration };
+        return { kind: 'created' as const, absence, matchedDeclaration };
       });
+      if (creationResult.kind === 'historical_school_unknown') {
+        return res.status(409).json({
+          error: 'L’établissement historique de cette absence ne peut pas être vérifié.',
+          code: 'HISTORICAL_SCHOOL_NOT_VERIFIABLE',
+        });
+      }
+      if (creationResult.kind === 'historical_school_forbidden') {
+        return res.status(403).json({ error: 'Cannot record an absence outside the historical school scope' });
+      }
+      const { absence: createdAbsence, matchedDeclaration } = creationResult;
 
       // Automatically create a simulated notification for the Parent of this student
       const [parentRecord] = await db.select().from(parents).where(eq(parents.id, student.parentId));
@@ -15637,7 +15940,7 @@ export async function createApp() {
 
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
 
-      const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+      const childStudentIds = await getParentLinkedStudentIds(actor.id);
       if (!childStudentIds.includes(absenceStudent.id)) {
         return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
@@ -15665,7 +15968,7 @@ export async function createApp() {
           .returning();
         if (!after) return { kind: 'not_found' as const };
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, absenceStudent.schoolId, 'absence_justifications', 'submit', 'absence_justification', id),
+          ...createAuditEventContext(actor, absence.schoolId, 'absence_justifications', 'submit', 'absence_justification', id),
           beforeValues: createAuditSnapshot(before, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
           afterValues: createAuditSnapshot(after, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
           result: 'success',
@@ -15720,15 +16023,15 @@ export async function createApp() {
 
       if (actor.role === 'teacher') {
         const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
-        if (!assignmentContext || student.schoolId !== assignmentContext.schoolId
+        if (!assignmentContext || absence.schoolId !== assignmentContext.schoolId
           || !canTeacherAccessAbsence(absence, assignmentContext.teacherId, assignmentContext.assignments)) {
           return res.status(403).json({ error: 'Teacher is not assigned to this absence teaching assignment' });
         }
       } else if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
-        if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
-          return res.status(403).json({ error: 'Actor is outside the student school' });
+        if (actor.schoolId == null || absence.schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Actor is outside the historical event school' });
         }
-        const classInScope = classRecord.schoolId === actor.schoolId || await isApprovedClassForSchool(absence.classId, actor.schoolId);
+        const classInScope = classRecord.schoolId === absence.schoolId || (absence.schoolId != null && await isApprovedClassForSchool(absence.classId, absence.schoolId));
         if (!classInScope) return res.status(403).json({ error: 'Class is outside the actor school' });
       } else if (actor.role !== 'super_admin') {
         return res.status(403).json({ error: 'Not authorized to review justifications' });
@@ -15759,7 +16062,7 @@ export async function createApp() {
         }).where(eq(absences.id, id)).returning();
         if (!after) return { kind: 'not_found' as const };
         await appendAuditEvent(tx, {
-          ...createAuditEventContext(actor, student.schoolId, 'absence_justifications', 'review', 'absence_justification', id),
+          ...createAuditEventContext(actor, before.schoolId, 'absence_justifications', 'review', 'absence_justification', id),
           beforeValues: createAuditSnapshot(before, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
           afterValues: createAuditSnapshot(after, ['isJustified', 'justificationStatus', 'reviewedBy', 'reviewedAt']),
           result: 'success',
@@ -15884,11 +16187,11 @@ export async function createApp() {
         if (!classRecord) return { kind: 'class_not_found' as const };
 
         if (actor.role !== 'super_admin') {
-          if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
+          if (actor.schoolId == null || absence.schoolId !== actor.schoolId) {
             return { kind: 'outside_school' as const };
           }
-          const classInScope = classRecord.schoolId === actor.schoolId
-            || await isApprovedClassForSchool(absence.classId, actor.schoolId);
+          const classInScope = classRecord.schoolId === absence.schoolId
+            || (absence.schoolId != null && await isApprovedClassForSchool(absence.classId, absence.schoolId));
           if (!classInScope) return { kind: 'outside_class' as const };
         }
 
@@ -15912,7 +16215,7 @@ export async function createApp() {
             email: previousReviewer?.email ?? null,
             name: previousReviewer?.name ?? null,
           },
-          targetSchool: { id: student.schoolId },
+          targetSchool: { id: absence.schoolId },
           module: 'absence_justifications',
           action: 'preserve_rejected_justification_decision',
           resourceType: 'absence_justification',
@@ -15945,7 +16248,7 @@ export async function createApp() {
             name: actor.name ?? null,
             activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
           },
-          targetSchool: { id: student.schoolId },
+          targetSchool: { id: absence.schoolId },
           module: 'absence_justifications',
           action: 'approve_rejected_justification_after_reexamination',
           resourceType: 'absence_justification',
@@ -16246,15 +16549,15 @@ export async function createApp() {
         .innerJoin(schools, eq(schools.id, students.schoolId))
         .where(eq(students.id, absence.studentId));
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
-      if (absenceStudent.schoolId != null && await isSchoolSuspended(absenceStudent.schoolId)) {
+      if (absence.schoolId != null && await isSchoolSuspended(absence.schoolId)) {
         return res.status(423).json({
           error: schoolSuspendedMessage,
           code: 'SCHOOL_SUSPENDED',
-          schoolId: absenceStudent.schoolId,
+          schoolId: absence.schoolId,
         });
       }
 
-      const childStudentIds = await getParentChildStudentIds(parentId, absenceStudent.schoolId);
+      const childStudentIds = await getParentLinkedStudentIds(parentId);
       if (!childStudentIds.includes(absenceStudent.id)) {
         return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
       }
@@ -16283,7 +16586,7 @@ export async function createApp() {
           email: parent.email,
           name: parent.name,
           role: parent.role,
-          schoolId: absenceStudent.schoolId,
+          schoolId: absence.schoolId,
         };
         let submissionResult:
           | { kind: 'saved'; absence: typeof absences.$inferSelect; files: typeof absenceJustifications.$inferSelect[] }
@@ -16326,7 +16629,7 @@ export async function createApp() {
                 name: actor.name ?? null,
                 activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
               },
-              targetSchool: { id: absenceStudent.schoolId },
+              targetSchool: { id: absence.schoolId },
               module: 'absence_justifications',
               action: 'create',
               resourceType: 'absence_justification',
@@ -16348,7 +16651,7 @@ export async function createApp() {
               name: actor.name ?? null,
               activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
             },
-            targetSchool: { id: absenceStudent.schoolId },
+            targetSchool: { id: absence.schoolId },
             module: 'absence_justifications',
             action: 'create',
             resourceType: 'absence_justification',
@@ -16451,11 +16754,11 @@ export async function createApp() {
           return res.status(403).json({ error: 'Cannot justify absence for student outside your assigned classes' });
         }
       } else if (actor.role === 'parent') {
-        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        const childStudentIds = await getParentLinkedStudentIds(actor.id);
         if (!childStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot justify absence for student you do not represent' });
         }
-      } else if (actor.role !== 'super_admin' && actor.schoolId && absenceStudent.schoolId !== actor.schoolId) {
+      } else if (actor.role !== 'super_admin' && actor.schoolId && absence.schoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot justify absence in another school' });
       }
 
@@ -16506,7 +16809,7 @@ export async function createApp() {
               name: actor.name ?? null,
               activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
             },
-            targetSchool: { id: absenceStudent.schoolId },
+            targetSchool: { id: absence.schoolId },
             module: 'absence_justifications',
             action: 'create',
             resourceType: 'absence_justification',
@@ -16528,7 +16831,7 @@ export async function createApp() {
             name: actor.name ?? null,
             activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
           },
-          targetSchool: { id: absenceStudent.schoolId },
+          targetSchool: { id: absence.schoolId },
           module: 'absence_justifications',
           action: 'create',
           resourceType: 'absence_justification',
@@ -16598,14 +16901,14 @@ export async function createApp() {
       if (!absenceStudent) return res.status(404).json({ error: 'Student not found' });
       if (actor.role === 'teacher') {
         const assignmentContext = await getTeacherTeachingAssignmentContext(actor);
-        if (!assignmentContext || absenceStudent.schoolId !== assignmentContext.schoolId) {
+        if (!assignmentContext || absence.schoolId !== assignmentContext.schoolId) {
           return res.status(403).json({ error: 'Cannot access absence justification for this student' });
         }
         if (!canTeacherAccessAbsence(absence, assignmentContext.teacherId, assignmentContext.assignments)) {
           return res.status(403).json({ error: 'Cannot access absence justification for student outside your assigned classes' });
         }
       } else if (actor.role === 'parent') {
-        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        const childStudentIds = await getParentLinkedStudentIds(actor.id);
         if (!childStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot access absence justification for student you do not represent' });
         }
@@ -16621,10 +16924,10 @@ export async function createApp() {
             eq(userSchools.role, 'school_admin'),
             eq(userSchools.isActive, true),
           ));
-        if (!activeMembership || absenceStudent.schoolId !== actor.schoolId) {
+        if (!activeMembership || absence.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot access absence justification in another school' });
         }
-      } else if (actor.role !== 'super_admin' && actor.schoolId && absenceStudent.schoolId !== actor.schoolId) {
+      } else if (actor.role !== 'super_admin' && actor.schoolId && absence.schoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot access absence justification in another school' });
       }
 
@@ -16955,6 +17258,9 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (!['super_admin', 'school_admin', 'school_accountant', 'surveillant', 'teacher', 'parent'].includes(actor.role)) {
+        return res.status(403).json({ error: 'Not authorized to view subjects' });
+      }
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
@@ -16962,7 +17268,20 @@ export async function createApp() {
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
-          : schoolIdParam;
+          : actor.role === 'parent'
+            ? actor.schoolId
+            : schoolIdParam;
+
+      if (actor.role === 'parent') {
+        if (actor.schoolId == null) {
+          return res.status(403).json({ error: 'Parent school context is required' });
+        }
+        if (schoolIdParam != null && schoolIdParam !== actor.schoolId) {
+          return res.status(403).json({ error: 'Cannot access subjects outside the parent school context' });
+        }
+        const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        if (childStudentIds.length === 0) return res.json([]);
+      }
 
       if (actor.role === 'teacher') {
         if (!targetSchoolId) {
@@ -17016,7 +17335,10 @@ export async function createApp() {
         return;
       }
 
-      if (isSchoolOperationsRole(actor.role)) {
+      if (isSchoolOperationsRole(actor.role)
+        || actor.role === 'surveillant'
+        || actor.role === 'parent'
+        || (actor.role === 'super_admin' && targetSchoolId != null)) {
         if (!targetSchoolId) {
           return res.status(403).json({ error: 'School context is required' });
         }
@@ -17052,7 +17374,7 @@ export async function createApp() {
           schoolId: subject.schoolId ?? null,
         }));
 
-        if (approvedOnly) {
+        if (approvedOnly || actor.role === 'surveillant' || actor.role === 'parent') {
           result = result.filter((subject) => subject.status === 'approved');
         }
 
@@ -17883,6 +18205,13 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       let query = db
         .select({
@@ -17909,7 +18238,18 @@ export async function createApp() {
         .leftJoin(users, eq(teachers.userId, users.id))
         .leftJoin(subjects, eq(evaluations.subjectId, subjects.id));
 
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && requestedSchoolId != null) {
+        query = query.where(and(
+          eq(evaluations.schoolId, requestedSchoolId),
+          or(
+            eq(classes.schoolId, requestedSchoolId),
+            and(
+              sql`${classes.schoolId} IS NULL`,
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${requestedSchoolId} AND sc.status = 'approved')`,
+            ),
+          ),
+        )) as any;
+      } else if (actor.role !== 'super_admin') {
         // School admin, teacher, and others see only their school's evaluations.
         // Also allow global classes (classes.schoolId IS NULL) that have been
         // explicitly approved for this school via `school_classes`.
@@ -17925,6 +18265,9 @@ export async function createApp() {
             .where(inArray(students.id, childStudentIds));
 
           const childClassIds = childClassRows.map((row) => row.classId).filter((id): id is number => id != null);
+          parentClassSchoolPairs = new Set(childClassRows
+            .filter((row): row is typeof row & { classId: number } => row.classId != null)
+            .map((row) => `${row.classId}:${row.schoolId}`));
           const childSchoolIds = Array.from(new Set(childClassRows.map((row) => row.schoolId)));
           if (childClassIds.length === 0) {
             return res.json([]);
@@ -17952,6 +18295,9 @@ export async function createApp() {
       }
 
       let list = await query;
+      if (actor.role === 'parent' && parentClassSchoolPairs) {
+        list = list.filter((evaluation) => parentClassSchoolPairs!.has(`${evaluation.classId}:${evaluation.schoolId}`));
+      }
       if ((isSchoolOperationsRole(actor.role) || actor.role === 'teacher') && actor.schoolId != null) {
         const classApprovalById = new Map<number, Promise<boolean>>();
         const inSchoolScope = await Promise.all(list.map(async (evaluation) => {
@@ -18114,20 +18460,6 @@ export async function createApp() {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
       }
 
-      if (isSchoolOperationsRole(actor.role)) {
-        const [evaluationTeacher] = await db.select({ id: teachers.id, userId: teachers.userId, schoolId: teachers.schoolId })
-          .from(teachers).where(eq(teachers.id, resolvedTeacherId));
-        if (!evaluationTeacher) return res.status(400).json({ error: 'Invalid teacherId' });
-        if (evaluationTeacher.schoolId !== actor.schoolId) {
-          const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
-            eq(userSchools.userId, evaluationTeacher.userId),
-            eq(userSchools.schoolId, actor.schoolId!),
-            eq(userSchools.role, 'teacher'),
-          ));
-          if (!membership) return res.status(403).json({ error: 'Evaluation teacher is not associated with this school' });
-        }
-      }
-
       const evaluationDate = String(date || '');
       const parsedEvaluationDate = new Date(evaluationDate);
       if (!evaluationDate || Number.isNaN(parsedEvaluationDate.getTime())) {
@@ -18164,6 +18496,20 @@ export async function createApp() {
       }
       if (!(await isApprovedClassForSchool(parseInt(classId), evaluationSchoolId))) {
         return res.status(403).json({ error: 'Class is not approved for the evaluation school' });
+      }
+      const [evaluationTeacher] = await db.select({
+        id: teachers.id,
+        userId: teachers.userId,
+        schoolId: teachers.schoolId,
+      }).from(teachers).where(eq(teachers.id, resolvedTeacherId));
+      if (!evaluationTeacher) return res.status(400).json({ error: 'Invalid teacherId' });
+      if (evaluationTeacher.schoolId !== evaluationSchoolId) {
+        const [membership] = await db.select({ id: userSchools.id }).from(userSchools).where(and(
+          eq(userSchools.userId, evaluationTeacher.userId),
+          eq(userSchools.schoolId, evaluationSchoolId),
+          eq(userSchools.role, 'teacher'),
+        ));
+        if (!membership) return res.status(403).json({ error: 'Evaluation teacher is not associated with this school' });
       }
       const resolvedTerm = await resolveSchoolTermForClass({
         classId: parseInt(classId),
@@ -18512,6 +18858,13 @@ if (uniqueParentIds.length > 0) {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       let childStudentIds: number[] = [];
       let query = db
@@ -18539,14 +18892,24 @@ if (uniqueParentIds.length > 0) {
         .innerJoin(evaluations, eq(grades.evaluationId, evaluations.id))
         .leftJoin(subjects, eq(evaluations.subjectId, subjects.id));
 
-      if (actor.role !== 'super_admin') {
+      if (actor.role === 'super_admin' && requestedSchoolId != null) {
+        query = query.where(and(
+          eq(students.schoolId, requestedSchoolId),
+          eq(evaluations.schoolId, requestedSchoolId),
+        )) as any;
+      } else if (actor.role === 'super_admin') {
+        query = query.where(eq(students.schoolId, evaluations.schoolId)) as any;
+      } else if (actor.role !== 'super_admin') {
         if (actor.role === 'parent') {
           childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
             return res.json([]);
           }
 
-          query = query.where(inArray(grades.studentId, childStudentIds)) as any;
+          query = query.where(and(
+            inArray(grades.studentId, childStudentIds),
+            eq(students.schoolId, evaluations.schoolId),
+          )) as any;
         } else if (actor.role === 'teacher') {
           const scope = await getTeacherAuthorizationScope(actor);
           if (!scope) return res.json([]);
@@ -18652,6 +19015,9 @@ if (uniqueParentIds.length > 0) {
       if (!student) return res.status(404).json({ error: 'Student not found' });
       if (student.isActive !== true || student.classId !== evaluation.classId) {
         return res.status(403).json({ error: 'Student must be active and belong to the evaluation class' });
+      }
+      if (student.schoolId !== evaluation.schoolId) {
+        return res.status(403).json({ error: 'Student and evaluation must belong to the same school' });
       }
       // Validate that student was enrolled in the class before or at the evaluation timestamp.
       // Prefer the evaluation.createdAt timestamp if available, otherwise fall back to evaluation.date.
@@ -19148,6 +19514,13 @@ if (uniqueParentIds.length > 0) {
       if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         return res.status(403).json({ error: 'Verified school context is required' });
       }
+      const requestedSchoolId = actor.role === 'super_admin' && req.query.schoolId != null
+        ? Number(req.query.schoolId)
+        : null;
+      if (actor.role === 'super_admin' && req.query.schoolId != null
+        && (!Number.isInteger(requestedSchoolId) || requestedSchoolId! <= 0)) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
 
       // Build filter condition based on user role
       let schoolFilter: any = undefined;
@@ -19173,6 +19546,8 @@ if (uniqueParentIds.length > 0) {
       };
       if (actor.role !== 'super_admin' && actor.schoolId) {
         schoolFilter = actor.schoolId;
+      } else if (actor.role === 'super_admin') {
+        schoolFilter = requestedSchoolId;
       }
 
       if (actor.role === 'teacher') {
@@ -19185,8 +19560,13 @@ if (uniqueParentIds.length > 0) {
       }
 
       let parentProfile: { id: number; studentId?: number | null } | null = null;
+      let parentAttendanceStudentIds: number[] = [];
+      let parentProfileIds: number[] = [];
       if (actor.role === 'parent') {
         parentChildIds = await getParentChildStudentIds(actor.id, actor.schoolId);
+        parentAttendanceStudentIds = await getParentLinkedStudentIds(actor.id);
+        parentProfileIds = (await db.select({ id: parents.id }).from(parents)
+          .where(eq(parents.userId, actor.id ?? -1))).map((profile) => profile.id);
       }
 
       const normalizeGenderValue = (value: unknown): 'male' | 'female' | 'unknown' => {
@@ -19207,7 +19587,7 @@ if (uniqueParentIds.length > 0) {
       let chartAbsencesQuery = db.select({ classId: absences.classId }).from(absences);
 
       if (actor.role === 'parent') {
-        if (!parentChildIds || parentChildIds.length === 0) {
+        if ((!parentChildIds || parentChildIds.length === 0) && parentAttendanceStudentIds.length === 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, absenceDeclarationStats: emptyAbsenceDeclarationStats, absenceJustificationStats: emptyAbsenceJustificationStats, ageStatsAsOf, ageStatsByClass: [] });
         }
 
@@ -19219,7 +19599,7 @@ if (uniqueParentIds.length > 0) {
           .from(classes)
           .innerJoin(students, eq(classes.id, students.classId))
           .where(inArray(students.id, parentChildIds)) as any;
-        chartAbsencesQuery = chartAbsencesQuery.where(inArray(absences.studentId, parentChildIds)) as any;
+        chartAbsencesQuery = chartAbsencesQuery.where(inArray(absences.studentId, parentAttendanceStudentIds)) as any;
         classCountQuery = db
           .select({ count: sql<number>`count(distinct ${classes.id})::integer` })
           .from(classes)
@@ -19228,7 +19608,7 @@ if (uniqueParentIds.length > 0) {
         absenceCountQuery = db
           .select({ count: sql<number>`count(*)::integer` })
           .from(absences)
-          .where(inArray(absences.studentId, parentChildIds)) as any;
+          .where(inArray(absences.studentId, parentAttendanceStudentIds)) as any;
       } else if (actor.role === 'teacher') {
         if (!teacherClassIds || teacherClassIds.length === 0) {
           return res.json({ stats: { totalStudents: 0, totalAbsences: 0, totalClasses: 0, attendanceRate: 100, maleStudents: 0, femaleStudents: 0 }, recentAbsences: [], recentGrades: [], absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 }, absenceDeclarationStats: emptyAbsenceDeclarationStats, absenceJustificationStats: emptyAbsenceJustificationStats, ageStatsAsOf, ageStatsByClass: [] });
@@ -19252,7 +19632,7 @@ if (uniqueParentIds.length > 0) {
             teacherAssignmentIds.length > 0
               ? inArray(absences.teachingAssignmentId, teacherAssignmentIds)
               : sql`false`,
-            eq(students.schoolId, actor.schoolId!),
+            eq(absences.schoolId, actor.schoolId!),
           )) as any;
         classCountQuery = db
           .select({ count: sql<number>`count(*)::integer` })
@@ -19270,25 +19650,32 @@ if (uniqueParentIds.length > 0) {
             teacherAssignmentIds.length > 0
               ? inArray(absences.teachingAssignmentId, teacherAssignmentIds)
               : sql`false`,
-            eq(students.schoolId, actor.schoolId!),
+            eq(absences.schoolId, actor.schoolId!),
           )) as any;
       } else if (schoolFilter) {
         studentCountQuery = studentCountQuery.where(and(eq(students.isActive, true), eq(students.schoolId, schoolFilter))) as any;
         studentGenderQuery = studentGenderQuery.where(and(eq(students.isActive, true), eq(students.schoolId, schoolFilter))) as any;
-        chartClassesQuery = chartClassesQuery.where(eq(classes.schoolId, schoolFilter)) as any;
+        const selectedSchoolClassCondition = or(
+          eq(classes.schoolId, schoolFilter),
+          and(
+            isNull(classes.schoolId),
+            sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${schoolFilter} AND sc.status = 'approved')`,
+          ),
+        )!;
+        chartClassesQuery = chartClassesQuery.where(selectedSchoolClassCondition) as any;
         chartStudentsQuery = chartStudentsQuery.where(eq(students.schoolId, schoolFilter)) as any;
-        classCountQuery = classCountQuery.where(eq(classes.schoolId, schoolFilter)) as any;
+        classCountQuery = classCountQuery.where(selectedSchoolClassCondition) as any;
         // For absences, filter through students
         absenceCountQuery = db
           .select({ count: sql<number>`count(*)::integer` })
           .from(absences)
           .innerJoin(students, eq(absences.studentId, students.id))
-          .where(eq(students.schoolId, schoolFilter)) as any;
+          .where(eq(absences.schoolId, schoolFilter)) as any;
         chartAbsencesQuery = db
           .select({ classId: absences.classId })
           .from(absences)
           .innerJoin(students, eq(absences.studentId, students.id))
-          .where(eq(students.schoolId, schoolFilter)) as any;
+          .where(eq(absences.schoolId, schoolFilter)) as any;
       } else {
         studentCountQuery = studentCountQuery.where(eq(students.isActive, true)) as any;
         studentGenderQuery = studentGenderQuery.where(eq(students.isActive, true)) as any;
@@ -19318,7 +19705,13 @@ if (uniqueParentIds.length > 0) {
         .from(students)
         .innerJoin(classes, and(
           eq(classes.id, students.classId),
-          or(isNull(classes.schoolId), eq(classes.schoolId, students.schoolId)),
+          or(
+            eq(classes.schoolId, students.schoolId),
+            and(
+              isNull(classes.schoolId),
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${students.schoolId} AND sc.status = 'approved')`,
+            ),
+          ),
         ))
         .where(and(...ageStudentFilters));
       const ageStatsByClass = buildClassAgeStats(
@@ -19354,7 +19747,7 @@ if (uniqueParentIds.length > 0) {
         if (!parentChildIds || parentChildIds.length === 0) {
           absenceStatusCountsQuery = db.select({ justified: sql<number>`0::integer`, unjustified: sql<number>`0::integer`, pending: sql<number>`0::integer`, declared: sql<number>`0::integer` }) as any;
         } else {
-          absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, parentChildIds)) as any;
+          absenceStatusCountsQuery = absenceStatusCountsQuery.where(inArray(absences.studentId, parentAttendanceStudentIds)) as any;
         }
       } else if (actor.role === 'teacher') {
         if (teacherAssignmentIds.length === 0) {
@@ -19371,7 +19764,7 @@ if (uniqueParentIds.length > 0) {
             .innerJoin(students, eq(absences.studentId, students.id))
             .where(and(
               inArray(absences.teachingAssignmentId, teacherAssignmentIds),
-              eq(students.schoolId, actor.schoolId!),
+              eq(absences.schoolId, actor.schoolId!),
             )) as any;
         }
       } else if (schoolFilter) {
@@ -19384,7 +19777,7 @@ if (uniqueParentIds.length > 0) {
           })
           .from(absences)
           .innerJoin(students, eq(absences.studentId, students.id))
-          .where(eq(students.schoolId, schoolFilter)) as any;
+          .where(eq(absences.schoolId, schoolFilter)) as any;
       }
 
       const absenceStatusCountsResult = await absenceStatusCountsQuery;
@@ -19406,17 +19799,20 @@ if (uniqueParentIds.length > 0) {
       const absenceDeclarationStatsBaseQuery = db
         .select(absenceDeclarationStatsSelection)
         .from(absenceDeclarations)
-        .innerJoin(students, eq(students.id, absenceDeclarations.studentId));
+        .innerJoin(students, eq(students.id, absenceDeclarations.studentId))
+        .innerJoin(parents, eq(parents.id, absenceDeclarations.parentId));
       const absenceDeclarationStatsRows = actor.role === 'super_admin'
-        ? await absenceDeclarationStatsBaseQuery
+        ? schoolFilter != null
+          ? await absenceDeclarationStatsBaseQuery.where(eq(absenceDeclarations.schoolId, schoolFilter))
+          : await absenceDeclarationStatsBaseQuery
         : actor.role === 'parent'
-          ? parentChildIds?.length
-            ? await absenceDeclarationStatsBaseQuery.where(inArray(absenceDeclarations.studentId, parentChildIds))
+          ? parentProfileIds.length
+            ? await absenceDeclarationStatsBaseQuery.where(inArray(absenceDeclarations.parentId, parentProfileIds))
             : await absenceDeclarationStatsBaseQuery.where(sql`false`)
           : actor.role === 'teacher'
             ? await absenceDeclarationStatsBaseQuery.where(sql`false`)
             : actor.schoolId != null
-              ? await absenceDeclarationStatsBaseQuery.where(eq(students.schoolId, actor.schoolId))
+              ? await absenceDeclarationStatsBaseQuery.where(eq(absenceDeclarations.schoolId, actor.schoolId))
               : await absenceDeclarationStatsBaseQuery.where(sql`false`);
       const absenceDeclarationStatsRow = absenceDeclarationStatsRows[0];
       const absenceDeclarationStats = {
@@ -19439,20 +19835,22 @@ if (uniqueParentIds.length > 0) {
         .from(absences)
         .innerJoin(students, eq(students.id, absences.studentId));
       const absenceJustificationStatsRows = actor.role === 'super_admin'
-        ? await absenceJustificationStatsBaseQuery
+        ? schoolFilter != null
+          ? await absenceJustificationStatsBaseQuery.where(eq(absences.schoolId, schoolFilter))
+          : await absenceJustificationStatsBaseQuery
         : actor.role === 'parent'
           ? parentChildIds?.length
-            ? await absenceJustificationStatsBaseQuery.where(inArray(absences.studentId, parentChildIds))
+            ? await absenceJustificationStatsBaseQuery.where(inArray(absences.studentId, parentAttendanceStudentIds))
             : await absenceJustificationStatsBaseQuery.where(sql`false`)
           : actor.role === 'teacher'
             ? teacherAssignmentIds.length > 0
               ? await absenceJustificationStatsBaseQuery.where(and(
                 inArray(absences.teachingAssignmentId, teacherAssignmentIds),
-                eq(students.schoolId, actor.schoolId!),
+                eq(absences.schoolId, actor.schoolId!),
               ))
               : await absenceJustificationStatsBaseQuery.where(sql`false`)
             : actor.schoolId != null
-              ? await absenceJustificationStatsBaseQuery.where(eq(students.schoolId, actor.schoolId))
+              ? await absenceJustificationStatsBaseQuery.where(eq(absences.schoolId, actor.schoolId))
               : await absenceJustificationStatsBaseQuery.where(sql`false`);
       const absenceJustificationStatsRow = absenceJustificationStatsRows[0];
       const absenceJustificationStats = {
@@ -19471,6 +19869,17 @@ if (uniqueParentIds.length > 0) {
       }, { maleStudents: 0, femaleStudents: 0 });
       const totalAbsences = absenceCountResult[0]?.count || 0;
       const totalClasses = classCountResult[0]?.count || 0;
+      let unknownHistoricalAttendanceCount = 0;
+      if (actor.role === 'super_admin' && schoolFilter == null) {
+        const [unknownAbsenceCount, unknownLateArrivalCount, unknownDeclarationCount] = await Promise.all([
+          db.select({ count: sql<number>`count(*)::integer` }).from(absences).where(isNull(absences.schoolId)),
+          db.select({ count: sql<number>`count(*)::integer` }).from(lateArrivals).where(isNull(lateArrivals.schoolId)),
+          db.select({ count: sql<number>`count(*)::integer` }).from(absenceDeclarations).where(isNull(absenceDeclarations.schoolId)),
+        ]);
+        unknownHistoricalAttendanceCount = Number(unknownAbsenceCount[0]?.count ?? 0)
+          + Number(unknownLateArrivalCount[0]?.count ?? 0)
+          + Number(unknownDeclarationCount[0]?.count ?? 0);
+      }
 
       const studentsByClass = chartStudentsRows.reduce((acc: Map<number, number>, row: any) => {
         if (row.classId != null) {
@@ -19502,6 +19911,7 @@ if (uniqueParentIds.length > 0) {
         .select({
           id: absences.id,
           studentId: absences.studentId,
+          schoolId: absences.schoolId,
           studentName: sql<string>`concat(${students.lastName}, ' ', ${students.firstName})`,
           date: absences.date,
           isJustified: absences.isJustified,
@@ -19515,16 +19925,16 @@ if (uniqueParentIds.length > 0) {
         .limit(5);
 
       if (actor.role === 'parent') {
-        recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, parentChildIds || [])) as any;
+        recentAbsencesQuery = recentAbsencesQuery.where(inArray(absences.studentId, parentAttendanceStudentIds)) as any;
       } else if (actor.role === 'teacher') {
         recentAbsencesQuery = recentAbsencesQuery.where(and(
           teacherAssignmentIds.length > 0
             ? inArray(absences.teachingAssignmentId, teacherAssignmentIds)
             : sql`false`,
-          eq(students.schoolId, actor.schoolId!),
+          eq(absences.schoolId, actor.schoolId!),
         )) as any;
       } else if (schoolFilter) {
-        recentAbsencesQuery = recentAbsencesQuery.where(eq(students.schoolId, schoolFilter)) as any;
+        recentAbsencesQuery = recentAbsencesQuery.where(eq(absences.schoolId, schoolFilter)) as any;
       }
 
       const recentAbsences = await recentAbsencesQuery;
@@ -19550,7 +19960,10 @@ if (uniqueParentIds.length > 0) {
         .limit(5);
 
       if (actor.role === 'parent') {
-        recentGradesQuery = recentGradesQuery.where(inArray(grades.studentId, parentChildIds || [])) as any;
+        recentGradesQuery = recentGradesQuery.where(and(
+          inArray(grades.studentId, parentChildIds || []),
+          eq(students.schoolId, evaluations.schoolId),
+        )) as any;
       } else if (actor.role === 'teacher') {
         const authorizedStudentIds = teacherScope
           ? await getScopedTeacherReadableStudentIds(teacherScope, teacherClassIds || [])
@@ -19558,9 +19971,15 @@ if (uniqueParentIds.length > 0) {
         recentGradesQuery = recentGradesQuery.where(and(
           inArray(grades.studentId, authorizedStudentIds),
           eq(students.schoolId, actor.schoolId!),
+          eq(evaluations.schoolId, students.schoolId),
         )) as any;
       } else if (schoolFilter) {
-        recentGradesQuery = recentGradesQuery.where(eq(students.schoolId, schoolFilter)) as any;
+        recentGradesQuery = recentGradesQuery.where(and(
+          eq(students.schoolId, schoolFilter),
+          eq(evaluations.schoolId, schoolFilter),
+        )) as any;
+      } else if (actor.role === 'super_admin') {
+        recentGradesQuery = recentGradesQuery.where(eq(students.schoolId, evaluations.schoolId)) as any;
       }
 
       let recentGrades = await recentGradesQuery;
@@ -19578,6 +19997,7 @@ if (uniqueParentIds.length > 0) {
         attendanceRate: Math.round(attendanceRate * 100) / 100,
         maleStudents: genderCounts.maleStudents,
         femaleStudents: genderCounts.femaleStudents,
+        unknownHistoricalAttendanceCount,
       };
 
       res.json({
@@ -19710,11 +20130,9 @@ if (uniqueParentIds.length > 0) {
         .where(and(eq(notificationAttachments.id, attachmentId), eq(notificationAttachments.notificationId, notificationId)));
       if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
 
-      const [recipient] = await db.select({ id: users.id, schoolId: users.schoolId }).from(users).where(eq(users.id, notification.userId));
       const isOwner = notification.userId === actor.id;
-      const isSchoolAdminAllowed = isSchoolOperationsRole(actor.role) && actor.schoolId != null && recipient?.schoolId === actor.schoolId;
       const isSuperAdminAllowed = actor.role === 'super_admin';
-      if (!isOwner && !isSchoolAdminAllowed && !isSuperAdminAllowed) {
+      if (!isOwner && !isSuperAdminAllowed) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -19804,6 +20222,20 @@ if (uniqueParentIds.length > 0) {
       if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         return rejectAfterUpload(403, 'Forbidden: missing school context');
       }
+      const requestedSchoolId = rawBody.schoolId == null || rawBody.schoolId === ''
+        ? null
+        : parsePositiveInteger(rawBody.schoolId);
+      if (rawBody.schoolId != null && rawBody.schoolId !== '' && requestedSchoolId == null) {
+        return rejectAfterUpload(400, 'Invalid schoolId');
+      }
+      if (isSchoolOperationsRole(actor.role)
+        && requestedSchoolId != null
+        && requestedSchoolId !== actor.schoolId) {
+        return rejectAfterUpload(403, 'Cannot send notifications outside the actor school');
+      }
+      const recipientSchoolId = isSchoolOperationsRole(actor.role)
+        ? actor.schoolId!
+        : requestedSchoolId ?? undefined;
 
       let targetUserIds: number[] = [];
 
@@ -19853,27 +20285,36 @@ if (uniqueParentIds.length > 0) {
 
         const hasActiveParentFunction = targetMemberships.some((membership) => (
           membership.role === 'parent'
-          && (!isSchoolOperationsRole(actor.role) || membership.schoolId === actor.schoolId)
+          && (recipientSchoolId == null || membership.schoolId === recipientSchoolId)
         ));
-        if (hasActiveParentFunction) {
-          const activeParentUserIds = await resolveActiveParentUserIds(
-            isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : undefined,
-          );
-          if (!activeParentUserIds.includes(targetUser.id)) return rejectAfterUpload(403, 'Parent has no active students in this school');
+        if (!hasActiveParentFunction) {
+          return rejectAfterUpload(403, 'Target user is not a parent in the selected school');
         }
+        const activeParentUserIds = await resolveActiveParentUserIds(
+          recipientSchoolId == null ? undefined : { schoolId: recipientSchoolId },
+        );
+        if (!activeParentUserIds.includes(targetUser.id)) return rejectAfterUpload(403, 'Parent has no active students in this school');
 
         targetUserIds.push(targetUser.id);
       } else if (classId) {
+        if (actor.role === 'super_admin' && recipientSchoolId == null) {
+          return rejectAfterUpload(400, 'Select a school before sending a class notification');
+        }
         const parsedClassId = parseInt(String(classId), 10);
         if (!Number.isInteger(parsedClassId)) return rejectAfterUpload(400, 'Invalid class');
+        if (recipientSchoolId != null && !(await isApprovedClassForSchool(parsedClassId, recipientSchoolId))) {
+          return rejectAfterUpload(403, 'Class is not associated with the selected school');
+        }
 
         targetUserIds = await resolveActiveParentUserIds({
           classId: parsedClassId,
-          ...(isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : {}),
+          ...(recipientSchoolId != null ? { schoolId: recipientSchoolId } : {}),
         });
       } else {
         // Send to all parents (or all parents in school if school_admin)
-        targetUserIds = await resolveActiveParentUserIds(isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : undefined);
+        targetUserIds = await resolveActiveParentUserIds(
+          recipientSchoolId == null ? undefined : { schoolId: recipientSchoolId },
+        );
       }
 
       try {

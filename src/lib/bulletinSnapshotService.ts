@@ -163,8 +163,8 @@ export interface BulletinSnapshotContext {
     startDate?: string | null;
     endDate?: string | null;
   } | null>;
-  getUnjustifiedAbsencesCount(studentId: number, classId: number, startDate: string, endDate: string): Promise<number>;
-  getUnjustifiedLateArrivalMinutes(studentId: number, classId: number, startDate: string, endDate: string): Promise<number>;
+  getUnjustifiedAbsencesCount(studentId: number, classId: number, schoolId: number, startDate: string, endDate: string): Promise<number>;
+  getUnjustifiedLateArrivalMinutes(studentId: number, classId: number, schoolId: number, startDate: string, endDate: string): Promise<number>;
   getClassStudents(classId: number, schoolId: number): Promise<Array<{ id: number; classId: number; schoolId: number; firstName: string; lastName: string }>>;
   getClassTermEvaluations(classId: number, termId: number, schoolId: number): Promise<BulletinEvaluationLike[]>;
   getGradesForStudents(studentIds: number[], evaluationIds: number[]): Promise<BulletinGradeLike[]>;
@@ -181,6 +181,7 @@ const countUnjustifiedAbsences = async (
   tx: any,
   studentId: number,
   classId: number,
+  schoolId: number,
   startDate: string,
   endDate: string,
 ): Promise<number> => {
@@ -189,6 +190,7 @@ const countUnjustifiedAbsences = async (
   }).from(absences).where(and(
     eq(absences.studentId, studentId),
     eq(absences.classId, classId),
+    eq(absences.schoolId, schoolId),
     sql`${absences.date} >= ${startDate}`,
     sql`${absences.date} <= ${endDate}`,
     unjustifiedAbsenceCondition(),
@@ -200,6 +202,7 @@ const countUnjustifiedLateArrivalMinutes = async (
   tx: any,
   studentId: number,
   classId: number,
+  schoolId: number,
   startDate: string,
   endDate: string,
 ): Promise<number> => {
@@ -208,6 +211,7 @@ const countUnjustifiedLateArrivalMinutes = async (
   }).from(lateArrivals).where(and(
     eq(lateArrivals.studentId, studentId),
     eq(lateArrivals.classId, classId),
+    eq(lateArrivals.schoolId, schoolId),
     sql`${lateArrivals.date} >= ${startDate}`,
     sql`${lateArrivals.date} <= ${endDate}`,
     unjustifiedLateArrivalCondition(),
@@ -952,11 +956,11 @@ export const createDbBulletinSnapshotPersistence = (): BulletinSnapshotPersisten
           }).from(schoolTerms).where(eq(schoolTerms.id, termId));
           return row ?? null;
         },
-        async getUnjustifiedAbsencesCount(studentId, classId, startDate, endDate) {
-          return countUnjustifiedAbsences(tx, studentId, classId, startDate, endDate);
+        async getUnjustifiedAbsencesCount(studentId, classId, schoolId, startDate, endDate) {
+          return countUnjustifiedAbsences(tx, studentId, classId, schoolId, startDate, endDate);
         },
-        async getUnjustifiedLateArrivalMinutes(studentId, classId, startDate, endDate) {
-          return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, startDate, endDate);
+        async getUnjustifiedLateArrivalMinutes(studentId, classId, schoolId, startDate, endDate) {
+          return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, schoolId, startDate, endDate);
         },
         async getClassStudents(classId, schoolId) {
           await assertSchoolActiveInTransaction(tx, schoolId);
@@ -1333,11 +1337,11 @@ export const registerBulletinGenerateRoute = (
                 }).from(schoolTerms).where(eq(schoolTerms.id, termId));
                 return row ?? null;
               },
-              async getUnjustifiedAbsencesCount(studentId, classId, startDate, endDate) {
-                return countUnjustifiedAbsences(tx, studentId, classId, startDate, endDate);
+              async getUnjustifiedAbsencesCount(studentId, classId, schoolId, startDate, endDate) {
+                return countUnjustifiedAbsences(tx, studentId, classId, schoolId, startDate, endDate);
               },
-              async getUnjustifiedLateArrivalMinutes(studentId, classId, startDate, endDate) {
-                return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, startDate, endDate);
+              async getUnjustifiedLateArrivalMinutes(studentId, classId, schoolId, startDate, endDate) {
+                return countUnjustifiedLateArrivalMinutes(tx, studentId, classId, schoolId, startDate, endDate);
               },
               async getClassStudents(classId, schoolId) {
                 if (actor) {
@@ -1730,12 +1734,14 @@ export const generateBulletinSnapshot = async (
     const unjustifiedAbsencesCount = await ctx.getUnjustifiedAbsencesCount(
       student.id,
       student.classId,
+      student.schoolId,
       termStartDateSnapshot,
       termEndDateSnapshot,
     );
     const unjustifiedLateArrivalMinutes = await ctx.getUnjustifiedLateArrivalMinutes(
       student.id,
       student.classId,
+      student.schoolId,
       termStartDateSnapshot,
       termEndDateSnapshot,
     );

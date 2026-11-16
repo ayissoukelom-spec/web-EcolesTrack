@@ -118,7 +118,7 @@ export interface Teacher {
   isDeleted?: boolean;
   phone?: string;
   specialization?: string | string[];
-  schoolId: number;
+  schoolId?: number | null;
   schoolIds?: number[];
   classIds?: number[];
   teachingClassIds?: number[];
@@ -264,6 +264,7 @@ export interface Grade {
 export interface Absence {
   id: number;
   studentId: number;
+  schoolId?: number | null;
   studentName: string;
   classId: number;
   className: string;
@@ -291,7 +292,7 @@ export interface AbsenceDeclaration {
   parentName?: string | null;
   classId: number | null;
   className?: string | null;
-  schoolId: number | null;
+  schoolId?: number | null;
   date: string;
   startTime: string;
   endTime: string;
@@ -306,6 +307,7 @@ export interface AbsenceDeclaration {
 export interface LateArrival {
   id: number;
   studentId: number;
+  schoolId?: number | null;
   teachingAssignmentId?: number | null;
   studentName?: string;
   classId: number;
@@ -468,6 +470,7 @@ export interface BulletinDetail extends BulletinListItem {
 }
 
 export interface BulletinListFilters {
+  schoolId?: number;
   classId?: number;
   studentId?: number;
   termId?: number;

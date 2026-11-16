@@ -12,6 +12,7 @@ interface DashboardStats {
   maleStudents?: number;
   femaleStudents?: number;
   unknownGenderStudents?: number;
+  unknownHistoricalAttendanceCount?: number;
 }
 
 export interface LoginStats {

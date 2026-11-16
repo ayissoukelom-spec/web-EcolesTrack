@@ -50,6 +50,7 @@ interface DashboardViewProps {
     attendanceRate: number;
     maleStudents?: number;
     femaleStudents?: number;
+    unknownHistoricalAttendanceCount?: number;
   };
   recentAbsences: any[];
   recentGrades: any[];
@@ -231,6 +232,11 @@ export default function DashboardView({
               <span className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-rose-100">Absences enregistrées</span>
               <p className="text-4xl font-black leading-none text-white">{stats.totalAbsences}</p>
               <p className="text-xs font-semibold tracking-tight text-rose-50/90">Depuis l’ouverture de l’année</p>
+              {userRole === 'super_admin' && (stats.unknownHistoricalAttendanceCount ?? 0) > 0 && (
+                <p className="text-xs font-bold text-amber-100">
+                  Événements d’établissement historique inconnu : {stats.unknownHistoricalAttendanceCount}
+                </p>
+              )}
             </div>
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/25 bg-white/10 text-white shadow-inner">
               <AlertTriangle className="h-6 w-6" />

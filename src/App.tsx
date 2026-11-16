@@ -175,6 +175,9 @@ export default function App() {
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
+  const dataRefreshSequenceRef = useRef(0);
+  const dataScopeRef = useRef('');
+  dataScopeRef.current = `${currentRole}:${currentRole === 'super_admin' ? superAdminSchoolFilterId ?? 'all' : currentSchoolId ?? 'none'}`;
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
   const [expandedNavigationGroups, setExpandedNavigationGroups] = useState({
     absences: true,
@@ -249,6 +252,7 @@ export default function App() {
     setTeacherControlRequestedTab(tab === 'requests' ? 'requests' : 'sessions');
   }, []);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [loadedDataScope, setLoadedDataScope] = useState('');
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
   const importCredentialsSessionRef = useRef(`${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`);
@@ -538,6 +542,10 @@ export default function App() {
   const fetchAllData = async (showSpinner = true) => {
     if (!role || (role !== 'super_admin' && activeSchoolId == null)) return;
 
+    const requestId = ++dataRefreshSequenceRef.current;
+    const requestScope = dataScopeRef.current;
+    const isCurrentRequest = () => requestId === dataRefreshSequenceRef.current
+      && requestScope === dataScopeRef.current;
     const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
     if (showSpinner) setIsSyncing(true);
     setErrorMsg(null);
@@ -549,9 +557,14 @@ export default function App() {
           console.warn('Auth sync warning ignored in UI:', err);
         }
       });
+      if (!isCurrentRequest()) return;
 
       // 2. Load dashboard summary & role details
-      const summary = await apiFetch('/api/dashboard/summary');
+      const schoolQuery = currentRole === 'super_admin' && superAdminSchoolFilterId != null
+        ? `?schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`
+        : '';
+      const summary = await apiFetch(`/api/dashboard/summary${schoolQuery}`);
+      if (!isCurrentRequest()) return;
       console.log('RAW API RESPONSE DASHBOARD:', summary);
       console.log('chartData reçu:', (summary as any)?.chartData);
       if (summary && typeof summary === 'object') {
@@ -612,45 +625,55 @@ export default function App() {
       }
 
       // 3. Load other lists for CRUD and management tabs
+      const withSchoolFilter = (endpoint: string) => {
+        if (currentRole !== 'super_admin' || superAdminSchoolFilterId == null) return endpoint;
+        const separator = endpoint.includes('?') ? '&' : '?';
+        return `${endpoint}${separator}schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`;
+      };
       const classesEndpoint = currentRole !== 'super_admin' && currentSchoolId != null
         ? `/api/classes?schoolId=${currentSchoolId}`
-        : '/api/classes';
-      const studentsEndpoint = '/api/students?includeFormer=true';
+        : withSchoolFilter('/api/classes');
+      const studentsEndpoint = withSchoolFilter('/api/students?includeFormer=true');
       const homeroomClassesEndpoint = currentRole === 'teacher' ? '/api/my-homeroom-classes' : null;
       const disabledUsersEndpoint = currentRole === 'super_admin'
         ? '/api/simulation/users?includeDeleted=true'
         : null;
-      const endpoints = [
-        '/api/schools',
-        '/api/academic-years',
-        classesEndpoint,
-        '/api/teachers',
-        studentsEndpoint,
-        '/api/parents',
-        '/api/absences',
-        '/api/absence-declarations',
-        '/api/late-arrivals',
-        '/api/absence-controls',
-        '/api/evaluations',
-        '/api/grades',
-        '/api/notifications',
-        '/api/subjects',
-        '/api/subjects?approvedOnly=true',
-        '/api/subject-types',
-        '/api/education/levels',
-        '/api/simulation/users',
-        ...(disabledUsersEndpoint ? [disabledUsersEndpoint] : []),
-        ...(homeroomClassesEndpoint ? [homeroomClassesEndpoint] : []),
+      const endpointRoutes = [
+        { key: '/api/schools', url: '/api/schools' },
+        { key: '/api/academic-years', url: withSchoolFilter('/api/academic-years') },
+        { key: classesEndpoint, url: classesEndpoint },
+        { key: '/api/teachers', url: withSchoolFilter('/api/teachers') },
+        { key: studentsEndpoint, url: studentsEndpoint },
+        { key: '/api/parents', url: withSchoolFilter('/api/parents') },
+        { key: '/api/absences', url: withSchoolFilter('/api/absences') },
+        { key: '/api/absence-declarations', url: withSchoolFilter('/api/absence-declarations') },
+        { key: '/api/late-arrivals', url: withSchoolFilter('/api/late-arrivals') },
+        { key: '/api/absence-controls', url: withSchoolFilter('/api/absence-controls') },
+        { key: '/api/evaluations', url: withSchoolFilter('/api/evaluations') },
+        { key: '/api/grades', url: withSchoolFilter('/api/grades') },
+        { key: '/api/notifications', url: withSchoolFilter('/api/notifications') },
+        { key: '/api/subjects', url: withSchoolFilter('/api/subjects') },
+        { key: '/api/subjects?approvedOnly=true', url: withSchoolFilter('/api/subjects?approvedOnly=true') },
+        { key: '/api/subject-types', url: '/api/subject-types' },
+        { key: '/api/education/levels', url: '/api/education/levels' },
+        { key: '/api/simulation/users', url: '/api/simulation/users' },
+        ...(disabledUsersEndpoint ? [{ key: disabledUsersEndpoint, url: disabledUsersEndpoint }] : []),
+        ...(homeroomClassesEndpoint ? [{ key: homeroomClassesEndpoint, url: homeroomClassesEndpoint }] : []),
       ];
-
-      const promises = endpoints.map(e => apiFetch(e).catch((err) => ({ __error: true, error: err })));
+      const endpoints = endpointRoutes.map(({ key }) => key);
+      const promises = endpointRoutes.map(({ url }) =>
+        apiFetch(url).catch((err) => ({ __error: true, error: err })),
+      );
       const canLoadLateArrivalJustifications = ['parent', 'teacher', 'surveillant', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole);
       const [results, lateArrivalJustifications] = await Promise.all([
         Promise.all(promises),
         canLoadLateArrivalJustifications
-          ? fetchLateArrivalJustifications().catch((err) => ({ __error: true, error: err }))
+          ? fetchLateArrivalJustifications(
+            currentRole === 'super_admin' ? superAdminSchoolFilterId ?? undefined : undefined,
+          ).catch((err) => ({ __error: true, error: err }))
           : Promise.resolve([] as LateArrivalJustificationListItem[]),
       ]);
+      if (!isCurrentRequest()) return;
 
       const map = Object.fromEntries(endpoints.map((e, i) => [e, results[i]]));
       logTeachersPayload('RAW_API_RESPONSE_/api/teachers', results[endpoints.indexOf('/api/teachers')]);
@@ -679,7 +702,18 @@ export default function App() {
       }
       if (Array.isArray(map['/api/absence-declarations'])) setAbsenceDeclarationsList(map['/api/absence-declarations']);
       if (Array.isArray(map['/api/late-arrivals'])) setLateArrivals(map['/api/late-arrivals']);
-      if (Array.isArray(lateArrivalJustifications)) setLateArrivalJustificationsList(lateArrivalJustifications);
+      const selectedSchoolLateArrivalIds = new Set(
+        currentRole === 'super_admin' && superAdminSchoolFilterId != null && Array.isArray(map['/api/late-arrivals'])
+          ? map['/api/late-arrivals'].map((arrival: any) => arrival.id)
+          : [],
+      );
+      if (Array.isArray(lateArrivalJustifications)) {
+        setLateArrivalJustificationsList(
+          currentRole === 'super_admin' && superAdminSchoolFilterId != null
+            ? lateArrivalJustifications.filter((item) => selectedSchoolLateArrivalIds.has(item.lateArrival.id))
+            : lateArrivalJustifications,
+        );
+      }
       else if (lateArrivalJustifications?.__error) {
         console.error('Failed to load late-arrival justifications:', lateArrivalJustifications.error);
         setErrorMsg(getUiErrorMessage(
@@ -718,7 +752,10 @@ export default function App() {
         setAuditEvents([]);
         setAuditPage(null);
       }
+      if (!isCurrentRequest()) return;
+      setLoadedDataScope(requestScope);
     } catch (err: any) {
+      if (!isCurrentRequest()) return;
       const uiMessage = getUiErrorMessage(err, 'Impossible de charger les données EcoleTrack.');
       if (uiMessage) {
         setErrorMsg(uiMessage);
@@ -726,7 +763,7 @@ export default function App() {
       console.error('Error hydrating EcoleTrack database:', err);
       console.warn('[students-load] keeping existing student list because the refresh failed.', err);
     } finally {
-      setIsSyncing(false);
+      if (isCurrentRequest()) setIsSyncing(false);
     }
   };
 
@@ -741,14 +778,16 @@ export default function App() {
     if (currentRole !== 'super_admin') return;
     const schoolId = superAdminSchoolFilterId;
     const endpoint = schoolId ? `/api/classes?schoolId=${schoolId}` : '/api/classes';
+    let cancelled = false;
     (async () => {
       try {
         const payload = await apiFetch(endpoint);
-        setClassesList(Array.isArray(payload) ? payload : []);
+        if (!cancelled) setClassesList(Array.isArray(payload) ? payload : []);
       } catch (err: any) {
-        console.warn('Failed to load classes for super admin school filter', err);
+        if (!cancelled) console.warn('Failed to load classes for super admin school filter', err);
       }
     })();
+    return () => { cancelled = true; };
   }, [superAdminSchoolFilterId, currentRole]);
 
   useEffect(() => {
@@ -766,7 +805,7 @@ export default function App() {
     if (currentRole === 'super_admin' || activeSchoolId != null) {
       fetchAllData();
     }
-  }, [activeSchoolId, currentRole, role]);
+  }, [activeSchoolId, currentRole, role, superAdminSchoolFilterId]);
 
   useEffect(() => {
     setPendingRegularizationsCount(0);
@@ -1534,7 +1573,7 @@ export default function App() {
     }
   };
 
-  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number; files?: File[] }) => {
+  const handleSendNotification = async (data: { title: string; body: string; type: string; userId?: number; classId?: number; schoolId?: number; files?: File[] }) => {
     try {
       if (data.files && data.files.length > 0) {
         const formData = new FormData();
@@ -1543,6 +1582,7 @@ export default function App() {
         formData.append('type', data.type);
         if (data.userId != null) formData.append('userId', String(data.userId));
         if (data.classId != null) formData.append('classId', String(data.classId));
+        if (data.schoolId != null) formData.append('schoolId', String(data.schoolId));
         data.files.forEach((file) => formData.append('files', file));
 
         await apiFetch('/api/notifications/send', {
@@ -1663,6 +1703,9 @@ export default function App() {
     }
     return !isEvaluationArchived(ev, studentsList, gradesList);
   });
+  const visibleAbsenceDeclarations = currentRole === 'super_admin' && superAdminSchoolFilterId != null
+    ? absenceDeclarationsList.filter((declaration) => declaration.schoolId === superAdminSchoolFilterId)
+    : absenceDeclarationsList;
   const archivedEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return false;
     if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
@@ -2136,16 +2179,38 @@ export default function App() {
           )}
 
           {/* LOADING SCREEN */}
-          {isSyncing && (
+          {(isSyncing || loadedDataScope !== dataScopeRef.current) && (
             <div className="bg-white/60 p-12 text-center rounded-2xl border border-slate-50 shadow-sm flex flex-col justify-center items-center gap-3 my-12">
-              <RefreshCw className="h-10 w-10 text-indigo-600 animate-spin" />
-              <p className="text-xs text-slate-500 font-medium">Synchronisation des registres en temps réel...</p>
+              {isSyncing
+                ? <RefreshCw className="h-10 w-10 text-indigo-600 animate-spin" />
+                : <AlertCircle className="h-10 w-10 text-amber-500" />}
+              <p className="text-xs text-slate-500 font-medium">
+                {isSyncing ? 'Synchronisation des registres en temps réel...' : 'Les données de ce périmètre ne sont pas disponibles.'}
+              </p>
             </div>
           )}
 
           {/* DYNAMIC RENDERING PANEL BASED ON ACTIVE TABS */}
-          {!isSyncing && !isTeacherControlDestination && (
+          {!isSyncing && loadedDataScope === dataScopeRef.current && !isTeacherControlDestination && (
             <div className="bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in" id="content-card">
+              {currentRole === 'super_admin' && (
+                <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                  <label htmlFor="global-school-filter" className="text-sm font-semibold text-slate-700">
+                    Établissement consulté
+                  </label>
+                  <select
+                    id="global-school-filter"
+                    value={superAdminSchoolFilterId ?? ''}
+                    onChange={(event) => setSuperAdminSchoolFilterId(event.target.value ? Number(event.target.value) : null)}
+                    className="min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">Toutes les écoles</option>
+                    {schoolsList.map((school) => (
+                      <option key={school.id} value={school.id}>{school.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {activeTab === 'tableau-de-bord' && (
                 <DashboardView
                   stats={stats}
@@ -2218,6 +2283,8 @@ export default function App() {
                   onApproveClass={handleApproveClass}
                   onRejectClass={handleRejectClass}
                   currentSchoolId={currentSchoolId}
+                  schoolFilterId={currentRole === 'super_admin' ? superAdminSchoolFilterId : null}
+                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   onRefreshClasses={refreshClassesForSchool}
                   />
                 </ErrorBoundary>
@@ -2226,10 +2293,11 @@ export default function App() {
               {(activeTab === 'absences' || activeTab === 'absence-validations') && (
                 <AbsenceView
                   userRole={currentRole}
+                  schoolFilterId={currentRole === 'super_admin' ? superAdminSchoolFilterId : undefined}
                   pendingReviewOnly={activeTab === 'absence-validations'}
                   showAbsenceDeclarationSection={activeTab === 'absences'}
                   absencesList={absencesList}
-                  absenceDeclarationsList={absenceDeclarationsList}
+                  absenceDeclarationsList={visibleAbsenceDeclarations}
                   lateArrivalsList={lateArrivalsList}
                   lateArrivalJustificationsList={lateArrivalJustificationsList}
                   studentsList={studentsList}
@@ -2262,7 +2330,7 @@ export default function App() {
               {activeTab === 'absence-declaration-validations'
                 && ['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
                 <AbsenceDeclarationValidationsView
-                  declarations={absenceDeclarationsList}
+                  declarations={visibleAbsenceDeclarations}
                   onReview={handleReviewAbsenceDeclaration}
                 />
               )}
@@ -2292,7 +2360,7 @@ export default function App() {
                     studentsList={studentsList}
                     classesList={classesList}
                     schoolsList={schoolsList}
-                    schoolFilterId={superAdminSchoolFilterId}
+                    schoolFilterId={currentRole === 'super_admin' ? superAdminSchoolFilterId : null}
                     onSchoolFilterChange={setSuperAdminSchoolFilterId}
                     teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
                     teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
@@ -2324,6 +2392,8 @@ export default function App() {
               {activeTab === 'bulletins' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <BulletinsView
                   schoolsList={schoolsList}
+                  schoolFilterId={superAdminSchoolFilterId}
+                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   classesList={classesList}
                   studentsList={studentsList}
                   evaluationsList={activeEvaluations}
@@ -2338,6 +2408,8 @@ export default function App() {
                 <AccountingView
                   userRole={currentRole}
                   currentSchoolId={currentSchoolId ?? null}
+                  schoolFilterId={superAdminSchoolFilterId}
+                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
                   schools={schoolsList}
                   years={yearsList}
                   classes={classesList}
@@ -2349,6 +2421,8 @@ export default function App() {
                 <ClassResultsView
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
+                  schoolFilterId={superAdminSchoolFilterId}
+                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
                 />
               )}
 
@@ -2356,6 +2430,8 @@ export default function App() {
                 <ClassSubjectPivotView
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
+                  schoolFilterId={superAdminSchoolFilterId}
+                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
                 />
               )}
 
@@ -2371,6 +2447,7 @@ export default function App() {
               {activeTab === 'notifications' && (
                 <NotificationView
                   userRole={currentRole}
+                  schoolFilterId={superAdminSchoolFilterId}
                   notificationsList={notificationsList}
                   usersList={usersList}
                   classesList={classesList}

@@ -57,9 +57,9 @@ interface NotesViewProps {
 }
 
 export default function NotesView({
-  evaluationsList,
-  gradesList,
-  studentsList,
+  evaluationsList: allEvaluationsList,
+  gradesList: allGradesList,
+  studentsList: allStudentsList,
   classesList,
   schoolsList,
   schoolFilterId,
@@ -79,6 +79,19 @@ export default function NotesView({
   const userRole = role as UserRole;
   const isSchoolOperationsRole = userRole === 'school_admin' || userRole === 'school_accountant';
   const currentSchoolId = activeSchoolId;
+  const selectedSchoolId = userRole === 'super_admin' ? schoolFilterId ?? null : null;
+  const studentsList = selectedSchoolId == null
+    ? allStudentsList
+    : allStudentsList.filter((student) => student.schoolId === selectedSchoolId);
+  const evaluationsList = selectedSchoolId == null
+    ? allEvaluationsList
+    : allEvaluationsList.filter((evaluation) => evaluation.schoolId === selectedSchoolId);
+  const scopedEvaluationIds = useMemo(() => new Set(evaluationsList.map((evaluation) => evaluation.id)), [evaluationsList]);
+  const scopedStudentIds = useMemo(() => new Set(studentsList.map((student) => student.id)), [studentsList]);
+  const gradesList = selectedSchoolId == null
+    ? allGradesList
+    : allGradesList.filter((grade) => scopedEvaluationIds.has(grade.evaluationId)
+      && scopedStudentIds.has(grade.studentId));
   const sortedClasses = useMemo(() => sortClasses(classesList || []), [classesList]);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
   const activeTeacherAssignments = userRole === 'teacher'
@@ -124,6 +137,14 @@ export default function NotesView({
   const isSavingAllGradesRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
   const [isGroupedPublicationFormOpen, setIsGroupedPublicationFormOpen] = useState(false);
+
+  useEffect(() => {
+    setSelectedClassId('');
+    setSelectedEvalId('');
+    setGradeInputValues({});
+    setGradeValidationErrors({});
+    setPendingEvaluation(null);
+  }, [selectedSchoolId]);
 
   // New Eval form states
   const formatLocalDatetime = (value = new Date()) => {

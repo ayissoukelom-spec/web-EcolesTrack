@@ -50,6 +50,8 @@ interface ClassSubjectPivotResponse {
 interface ClassSubjectPivotViewProps {
   schoolsList: School[];
   currentSchoolId?: number | null;
+  schoolFilterId?: number | null;
+  onSchoolFilterChange?: (schoolId: number | null) => void;
 }
 
 const formatAverage = (average: number | null): string => (
@@ -59,13 +61,18 @@ const formatAverage = (average: number | null): string => (
 export default function ClassSubjectPivotView({
   schoolsList,
   currentSchoolId,
+  schoolFilterId,
+  onSchoolFilterChange,
 }: ClassSubjectPivotViewProps) {
   const { role } = useAuth();
   const currentRole = role as UserRole;
   const isSchoolOperationsRole = currentRole === 'school_admin' || currentRole === 'school_accountant';
-  const [schoolId, setSchoolId] = useState(
+  const [localSchoolId, setLocalSchoolId] = useState(
     isSchoolOperationsRole && currentSchoolId != null ? String(currentSchoolId) : '',
   );
+  const schoolId = currentRole === 'super_admin' && schoolFilterId !== undefined
+    ? schoolFilterId == null ? '' : String(schoolFilterId)
+    : localSchoolId;
   const [classOptions, setClassOptions] = useState<ClassOption[]>([]);
   const [academicYearId, setAcademicYearId] = useState('');
   const [periods, setPeriods] = useState<PeriodOption[]>([]);
@@ -80,9 +87,9 @@ export default function ClassSubjectPivotView({
 
   useEffect(() => {
     if (isSchoolOperationsRole && currentSchoolId != null) {
-      setSchoolId(String(currentSchoolId));
+      setLocalSchoolId(String(currentSchoolId));
     } else if (currentRole === 'super_admin') {
-      setSchoolId('');
+      setLocalSchoolId('');
     }
     setAcademicYearId('');
     setPeriodId('');
@@ -245,7 +252,11 @@ export default function ClassSubjectPivotView({
             Établissement
             <select
               value={schoolId}
-              onChange={(event) => setSchoolId(event.target.value)}
+              onChange={(event) => {
+                const nextSchoolId = event.target.value;
+                setLocalSchoolId(nextSchoolId);
+                onSchoolFilterChange?.(nextSchoolId ? Number(nextSchoolId) : null);
+              }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             >
               <option value="">Sélectionner une école</option>

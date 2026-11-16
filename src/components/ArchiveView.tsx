@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Evaluation, Grade, Student, Class, UserRole, getTeacherDisplayName } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { isClassVisibleToSchool } from '../lib/classVisibility.ts';
@@ -32,9 +32,9 @@ interface ArchiveViewProps {
 
 export default function ArchiveView({
   userRole,
-  evaluationsList,
-  gradesList,
-  studentsList,
+  evaluationsList: allEvaluationsList,
+  gradesList: allGradesList,
+  studentsList: allStudentsList,
   classesList,
   schoolsList,
   schoolFilterId,
@@ -42,6 +42,18 @@ export default function ArchiveView({
   teacherTeachingAssignments = [],
   teacherId,
 }: ArchiveViewProps) {
+  const selectedSchoolId = userRole === 'super_admin' ? schoolFilterId ?? null : null;
+  const evaluationsList = selectedSchoolId == null
+    ? allEvaluationsList
+    : allEvaluationsList.filter((evaluation) => evaluation.schoolId === selectedSchoolId);
+  const studentsList = selectedSchoolId == null
+    ? allStudentsList
+    : allStudentsList.filter((student) => student.schoolId === selectedSchoolId);
+  const evaluationIds = new Set(evaluationsList.map((evaluation) => evaluation.id));
+  const studentIds = new Set(studentsList.map((student) => student.id));
+  const gradesList = selectedSchoolId == null
+    ? allGradesList
+    : allGradesList.filter((grade) => evaluationIds.has(grade.evaluationId) && studentIds.has(grade.studentId));
   const sortedClasses = sortClasses(classesList || []);
   const activeTeacherAssignments = userRole === 'teacher'
     ? teacherTeachingAssignments.filter((assignment) => assignment.isActive === true)
@@ -58,6 +70,10 @@ export default function ArchiveView({
   const [toDate, setToDate] = useState('');
   const [downloadingExports, setDownloadingExports] = useState<Set<string>>(() => new Set());
   const downloadingExportsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    setSelectedClassId('');
+  }, [selectedSchoolId]);
 
   const runExport = async (key: string, exportFile: () => Promise<void>) => {
     if (downloadingExportsRef.current.has(key)) return;
@@ -289,10 +305,6 @@ export default function ArchiveView({
           Number(assignment.classId) === Number(ev.classId)
             && Number(assignment.subjectId) === Number(ev.subjectId),
         )) return false;
-      }
-      if (schoolFilterId) {
-        const evaluationClass = classesList.find((cls) => cls.id === ev.classId);
-        if (!evaluationClass || evaluationClass.schoolId !== schoolFilterId) return false;
       }
       if (selectedClassId && String(ev.classId) !== selectedClassId) return false;
       if (!isEvaluationArchivedUtil(ev, studentsList, gradesList)) return false;

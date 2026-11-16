@@ -8,6 +8,8 @@ import { useAuth } from '../contexts/AuthContext.tsx';
 interface ClassResultsViewProps {
   schoolsList: School[];
   currentSchoolId?: number | null;
+  schoolFilterId?: number | null;
+  onSchoolFilterChange?: (schoolId: number | null) => void;
 }
 
 interface ResultClass extends Class {
@@ -107,14 +109,22 @@ const evaluationTypeLabel = (type: AvailableEvaluation['type']): string => {
   return 'Évaluation';
 };
 
-export default function ClassResultsView({ schoolsList, currentSchoolId }: ClassResultsViewProps) {
+export default function ClassResultsView({
+  schoolsList,
+  currentSchoolId,
+  schoolFilterId,
+  onSchoolFilterChange,
+}: ClassResultsViewProps) {
   const { role } = useAuth();
   const currentRole = role as UserRole;
   const isSchoolOperationsRole = currentRole === 'school_admin' || currentRole === 'school_accountant';
   const [mode, setMode] = useState<'official' | 'custom'>('official');
-  const [schoolId, setSchoolId] = useState(
+  const [localSchoolId, setLocalSchoolId] = useState(
     isSchoolOperationsRole && currentSchoolId != null ? String(currentSchoolId) : '',
   );
+  const schoolId = currentRole === 'super_admin' && schoolFilterId !== undefined
+    ? schoolFilterId == null ? '' : String(schoolFilterId)
+    : localSchoolId;
   const [classes, setClasses] = useState<ResultClass[]>([]);
   const [classId, setClassId] = useState('');
   const [periods, setPeriods] = useState<ResultPeriod[]>([]);
@@ -147,9 +157,9 @@ export default function ClassResultsView({ schoolsList, currentSchoolId }: Class
 
   useEffect(() => {
     if (isSchoolOperationsRole && currentSchoolId != null) {
-      setSchoolId(String(currentSchoolId));
+      setLocalSchoolId(String(currentSchoolId));
     } else if (currentRole === 'super_admin') {
-      setSchoolId('');
+      setLocalSchoolId('');
     }
     invalidateDisplayedResults();
     setClassId('');
@@ -465,7 +475,9 @@ export default function ClassResultsView({ schoolsList, currentSchoolId }: Class
               value={schoolId}
               onChange={(event) => {
                 invalidateDisplayedResults();
-                setSchoolId(event.target.value);
+                const nextSchoolId = event.target.value;
+                setLocalSchoolId(nextSchoolId);
+                onSchoolFilterChange?.(nextSchoolId ? Number(nextSchoolId) : null);
               }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             >

@@ -45,3 +45,16 @@ export async function getParentChildStudentIds(
 
   return Array.from(childIds);
 }
+
+export async function getParentLinkedStudentIds(
+  userId: number | null | undefined,
+): Promise<number[]> {
+  if (userId == null) return [];
+
+  const linkedStudents = await db.select({ id: students.id })
+    .from(students)
+    .innerJoin(parents, eq(students.parentId, parents.id))
+    .where(eq(parents.userId, userId));
+
+  return Array.from(new Set(linkedStudents.map((student) => student.id)));
+}

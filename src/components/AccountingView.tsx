@@ -165,6 +165,8 @@ type ObligationGenerationPreview = {
 interface AccountingViewProps {
   userRole: UserRole;
   currentSchoolId: number | null;
+  schoolFilterId?: number | null;
+  onSchoolFilterChange?: (schoolId: number | null) => void;
   schools: School[];
   years: AcademicYear[];
   classes: Class[];
@@ -253,13 +255,22 @@ const dashboardMetricStyles = {
 export default function AccountingView({
   userRole,
   currentSchoolId,
+  schoolFilterId,
+  onSchoolFilterChange,
   schools,
   years,
   classes,
   students,
 }: AccountingViewProps) {
   const { user } = useAuth();
-  const [schoolId, setSchoolId] = useState<number | null>(currentSchoolId);
+  const [localSchoolId, setLocalSchoolId] = useState<number | null>(currentSchoolId);
+  const schoolId = userRole === 'super_admin' && schoolFilterId !== undefined
+    ? schoolFilterId
+    : localSchoolId;
+  const updateSchoolId = (nextSchoolId: number | null) => {
+    setLocalSchoolId(nextSchoolId);
+    onSchoolFilterChange?.(nextSchoolId);
+  };
   const [yearId, setYearId] = useState<number | null>(() => getActiveAccountingYearId(years, currentSchoolId));
   const [tab, setTab] = useState<AccountingTab>('dashboard');
   const [categories, setCategories] = useState<Category[]>([]);
@@ -666,7 +677,7 @@ export default function AccountingView({
   useEffect(() => {
     if (!authorized) return;
     const selectedSchoolId = userRole === 'super_admin' ? schoolId : currentSchoolId;
-    if (userRole !== 'super_admin') setSchoolId(currentSchoolId);
+    if (userRole !== 'super_admin') setLocalSchoolId(currentSchoolId);
     setYearId(getActiveAccountingYearId(years, selectedSchoolId));
   }, [authorized, currentSchoolId, schoolId, userRole, years]);
 
@@ -1841,7 +1852,7 @@ export default function AccountingView({
           {userRole === 'super_admin' && (
             <select className="rounded-lg border border-slate-200 p-2 text-sm" value={schoolId ?? ''} onChange={(event) => {
               const nextSchoolId = Number(event.target.value) || null;
-              setSchoolId(nextSchoolId);
+              updateSchoolId(nextSchoolId);
               setYearId(getActiveAccountingYearId(years, nextSchoolId));
             }} aria-label="Établissement">
               <option value="">Tous les établissements</option>

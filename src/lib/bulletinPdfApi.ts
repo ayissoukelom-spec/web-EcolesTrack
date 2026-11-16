@@ -899,6 +899,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
       },
       promotionThreshold: schools.promotionThreshold,
       schoolYearId: bulletins.schoolYearId,
+      attendanceSchoolId: academicYears.schoolId,
       schoolYearName: academicYears.name,
       termId: bulletins.termId,
       generationId: bulletins.generationId,
@@ -1396,6 +1397,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
           and(
             eq(absences.studentId, header.studentId),
             eq(absences.classId, header.classId),
+            header.attendanceSchoolId != null ? eq(absences.schoolId, header.attendanceSchoolId) : sql`false`,
             sql`${absences.date} >= ${termStartDate}`,
             sql`${absences.date} <= ${termEndDate}`,
             unjustifiedAbsenceCondition(),
@@ -1408,6 +1410,7 @@ export const createDbBulletinPdfDataProvider = (): BulletinPdfDataProvider => ({
         .where(and(
           eq(lateArrivals.studentId, header.studentId),
           eq(lateArrivals.classId, header.classId),
+          header.attendanceSchoolId != null ? eq(lateArrivals.schoolId, header.attendanceSchoolId) : sql`false`,
           sql`${lateArrivals.date} >= ${termStartDate}`,
           sql`${lateArrivals.date} <= ${termEndDate}`,
           unjustifiedLateArrivalCondition(),
