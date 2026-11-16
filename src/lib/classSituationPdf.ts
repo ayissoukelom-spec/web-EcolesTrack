@@ -41,6 +41,7 @@ interface ClassSituationPdfOptions {
   schoolName: string;
   academicYearName: string;
   className: string;
+  groupByClass?: boolean;
   issuedAt: Date;
   rows: ClassSituationPdfCategoryRow[];
 }
@@ -128,12 +129,13 @@ export const generateClassSituationPdf = async ({
   schoolName,
   academicYearName,
   className,
+  groupByClass = false,
   issuedAt,
   rows,
 }: ClassSituationPdfOptions) => {
   const students = aggregateClassSituationPdfRows(rows);
   const pdf = await PDFDocument.create();
-  pdf.setTitle(`Situation financière de la classe - ${className}`);
+  pdf.setTitle(`Situation financière ${groupByClass ? 'de l’établissement' : 'de la classe'} - ${className}`);
   pdf.setAuthor(schoolName);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -177,82 +179,148 @@ export const generateClassSituationPdf = async ({
     y = pageHeight - margin;
     if (repeatTableHeader) drawTableHeader();
   };
+  const drawClassGroupHeading = (name: string) => {
+    const headingHeight = 18;
+    if (y - headingHeight < bottomLimit) addPage(true);
+    const x = (pageWidth - tableWidth) / 2;
+    page.drawRectangle({
+      x,
+      y: y - headingHeight,
+      width: tableWidth,
+      height: headingHeight,
+      color: headerFill,
+      borderColor: border,
+      borderWidth: 0.6,
+    });
+    drawText(`Classe : ${fitText(name, tableWidth - 20, 8, bold)}`, x + 8, y - 12, 8, true);
+    y -= headingHeight;
+  };
 
   drawText(schoolName, margin, y - 10, 15, true);
   y -= 26;
   drawText(`Année scolaire : ${academicYearName}`, margin, y, 10, false, muted);
   y -= 26;
-  drawText('Situation financière de la classe', margin, y, 18, true);
+  drawText(
+    groupByClass ? 'Situation financière de l’établissement' : 'Situation financière de la classe',
+    margin,
+    y,
+    18,
+    true,
+  );
   y -= 22;
-  drawText(`Classe : ${className}`, margin, y, 11, true);
+  drawText(`${groupByClass ? 'Périmètre' : 'Classe'} : ${className}`, margin, y, 11, true);
   const issued = issuedAt.toLocaleDateString('fr-FR');
   const issuedText = `Édité le ${issued}`;
   drawText(issuedText, pageWidth - margin - regular.widthOfTextAtSize(issuedText, 9), y, 9, false, muted);
   y -= 22;
   drawTableHeader();
 
-  for (const [index, student] of students.entries()) {
-    const categoryLines = student.categories.flatMap((category) => [
-      `${category.categoryLabel} : ${money(category.due)} / ${money(category.paid)} / ${money(category.remaining)}`,
-      ...(category.obligationClassNames.length > 0
-        ? [`Classe(s) de l’obligation : ${category.obligationClassNames.join(', ')}`]
-        : []),
-    ]);
-    const rowHeight = Math.max(27, categoryLines.length * lineHeight + 8);
-    if (y - rowHeight < bottomLimit) addPage(true);
-    const top = y;
-    const bottom = y - rowHeight;
-    let x = (pageWidth - tableWidth) / 2;
-    const values = [
-      String(index + 1),
-      `${student.lastName} ${student.firstName}`.trim(),
-      '',
-      money(student.studentDue),
-      money(student.studentPaid),
-      money(student.studentRemaining),
-      statusLabel(student.studentStatus),
-    ];
-    page.drawRectangle({
-      x,
-      y: bottom,
-      width: tableWidth,
-      height: rowHeight,
-      borderColor: border,
-      borderWidth: 0.6,
-    });
-    values.forEach((value, columnIndex) => {
-      const column = tableColumns[columnIndex];
-      page.drawLine({ start: { x, y: top }, end: { x, y: bottom }, color: border, thickness: 0.6 });
-      const innerWidth = column.width - 10;
-      const shown = fitText(value, innerWidth, 8, regular);
-      const textWidth = regular.widthOfTextAtSize(shown, 8);
-      const textX = column.align === 'right' ? x + column.width - 5 - textWidth : x + 5;
-      const statusColor = student.studentStatus === 'paid'
-        ? rgb(0.08, 0.42, 0.25)
-        : student.studentStatus === 'partial'
-          ? rgb(0.58, 0.34, 0.04)
-          : student.studentStatus === 'unpaid'
-            ? rgb(0.65, 0.14, 0.14)
-            : muted;
-      if (columnIndex !== 2) {
-        drawText(shown, textX, bottom + (rowHeight - 8) / 2, 8, columnIndex === 6, columnIndex === 6 ? statusColor : dark);
-      } else {
-        categoryLines.forEach((line, lineIndex) => {
-          drawText(
-            fitText(line, innerWidth, 7, regular),
-            x + 5,
-            top - 11 - lineIndex * lineHeight,
-            7,
-          );
-        });
+  const studentGroups = groupByClass
+    ? [...students.reduce((groups, student) => {
+      const group = groups.get(student.className) ?? [];
+      group.push(student);
+      groups.set(student.className, group);
+      return groups;
+    }, new Map<string, ClassSituationPdfStudent[]>()).entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'fr'))
+      .map(([name, groupStudents]) => ({ name, students: groupStudents }))
+    : [{ name: className, students }];
+  let studentIndex = 0;
+  for (const group of studentGroups) {
+    if (groupByClass) drawClassGroupHeading(group.name);
+
+    for (const student of group.students) {
+      studentIndex += 1;
+      const categoryLines = student.categories.flatMap((category) => [
+        `${category.categoryLabel} : ${money(category.due)} / ${money(category.paid)} / ${money(category.remaining)}`,
+        ...(category.obligationClassNames.length > 0
+          ? [`Classe(s) de l’obligation : ${category.obligationClassNames.join(', ')}`]
+          : []),
+      ]);
+      const rowHeight = Math.max(27, categoryLines.length * lineHeight + 8);
+      if (y - rowHeight < bottomLimit) {
+        addPage(true);
+        if (groupByClass) drawClassGroupHeading(group.name);
       }
-      x += column.width;
-    });
-    page.drawLine({ start: { x, y: top }, end: { x, y: bottom }, color: border, thickness: 0.6 });
-    y = bottom;
+      const top = y;
+      const bottom = y - rowHeight;
+      let x = (pageWidth - tableWidth) / 2;
+      const values = [
+        String(studentIndex),
+        `${student.lastName} ${student.firstName}`.trim(),
+        '',
+        money(student.studentDue),
+        money(student.studentPaid),
+        money(student.studentRemaining),
+        statusLabel(student.studentStatus),
+      ];
+      page.drawRectangle({
+        x,
+        y: bottom,
+        width: tableWidth,
+        height: rowHeight,
+        borderColor: border,
+        borderWidth: 0.6,
+      });
+      values.forEach((value, columnIndex) => {
+        const column = tableColumns[columnIndex];
+        page.drawLine({ start: { x, y: top }, end: { x, y: bottom }, color: border, thickness: 0.6 });
+        const innerWidth = column.width - 10;
+        const shown = fitText(value, innerWidth, 8, regular);
+        const textWidth = regular.widthOfTextAtSize(shown, 8);
+        const textX = column.align === 'right' ? x + column.width - 5 - textWidth : x + 5;
+        const statusColor = student.studentStatus === 'paid'
+          ? rgb(0.08, 0.42, 0.25)
+          : student.studentStatus === 'partial'
+            ? rgb(0.58, 0.34, 0.04)
+            : student.studentStatus === 'unpaid'
+              ? rgb(0.65, 0.14, 0.14)
+              : muted;
+        if (columnIndex !== 2) {
+          drawText(shown, textX, bottom + (rowHeight - 8) / 2, 8, columnIndex === 6, columnIndex === 6 ? statusColor : dark);
+        } else {
+          categoryLines.forEach((line, lineIndex) => {
+            drawText(
+              fitText(line, innerWidth, 7, regular),
+              x + 5,
+              top - 11 - lineIndex * lineHeight,
+              7,
+            );
+          });
+        }
+        x += column.width;
+      });
+      page.drawLine({ start: { x, y: top }, end: { x, y: bottom }, color: border, thickness: 0.6 });
+      y = bottom;
+    }
+
+    if (groupByClass) {
+      const totals = group.students.reduce((result, student) => ({
+        due: result.due + student.studentDue,
+        paid: result.paid + student.studentPaid,
+        remaining: result.remaining + student.studentRemaining,
+      }), { due: 0, paid: 0, remaining: 0 });
+      const subtotalHeight = 20;
+      if (y - subtotalHeight < bottomLimit) addPage(true);
+      const x = (pageWidth - tableWidth) / 2;
+      page.drawRectangle({
+        x,
+        y: y - subtotalHeight,
+        width: tableWidth,
+        height: subtotalHeight,
+        color: rgb(0.96, 0.97, 0.98),
+        borderColor: border,
+        borderWidth: 0.6,
+      });
+      drawText(`Sous-total ${fitText(group.name, 145, 8, bold)} : ${group.students.length} élève(s)`, x + 8, y - 13, 8, true);
+      drawText(`Dû : ${money(totals.due)} FCFA`, x + 190, y - 13, 8, true);
+      drawText(`Encaissé : ${money(totals.paid)} FCFA`, x + 370, y - 13, 8, true);
+      drawText(`Reste : ${money(totals.remaining)} FCFA`, x + 570, y - 13, 8, true);
+      y -= subtotalHeight;
+    }
   }
   if (students.length === 0) {
-    drawText('Aucun élève ne correspond à cette classe et aux filtres sélectionnés.', margin, y - 18, 10, false, muted);
+    drawText('Aucun élève ne correspond au périmètre et aux filtres sélectionnés.', margin, y - 18, 10, false, muted);
     y -= 36;
   }
 

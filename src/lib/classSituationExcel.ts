@@ -43,6 +43,7 @@ export interface ClassSituationExcelOptions {
   schoolName: string;
   academicYearName: string;
   className: string;
+  groupByClass?: boolean;
   students: ClassSituationExcelStudent[];
   installments: ClassSituationExcelInstallment[];
 }
@@ -131,33 +132,94 @@ export const buildClassSituationExcel = async (
   ];
   situation.addRow(situationHeaders);
   styleHeader(situation.getRow(1));
-  options.students.forEach((student, index) => {
-    const row = situation.addRow([
-      index + 1,
-      `${student.lastName} ${student.firstName}`,
-      student.className,
-      student.obligationClassNames?.join(', ') || null,
-      student.studentDue,
-      student.studentPaid,
-      student.studentRemaining,
-      studentStatusLabels[student.studentStatus],
-      student.overdueInstallmentCount,
-      student.overdueInstallmentAmount,
-      student.nextInstallment?.label ?? null,
-      excelDate(student.nextInstallment?.dueDate ?? null),
-      student.nextInstallment?.remaining ?? null,
-      punctualityLabels[student.punctualityStatus],
-      'Voir les échéances (feuille 2)',
+  const studentGroups = options.groupByClass
+    ? [...options.students.reduce((groups, student) => {
+      const group = groups.get(student.className) ?? [];
+      group.push(student);
+      groups.set(student.className, group);
+      return groups;
+    }, new Map<string, ClassSituationExcelStudent[]>()).entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'fr'))
+      .map(([className, students]) => ({ className, students }))
+    : [{ className: options.className, students: options.students }];
+  let studentIndex = 0;
+  for (const group of studentGroups) {
+    if (options.groupByClass) {
+      const heading = situation.addRow([null, `Classe : ${group.className}`]);
+      heading.font = { bold: true, color: { argb: 'FF1F2937' } };
+      heading.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF0F6' } };
+      applyTextProtection(heading, [2]);
+    }
+    for (const student of group.students) {
+      studentIndex += 1;
+      const row = situation.addRow([
+        studentIndex,
+        `${student.lastName} ${student.firstName}`,
+        student.className,
+        student.obligationClassNames?.join(', ') || null,
+        student.studentDue,
+        student.studentPaid,
+        student.studentRemaining,
+        studentStatusLabels[student.studentStatus],
+        student.overdueInstallmentCount,
+        student.overdueInstallmentAmount,
+        student.nextInstallment?.label ?? null,
+        excelDate(student.nextInstallment?.dueDate ?? null),
+        student.nextInstallment?.remaining ?? null,
+        punctualityLabels[student.punctualityStatus],
+        'Voir les échéances (feuille 2)',
+      ]);
+      applyTextProtection(row, [2, 3, 4, 8, 11, 14, 15]);
+      for (const column of [5, 6, 7, 10, 13]) row.getCell(column).numFmt = moneyFormat;
+      row.getCell(9).numFmt = '0';
+      row.getCell(12).numFmt = 'dd/mm/yyyy';
+    }
+    if (options.groupByClass) {
+      const totals = group.students.reduce((result, student) => ({
+        due: result.due + student.studentDue,
+        paid: result.paid + student.studentPaid,
+        remaining: result.remaining + student.studentRemaining,
+      }), { due: 0, paid: 0, remaining: 0 });
+      const subtotal = situation.addRow([
+        null,
+        `Sous-total — ${group.className} (${group.students.length} élève(s))`,
+        null,
+        null,
+        totals.due,
+        totals.paid,
+        totals.remaining,
+      ]);
+      subtotal.font = { bold: true };
+      subtotal.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+      applyTextProtection(subtotal, [2]);
+      for (const column of [5, 6, 7]) subtotal.getCell(column).numFmt = moneyFormat;
+    }
+  }
+  if (options.groupByClass) {
+    const totals = options.students.reduce((result, student) => ({
+      due: result.due + student.studentDue,
+      paid: result.paid + student.studentPaid,
+      remaining: result.remaining + student.studentRemaining,
+    }), { due: 0, paid: 0, remaining: 0 });
+    const grandTotal = situation.addRow([
+      null,
+      `Total général établissement (${options.students.length} élève(s))`,
+      null,
+      null,
+      totals.due,
+      totals.paid,
+      totals.remaining,
     ]);
-    applyTextProtection(row, [2, 3, 4, 8, 11, 14, 15]);
-    for (const column of [5, 6, 7, 10, 13]) row.getCell(column).numFmt = moneyFormat;
-    row.getCell(9).numFmt = '0';
-    row.getCell(12).numFmt = 'dd/mm/yyyy';
-  });
-  situation.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: options.students.length + 1, column: situationHeaders.length },
-  };
+    grandTotal.font = { bold: true, color: { argb: 'FF1F2937' } };
+    grandTotal.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } };
+    applyTextProtection(grandTotal, [2]);
+    for (const column of [5, 6, 7]) grandTotal.getCell(column).numFmt = moneyFormat;
+  } else {
+    situation.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: options.students.length + 1, column: situationHeaders.length },
+    };
+  }
 
   const detail = workbook.addWorksheet('Détail des échéances', {
     views: [{ state: 'frozen', ySplit: 1 }],

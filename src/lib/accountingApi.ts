@@ -2020,9 +2020,14 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     try {
       const actor = await actorFor(req, res);
       if (!actor) return;
-      const schoolId = await getSchoolId(actor, req.query.schoolId, res);
-      if (!schoolId) return;
-      const conditions = [eq(financialPayments.schoolId, schoolId)];
+      const requestedSchoolId = req.query.schoolId;
+      const allSchools = actor.role === 'super_admin'
+        && (requestedSchoolId == null || requestedSchoolId === '');
+      const schoolId = allSchools ? null : await getSchoolId(actor, requestedSchoolId, res);
+      if (!allSchools && !schoolId) return;
+      const conditions = [
+        ...(schoolId == null ? [] : [eq(financialPayments.schoolId, schoolId)]),
+      ];
       const yearId = req.query.academicYearId == null ? null : asPositiveInt(req.query.academicYearId);
       const studentId = req.query.studentId == null ? null : asPositiveInt(req.query.studentId);
       if ((req.query.academicYearId != null && !yearId) || (req.query.studentId != null && !studentId)) {
@@ -2032,8 +2037,17 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (studentId) conditions.push(eq(financialPayments.studentId, studentId));
       const rows = await db.select({
         id: financialPayments.id,
+        schoolName: schools.name,
         studentId: financialPayments.studentId,
         studentName: sql<string>`${students.firstName} || ' ' || ${students.lastName}`,
+        className: sql<string | null>`(
+          SELECT string_agg(DISTINCT ${financialObligations.classNameSnapshot}, ' / ' ORDER BY ${financialObligations.classNameSnapshot})
+          FROM ${financialPaymentAllocations}
+          INNER JOIN ${financialObligations}
+            ON ${financialObligations.id} = ${financialPaymentAllocations.obligationId}
+          WHERE ${financialPaymentAllocations.paymentId} = ${financialPayments.id}
+            AND ${financialObligations.schoolId} = ${financialPayments.schoolId}
+        )`,
         academicYearId: financialPayments.academicYearId,
         amount: financialPayments.amount,
         currency: financialPayments.currency,
@@ -2044,9 +2058,13 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         receiptId: financialReceipts.id,
         receiptNumber: financialReceipts.receiptNumber,
       }).from(financialPayments)
-        .innerJoin(students, eq(students.id, financialPayments.studentId))
+        .innerJoin(students, and(
+          eq(students.id, financialPayments.studentId),
+          eq(students.schoolId, financialPayments.schoolId),
+        ))
+        .innerJoin(schools, eq(schools.id, financialPayments.schoolId))
         .leftJoin(financialReceipts, eq(financialReceipts.paymentId, financialPayments.id))
-        .where(and(...conditions))
+        .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(desc(financialPayments.paidAt))
         .limit(500);
       return res.json(rows);
@@ -3155,9 +3173,6 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (req.query.classId != null && !classId) {
         return res.status(400).json({ error: 'Valid classId is required' });
       }
-      if (aggregateByStudent && classId == null) {
-        return res.status(400).json({ error: 'A classId is required for student aggregate situations' });
-      }
       if (classId && !await validateClassAndYear(schoolId, classId, academicYearId)) {
         return res.status(404).json({ error: 'Class not found in this school and academic year' });
       }
@@ -4193,8 +4208,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     try {
       const actor = await actorFor(req, res);
       if (!actor) return;
-      const schoolId = await getSchoolId(actor, req.query.schoolId, res);
-      if (!schoolId) return;
+      const requestedSchoolId = req.query.schoolId;
+      const allSchools = actor.role === 'super_admin'
+        && (requestedSchoolId == null || requestedSchoolId === '');
+      const schoolId = allSchools ? null : await getSchoolId(actor, requestedSchoolId, res);
+      if (!allSchools && !schoolId) return;
       const status = req.query.status == null ? null : String(req.query.status);
       const paymentId = req.query.paymentId == null ? null : asPositiveInt(req.query.paymentId);
       if ((status != null && !['pending', 'approved', 'rejected'].includes(status))
@@ -4202,14 +4220,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         return res.status(400).json({ error: 'Invalid adjustment request filter' });
       }
       const conditions = [
-        eq(financialAdjustmentRequests.schoolId, schoolId),
+        ...(schoolId == null ? [] : [eq(financialAdjustmentRequests.schoolId, schoolId)]),
         ...(status ? [eq(financialAdjustmentRequests.status, status)] : []),
         ...(paymentId ? [eq(financialAdjustmentRequests.paymentId, paymentId)] : []),
       ];
       const rows = await db.select({
         id: financialAdjustmentRequests.id,
-        schoolId: financialAdjustmentRequests.schoolId,
+        schoolName: schools.name,
         paymentId: financialAdjustmentRequests.paymentId,
+        paymentAmount: financialPayments.amount,
+        studentFirstName: students.firstName,
+        studentLastName: students.lastName,
+        className: sql<string | null>`(
+          SELECT string_agg(DISTINCT ${financialObligations.classNameSnapshot}, ' / ' ORDER BY ${financialObligations.classNameSnapshot})
+          FROM ${financialPaymentAllocations}
+          INNER JOIN ${financialObligations}
+            ON ${financialObligations.id} = ${financialPaymentAllocations.obligationId}
+          WHERE ${financialPaymentAllocations.paymentId} = ${financialAdjustmentRequests.paymentId}
+            AND ${financialObligations.schoolId} = ${financialAdjustmentRequests.schoolId}
+        )`,
         kind: financialAdjustmentRequests.kind,
         amount: financialAdjustmentRequests.amount,
         reason: financialAdjustmentRequests.reason,
@@ -4232,7 +4261,16 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         refundConfirmedByEmail: financialAdjustmentRequests.refundConfirmedByEmail,
         refundConfirmedAt: financialAdjustmentRequests.refundConfirmedAt,
       }).from(financialAdjustmentRequests)
-        .where(and(...conditions))
+        .innerJoin(financialPayments, and(
+          eq(financialPayments.id, financialAdjustmentRequests.paymentId),
+          eq(financialPayments.schoolId, financialAdjustmentRequests.schoolId),
+        ))
+        .innerJoin(students, and(
+          eq(students.id, financialPayments.studentId),
+          eq(students.schoolId, financialPayments.schoolId),
+        ))
+        .innerJoin(schools, eq(schools.id, financialAdjustmentRequests.schoolId))
+        .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(desc(financialAdjustmentRequests.createdAt))
         .limit(500);
       return res.json(rows);
@@ -4295,18 +4333,27 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           throw Object.assign(new Error('Requested amount exceeds the unreversed payment amount'), { statusCode: 409 });
         }
 
-        const [request] = await tx.insert(financialAdjustmentRequests).values({
-          schoolId,
-          paymentId,
-          kind,
-          amount,
-          reason,
-          requestedByUserId: actor.id,
-          requestedByRole: actor.role,
-          requestedByName: actor.name ?? null,
-          requestedByEmail: actor.email ?? null,
-          idempotencyKey,
-        }).returning();
+        const insertedRequest = await tx.execute(sql`
+          INSERT INTO public.financial_adjustment_requests (
+            school_id, payment_id, kind, amount, reason,
+            requested_by_user_id, requested_by_role, requested_by_name,
+            requested_by_email, idempotency_key
+          )
+          VALUES (
+            ${schoolId}, ${paymentId}, ${kind}, ${amount}, ${reason},
+            ${actor.id}, ${actor.role}, ${actor.name ?? null},
+            ${actor.email ?? null}, ${idempotencyKey}
+          )
+          RETURNING id
+        `);
+        const requestId = Number(insertedRequest.rows[0]?.id);
+        if (!Number.isSafeInteger(requestId) || requestId <= 0) {
+          throw new Error('Failed to retrieve created accounting adjustment request');
+        }
+        const [request] = await tx.select().from(financialAdjustmentRequests)
+          .where(eq(financialAdjustmentRequests.id, requestId))
+          .limit(1);
+        if (!request) throw new Error('Created accounting adjustment request could not be reloaded');
         await addAudit(tx, actor, schoolId, 'request', 'financial_adjustment_request', request.id,
           `${kind} request created for payment ${paymentId}.`,
           null,

@@ -614,10 +614,10 @@ export default function AccountingView({
     const params = new URLSearchParams({
       schoolId: String(schoolId ?? ''),
       academicYearId: String(yearId ?? ''),
-      classId: String(studentSituationClassId ?? ''),
       aggregate: 'student',
       includeInactive: 'true',
     });
+    if (studentSituationClassId != null) params.set('classId', String(studentSituationClassId));
     if (studentSituationStatus != null) params.set('status', studentSituationStatus);
     return params.toString();
   }, [schoolId, studentSituationClassId, studentSituationStatus, yearId]);
@@ -626,7 +626,16 @@ export default function AccountingView({
     && (studentSituationStatus == null
       || (studentSituationStudentIds ?? []).includes(student.id)));
   const selectedClassSituation = situationClasses.find((item) => item.id === studentSituationClassId) ?? null;
+  const isAllClassesSituation = studentSituationClassId == null;
+  const classSituationScopeLabel = selectedClassSituation?.name ?? 'Toutes les classes';
   const selectedSchool = schools.find((item) => item.id === schoolId) ?? null;
+  const displayedClassSituationRows = useMemo(() => {
+    if (!isAllClassesSituation) return classSituationRows;
+    return [...classSituationRows].sort((left, right) =>
+      left.className.localeCompare(right.className, 'fr')
+      || left.lastName.localeCompare(right.lastName, 'fr')
+      || left.firstName.localeCompare(right.firstName, 'fr'));
+  }, [classSituationRows, isAllClassesSituation]);
   const classSituationTotals = classSituationRows.reduce((totals, row) => ({
     due: totals.due + row.studentDue,
     paid: totals.paid + row.studentPaid,
@@ -895,7 +904,7 @@ export default function AccountingView({
   }, [authorized, schoolId, studentSituationQuery, studentSituationStatus, yearId]);
 
   useEffect(() => {
-    if (!isClassSituationVisible || !authorized || !schoolId || !yearId || studentSituationClassId == null) {
+    if (!isClassSituationVisible || !authorized || !schoolId || !yearId) {
       setClassSituationRows([]);
       setIsClassSituationLoading(false);
       return;
@@ -998,7 +1007,7 @@ export default function AccountingView({
   };
 
   const downloadClassSituationPdf = async () => {
-    if (!selectedClassSituation || !yearId || !isClassSituationVisible) return;
+    if (!schoolId || !yearId || !isClassSituationVisible) return;
     setIsClassSituationPdfLoading(true);
     setClassSituationError('');
     try {
@@ -1009,7 +1018,8 @@ export default function AccountingView({
       const pdfBytes = await generateClassSituationPdf({
         schoolName: selectedSchool?.officialName || selectedSchool?.name || 'Établissement',
         academicYearName: selectedYearName,
-        className: selectedClassSituation.name,
+        className: classSituationScopeLabel,
+        groupByClass: isAllClassesSituation,
         issuedAt: new Date(),
         rows: detailResult.rows ?? [],
       });
@@ -1017,7 +1027,8 @@ export default function AccountingView({
       const url = URL.createObjectURL(pdfBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `situation-financiere-${selectedClassSituation.name.replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}.pdf`;
+      const fileScope = classSituationScopeLabel.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+      link.download = `situation-financiere-${fileScope}.pdf`;
       document.body.append(link);
       const revokeUrl = URL.revokeObjectURL.bind(URL);
       link.click();
@@ -1033,7 +1044,7 @@ export default function AccountingView({
   };
 
   const downloadClassSituationExcel = async () => {
-    if (!selectedClassSituation || !yearId || !isClassSituationVisible) return;
+    if (!schoolId || !yearId || !isClassSituationVisible) return;
     setIsClassSituationExcelLoading(true);
     setClassSituationError('');
     try {
@@ -1049,7 +1060,8 @@ export default function AccountingView({
       const excelBytes = await buildClassSituationExcel({
         schoolName: selectedSchool?.officialName || selectedSchool?.name || 'Établissement',
         academicYearName: selectedYearName,
-        className: selectedClassSituation.name,
+        className: classSituationScopeLabel,
+        groupByClass: isAllClassesSituation,
         students: rows,
         installments,
       });
@@ -1059,7 +1071,8 @@ export default function AccountingView({
       const url = URL.createObjectURL(excelBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `situation-financiere-${selectedClassSituation.name.replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}.xlsx`;
+      const fileScope = classSituationScopeLabel.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+      link.download = `situation-financiere-${fileScope}.xlsx`;
       document.body.append(link);
       const revokeUrl = URL.revokeObjectURL.bind(URL);
       link.click();
@@ -1831,7 +1844,7 @@ export default function AccountingView({
               setSchoolId(nextSchoolId);
               setYearId(getActiveAccountingYearId(years, nextSchoolId));
             }} aria-label="Établissement">
-              <option value="">Choisir une école</option>
+              <option value="">Tous les établissements</option>
               {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
             </select>
           )}
@@ -1955,7 +1968,27 @@ export default function AccountingView({
           </div>
         )}
       </ModalSurface>
-      {!schoolId && <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">Sélectionnez un établissement pour accéder à ses données financières.</p>}
+      {!schoolId && userRole !== 'super_admin' && <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">Sélectionnez un établissement pour accéder à ses données financières.</p>}
+      {!schoolId && userRole === 'super_admin' && (
+        <div className="space-y-4">
+          <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">Choisissez un établissement pour ses données financières, ou consultez l’historique global des paiements et des demandes.</p>
+          <nav className="flex flex-wrap gap-2" aria-label="Sections comptables">
+            <button type="button" onClick={() => setTab('history')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${tab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              Historique global et demandes
+            </button>
+          </nav>
+          {tab === 'history' && (
+            <AccountingAdjustmentWorkflow
+              userRole={userRole}
+              schoolId={null}
+              currentUserId={currentUserId}
+              refreshToken={accountingRefreshToken}
+              onFinancialDataChanged={() => setAccountingRefreshToken((current) => current + 1)}
+              renderReceiptActions={renderReceiptActions}
+            />
+          )}
+        </div>
+      )}
       {schoolId && (
         <>
           <nav className="flex flex-wrap gap-2" aria-label="Sections comptables">
@@ -2104,7 +2137,6 @@ export default function AccountingView({
             <AccountingAdjustmentWorkflow
               userRole={userRole}
               schoolId={schoolId}
-              academicYearId={yearId}
               currentUserId={currentUserId}
               refreshToken={accountingRefreshToken}
               onFinancialDataChanged={() => setAccountingRefreshToken((current) => current + 1)}
@@ -2850,7 +2882,7 @@ export default function AccountingView({
                 </select>
                 <button
                   type="button"
-                  disabled={studentSituationClassId == null || !yearId || isClassSituationLoading}
+                  disabled={!yearId || isClassSituationLoading}
                   onClick={() => {
                     setIsClassSituationVisible(true);
                     setStudentId(null);
@@ -2858,11 +2890,13 @@ export default function AccountingView({
                   }}
                   className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {isClassSituationLoading ? 'Chargement…' : 'Voir la situation de la classe'}
+                  {isClassSituationLoading
+                    ? 'Chargement…'
+                    : isAllClassesSituation ? 'Voir la situation globale' : 'Voir la situation de la classe'}
                 </button>
                 <button
                   type="button"
-                  disabled={!selectedClassSituation || !yearId || !isClassSituationVisible || isClassSituationLoading || isClassSituationPdfLoading}
+                  disabled={!yearId || !isClassSituationVisible || isClassSituationLoading || isClassSituationPdfLoading}
                   onClick={downloadClassSituationPdf}
                   className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 px-3 py-2 text-sm font-semibold text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -2871,7 +2905,7 @@ export default function AccountingView({
                 </button>
                 <button
                   type="button"
-                  disabled={!selectedClassSituation || !yearId || !isClassSituationVisible || isClassSituationLoading || isClassSituationExcelLoading}
+                  disabled={!yearId || !isClassSituationVisible || isClassSituationLoading || isClassSituationExcelLoading}
                   onClick={downloadClassSituationExcel}
                   className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -2880,14 +2914,22 @@ export default function AccountingView({
                 </button>
               </div>
               {classSituationError && <p role="alert" className="text-sm text-rose-700">{classSituationError}</p>}
-              {isClassSituationVisible && selectedClassSituation && (
-                <section className="space-y-3 rounded-xl border border-slate-200 p-4" aria-label="Situation financière de la classe">
+              {isClassSituationVisible && yearId && (
+                <section className="space-y-3 rounded-xl border border-slate-200 p-4" aria-label={isAllClassesSituation ? 'Situation financière globale de l’établissement' : 'Situation financière de la classe'}>
                   <div>
-                    <h2 className="text-lg font-bold">Situation financière de la classe — {selectedClassSituation.name}</h2>
+                    <h2 className="text-lg font-bold">
+                      {isAllClassesSituation
+                        ? 'Situation financière de l’établissement — Toutes les classes'
+                        : `Situation financière de la classe — ${classSituationScopeLabel}`}
+                    </h2>
                     <p className="text-sm text-slate-500">{selectedSchool?.name ?? ''} · {selectedYearName}</p>
                   </div>
                   {isClassSituationLoading ? (
-                    <p role="status" className="text-sm text-slate-500">Chargement de la situation financière de la classe…</p>
+                    <p role="status" className="text-sm text-slate-500">
+                      {isAllClassesSituation
+                        ? 'Chargement de la situation financière de l’établissement…'
+                        : 'Chargement de la situation financière de la classe…'}
+                    </p>
                   ) : (
                     <>
                       <div className="overflow-x-auto rounded-lg border border-slate-200">
@@ -2910,7 +2952,7 @@ export default function AccountingView({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {classSituationRows.map((row, index) => (
+                            {displayedClassSituationRows.map((row, index) => (
                               <tr key={row.studentId}>
                                 <td className="px-3 py-2">{index + 1}</td>
                                 <td className="px-3 py-2 font-semibold">{row.lastName} {row.firstName}</td>
@@ -2956,7 +2998,9 @@ export default function AccountingView({
                             {!classSituationRows.length && (
                               <tr>
                                 <td colSpan={13} className="px-3 py-5 text-center text-slate-500">
-                                  Aucun élève ne correspond à cette classe et aux filtres sélectionnés.
+                                  {isAllClassesSituation
+                                    ? 'Aucun élève ne correspond à l’établissement, à l’année et aux filtres sélectionnés.'
+                                    : 'Aucun élève ne correspond à cette classe et aux filtres sélectionnés.'}
                                 </td>
                               </tr>
                             )}

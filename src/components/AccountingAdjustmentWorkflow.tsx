@@ -7,8 +7,10 @@ import ModalSurface from './ModalSurface.tsx';
 
 type PaymentRow = {
   id: number;
+  schoolName: string;
   studentId: number;
   studentName: string;
+  className: string | null;
   academicYearId: number;
   amount: number;
   method: string;
@@ -20,7 +22,12 @@ type PaymentRow = {
 
 type AdjustmentRequest = {
   id: number;
+  schoolName: string;
   paymentId: number;
+  paymentAmount: number;
+  studentFirstName: string;
+  studentLastName: string;
+  className: string | null;
   kind: 'cancellation' | 'refund';
   amount: number | null;
   reason: string;
@@ -41,8 +48,7 @@ type AdjustmentRequest = {
 
 interface AccountingAdjustmentWorkflowProps {
   userRole: UserRole;
-  schoolId: number;
-  academicYearId: number | null;
+  schoolId: number | null;
   currentUserId: number | null;
   refreshToken: number;
   onFinancialDataChanged: () => void;
@@ -61,6 +67,15 @@ const formatDate = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('fr-FR');
 };
 
+const normalizeSearchText = (value: string) => value
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLocaleLowerCase('fr');
+
+const formatDateInputValue = (date: Date) => (
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+);
+
 const getRequestStatusLabel = (request: AdjustmentRequest) => {
   if (request.status === 'pending') return 'En attente de validation';
   if (request.status === 'rejected') return 'Refusée';
@@ -78,7 +93,6 @@ const isRequestActive = (request: AdjustmentRequest) => request.status === 'pend
 export default function AccountingAdjustmentWorkflow({
   userRole,
   schoolId,
-  academicYearId,
   currentUserId,
   refreshToken,
   onFinancialDataChanged,
@@ -94,6 +108,8 @@ export default function AccountingAdjustmentWorkflow({
   const [requestAmount, setRequestAmount] = useState('');
   const [requestReason, setRequestReason] = useState('');
   const [requestBusy, setRequestBusy] = useState(false);
+  const requestSubmitLock = useRef(false);
+  const requestAttempt = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const [decisionReasons, setDecisionReasons] = useState<Record<number, string>>({});
   const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
   const [directPayment, setDirectPayment] = useState<PaymentRow | null>(null);
@@ -102,22 +118,32 @@ export default function AccountingAdjustmentWorkflow({
   const [directReason, setDirectReason] = useState('');
   const [directBusy, setDirectBusy] = useState(false);
   const directAdjustmentAttempt = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [classFilter, setClassFilter] = useState('');
+  const [kindFilter, setKindFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [requestedFrom, setRequestedFrom] = useState('');
+  const [requestedTo, setRequestedTo] = useState('');
 
   const canRequest = userRole === 'school_accountant';
   const canReview = userRole === 'school_admin';
   const canConfirmRefund = userRole === 'school_accountant';
   const isSuperAdmin = userRole === 'super_admin';
+  const canDirectAdjust = isSuperAdmin && schoolId != null;
 
   const reload = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const paymentQuery = new URLSearchParams({ schoolId: String(schoolId) });
-      if (academicYearId != null) paymentQuery.set('academicYearId', String(academicYearId));
-      const requestQuery = new URLSearchParams({ schoolId: String(schoolId) });
+      const paymentQuery = new URLSearchParams();
+      const requestQuery = new URLSearchParams();
+      if (schoolId != null) {
+        paymentQuery.set('schoolId', String(schoolId));
+        requestQuery.set('schoolId', String(schoolId));
+      }
       const [paymentRows, requestRows] = await Promise.all([
-        apiFetch(`/api/accounting/payments?${paymentQuery.toString()}`),
-        apiFetch(`/api/accounting/adjustment-requests?${requestQuery.toString()}`),
+        apiFetch(`/api/accounting/payments${paymentQuery.toString() ? `?${paymentQuery.toString()}` : ''}`),
+        apiFetch(`/api/accounting/adjustment-requests${requestQuery.toString() ? `?${requestQuery.toString()}` : ''}`),
       ]);
       setPayments(Array.isArray(paymentRows) ? paymentRows : []);
       setRequests(Array.isArray(requestRows) ? requestRows : []);
@@ -128,13 +154,16 @@ export default function AccountingAdjustmentWorkflow({
     } finally {
       setLoading(false);
     }
-  }, [academicYearId, schoolId]);
+  }, [schoolId]);
 
   useEffect(() => {
     void reload();
   }, [reload, refreshToken]);
 
-  const paymentById = useMemo(() => new Map(payments.map((payment) => [payment.id, payment])), [payments]);
+  useEffect(() => {
+    setClassFilter('');
+  }, [schoolId]);
+
   const activeRequestByPaymentId = useMemo(() => {
     const active = new Map<number, AdjustmentRequest>();
     for (const request of requests) {
@@ -142,12 +171,34 @@ export default function AccountingAdjustmentWorkflow({
     }
     return active;
   }, [requests]);
+  const requestClassOptions = useMemo(() => Array.from(new Set(
+    requests.map((request) => request.className?.trim()).filter((name): name is string => Boolean(name)),
+  )).sort((left, right) => left.localeCompare(right, 'fr')), [requests]);
+  const filteredRequests = useMemo(() => {
+    const searchTokens = normalizeSearchText(studentSearch).split(/\s+/).filter(Boolean);
+    return requests.filter((request) => {
+      const studentNames = normalizeSearchText(
+        `${request.studentFirstName} ${request.studentLastName} ${request.studentLastName} ${request.studentFirstName}`,
+      );
+      const requestedDate = new Date(request.requestedAt);
+      if (Number.isNaN(requestedDate.getTime())) return false;
+      const requestedDateKey = formatDateInputValue(requestedDate);
+      return searchTokens.every((token) => studentNames.includes(token))
+        && (!classFilter || request.className === classFilter)
+        && (!kindFilter || request.kind === kindFilter)
+        && (!statusFilter || request.status === statusFilter)
+        && (!requestedFrom || requestedDateKey >= requestedFrom)
+        && (!requestedTo || requestedDateKey <= requestedTo);
+    });
+  }, [classFilter, kindFilter, requestedFrom, requestedTo, requests, statusFilter, studentSearch]);
 
   const openRequestForm = (payment: PaymentRow, kind: 'cancellation' | 'refund') => {
     setSelectedPayment(payment);
     setRequestKind(kind);
     setRequestAmount('');
     setRequestReason('');
+    requestAttempt.current = null;
+    requestSubmitLock.current = false;
     setError('');
     setNotice('');
   };
@@ -164,7 +215,7 @@ export default function AccountingAdjustmentWorkflow({
 
   const submitRequest = async (event: FormEvent) => {
     event.preventDefault();
-    if (!selectedPayment || !canRequest || requestBusy) return;
+    if (!selectedPayment || !canRequest || requestBusy || requestSubmitLock.current) return;
     const reason = requestReason.trim();
     const amount = requestKind === 'refund' ? Number(requestAmount) : null;
     if (!reason || reason.length > 500) {
@@ -177,27 +228,37 @@ export default function AccountingAdjustmentWorkflow({
       return;
     }
 
+    const fingerprint = JSON.stringify([selectedPayment.id, requestKind, amount, reason]);
+    const previousAttempt = requestAttempt.current;
+    const idempotencyKey = previousAttempt?.fingerprint === fingerprint
+      ? previousAttempt.idempotencyKey
+      : crypto.randomUUID();
+    requestAttempt.current = { fingerprint, idempotencyKey };
+    requestSubmitLock.current = true;
     setRequestBusy(true);
     setError('');
     setNotice('');
     try {
       await apiFetch(`/api/accounting/payments/${selectedPayment.id}/adjustment-requests`, {
         method: 'POST',
-        body: {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           kind: requestKind,
           ...(requestKind === 'refund' ? { amount } : {}),
           reason,
-          idempotencyKey: crypto.randomUUID(),
-        },
+          idempotencyKey,
+        }),
       });
       setSelectedPayment(null);
+      requestAttempt.current = null;
       setNotice('La demande a été transmise pour validation.');
       await reload();
       onFinancialDataChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Impossible de transmettre la demande.');
       await reload();
+      setError(requestError instanceof Error ? requestError.message : 'Impossible de transmettre la demande.');
     } finally {
+      requestSubmitLock.current = false;
       setRequestBusy(false);
     }
   };
@@ -211,14 +272,15 @@ export default function AccountingAdjustmentWorkflow({
     try {
       await apiFetch(`/api/accounting/adjustment-requests/${request.id}/decision`, {
         method: 'POST',
-        body: { decision, reason },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, reason }),
       });
       setNotice(decision === 'approve' ? 'La demande a été approuvée.' : 'La demande a été refusée.');
       await reload();
       onFinancialDataChanged();
     } catch (decisionError) {
-      setError(decisionError instanceof Error ? decisionError.message : 'Impossible d’enregistrer la décision.');
       await reload();
+      setError(decisionError instanceof Error ? decisionError.message : 'Impossible d’enregistrer la décision.');
     } finally {
       setBusyRequestId(null);
     }
@@ -232,14 +294,15 @@ export default function AccountingAdjustmentWorkflow({
     try {
       await apiFetch(`/api/accounting/adjustment-requests/${request.id}/refund-confirmation`, {
         method: 'POST',
-        body: {},
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       });
       setNotice('La restitution des fonds a été confirmée.');
       await reload();
       onFinancialDataChanged();
     } catch (confirmationError) {
-      setError(confirmationError instanceof Error ? confirmationError.message : 'Impossible de confirmer la restitution.');
       await reload();
+      setError(confirmationError instanceof Error ? confirmationError.message : 'Impossible de confirmer la restitution.');
     } finally {
       setBusyRequestId(null);
     }
@@ -272,11 +335,12 @@ export default function AccountingAdjustmentWorkflow({
     try {
       await apiFetch(`/api/accounting/payments/${directPayment.id}/${directKind === 'cancellation' ? 'cancel' : 'refund'}`, {
         method: 'POST',
-        body: {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           ...(directKind === 'refund' ? { amount } : {}),
           reason,
           idempotencyKey,
-        },
+        }),
       });
       setDirectPayment(null);
       directAdjustmentAttempt.current = null;
@@ -286,10 +350,10 @@ export default function AccountingAdjustmentWorkflow({
       await reload();
       onFinancialDataChanged();
     } catch (adjustmentError) {
+      await reload();
       setError(adjustmentError instanceof Error
         ? adjustmentError.message
         : 'Impossible d’effectuer l’ajustement direct.');
-      await reload();
     } finally {
       setDirectBusy(false);
     }
@@ -308,18 +372,21 @@ export default function AccountingAdjustmentWorkflow({
             <div>
               <h2 className="text-xl font-bold text-slate-900">Historique des paiements</h2>
               <p className="mt-1 text-sm text-slate-500">Les opérations historiques restent consultables indépendamment du rôle de leur auteur.</p>
+              {isSuperAdmin && !schoolId && (
+                <p className="mt-1 text-sm text-indigo-700">Consultation toutes écoles. Sélectionnez un établissement dans le filtre en haut pour limiter l’historique et accéder aux interventions directes.</p>
+              )}
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full min-w-[900px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2">Élève / paiement</th>
+                    <th className="px-3 py-2">Élève / classe / établissement</th>
                     <th className="px-3 py-2">Mode</th>
                     <th className="px-3 py-2">Montant</th>
                     <th className="px-3 py-2">État</th>
                     <th className="px-3 py-2">Reçu</th>
-                    {(canRequest || isSuperAdmin) && <th className="px-3 py-2">Action</th>}
+                    {(canRequest || canDirectAdjust) && <th className="px-3 py-2">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -331,12 +398,14 @@ export default function AccountingAdjustmentWorkflow({
                         <td className="px-3 py-2">
                           <span className="font-semibold">{payment.studentName}</span>
                           <span className="ml-2 text-xs text-slate-500">Paiement #{payment.id}</span>
+                          <span className="mt-1 block text-xs text-slate-600">Classe : {payment.className || '—'}</span>
+                          {isSuperAdmin && <span className="block text-xs text-slate-600">Établissement : {payment.schoolName}</span>}
                           {activeRequest && (
                             <span className="mt-1 block text-xs font-semibold text-amber-800">
                               Demande active : {getRequestStatusLabel(activeRequest)}
                             </span>
                           )}
-                          {isSuperAdmin && activeRequest && (
+                          {canDirectAdjust && activeRequest && (
                             <span className="mt-1 block text-xs text-rose-700">
                               Intervention directe bloquée jusqu’au traitement de cette demande.
                             </span>
@@ -348,7 +417,7 @@ export default function AccountingAdjustmentWorkflow({
                         <td className="whitespace-nowrap px-3 py-2">
                           {renderReceiptActions(payment.receiptId, payment.receiptNumber, payment.status)}
                         </td>
-                        {(canRequest || isSuperAdmin) && (
+                        {(canRequest || canDirectAdjust) && (
                           <td className="px-3 py-2">
                             {canRequest && payment.status === 'posted' && !activeRequest && (
                               <div className="flex flex-wrap gap-2">
@@ -360,7 +429,7 @@ export default function AccountingAdjustmentWorkflow({
                                 </button>
                               </div>
                             )}
-                            {isSuperAdmin && payment.status === 'posted' && !activeRequest && (
+                            {canDirectAdjust && payment.status === 'posted' && !activeRequest && (
                               <div className="flex flex-wrap gap-2">
                                 <button type="button" className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-800" onClick={() => openDirectAdjustmentForm(payment, 'cancellation')}>
                                   Annuler directement
@@ -379,7 +448,7 @@ export default function AccountingAdjustmentWorkflow({
                     );
                   })}
                   {!payments.length && (
-                    <tr><td className="px-3 py-6 text-center text-slate-500" colSpan={canRequest || isSuperAdmin ? 7 : 6}>Aucun paiement trouvé pour cette sélection.</td></tr>
+                    <tr><td className="px-3 py-6 text-center text-slate-500" colSpan={canRequest || canDirectAdjust ? 7 : 6}>Aucun paiement trouvé pour cette sélection.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -391,9 +460,60 @@ export default function AccountingAdjustmentWorkflow({
               <h2 className="text-xl font-bold text-slate-900">{canReview ? 'Demandes à traiter' : 'Demandes d’ajustement'}</h2>
               <p className="mt-1 text-sm text-slate-500">Une autorisation de remboursement ne confirme pas la restitution des fonds.</p>
             </div>
+            <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-3">
+              <input
+                type="search"
+                aria-label="Rechercher par nom ou prénom de l’élève"
+                placeholder="Nom ou prénom de l’élève"
+                value={studentSearch}
+                onChange={(event) => setStudentSearch(event.target.value)}
+                className="rounded-lg border border-slate-200 bg-white p-2 text-sm"
+              />
+              <select aria-label="Filtrer par classe" value={classFilter} onChange={(event) => setClassFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-sm">
+                <option value="">Toutes les classes</option>
+                {requestClassOptions.map((className) => <option key={className} value={className}>{className}</option>)}
+              </select>
+              <select aria-label="Filtrer par type de demande" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-sm">
+                <option value="">Tous les types</option>
+                <option value="cancellation">Annulation</option>
+                <option value="refund">Remboursement</option>
+              </select>
+              <select aria-label="Filtrer par statut de demande" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-sm">
+                <option value="">Tous les statuts</option>
+                <option value="pending">En attente</option>
+                <option value="approved">Approuvée</option>
+                <option value="rejected">Refusée</option>
+              </select>
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                Transmise à partir du
+                <input type="date" aria-label="Demandes transmises à partir du" value={requestedFrom} onChange={(event) => setRequestedFrom(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-sm font-normal" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                Transmise jusqu’au
+                <input type="date" aria-label="Demandes transmises jusqu’au" value={requestedTo} onChange={(event) => setRequestedTo(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-sm font-normal" />
+              </label>
+              <div className="flex items-center justify-between gap-2 sm:col-span-2 lg:col-span-3">
+                {isSuperAdmin
+                  ? <span className="text-xs text-slate-600">Établissement : utilisez le sélecteur en haut (toutes les écoles ou une école).</span>
+                  : <span className="text-xs text-slate-600">Historique limité à votre établissement actif.</span>}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentSearch('');
+                    setClassFilter('');
+                    setKindFilter('');
+                    setStatusFilter('');
+                    setRequestedFrom('');
+                    setRequestedTo('');
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                >
+                  Réinitialiser les filtres
+                </button>
+              </div>
+            </div>
             <div className="space-y-3">
-              {requests.map((request) => {
-                const payment = paymentById.get(request.paymentId);
+              {filteredRequests.map((request) => {
                 const canDecide = canReview && request.status === 'pending';
                 const canConfirm = canConfirmRefund
                   && request.kind === 'refund'
@@ -409,8 +529,12 @@ export default function AccountingAdjustmentWorkflow({
                         </h3>
                         <p className="mt-1 text-sm text-slate-600">
                           Paiement #{request.paymentId}
-                          {payment ? ` · ${payment.studentName} · ${formatMoney(payment.amount)}` : ''}
+                          {` · ${request.studentFirstName} ${request.studentLastName} · ${formatMoney(request.paymentAmount)}`}
                           {request.amount != null ? ` · Montant demandé : ${formatMoney(request.amount)}` : ' · Annulation totale'}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Classe : {request.className || '—'}
+                          {isSuperAdmin ? ` · Établissement : ${request.schoolName}` : ''}
                         </p>
                       </div>
                       <span className={`rounded-full px-3 py-1 text-xs font-bold ${
@@ -481,6 +605,7 @@ export default function AccountingAdjustmentWorkflow({
                 );
               })}
               {!requests.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Aucune demande d’annulation ou de remboursement.</p>}
+              {requests.length > 0 && !filteredRequests.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Aucune demande ne correspond aux filtres sélectionnés.</p>}
             </div>
           </section>
         </>
@@ -489,7 +614,10 @@ export default function AccountingAdjustmentWorkflow({
       <ModalSurface
         isOpen={selectedPayment != null}
         onClose={() => {
-          if (!requestBusy) setSelectedPayment(null);
+          if (!requestBusy) {
+            setSelectedPayment(null);
+            requestAttempt.current = null;
+          }
         }}
         contentClassName="max-w-xl"
         ariaLabel={requestKind === 'cancellation' ? 'Demande d’annulation' : 'Demande de remboursement'}
