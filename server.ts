@@ -2315,6 +2315,18 @@ function verifyInternalNotificationAttachmentRequest(req: any, res: any): boolea
 export async function createApp() {
   assertSimulatedAuthConfiguration();
   const app = express();
+  const serverCalendarDateInAfricaLome = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Lome',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+    const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+    const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+    return `${year}-${month}-${day}`;
+  };
   app.disable('x-powered-by');
   app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
 
@@ -2850,6 +2862,12 @@ export async function createApp() {
   // Health check endpoint
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
+  });
+  app.get('/api/server-date', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json({ date: serverCalendarDateInAfricaLome() });
   });
 
   const suspensionExemptPaths = new Set([
@@ -13270,7 +13288,24 @@ export async function createApp() {
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   };
   const isDeclarationTime = (value: unknown) => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-  const todayIsoDate = () => new Date().toISOString().slice(0, 10);
+  const formatDateInTimeZone = (date: Date, timeZone: string) => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+    const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+    const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+    return `${year}-${month}-${day}`;
+  };
+  const serverTodayIsoDate = (timeZone = 'Africa/Lome') => formatDateInTimeZone(new Date(), timeZone);
+  const absencePastDateError = {
+    error: 'Vous ne pouvez pas déclarer une absence pour une date passée. Veuillez sélectionner la date du jour ou une date ultérieure.',
+    code: 'ABSENCE_DATE_IN_PAST',
+  };
 
   const notifyAbsenceDeclarationParent = async (parentUserId: number, title: string, message: string, metadata: Record<string, unknown>) => {
     const invalidationEventId = `invalidate-absence-declarations-${String(metadata.declarationId)}-${String(metadata.status || 'received')}-${crypto.randomUUID()}`;
@@ -13384,10 +13419,13 @@ export async function createApp() {
     }
     if (action !== 'cancel' && (
       !Number.isInteger(studentId) || studentId <= 0 ||
-      !isDeclarationDate(date) || date < todayIsoDate() ||
+      !isDeclarationDate(date) ||
       !isDeclarationTime(startTime) || !isDeclarationTime(endTime) || startTime >= endTime
     )) {
       return { status: 400, body: { error: 'Invalid absence declaration details' } };
+    }
+    if (action === 'create' && date < serverTodayIsoDate()) {
+      return { status: 400, body: absencePastDateError };
     }
     if (action !== 'cancel' && !childStudentIds.includes(studentId)) {
       return { status: 403, body: { error: 'Cannot declare an absence for a student you do not represent' } };
@@ -13415,7 +13453,7 @@ export async function createApp() {
         }).returning();
         if (!created) throw new Error('Absence declaration insert did not return a row.');
         let linkedAbsenceCount = 0;
-        if (date <= todayIsoDate()) {
+        if (date <= serverTodayIsoDate()) {
           const linkedAbsences = await tx.update(absences).set({ declarationId: created.id }).where(and(
             eq(absences.studentId, studentId),
             eq(absences.date, date),
@@ -13457,6 +13495,9 @@ export async function createApp() {
     if (!childStudentIds.includes(declaration.studentId)) {
       return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
     }
+    if (action === 'update' && date < serverTodayIsoDate() && date !== declaration.date) {
+      return { status: 400, body: absencePastDateError };
+    }
     const affectedStudentIds = action === 'update'
       ? [declaration.studentId, studentId]
       : [declaration.studentId];
@@ -13470,9 +13511,6 @@ export async function createApp() {
           body: { error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED', schoolId: affectedStudent.schoolId },
         };
       }
-    }
-    if (declaration.date < todayIsoDate()) {
-      return { status: 409, body: { error: 'A past declaration cannot be changed' } };
     }
     const linkedAbsence = await db.select({ id: absences.id }).from(absences)
       .where(eq(absences.declarationId, declarationId)).limit(1);
@@ -13502,8 +13540,8 @@ export async function createApp() {
         if (!childStudentIds.includes(before.studentId)) {
           return { status: 403, body: { error: 'Declaration student is no longer currently linked to this parent' } };
         }
-        if (before.date < todayIsoDate()) {
-          return { status: 409, body: { error: 'A past declaration cannot be changed' } };
+        if (action === 'update' && date < serverTodayIsoDate() && date !== before.date) {
+          return { status: 400, body: absencePastDateError };
         }
         const [linkedAbsence] = await tx.select({ id: absences.id }).from(absences)
           .where(eq(absences.declarationId, declarationId))
@@ -13625,7 +13663,7 @@ export async function createApp() {
           studentId: result.body.studentId,
           status: 'RECEIVED',
         });
-        if (result.body.date <= todayIsoDate()) {
+        if (result.body.date <= serverTodayIsoDate()) {
           await relayParentDataInvalidation('attendance', [{
             parentId: String(actor.id),
             entityIds: [String(result.body.studentId)],
@@ -13776,7 +13814,7 @@ export async function createApp() {
           studentId: result.body.studentId,
           status: 'RECEIVED',
         });
-        if (result.body.date <= todayIsoDate()) {
+        if (result.body.date <= serverTodayIsoDate()) {
           await relayParentDataInvalidation('attendance', [{
             parentId: String(parentUserId),
             entityIds: [String(result.body.studentId)],
@@ -13836,7 +13874,7 @@ export async function createApp() {
         updatedAt: reviewedAt,
       }).where(eq(absenceDeclarations.id, id)).returning();
 
-      if (declaration.date <= todayIsoDate()) {
+      if (declaration.date <= serverTodayIsoDate()) {
         await db.update(absences).set({ declarationId: declaration.id }).where(and(
           eq(absences.studentId, declaration.studentId),
           eq(absences.date, declaration.date),
@@ -13874,7 +13912,7 @@ export async function createApp() {
       if (!declaration) return res.status(404).json({ error: 'Declaration not found' });
       const student = await getAuthorizedDeclarationStudent(actor, declaration);
       if (!student) return res.status(403).json({ error: 'Declaration is outside the actor scope' });
-      if (declaration.date > todayIsoDate() || !['RECEIVED', 'ACCEPTED'].includes(declaration.status)) {
+      if (declaration.date > serverTodayIsoDate() || !['RECEIVED', 'ACCEPTED'].includes(declaration.status)) {
         return res.status(409).json({ error: 'This declaration cannot be closed as not realized' });
       }
       const linkedAbsence = await db.select({ id: absences.id }).from(absences).where(eq(absences.declarationId, id)).limit(1);
@@ -15394,7 +15432,7 @@ export async function createApp() {
       }
 
       const { absence: createdAbsence, matchedDeclaration } = await db.transaction(async (tx) => {
-        const [matchedDeclaration] = typeof date === 'string' && date <= todayIsoDate()
+        const [matchedDeclaration] = typeof date === 'string' && date <= serverTodayIsoDate()
           ? await tx.select().from(absenceDeclarations).where(and(
             eq(absenceDeclarations.studentId, parseInt(studentId, 10)),
             eq(absenceDeclarations.date, date),

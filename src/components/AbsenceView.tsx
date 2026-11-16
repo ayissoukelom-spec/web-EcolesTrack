@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { Absence, AbsenceDeclaration, Student, Class, Teacher, UserRole } from '../types.ts';
 import { sortClasses } from '../lib/classOrdering';
 import { getEffectiveAbsenceJustificationStatus } from '../lib/absenceJustificationStatus.ts';
 import { Clock, Plus, Filter, CalendarCheck, ShieldAlert, CheckSquare, Search, FileSymlink, Tag, Download, ChevronDown, LoaderCircle } from 'lucide-react';
-import { downloadAbsenceJustification } from '../lib/api.ts';
+import { apiFetch, downloadAbsenceJustification } from '../lib/api.ts';
 import type {
   LateArrivalJustificationDetail,
   LateArrivalJustificationListItem,
@@ -11,6 +11,9 @@ import type {
 import CustomDropdown from './CustomDropdown';
 import RequiredLabel from './RequiredLabel';
 import ModalSurface from './ModalSurface';
+
+const ABSENCE_DATE_IN_PAST_MESSAGE = 'Vous ne pouvez pas déclarer une absence pour une date passée. Veuillez sélectionner la date du jour ou une date ultérieure.';
+const SERVER_DATE_UNAVAILABLE_MESSAGE = 'Impossible de vérifier la date du serveur. Veuillez réessayer avant d’envoyer la déclaration.';
 
 interface LateArrivalEntry {
   id: number;
@@ -275,17 +278,72 @@ export default function AbsenceView({
   const [declarationForm, setDeclarationForm] = useState({
     id: null as number | null,
     studentId: '',
-    date: new Date().toISOString().split('T')[0],
+    date: '',
     startTime: '08:00',
     endTime: '09:30',
     reason: '',
   });
-  const declarationToday = new Date().toISOString().split('T')[0];
+  const [declarationToday, setDeclarationToday] = useState<string | null>(null);
+  const [isRefreshingDeclarationDate, setIsRefreshingDeclarationDate] = useState(false);
+  const declarationDateRequestRef = useRef(0);
+  const originalDeclarationDate = declarationForm.id == null
+    ? null
+    : absenceDeclarationsList.find((declaration) => declaration.id === declarationForm.id)?.date ?? null;
+  const declarationDateNeedsServerVerification = declarationForm.id == null
+    || declarationForm.date !== originalDeclarationDate;
+  const declarationDateMinimum = declarationDateNeedsServerVerification
+    ? declarationToday ?? undefined
+    : undefined;
+  const refreshDeclarationDate = useCallback(async (): Promise<string | null> => {
+    const requestId = declarationDateRequestRef.current + 1;
+    declarationDateRequestRef.current = requestId;
+    setIsRefreshingDeclarationDate(true);
+    try {
+      const response = await apiFetch('/api/server-date', { cache: 'no-store' }) as { date?: unknown };
+      if (typeof response?.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(response.date)) {
+        throw new Error(SERVER_DATE_UNAVAILABLE_MESSAGE);
+      }
+      if (requestId !== declarationDateRequestRef.current) return null;
+      const verifiedDate = response.date;
+      setDeclarationToday(verifiedDate);
+      setDeclarationForm((previous) => previous.date ? previous : { ...previous, date: verifiedDate });
+      return verifiedDate;
+    } catch (error) {
+      if (requestId === declarationDateRequestRef.current) setDeclarationToday(null);
+      console.error('Failed to refresh the verified absence declaration date', error);
+      return null;
+    } finally {
+      if (requestId === declarationDateRequestRef.current) setIsRefreshingDeclarationDate(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isDeclarationFormOpen) return;
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void refreshDeclarationDate();
+    };
+    void refreshDeclarationDate();
+    const intervalId = window.setInterval(refresh, 60_000);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('pageshow', refresh);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    window.addEventListener('ecoletrack:app-resume', refresh);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('pageshow', refresh);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('ecoletrack:app-resume', refresh);
+    };
+  }, [isDeclarationFormOpen, refreshDeclarationDate]);
+
   const canReviewAbsenceDeclarations = ['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(userRole);
   const receivedAbsenceDeclarationsCount = absenceDeclarationsList.filter((declaration) => declaration.status === 'RECEIVED').length;
 
   const resetDeclarationForm = () => {
-    setDeclarationForm({ id: null, studentId: '', date: declarationToday, startTime: '08:00', endTime: '09:30', reason: '' });
+    setDeclarationForm({ id: null, studentId: '', date: declarationToday ?? '', startTime: '08:00', endTime: '09:30', reason: '' });
     setIsDeclarationFormOpen(false);
     setDeclarationError(null);
   };
@@ -295,6 +353,19 @@ export default function AbsenceView({
     const reason = declarationForm.reason.trim();
     if (!reason) {
       setDeclarationError('Veuillez saisir un motif de déclaration.');
+      return;
+    }
+    const originalDate = declarationForm.id == null
+      ? null
+      : absenceDeclarationsList.find((declaration) => declaration.id === declarationForm.id)?.date;
+    const dateNeedsVerification = declarationForm.id == null || declarationForm.date !== originalDate;
+    const verifiedDate = dateNeedsVerification ? await refreshDeclarationDate() : declarationToday;
+    if (dateNeedsVerification && !verifiedDate) {
+      setDeclarationError(SERVER_DATE_UNAVAILABLE_MESSAGE);
+      return;
+    }
+    if (dateNeedsVerification && verifiedDate && declarationForm.date < verifiedDate) {
+      setDeclarationError(ABSENCE_DATE_IN_PAST_MESSAGE);
       return;
     }
     const data = {
@@ -314,7 +385,9 @@ export default function AbsenceView({
       }
       resetDeclarationForm();
     } catch (error: any) {
-      setDeclarationError(error?.message || 'Impossible d’enregistrer la déclaration.');
+      setDeclarationError(error?.code === 'ABSENCE_DATE_IN_PAST'
+        ? ABSENCE_DATE_IN_PAST_MESSAGE
+        : error?.message || 'Impossible d’enregistrer la déclaration.');
     }
   };
 
@@ -1026,11 +1099,12 @@ export default function AbsenceView({
                     ...previous,
                     id: null,
                     studentId: previous.studentId || (sortedStudents[0] ? String(sortedStudents[0].id) : ''),
-                    date: declarationToday,
+                    date: '',
                     startTime: '08:00',
                     endTime: '09:30',
                     reason: '',
                   }));
+                  setDeclarationToday(null);
                   setDeclarationError(null);
                   setIsDeclarationFormOpen(true);
                 }}
@@ -1065,7 +1139,8 @@ export default function AbsenceView({
                 <input
                   required
                   type="date"
-                  min={declarationToday}
+                  min={declarationDateMinimum}
+                  disabled={declarationDateNeedsServerVerification && (!declarationToday || isRefreshingDeclarationDate)}
                   value={declarationForm.date}
                   onChange={(event) => setDeclarationForm((previous) => ({ ...previous, date: event.target.value }))}
                   className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
@@ -1100,10 +1175,15 @@ export default function AbsenceView({
                   className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
                 />
               </label>
+              {declarationDateNeedsServerVerification && !declarationToday && (
+                <p className="sm:col-span-2 lg:col-span-5 text-xs font-semibold text-rose-700" role="alert">
+                  {isRefreshingDeclarationDate ? 'Vérification de la date du serveur…' : SERVER_DATE_UNAVAILABLE_MESSAGE}
+                </p>
+              )}
               {declarationError && <p className="sm:col-span-2 lg:col-span-5 text-xs font-semibold text-rose-700" role="alert">{declarationError}</p>}
               <div className="sm:col-span-2 lg:col-span-5 flex justify-end gap-2">
                 <button type="button" onClick={resetDeclarationForm} className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Annuler</button>
-                <button type="submit" className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+                <button type="submit" disabled={declarationDateNeedsServerVerification && (!declarationToday || isRefreshingDeclarationDate)} className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-400">
                   {declarationForm.id == null ? 'Envoyer la déclaration' : 'Enregistrer les modifications'}
                 </button>
               </div>
@@ -1114,10 +1194,11 @@ export default function AbsenceView({
             {absenceDeclarationsList
               .filter((declaration) => !pendingReviewOnly || declaration.status === 'RECEIVED')
               .map((declaration) => {
-                const canParentChange = userRole === 'parent'
-                  && ['RECEIVED', 'ACCEPTED'].includes(declaration.status)
-                  && declaration.date >= declarationToday;
-                const canCloseAsNotRealized = declaration.date <= declarationToday
+                const canParentCancel = userRole === 'parent'
+                  && ['RECEIVED', 'ACCEPTED'].includes(declaration.status);
+                const canParentChange = canParentCancel;
+                const canCloseAsNotRealized = declarationToday != null
+                  && declaration.date <= declarationToday
                   && ['RECEIVED', 'ACCEPTED'].includes(declaration.status);
                 const statusLabel = {
                   RECEIVED: 'Reçue',
@@ -1147,7 +1228,7 @@ export default function AbsenceView({
                       {canParentChange && onUpdateAbsenceDeclaration && (
                         <button type="button" onClick={() => editDeclaration(declaration)} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700">Modifier</button>
                       )}
-                      {canParentChange && onCancelAbsenceDeclaration && (
+                      {canParentCancel && onCancelAbsenceDeclaration && (
                         <button type="button" onClick={() => void cancelDeclaration(declaration)} className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700">Annuler la déclaration</button>
                       )}
                       {userRole !== 'parent' && declaration.status === 'RECEIVED' && onReviewAbsenceDeclaration && (
