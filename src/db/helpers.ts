@@ -1170,19 +1170,23 @@ export async function verifyRestrictedRuntimeSchema() {
       WHERE EXISTS (
         SELECT 1
         FROM (VALUES
-          ('public.validate_financial_adjustment_request_school()'),
-          ('public.validate_financial_adjustment_request_result()'),
-          ('public.protect_financial_adjustment_request_history()'),
-          ('public.reject_financial_adjustment_requests_truncate()'),
-          ('technical_audit.capture_financial_adjustment_requests_row()'),
-          ('technical_audit.capture_financial_adjustment_requests_truncate()')
-        ) expected(function_signature)
+          ('public', 'validate_financial_adjustment_request_school'),
+          ('public', 'validate_financial_adjustment_request_result'),
+          ('public', 'protect_financial_adjustment_request_history'),
+          ('public', 'reject_financial_adjustment_requests_truncate'),
+          ('technical_audit', 'capture_financial_adjustment_requests_row'),
+          ('technical_audit', 'capture_financial_adjustment_requests_truncate')
+        ) expected(function_schema, function_name)
         WHERE NOT EXISTS (
           SELECT 1
-          FROM pg_proc protected_function
-          JOIN pg_roles protected_owner
+          FROM pg_catalog.pg_proc protected_function
+          JOIN pg_catalog.pg_namespace protected_schema
+            ON protected_schema.oid = protected_function.pronamespace
+          JOIN pg_catalog.pg_roles protected_owner
             ON protected_owner.rolname = 'ecoletrack_history_owner'
-          WHERE protected_function.oid = to_regprocedure(expected.function_signature)
+          WHERE protected_schema.nspname = expected.function_schema
+            AND protected_function.proname = expected.function_name
+            AND protected_function.pronargs = 0
             AND protected_function.proowner = protected_owner.oid
         )
       )
@@ -1191,21 +1195,27 @@ export async function verifyRestrictedRuntimeSchema() {
 
       SELECT 'financial adjustment request protection trigger public.' || expected.trigger_name
       FROM (VALUES
-        ('financial_adjustment_requests_school_scope', 23, 'public.validate_financial_adjustment_request_school()'),
-        ('financial_adjustment_requests_result_guard', 23, 'public.validate_financial_adjustment_request_result()'),
-        ('financial_adjustment_requests_history_guard', 31, 'public.protect_financial_adjustment_request_history()'),
-        ('financial_adjustment_requests_no_truncate', 34, 'public.reject_financial_adjustment_requests_truncate()'),
-        ('db_audit_row_financial_adjustment_requests', 29, 'technical_audit.capture_financial_adjustment_requests_row()'),
-        ('db_audit_truncate_financial_adjustment_requests', 32, 'technical_audit.capture_financial_adjustment_requests_truncate()')
-      ) AS expected(trigger_name, trigger_type, function_signature)
+        ('financial_adjustment_requests_school_scope', 23, 'public', 'validate_financial_adjustment_request_school'),
+        ('financial_adjustment_requests_result_guard', 23, 'public', 'validate_financial_adjustment_request_result'),
+        ('financial_adjustment_requests_history_guard', 31, 'public', 'protect_financial_adjustment_request_history'),
+        ('financial_adjustment_requests_no_truncate', 34, 'public', 'reject_financial_adjustment_requests_truncate'),
+        ('db_audit_row_financial_adjustment_requests', 29, 'technical_audit', 'capture_financial_adjustment_requests_row'),
+        ('db_audit_truncate_financial_adjustment_requests', 32, 'technical_audit', 'capture_financial_adjustment_requests_truncate')
+      ) AS expected(trigger_name, trigger_type, function_schema, function_name)
       WHERE NOT EXISTS (
         SELECT 1
-        FROM pg_trigger trigger_object
+        FROM pg_catalog.pg_trigger trigger_object
+        JOIN pg_catalog.pg_proc trigger_function
+          ON trigger_function.oid = trigger_object.tgfoid
+        JOIN pg_catalog.pg_namespace trigger_function_schema
+          ON trigger_function_schema.oid = trigger_function.pronamespace
         WHERE trigger_object.tgrelid = to_regclass('public.financial_adjustment_requests')
           AND trigger_object.tgname = expected.trigger_name
           AND trigger_object.tgtype = expected.trigger_type
           AND trigger_object.tgenabled = 'A'
-          AND trigger_object.tgfoid = to_regprocedure(expected.function_signature)
+          AND trigger_function_schema.nspname = expected.function_schema
+          AND trigger_function.proname = expected.function_name
+          AND trigger_function.pronargs = 0
           AND NOT trigger_object.tgisinternal
       )
 
