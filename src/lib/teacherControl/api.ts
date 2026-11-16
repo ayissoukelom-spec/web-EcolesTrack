@@ -378,7 +378,7 @@ async function lockTeacherControlTeacher(
 }
 
 function isControlRole(role: string): role is TeacherControlRole {
-  return role === 'teacher' || role === 'school_admin' || role === 'super_admin';
+  return role === 'teacher' || role === 'school_admin' || role === 'school_accountant' || role === 'super_admin';
 }
 
 function actorAuditName(actor: TeacherControlActor): string {
@@ -618,7 +618,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     const access = await requireSchoolAccess(
       actor,
       req.query.schoolId,
-      ['school_admin', 'super_admin'],
+      ['school_admin', 'school_accountant', 'super_admin'],
     );
     const [settings] = await db.select().from(teacherControlGpsSettings)
       .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
@@ -636,7 +636,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   }, resolveActor));
 
   app.get('/api/teacher-control/gps-settings/history', handleRoute(async (req, _res, actor) => {
-    const access = await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'super_admin']);
+    const access = await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
     const rawLimit = Number(req.query.limit ?? 50);
     const limit = Number.isSafeInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE) : 50;
     const rawOffset = Number(req.query.offset ?? 0);
@@ -654,7 +654,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   app.put('/api/teacher-control/gps-settings', handleRoute(async (req, res, actor) => {
     res.setHeader('Cache-Control', 'no-store');
     const body = req.body as Record<string, unknown>;
-    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'super_admin']);
+    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
     if (typeof body.isEnabled !== 'boolean') throw new TeacherControlApiError(400, 'isEnabled must be a boolean');
     const latitude = body.latitude == null ? null : body.latitude;
     const longitude = body.longitude == null ? null : body.longitude;
@@ -753,7 +753,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
 
   app.put('/api/teacher-control/teachers/:teacherId/hourly-rate', handleRoute(async (req, _res, actor) => {
     const body = req.body as Record<string, unknown>;
-    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'super_admin']);
+    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
     const teacherId = positiveInteger(req.params.teacherId);
     if (!teacherId) throw new TeacherControlApiError(400, 'teacherId is invalid');
     const [teacher] = await db.select({ id: teachers.id, userId: teachers.userId })
@@ -827,7 +827,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     const access = await requireSchoolAccess(
       actor,
       req.query.schoolId,
-      ['school_admin', 'super_admin'],
+      ['school_admin', 'school_accountant', 'super_admin'],
     );
     const teacherId = positiveInteger(req.params.teacherId);
     if (!teacherId) throw new TeacherControlApiError(400, 'teacherId is invalid');
@@ -1170,11 +1170,11 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   }, resolveActor));
 
   app.post('/api/teacher-control/sessions/:sessionId/close-incomplete', handleRoute(async (req, _res, actor) => {
-    if (actor.role !== 'school_admin') throw new TeacherControlApiError(403, 'Forbidden');
+    if (actor.role !== 'school_admin' && actor.role !== 'school_accountant') throw new TeacherControlApiError(403, 'Forbidden');
     const sessionId = positiveInteger(req.params.sessionId);
     const reason = nonEmptyText((req.body as Record<string, unknown>).reason);
     if (!sessionId || !reason) throw new TeacherControlApiError(400, 'sessionId and a reason are required');
-    const access = await requireSchoolAccess(actor, null, ['school_admin']);
+    const access = await requireSchoolAccess(actor, null, ['school_admin', 'school_accountant']);
     const now = new Date();
     return db.transaction(async (tx) => {
       const [sessionSnapshot] = await tx.select({
@@ -1223,7 +1223,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   }, resolveActor));
 
   app.post('/api/teacher-control/sessions/:sessionId/correction', handleRoute(async (req, _res, actor) => {
-    if (actor.role !== 'school_admin') throw new TeacherControlApiError(403, 'Forbidden');
+    if (actor.role !== 'school_admin' && actor.role !== 'school_accountant') throw new TeacherControlApiError(403, 'Forbidden');
     const sessionId = positiveInteger(req.params.sessionId);
     const body = req.body as Record<string, unknown>;
     const reason = nonEmptyText(body.reason);
@@ -1242,7 +1242,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       || !expectedEndedAt) {
       throw new TeacherControlApiError(400, 'Expected and corrected times must be valid timestamps');
     }
-    const access = await requireSchoolAccess(actor, null, ['school_admin']);
+    const access = await requireSchoolAccess(actor, null, ['school_admin', 'school_accountant']);
 
     return db.transaction(async (tx) => {
       const [sessionSnapshot] = await tx.select({
@@ -1658,7 +1658,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         .orderBy(desc(teacherControlRegularizationRequests.createdAt));
       return await addLinkedSessionStarts(groupRegularizationHistory(rows));
     }
-    const access = await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'super_admin']);
+    const access = await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
     const rows = await db.select({
       request: teacherControlRegularizationRequests,
       decision: teacherControlRegularizationDecisions,
@@ -1673,7 +1673,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   }, resolveActor));
 
   app.post('/api/teacher-control/regularizations/:requestId/decision', handleRoute(async (req, _res, actor) => {
-    if (actor.role !== 'school_admin') throw new TeacherControlApiError(403, 'Forbidden');
+    if (actor.role !== 'school_admin' && actor.role !== 'school_accountant') throw new TeacherControlApiError(403, 'Forbidden');
     const requestId = positiveInteger(req.params.requestId);
     const body = req.body as Record<string, unknown>;
     const decision = body.decision;
@@ -1684,7 +1684,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     if ((decision === 'rejected' || decision === 'modified_accepted') && !reason) {
       throw new TeacherControlApiError(400, 'A reason is required for this decision');
     }
-    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'super_admin']);
+    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
     return db.transaction(async (tx) => {
       const [requestSnapshot] = await tx.select({
         teacherId: teacherControlRegularizationRequests.teacherId,
@@ -1950,7 +1950,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     const access = await requireSchoolAccess(
       actor,
       isTeacher ? null : req.query.schoolId,
-      isTeacher ? ['teacher'] : ['school_admin', 'super_admin'],
+      isTeacher ? ['teacher'] : ['school_admin', 'school_accountant', 'super_admin'],
     );
     const teacherId = isTeacher ? await getTeacherId(actor, access.schoolId) : null;
     const [session] = await db.select({ id: teacherControlSessions.id })
@@ -2012,13 +2012,13 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
   }, resolveActor));
 
   app.get('/api/teacher-control/filter-options', handleRoute(async (req, _res, actor) => {
-    if (actor.role !== 'school_admin' && actor.role !== 'super_admin') {
+    if (actor.role !== 'school_admin' && actor.role !== 'school_accountant' && actor.role !== 'super_admin') {
       throw new TeacherControlApiError(403, 'Forbidden');
     }
 
     const schoolId = actor.role === 'super_admin' && (req.query.schoolId == null || req.query.schoolId === '')
       ? null
-      : (await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'super_admin'])).schoolId;
+      : (await requireSchoolAccess(actor, req.query.schoolId, ['school_admin', 'school_accountant', 'super_admin'])).schoolId;
     const selectOptions = (
       idColumn: typeof teacherControlSessions.teacherId | typeof teacherControlSessions.classId | typeof teacherControlSessions.subjectId,
       nameColumn: typeof teacherControlSessions.teacherNameSnapshot | typeof teacherControlSessions.classNameSnapshot | typeof teacherControlSessions.subjectNameSnapshot,
@@ -2066,7 +2066,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       const access = await requireSchoolAccess(
         actor,
         isTeacher ? null : req.query.schoolId,
-        isTeacher ? ['teacher'] : ['school_admin', 'super_admin'],
+        isTeacher ? ['teacher'] : ['school_admin', 'school_accountant', 'super_admin'],
       );
       schoolId = access.schoolId;
       if (isTeacher) teacherId = await getTeacherId(actor, access.schoolId);
@@ -2124,7 +2124,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     const access = await requireSchoolAccess(
       actor,
       isTeacher ? null : req.query.schoolId,
-      isTeacher ? ['teacher'] : ['school_admin', 'super_admin'],
+      isTeacher ? ['teacher'] : ['school_admin', 'school_accountant', 'super_admin'],
     );
     const filters = parseSessionFilters(req.query);
     if (isTeacher) {

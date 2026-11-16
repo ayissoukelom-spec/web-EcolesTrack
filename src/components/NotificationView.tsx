@@ -443,7 +443,7 @@ export default function NotificationView({
               <p className="text-xs text-slate-400">Envoie un message instantané à la cible que vous configurez</p>
             </div>
 
-            {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
+            {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) ? (
               <form onSubmit={handleBroadcast} className="space-y-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Destinataires</label>

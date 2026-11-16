@@ -601,10 +601,10 @@ export default function TeacherControlView({
   currentTeacherName,
 }: TeacherControlViewProps) {
   const isTeacher = userRole === 'teacher';
-  const isSchoolAdmin = userRole === 'school_admin';
+  const canManageSchoolControl = userRole === 'school_admin' || userRole === 'school_accountant';
   const isSuperAdmin = userRole === 'super_admin';
-  const canManage = isSchoolAdmin;
-  const canManageGps = isSchoolAdmin || isSuperAdmin;
+  const canManage = canManageSchoolControl;
+  const canManageGps = canManageSchoolControl || isSuperAdmin;
   const schoolId = isSuperAdmin ? superAdminSchoolFilterId : activeSchoolId;
   const selectedSchool = schoolsList.find((school) => school.id === schoolId);
   const schoolQuery = isSuperAdmin && schoolId != null ? `?schoolId=${schoolId}` : '';
@@ -1380,7 +1380,7 @@ export default function TeacherControlView({
     request: Regularization['request'],
     decision: 'accepted' | 'rejected' | 'modified_accepted',
   ) => {
-    if (!isSchoolAdmin) return;
+    if (!canManageSchoolControl) return;
     const reason = regularizationReasons[request.id]?.trim() ?? '';
     const proposedEndedAt = decision === 'modified_accepted'
       ? parseLomeInput(regularizationEndTimes[request.id]
@@ -1428,7 +1428,7 @@ export default function TeacherControlView({
     session: Session,
     correction: { startedAt?: string; endedAt?: string; reason: string },
   ) => {
-    if (!isSchoolAdmin) return;
+    if (!canManageSchoolControl) return;
     setBusyAction(`correct-session-${session.id}`);
     setError(null);
     try {
@@ -1942,7 +1942,7 @@ export default function TeacherControlView({
                 />
             )}
 
-            {isSchoolAdmin && entry.request.status === 'pending' && (
+            {canManageSchoolControl && entry.request.status === 'pending' && (
               <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
                 <label className="text-xs font-semibold text-slate-700">
                   Heure de début retenue · heure de Lomé
@@ -2562,7 +2562,7 @@ export default function TeacherControlView({
                     key={session.id}
                     session={session}
                     isTeacher={isTeacher}
-                    isSchoolAdmin={isSchoolAdmin}
+                    isSchoolAdmin={canManageSchoolControl}
                     isSuperAdmin={isSuperAdmin}
                     busyAction={busyAction}
                     selected={session.id === selectedSessionId}
@@ -2577,7 +2577,7 @@ export default function TeacherControlView({
             </div>
           )}
 
-          {selectedSession && isSchoolAdmin && selectedSession.status === 'completed' && (
+          {selectedSession && canManageSchoolControl && selectedSession.status === 'completed' && (
             <SessionTimeCorrectionForm
               key={`${selectedSession.id}:${selectedSession.startedAt}:${selectedSession.validatedEndedAt}`}
               session={selectedSession}
@@ -2708,7 +2708,7 @@ export default function TeacherControlView({
                       onSubmit={(mode) => void completeImmediateRegularization(entry.request, mode)}
                     />
                   )}
-                {isSchoolAdmin && entry.request.status === 'pending' && (
+                {canManageSchoolControl && entry.request.status === 'pending' && (
                   <div className="mt-4 grid gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
                     <label className="text-xs font-semibold text-slate-700">
                       Heure de début retenue · heure de Lomé
@@ -2939,7 +2939,8 @@ function ModuleHeading({
 }) {
   const roleTitle = role === 'teacher' ? 'Espace enseignant'
     : role === 'school_admin' ? 'Administration de l’établissement'
-      : 'Super Administrateur · consultation par établissement';
+      : role === 'school_accountant' ? 'Secrétariat comptable de l’établissement'
+        : 'Super Administrateur · consultation par établissement';
   return (
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -3275,7 +3276,7 @@ function SessionCard({
           {hasPendingRequest && <span className="self-center text-xs font-semibold text-amber-700">Demande en attente de décision</span>}
         </div>
       )}
-      {isSchoolAdmin && session.status === 'open' && !hasPendingRequest && (
+      {canManageSchoolControl && session.status === 'open' && !hasPendingRequest && (
         <form className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={(event) => { event.preventDefault(); onClose(closeReason); }}>
           <label className="text-xs font-semibold text-slate-700">
             Motif obligatoire de clôture administrative

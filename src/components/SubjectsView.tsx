@@ -55,6 +55,7 @@ export default function SubjectsView({
   onEditSubjectGroup = () => {},
   onDeleteSubjectGroup = () => {},
 }: SubjectsViewProps) {
+  const isSchoolOperationsRole = userRole === 'school_admin' || userRole === 'school_accountant';
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formName, setFormName] = useState('');
@@ -68,7 +69,7 @@ export default function SubjectsView({
   const [subjectTypeDescription, setSubjectTypeDescription] = useState('');
   const [subjectTypeSortOrder, setSubjectTypeSortOrder] = useState(0);
   const [editingSubjectTypeId, setEditingSubjectTypeId] = useState<number | null>(null);
-  const isSchoolAdminEditingSubject = userRole === 'school_admin' && editingId != null;
+  const isSchoolAdminEditingSubject = isSchoolOperationsRole && editingId != null;
 
   const handleOpenForm = (subject?: Subject) => {
     if (subject) {
@@ -162,7 +163,7 @@ export default function SubjectsView({
   };
 
   const visibleSubjects = subjectsList.filter((subject) => {
-    if (userRole === 'school_admin') {
+    if (isSchoolOperationsRole) {
       return typeof (subject as any).status !== 'undefined'
         && (subject as any).status !== 'rejected';
     }
@@ -210,7 +211,7 @@ export default function SubjectsView({
           </h2>
           <p className="text-sm text-slate-500 mt-2">Administrez les matières/disciplines disponibles dans votre établissement</p>
         </div>
-        {userRole !== 'school_admin' && (
+        {!isSchoolOperationsRole && (
           <button
             onClick={() => handleOpenForm()}
             className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold text-sm flex items-center gap-2 hover:bg-indigo-700 transition-colors"
@@ -379,7 +380,7 @@ export default function SubjectsView({
               <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Nom de la matière</th>
               <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Code</th>
               <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Type</th>
-              {userRole === 'school_admin' && <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Statut</th>}
+              {isSchoolOperationsRole && <th className="text-left px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Statut</th>}
               <th className="text-center px-6 py-4 font-semibold text-slate-700 text-sm uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
@@ -392,7 +393,7 @@ export default function SubjectsView({
                     {subject.code ? <span className="bg-slate-100 px-2 py-1 rounded text-xs font-mono">{subject.code}</span> : <span className="text-slate-400 text-xs italic">—</span>}
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-600">{subjectTypesList.find((subjectType) => subjectType.id === subject.subjectTypeId)?.name || <span className="text-slate-400 text-xs italic">Aucun type</span>}</td>
-                  {userRole === 'school_admin' && (
+                  {isSchoolOperationsRole && (
                     <td className="px-6 py-4 text-sm">
                       <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${getStatusClasses(subject.status)}`}>
                         {getStatusLabel(subject.status)}
@@ -400,7 +401,7 @@ export default function SubjectsView({
                     </td>
                   )}
                   <td className="px-6 py-4 text-center space-x-2">
-                    {userRole === 'school_admin' ? (
+                    {isSchoolOperationsRole ? (
                       <>
                         {(subject.schoolId === schoolId || subject.schoolId === null) && (
                           <button
@@ -449,7 +450,7 @@ export default function SubjectsView({
               ))
             ) : (
               <tr>
-                <td colSpan={userRole === 'school_admin' ? 5 : 4} className="px-6 py-12 text-center">
+                <td colSpan={isSchoolOperationsRole ? 5 : 4} className="px-6 py-12 text-center">
                   <BookOpen className="h-12 w-12 text-slate-200 mx-auto mb-3" />
                   <p className="text-slate-500 font-medium">Aucune matière créée</p>
                   <p className="text-xs text-slate-400 mt-1">Cliquez sur "Ajouter une matière" pour commencer</p>

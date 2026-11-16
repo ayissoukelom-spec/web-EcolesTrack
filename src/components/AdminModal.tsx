@@ -62,6 +62,7 @@ export default function AdminModal(props: any) {
     subjectGroups = [],
   } = props;
   const { fieldErrors, setFieldErrors } = props;
+  const hasSchoolAdminWorkspace = userRole === 'school_admin' || userRole === 'school_accountant';
   const [isSubmittingSchool, setIsSubmittingSchool] = useState(false);
   const schoolSubmissionInProgress = React.useRef(false);
 
@@ -109,7 +110,7 @@ export default function AdminModal(props: any) {
   );
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId, 10) : undefined;
-  const currentStudentSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? selectedStudentSchoolId) : selectedStudentSchoolId;
+  const currentStudentSchoolId = hasSchoolAdminWorkspace ? (currentSchoolId ?? selectedStudentSchoolId) : selectedStudentSchoolId;
   const selectedStudentClassId = studentForm.classId ? parseInt(studentForm.classId, 10) : undefined;
   const [schoolScopedStudentClasses, setSchoolScopedStudentClasses] = useState<any[] | null>(null);
   useEffect(() => {
@@ -143,12 +144,12 @@ export default function AdminModal(props: any) {
   const filteredTeachers = selectedStudentClassId && teachersInSelectedClass.length > 0
     ? teachersInSelectedClass
     : sortTeachersAlphabetically(teachersList.filter((t: any) => !currentStudentSchoolId || t.schoolId === currentStudentSchoolId));
-  const disableStudentSchoolSelection = userRole === 'school_admin' && currentSchoolId != null;
+  const disableStudentSchoolSelection = hasSchoolAdminWorkspace && currentSchoolId != null;
   const selectedStudentParentId = studentForm.parentId ? parseInt(studentForm.parentId, 10) : undefined;
   const [localParents, setLocalParents] = useState<Parent[] | null>(null);
   const [parentSearchQuery, setParentSearchQuery] = useState('');
   const [subjectSearchQuery, setSubjectSearchQuery] = useState('');
-  const availableClassesForSchool = userRole === 'school_admin' && currentSchoolId
+  const availableClassesForSchool = hasSchoolAdminWorkspace && currentSchoolId
     ? sortedClasses.filter((c: any) => isClassVisibleToSchool(c, currentSchoolId))
     : sortedClasses;
 
@@ -307,12 +308,12 @@ export default function AdminModal(props: any) {
 
   const autoSelectedSchoolId = selectedStudentClass?.schoolId ?? currentStudentSchoolId ?? currentSchoolId ?? schoolsList[0]?.id;
   const autoSelectedSchoolName = schoolsList.find((s: any) => s.id === autoSelectedSchoolId)?.name || 'École assignée automatiquement';
-  const autoAssignedParentSchoolId = userRole === 'school_admin' ? currentSchoolId : undefined;
+  const autoAssignedParentSchoolId = hasSchoolAdminWorkspace ? currentSchoolId : undefined;
   const autoAssignedParentSchoolName = schoolsList.find((s: any) => s.id === autoAssignedParentSchoolId)?.name || autoSelectedSchoolName;
 
   const teacherFormSchoolId = teacherForm.schoolId ? parseInt(teacherForm.schoolId, 10) : undefined;
   const newTeacherFormSchoolId = newTeacherForm.schoolId ? parseInt(newTeacherForm.schoolId, 10) : undefined;
-  const selectedTeacherSchoolId = userRole === 'school_admin'
+  const selectedTeacherSchoolId = hasSchoolAdminWorkspace
     ? (currentSchoolId ?? autoSelectedSchoolId)
     : (newTeacherMode ? newTeacherFormSchoolId : teacherFormSchoolId);
   const [teacherSchoolClasses, setTeacherSchoolClasses] = useState<any[] | null>(null);
@@ -359,7 +360,7 @@ export default function AdminModal(props: any) {
   };
 
   useEffect(() => {
-    if (userRole === 'school_admin' && currentSchoolId != null && !parentForm.schoolId) {
+    if (hasSchoolAdminWorkspace && currentSchoolId != null && !parentForm.schoolId) {
       setParentForm((prev: any) => ({ ...prev, schoolId: String(currentSchoolId) }));
     }
   }, [userRole, currentSchoolId, parentForm.schoolId, setParentForm]);
@@ -831,7 +832,7 @@ export default function AdminModal(props: any) {
                   >
                     <option value="">Choisir un niveau</option>
                     {educationLevels
-                      .filter((level: any) => userRole !== 'school_admin' || !schoolCyclesLoaded || enabledEducationCycleIds.includes(Number(level.cycleId)))
+                      .filter((level: any) => !hasSchoolAdminWorkspace || !schoolCyclesLoaded || enabledEducationCycleIds.includes(Number(level.cycleId)))
                       .map((level: any) => <option key={level.id} value={String(level.id)}>{level.name}</option>)}
                   </select>
                 </div>
@@ -861,7 +862,7 @@ export default function AdminModal(props: any) {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
-                {userRole === 'school_admin' ? (
+                {userRole === 'school_admin' || userRole === 'school_accountant' ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                     {schoolsList.find((s: any) => s.id === (currentSchoolId ?? Number(classForm.schoolId)))?.name || 'Votre école sera assignée automatiquement'}
                   </div>
@@ -907,7 +908,7 @@ export default function AdminModal(props: any) {
               </div>
                   <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
-                {userRole === 'school_admin' ? (
+                {hasSchoolAdminWorkspace ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                     {schoolsList.find((s: any) => s.id === (currentSchoolId ?? schoolsList[0]?.id))?.name || 'Votre école sera assignée automatiquement'}
                   </div>
@@ -1057,7 +1058,7 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
-                    {userRole === 'school_admin' ? (
+                    {hasSchoolAdminWorkspace ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">{autoSelectedSchoolName}</div>
                     ) : (
                       <select value={newParentForm.schoolId} onChange={e => setNewParentForm({...newParentForm, schoolId: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 text-xs sm:text-sm rounded-xl">
@@ -1136,7 +1137,7 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
-                    {userRole === 'school_admin' ? (
+                    {hasSchoolAdminWorkspace ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                         {autoSelectedSchoolName}
                       </div>
@@ -1433,7 +1434,7 @@ export default function AdminModal(props: any) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Compte Admin École</label>
-                    {userRole === 'school_admin' ? (
+                    {hasSchoolAdminWorkspace ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                         {availableSchoolAdmins.find((u: any) => u.id === parseInt(studentForm.schoolAdminId))?.name || 'Admin école sera assigné automatiquement'}
                       </div>
@@ -1510,7 +1511,7 @@ export default function AdminModal(props: any) {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">École</label>
-                {userRole === 'school_admin' && currentSchoolId != null ? (
+                {hasSchoolAdminWorkspace && currentSchoolId != null ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                     {autoAssignedParentSchoolName}
                   </div>

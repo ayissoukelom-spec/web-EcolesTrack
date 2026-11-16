@@ -514,6 +514,8 @@ export default function AdminView({
   onRefreshClasses,
   currentSchoolId,
 }: AdminViewProps) {
+  const hasSchoolAdminWorkspace = userRole === 'school_admin' || userRole === 'school_accountant';
+  const canManageAccounts = userRole === 'super_admin' || userRole === 'school_admin';
   const approvedTeacherSpecializationsById = new Map<string, any>();
   (approvedSubjectsList || []).forEach((subject: any) => {
     const id = Number(subject.id);
@@ -576,7 +578,9 @@ export default function AdminView({
       | null;
     const validTabs = userRole === 'super_admin'
       ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts']
-      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts'];
+      : canManageAccounts
+        ? ['years', 'classes', 'teachers', 'students', 'parents', 'accounts']
+        : ['years', 'classes', 'teachers', 'students', 'parents'];
     if (savedTab && validTabs.includes(savedTab)) return savedTab;
     return userRole === 'super_admin' ? 'schools' : 'years';
   };
@@ -634,15 +638,15 @@ export default function AdminView({
   const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    if (userRole === 'school_admin') setAssignmentSchoolFilter(currentSchoolId ?? null);
-  }, [userRole, currentSchoolId]);
+    if (hasSchoolAdminWorkspace) setAssignmentSchoolFilter(currentSchoolId ?? null);
+  }, [hasSchoolAdminWorkspace, currentSchoolId]);
 
-  const assignmentTargetSchoolId = userRole === 'school_admin'
+  const assignmentTargetSchoolId = hasSchoolAdminWorkspace
     ? currentSchoolId ?? null
     : assignmentSchoolFilter;
 
   useEffect(() => {
-    if (!['super_admin', 'school_admin'].includes(userRole) || assignmentMode !== 'assign') return;
+    if (!['super_admin', 'school_admin', 'school_accountant'].includes(userRole) || assignmentMode !== 'assign') return;
     if (assignmentTargetSchoolId == null) {
       setAssignmentClasses([]);
       setSavedClassAssignments(new Map());
@@ -781,9 +785,9 @@ export default function AdminView({
   const [classFormClasses, setClassFormClasses] = useState<Class[] | null>(null);
   const [classFormClassesLoading, setClassFormClassesLoading] = useState(false);
   const [classFormClassesError, setClassFormClassesError] = useState<string | null>(null);
-  const autoAssignedSchoolId = userRole === 'school_admin' ? (currentSchoolId ?? getSimulatedSchoolId()) : undefined;
+  const autoAssignedSchoolId = hasSchoolAdminWorkspace ? (currentSchoolId ?? getSimulatedSchoolId()) : undefined;
   const autoAssignedSchoolName = schoolsList.find((s) => s.id === autoAssignedSchoolId)?.name || 'École assignée automatiquement';
-  const currentSchoolForAdmin = userRole === 'school_admin' ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
+  const currentSchoolForAdmin = hasSchoolAdminWorkspace ? schoolsList.find((s) => s.id === (currentSchoolId ?? getSimulatedSchoolId())) : undefined;
   const isStudentsCreationLocked = Boolean(currentSchoolForAdmin?.studentsCreationLocked);
 
   useEffect(() => {
@@ -838,11 +842,11 @@ export default function AdminView({
       });
   }, [successionAcademicYearId]);
 
-  const examSchoolId = userRole === 'school_admin' ? currentSchoolId : superAdminSchoolFilterId;
+  const examSchoolId = hasSchoolAdminWorkspace ? currentSchoolId : superAdminSchoolFilterId;
 
   useEffect(() => {
     const yearId = Number(examAcademicYearId);
-    if (!Number.isInteger(yearId) || yearId <= 0 || (userRole === 'school_admin' && examSchoolId == null)) {
+    if (!Number.isInteger(yearId) || yearId <= 0 || (hasSchoolAdminWorkspace && examSchoolId == null)) {
       setExamConfigurations([]);
       setExamStudents([]);
       setExamResultStatuses({});
@@ -967,13 +971,15 @@ export default function AdminView({
     if (typeof window === 'undefined') return;
     const validTabs = userRole === 'super_admin'
       ? ['schools', 'years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres']
-      : ['years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres'];
+      : canManageAccounts
+        ? ['years', 'classes', 'teachers', 'students', 'parents', 'accounts', 'matieres']
+        : ['years', 'classes', 'teachers', 'students', 'parents', 'matieres'];
     if (!validTabs.includes(activeTab)) {
       setActiveTab(validTabs[0] as typeof activeTab);
       return;
     }
     window.localStorage.setItem('ecoletrack-admin-active-tab', activeTab);
-  }, [activeTab, userRole]);
+  }, [activeTab, canManageAccounts, userRole]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1173,7 +1179,7 @@ export default function AdminView({
   })();
 
   const studentsInCurrentScope = studentsList.filter((st) =>
-    (userRole === 'super_admin' || userRole === 'school_admin'
+    (userRole === 'super_admin' || hasSchoolAdminWorkspace
       ? studentRosterFilter === 'all' || (studentRosterFilter === 'former' ? st.isActive === false : st.isActive !== false)
       : st.isActive !== false) &&
     (userRole !== 'super_admin' || !superAdminSchoolFilterId || st.schoolId === superAdminSchoolFilterId) &&
@@ -1205,8 +1211,8 @@ export default function AdminView({
     );
   });
 
-  const isStudentExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
-  const isTeacherExportAllowed = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
+  const isStudentExportAllowed = ['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole);
+  const isTeacherExportAllowed = ['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole);
 
   const runAdminDownload = async (key: string, downloadFile: () => void | Promise<void>) => {
     if (downloadingAdminActionsRef.current.has(key)) return;
@@ -1366,7 +1372,7 @@ export default function AdminView({
     ? user.functions.length > 0
     : user.role !== 'super_admin';
   const isLocalFunctionRole = (role: string): role is Exclude<UserRole, 'super_admin'> => (
-    role === 'teacher' || role === 'school_admin' || role === 'parent' || role === 'surveillant'
+    role === 'teacher' || role === 'school_admin' || role === 'school_accountant' || role === 'parent' || role === 'surveillant'
   );
   const accountBelongsToSchool = (user: User, schoolId: number | null | undefined) => {
     if (!schoolId) return true;
@@ -1406,7 +1412,9 @@ export default function AdminView({
       return false;
     }
     if (userRole === 'school_admin' && (
-      u.role === 'super_admin' || hasLocalFunction(u, 'school_admin')
+      u.role === 'super_admin'
+      || hasLocalFunction(u, 'school_admin')
+      || hasLocalFunction(u, 'school_accountant')
     )) {
       return false;
     }
@@ -1432,13 +1440,13 @@ export default function AdminView({
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId) : undefined;
   const defaultAcademicYearId = yearsList.find((y) => y.isActive)?.id || yearsList[0]?.id;
   const getYearsForSchool = (schoolId?: string | number | undefined) => {
-    const sid = schoolId !== undefined && schoolId !== '' ? Number(schoolId) : (userRole === 'school_admin' ? currentSchoolId : undefined);
+    const sid = schoolId !== undefined && schoolId !== '' ? Number(schoolId) : (hasSchoolAdminWorkspace ? currentSchoolId : undefined);
     return yearsList.filter((y) => y.schoolId == null || (sid !== undefined && sid !== null && y.schoolId === sid));
   };
   const visibleYearsList = userRole === 'super_admin' ? yearsList : getYearsForSchool(undefined);
   const adminEducationSchoolId = userRole === 'super_admin'
     ? superAdminSchoolFilterId ?? currentSchoolId
-    : userRole === 'school_admin' ? currentSchoolId : null;
+    : hasSchoolAdminWorkspace ? currentSchoolId : null;
   const schoolTermsListUrl = (academicYearId: string | number) =>
     `/api/school-terms?academicYearId=${academicYearId}${userRole === 'super_admin' ? '&globalOnly=true' : ''}`;
   const getSchoolTermAvailability = (term: any) => {
@@ -1539,7 +1547,7 @@ export default function AdminView({
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
   const classesForMainTable = userRole === 'super_admin' && superAdminSchoolFilterId != null
     ? refreshedClassListsBySchool.get(superAdminSchoolFilterId) ?? studentFilterClasses ?? classesList
-    : userRole === 'school_admin' && currentSchoolId != null
+    : hasSchoolAdminWorkspace && currentSchoolId != null
       ? refreshedClassListsBySchool.get(currentSchoolId) ?? classesList
       : studentFilterClasses ?? classesList;
 
@@ -1669,7 +1677,7 @@ export default function AdminView({
     }
 
     const simSchoolId = getSimulatedSchoolId();
-    const targetSchoolId = userRole === 'school_admin'
+    const targetSchoolId = hasSchoolAdminWorkspace
       ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
       : parseInt(newParentForm.schoolId);
     if (!targetSchoolId) {
@@ -1701,7 +1709,7 @@ export default function AdminView({
   const handleSaveNewTeacher = async () => {
     setStudentError(null);
     const simSchoolId = getSimulatedSchoolId();
-    const targetSchoolId = userRole === 'school_admin'
+    const targetSchoolId = hasSchoolAdminWorkspace
       ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
       : parseInt(newTeacherForm.schoolId);
 
@@ -1711,7 +1719,7 @@ export default function AdminView({
       setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
       return;
     }
-    if (userRole !== 'school_admin' && !newTeacherForm.schoolId) {
+    if (!hasSchoolAdminWorkspace && !newTeacherForm.schoolId) {
       setStudentError('L’enseignant doit contenir une école.');
       return;
     }
@@ -1924,7 +1932,7 @@ export default function AdminView({
       }
     } else if (activeTab === 'teachers') {
       const simSchoolId = getSimulatedSchoolId();
-      const teacherSchoolId = userRole === 'school_admin'
+      const teacherSchoolId = hasSchoolAdminWorkspace
         ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id)
         : parseInt(teacherForm.schoolId);
       const trimmedLastName = String(teacherForm.lastName ?? '').trim();
@@ -1933,7 +1941,7 @@ export default function AdminView({
         setStudentError('L’enseignant doit contenir un nom, des prénoms, un email et un téléphone.');
         return;
       }
-      if (userRole !== 'school_admin' && !teacherForm.schoolId) {
+      if (!hasSchoolAdminWorkspace && !teacherForm.schoolId) {
         setStudentError('Veuillez sélectionner une école pour l’enseignant.');
         return;
       }
@@ -1964,7 +1972,7 @@ export default function AdminView({
         teachingAssignments,
         gender: teacherForm.gender,
       });
-      setTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], teachingAssignments: [], gender: '' });
+      setTeacherForm({ lastName: '', firstNames: '', email: '', phone: '', specializations: [], schoolId: hasSchoolAdminWorkspace ? String(currentSchoolId || schoolsList[0]?.id || '') : '', assignedClassIds: [], teachingAssignments: [], gender: '' });
     } else if (activeTab === 'parents') {
       if (!parentForm.parentType) {
         setStudentError('Veuillez sélectionner le lien parental (Père/Mère/Tuteur).');
@@ -2001,10 +2009,10 @@ export default function AdminView({
         studentId: parseInt(parentForm.studentId),
         gender: parentGender,
       });
-      setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: userRole === 'school_admin' ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '', parentType: '' });
+      setParentForm({ name: '', email: '', phonePrefix: '+228', phone: '', address: '', schoolId: hasSchoolAdminWorkspace ? String(currentSchoolId || schoolsList[0]?.id || '') : '', studentId: '', gender: '', parentType: '' });
     } else if (activeTab === 'students') {
       const simSchoolId = getSimulatedSchoolId();
-      const targetSchoolId = parseInt(studentForm.schoolId) || (userRole === 'school_admin' ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id) : schoolsList[0]?.id);
+      const targetSchoolId = parseInt(studentForm.schoolId) || (hasSchoolAdminWorkspace ? (currentSchoolId ?? simSchoolId ?? schoolsList[0]?.id) : schoolsList[0]?.id);
       const selectedSchoolAdminId = studentForm.schoolAdminId ? parseInt(studentForm.schoolAdminId) : undefined;
 
       if (newParentMode) {
@@ -2161,7 +2169,7 @@ export default function AdminView({
 
       // Validate parent-specific columns
       const headerKeys = Object.keys(records[0] || {});
-      const requiredHeaders = userRole === 'school_admin'
+      const requiredHeaders = hasSchoolAdminWorkspace
         ? PARENT_IMPORT_HEADERS.filter((header) => !['phonePrefix', 'gender', 'schoolId', 'studentId', 'studentIds', 'studentNames'].includes(header))
         : PARENT_IMPORT_HEADERS.filter((header) => !['phonePrefix', 'gender', 'studentId', 'studentIds', 'studentNames'].includes(header));
       const missing: string[] = [];
@@ -2183,7 +2191,7 @@ export default function AdminView({
       const valid: any[] = [];
       const previewRecords: any[] = [];
       for (let i = 0; i < normalized.length; i++) {
-        const result = validateParentImportRow(normalized[i], { requireSchoolId: userRole !== 'school_admin' });
+        const result = validateParentImportRow(normalized[i], { requireSchoolId: !hasSchoolAdminWorkspace });
         previewRecords.push(result.normalized);
         if (result.errors.length > 0) rowErrors.push({ row: i + 2, errors: result.errors }); else valid.push(result.normalized);
       }
@@ -2447,7 +2455,7 @@ export default function AdminView({
     email: '',
     name: '',
     role: userRole === 'super_admin' ? 'school_admin' : 'teacher',
-    schoolId: userRole === 'school_admin' ? String(currentSchoolId || '') : '',
+    schoolId: hasSchoolAdminWorkspace ? String(currentSchoolId || '') : '',
     academicYearId: '',
     phone: '',
     specialization: [] as string[],
@@ -2553,7 +2561,7 @@ export default function AdminView({
   const [reactivateUserSuccess, setReactivateUserSuccess] = useState(false);
 
   useEffect(() => {
-    if (importResult && userRole !== 'super_admin' && userRole !== 'school_admin') {
+    if (importResult && !['super_admin', 'school_admin', 'school_accountant'].includes(userRole)) {
       onClearImportResult?.();
     }
   }, [importResult, onClearImportResult, userRole]);
@@ -2854,7 +2862,7 @@ export default function AdminView({
         </div>
         
         {/* Only enable some global setup if super/school admin */}
-        {['super_admin', 'school_admin'].includes(userRole) && (
+        {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {userRole === 'super_admin' && activeTab === 'students' && (
               <button
@@ -2890,13 +2898,13 @@ export default function AdminView({
 
                 <button
                   onClick={() => {
-                    if (userRole === 'school_admin' && isStudentsCreationLocked) {
+                    if (hasSchoolAdminWorkspace && isStudentsCreationLocked) {
                       setStudentError('La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissementllée par le Super Admin pour cet établissement.');
                       return;
                     }
                     fileInputRef.current?.click();
                   }}
-                  className={`hidden sm:inline-flex items-center gap-2 ${userRole === 'school_admin' && isStudentsCreationLocked ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-100' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-100'} font-semibold text-xs px-3 py-2 rounded-lg`}
+                  className={`hidden sm:inline-flex items-center gap-2 ${hasSchoolAdminWorkspace && isStudentsCreationLocked ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-100' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-100'} font-semibold text-xs px-3 py-2 rounded-lg`}
                   title="Importer Excel"
                 >
                   Importer Excel
@@ -3635,13 +3643,16 @@ export default function AdminView({
                       <>
                         <option value="super_admin">Super Admin</option>
                         <option value="school_admin">Admin École</option>
+                        {userToEdit.role === 'school_accountant' && (
+                          <option value="school_accountant">Secrétaire comptable</option>
+                        )}
                       </>
                     )}
                     <option value="teacher">Enseignant</option>
                     <option value="parent">Parent</option>
                   </select>
                 )}
-                {userToEdit.role === 'teacher' && userRole === 'school_admin' ? (
+                {userToEdit.role === 'teacher' && hasSchoolAdminWorkspace ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                     {autoAssignedSchoolName}
                   </div>
@@ -4480,7 +4491,7 @@ export default function AdminView({
             key: 'years',
             label: 'Années Scolaires',
             icon: <Calendar className="h-4 w-4" />,
-            visible: ['super_admin', 'school_admin'].includes(userRole),
+            visible: ['super_admin', 'school_admin', 'school_accountant'].includes(userRole),
           },
           {
             key: 'teachers',
@@ -4492,7 +4503,7 @@ export default function AdminView({
             key: 'classes',
             label: 'Classes',
             icon: <Layers className="h-4 w-4" />,
-            visible: ['super_admin', 'school_admin'].includes(userRole),
+            visible: ['super_admin', 'school_admin', 'school_accountant'].includes(userRole),
           },
           {
             key: 'students',
@@ -4510,13 +4521,13 @@ export default function AdminView({
             key: 'accounts',
             label: 'Comptes',
             icon: <Settings className="h-4 w-4" />,
-            visible: ['super_admin', 'school_admin'].includes(userRole),
+            visible: canManageAccounts,
           },
           {
             key: 'matieres',
             label: 'Matières',
             icon: <BookOpen className="h-4 w-4" />,
-            visible: ['super_admin', 'school_admin'].includes(userRole),
+            visible: ['super_admin', 'school_admin', 'school_accountant'].includes(userRole),
           },
         ]
           .filter((tab) => tab.visible)
@@ -4537,7 +4548,7 @@ export default function AdminView({
       </div>
 
       {/* Create User Modal */}
-      {showCreateUserForm && activeTab === 'accounts' && (
+      {showCreateUserForm && activeTab === 'accounts' && canManageAccounts && (
         <ModalSurface
           isOpen={showCreateUserForm && activeTab === 'accounts'}
           onClose={() => {
@@ -4609,7 +4620,7 @@ export default function AdminView({
                       setNewUserForm({
                         ...newUserForm,
                         role: selectedRole,
-                        schoolId: selectedRole === 'school_admin'
+                        schoolId: selectedRole === 'school_admin' || selectedRole === 'school_accountant'
                           ? newUserForm.schoolId
                           : userRole === 'school_admin' && ['teacher', 'surveillant', 'parent'].includes(selectedRole)
                             ? String(currentSchoolId || '')
@@ -4626,6 +4637,7 @@ export default function AdminView({
                       <>
                         <option value="super_admin">Super Admin</option>
                         <option value="school_admin">Admin École</option>
+                        <option value="school_accountant">Secrétaire comptable</option>
                       </>
                     )}
                     <option value="teacher">Enseignant</option>
@@ -4746,6 +4758,24 @@ export default function AdminView({
                         ))}
                       </select>
                     )}
+                  </div>
+                )}
+
+                {newUserForm.role === 'school_accountant' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                      <RequiredLabel label="Établissement" required />
+                    </label>
+                    <select
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-indigo-500"
+                      value={newUserForm.schoolId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, schoolId: e.target.value })}
+                    >
+                      <option value="">-- Choisir un établissement --</option>
+                      {schoolsList.map((school) => (
+                        <option key={school.id} value={String(school.id)}>{school.name}</option>
+                      ))}
+                    </select>
                   </div>
                 )}
 
@@ -4901,8 +4931,8 @@ export default function AdminView({
                           : 'Le numéro de téléphone doit contenir exactement 8 chiffres');
                         return;
                       }
-                      if (newUserForm.role === 'school_admin' && !newUserForm.schoolId) {
-                        setCreateUserError('Une école est requise pour un Admin École');
+                      if ((newUserForm.role === 'school_admin' || newUserForm.role === 'school_accountant') && !newUserForm.schoolId) {
+                        setCreateUserError('Un établissement est requis pour cette fonction');
                         return;
                       }
                       if (newUserForm.role === 'school_admin' && !newUserForm.academicYearId) {
@@ -5023,7 +5053,7 @@ export default function AdminView({
               <p className="mt-1 text-slate-600">
                 {Number(importResult.insertedCount || 0)} {importResult.entityType === 'students' ? 'élève(s)' : 'parent(s)'} importé(s).
               </p>
-              {(userRole === 'super_admin' || userRole === 'school_admin')
+              {(['super_admin', 'school_admin', 'school_accountant'].includes(userRole))
                 && Array.isArray(importResult.inserted)
                 && importResult.inserted.some((item: any) => item.temporaryPassword) && (
                 <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
@@ -5469,7 +5499,7 @@ export default function AdminView({
                 </div>
               </div>
             )}
-            {(userRole === 'super_admin' || userRole === 'school_admin') && adminEducationSchoolId != null && (
+            {(['super_admin', 'school_admin', 'school_accountant'].includes(userRole)) && adminEducationSchoolId != null && (
               <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Types de périodes</div>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -5701,7 +5731,7 @@ export default function AdminView({
                       )}
                       <div className="inline-flex items-center gap-2">
                         <div className="text-slate-400 text-xs">{t.isActive ? 'Actif' : 'Inactif'}</div>
-                        {['super_admin', 'school_admin'].includes(userRole) && adminEducationSchoolId != null && (
+                        {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && adminEducationSchoolId != null && (
                           <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${availability.className}`}>
                             {availability.label}
                           </span>
@@ -5781,7 +5811,7 @@ export default function AdminView({
         {/* TAB 3: CLASSES */}
         {activeTab === 'classes' && (
           <div>
-            {['super_admin', 'school_admin'].includes(userRole) && (
+            {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
                 <div className="w-full sm:w-auto">
                   {userRole === 'super_admin' && (
@@ -5815,7 +5845,7 @@ export default function AdminView({
                 )}
               </div>
             )}
-            {['super_admin', 'school_admin'].includes(userRole) && (
+            {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 mb-4">
                 <h3 className="text-sm font-semibold text-slate-700">Progression des classes pour les décisions annuelles</h3>
                 <p className="mt-1 text-xs text-slate-500">Définissez une fois les correspondances globales du catalogue de classes.</p>
@@ -5859,7 +5889,7 @@ export default function AdminView({
                   </>
               </div>
             )}
-            {['super_admin', 'school_admin'].includes(userRole) && (
+            {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 mb-4">
                 <h3 className="text-sm font-semibold text-slate-700">Classes d examen et résultats officiels</h3>
                 <p className="mt-1 text-xs text-slate-500">La configuration est explicite par école, classe et année. Aucun résultat absent n est interprété comme un échec.</p>
@@ -5885,7 +5915,7 @@ export default function AdminView({
                     <option value="BAC_I">BAC I</option>
                     <option value="BAC_II">BAC II</option>
                   </select>
-                  <button type="button" disabled={!examAcademicYearId || !examClassId || (userRole === 'school_admin' && examSchoolId == null)} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={async () => {
+                  <button type="button" disabled={!examAcademicYearId || !examClassId || (hasSchoolAdminWorkspace && examSchoolId == null)} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={async () => {
                     try {
                       await saveClassExamConfiguration({ classId: Number(examClassId), schoolId: examSchoolId, academicYearId: Number(examAcademicYearId), examType });
                       setExamConfigurations(await fetchClassExamConfigurations({ schoolId: examSchoolId ?? undefined, academicYearId: Number(examAcademicYearId) }));
@@ -6098,7 +6128,7 @@ export default function AdminView({
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         )}
-                        {userRole === 'school_admin' && (
+                        {hasSchoolAdminWorkspace && (
                           <>
                             {cls.status !== 'approved' && (
                               <button
@@ -6168,7 +6198,7 @@ export default function AdminView({
             </div>
             
             {/* Mode toggle buttons for teachers (list vs assign) */}
-            {['super_admin', 'school_admin'].includes(userRole) && (
+            {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
               <div className="mb-4 flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={() => setAssignmentMode('list')}
@@ -6193,7 +6223,7 @@ export default function AdminView({
               </div>
             )}
             {/* List view - teachers table */}
-            {!['super_admin', 'school_admin'].includes(userRole) || assignmentMode === 'list' ? (
+            {!['super_admin', 'school_admin', 'school_accountant'].includes(userRole) || assignmentMode === 'list' ? (
               <>
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-sm font-semibold text-slate-700" data-testid="teachers-total-count">
@@ -6241,7 +6271,7 @@ export default function AdminView({
                             <Eye className="h-3.5 w-3.5" />
                             Voir
                           </button>
-                          {['super_admin', 'school_admin'].includes(userRole) && (
+                          {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
                             <button
                               onClick={() => {
                                 const user = usersList.find((u) => u.id === tc.userId);
@@ -6465,7 +6495,7 @@ export default function AdminView({
                 </select>
               </div>
             )}
-            {['super_admin', 'school_admin'].includes(userRole) && (
+            {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
               <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-3 mb-3 min-w-0">
                 <div className="flex min-w-0 flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
                   {userRole === 'super_admin' && (
@@ -6552,7 +6582,7 @@ export default function AdminView({
                   )}
                   <button
                     onClick={() => {
-                      if (userRole === 'school_admin' && isStudentsCreationLocked) {
+                      if (hasSchoolAdminWorkspace && isStudentsCreationLocked) {
                         setStudentError('La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissement.');
                         return;
                       }
@@ -6573,11 +6603,11 @@ export default function AdminView({
                       setActiveTab('students');
                       setIsModalOpen(true);
                     }}
-                    className={`inline-flex shrink-0 items-center gap-2 ${userRole === 'school_admin' && isStudentsCreationLocked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'} font-semibold text-xs px-3 py-2 rounded-lg`}
+                    className={`inline-flex shrink-0 items-center gap-2 ${hasSchoolAdminWorkspace && isStudentsCreationLocked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'} font-semibold text-xs px-3 py-2 rounded-lg`}
                   >
                     Créer un élève
                   </button>
-                  {userRole === 'school_admin' && isStudentsCreationLocked && (
+                  {hasSchoolAdminWorkspace && isStudentsCreationLocked && (
                     <div className="min-w-0 basis-full text-sm text-rose-600 italic sm:basis-auto sm:ml-3">La création d'élèves est temporairement verrouillée par le Super Admin pour cet établissement.</div>
                   )}
                 </div>
@@ -6630,7 +6660,7 @@ export default function AdminView({
                           <Eye className="h-3.5 w-3.5" />
                           Voir
                         </button>
-                        {['super_admin', 'school_admin'].includes(userRole) && (
+                        {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
                           <button
                             onClick={() => openStudentEdit(st)}
                             className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-indigo-700 text-xs font-semibold transition-colors"
@@ -6756,7 +6786,7 @@ export default function AdminView({
                         <Eye className="h-3.5 w-3.5" />
                         Voir
                       </button>
-                      {['super_admin', 'school_admin'].includes(userRole) && (
+                      {['super_admin', 'school_admin', 'school_accountant'].includes(userRole) && (
                         <button
                           onClick={() => {
                             const user = usersList.find((u) => u.id === pt.userId);
@@ -6796,7 +6826,7 @@ export default function AdminView({
         )}
 
         {/* TAB 7: ACCOUNTS */}
-        {activeTab === 'accounts' && (
+        {activeTab === 'accounts' && canManageAccounts && (
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div>
@@ -6860,6 +6890,7 @@ export default function AdminView({
                       <>
                         <option value="super_admin">Super Admin</option>
                         <option value="school_admin">Admin École</option>
+                        <option value="school_accountant">Secrétaire comptable</option>
                       </>
                     )}
                     <option value="teacher">Enseignant</option>
@@ -6915,9 +6946,12 @@ export default function AdminView({
                         : user.functions
                           ? user.functions.map((membership) => {
                             const schoolName = schoolsList.find((school) => school.id === membership.schoolId)?.name;
-                            return `${membership.role.replace('_', ' ')}${schoolName ? ` — ${schoolName}` : ''}`;
+                            const roleLabel = membership.role === 'school_accountant'
+                              ? 'Secrétaire comptable'
+                              : membership.role.replace('_', ' ');
+                            return `${roleLabel}${schoolName ? ` — ${schoolName}` : ''}`;
                           }).join(', ') || 'Aucune fonction active'
-                          : user.role.replace('_', ' ')}
+                          : user.role === 'school_accountant' ? 'Secrétaire comptable' : user.role.replace('_', ' ')}
                     </td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{schoolNamesForAccount(user).join(', ') || '—'}</td>
                     <td className="px-3 sm:px-6 py-4 text-slate-500">{yearsList.find((y) => y.id === (user as any).academicYearId)?.name || '—'}</td>
@@ -7084,9 +7118,11 @@ export default function AdminView({
                 onChange={(event) => setMultiSchoolRole(event.target.value)}
               >
                 {(userRole === 'super_admin'
-                  ? ['parent', 'teacher', 'school_admin', 'surveillant', 'super_admin']
+                  ? ['parent', 'teacher', 'school_admin', 'school_accountant', 'surveillant', 'super_admin']
                   : ['parent', 'teacher', 'surveillant']).map((role) => (
-                  <option key={role} value={role}>{role}</option>
+                  <option key={role} value={role}>
+                    {role === 'school_accountant' ? 'Secrétaire comptable' : role.replace('_', ' ')}
+                  </option>
                 ))}
               </select>
             </label>
@@ -7164,7 +7200,9 @@ export default function AdminView({
                   return (
                     <li key={membership.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                       <div>
-                        <div className="font-medium text-slate-800">{membership.role.replace('_', ' ')}</div>
+                        <div className="font-medium text-slate-800">
+                          {membership.role === 'school_accountant' ? 'Secrétaire comptable' : membership.role.replace('_', ' ')}
+                        </div>
                         <div className="text-sm text-slate-500">{schoolName}</div>
                         <span className={`text-xs font-semibold ${inactive ? 'text-rose-700' : 'text-emerald-700'}`}>
                           {inactive ? 'Fonction désactivée' : 'Fonction active'}

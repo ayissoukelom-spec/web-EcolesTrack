@@ -19,7 +19,7 @@ import type { LocalSchoolRole } from '../lib/localSchoolRoles.ts';
 import { isLocalSchoolRole } from '../lib/localSchoolRoles.ts';
 import type { ServerResolvedContextAuthorization } from '../server/accessSessionLifecycle.ts';
 
-export type AppRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | 'surveillant' | 'student';
+export type AppRole = 'super_admin' | 'school_admin' | 'school_accountant' | 'teacher' | 'parent' | 'surveillant' | 'student';
 
 export function assertSimulatedAuthConfiguration(): void {
   if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SIMULATED_AUTH === 'true') {
@@ -32,6 +32,7 @@ export const mapToAppRole = (rawRole?: string | null): AppRole | undefined => {
   if (
     rawRole === 'super_admin'
     || rawRole === 'school_admin'
+    || rawRole === 'school_accountant'
     || rawRole === 'teacher'
     || rawRole === 'surveillant'
     || rawRole === 'parent'

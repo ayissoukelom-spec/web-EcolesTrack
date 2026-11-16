@@ -1120,7 +1120,7 @@ class StudentAuthorizationError extends Error {
 }
 
 const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
-  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin') {
+  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin' && req.user?.role !== 'school_accountant') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();
@@ -1199,7 +1199,7 @@ export const registerBulletinGenerateRoute = (
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
       const currentAuditActor: AuditEventActor = {
         userId: actor.id ?? null,
         role: actor.role,
@@ -1531,7 +1531,7 @@ export const registerBulletinGenerateRoute = (
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role || '')) return res.status(403).json({ error: 'Forbidden' });
       const currentAuditActor: AuditEventActor = {
         userId: actor.id ?? null,
         role: actor.role,
@@ -1549,7 +1549,7 @@ export const registerBulletinGenerateRoute = (
 
       const [classRecord] = await db.select({ id: classes.id, academicYearId: classes.academicYearId, schoolId: classes.schoolId }).from(classes).where(eq(classes.id, classId));
       if (!classRecord) return res.status(404).json({ error: 'Class not found' });
-      if (actor.role === 'school_admin' && (
+      if ((actor.role === 'school_admin' || actor.role === 'school_accountant') && (
         actor.schoolId == null
         || !(await isApprovedClassForSchool(classId, actor.schoolId))
       )) return res.status(403).json({ error: 'Class is outside the school scope' });
@@ -1580,7 +1580,7 @@ export const registerBulletinGenerateRoute = (
           : Array.from(new Set(classStudents.map((student: any) => Number(student.schoolId)).filter((id: number) => Number.isInteger(id) && id > 0)));
       if (schoolIds.length === 0) return res.status(400).json({ error: 'School context is required to generate class bulletins' });
       auditSchoolId = schoolIds.length === 1 ? schoolIds[0] : null;
-      if (actor.role === 'school_admin' && (schoolIds.length !== 1 || schoolIds[0] !== actor.schoolId)) {
+      if ((actor.role === 'school_admin' || actor.role === 'school_accountant') && (schoolIds.length !== 1 || schoolIds[0] !== actor.schoolId)) {
         return res.status(403).json({ error: 'Class bulletins must stay within the actor school' });
       }
       for (const schoolId of schoolIds) {

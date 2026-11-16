@@ -453,7 +453,7 @@ export default function App() {
   ));
   const visibleErrorMsg = getUiErrorMessage(errorMsg);
 
-  const noteOverdueCount = currentRole === 'teacher' || currentRole === 'surveillant' || currentRole === 'school_admin' || currentRole === 'super_admin'
+  const noteOverdueCount = currentRole === 'teacher' || currentRole === 'surveillant' || currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'super_admin'
     ? countOverdueEvaluations(
       evaluationsList,
       studentsList,
@@ -644,7 +644,7 @@ export default function App() {
       ];
 
       const promises = endpoints.map(e => apiFetch(e).catch((err) => ({ __error: true, error: err })));
-      const canLoadLateArrivalJustifications = ['parent', 'teacher', 'surveillant', 'school_admin', 'super_admin'].includes(currentRole);
+      const canLoadLateArrivalJustifications = ['parent', 'teacher', 'surveillant', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole);
       const [results, lateArrivalJustifications] = await Promise.all([
         Promise.all(promises),
         canLoadLateArrivalJustifications
@@ -698,7 +698,7 @@ export default function App() {
       if (Array.isArray(map['/api/simulation/users'])) setUsersList(map['/api/simulation/users']);
       const disabledAccountRows = disabledUsersEndpoint && Array.isArray(map[disabledUsersEndpoint])
         ? map[disabledUsersEndpoint].filter((user: User) => (
-          user.isDeleted === true && ['teacher', 'school_admin', 'parent'].includes(user.role)
+          user.isDeleted === true && ['teacher', 'school_admin', 'school_accountant', 'parent'].includes(user.role)
         ))
         : [];
       if (disabledAccountRows.length > 0) {
@@ -770,7 +770,7 @@ export default function App() {
 
   useEffect(() => {
     setPendingRegularizationsCount(0);
-    if (!['teacher', 'school_admin', 'super_admin'].includes(currentRole)) {
+    if (!['teacher', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole)) {
       return;
     }
     if (currentRole !== 'super_admin' && activeSchoolId == null) {
@@ -837,7 +837,7 @@ export default function App() {
   }, [activeTab, currentRole]);
 
   useEffect(() => {
-    if (!['school_admin', 'super_admin', 'surveillant', 'teacher', 'parent'].includes(currentRole)) return;
+    if (!['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher', 'parent'].includes(currentRole)) return;
 
     const refreshDashboardOnFocus = () => {
       if (currentRole === 'parent') {
@@ -885,6 +885,8 @@ export default function App() {
         }
       } else if (newRole === 'school_admin') {
         setSimulatedUser({ uid: `sim_schooladmin_${Date.now()}`, email: 'sim_schooladmin@example.test', name: 'Admin Ecole', schoolId: currentSchoolId });
+      } else if (newRole === 'school_accountant') {
+        setSimulatedUser({ uid: `sim_schoolaccountant_${Date.now()}`, email: 'sim_schoolaccountant@example.test', name: 'Secrétaire comptable', schoolId: currentSchoolId });
       } else if (newRole === 'parent') {
         setSimulatedUser({ uid: `sim_parent_${Date.now()}`, email: 'sim_parent@example.test', name: 'Parent Simulé', schoolId: currentSchoolId });
       }
@@ -1655,7 +1657,7 @@ export default function App() {
   // Centralized filtering of evaluations: separate active from archived
   const activeEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return true;
-    if (currentRole === 'school_admin') {
+    if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
       return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
         && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
@@ -1663,7 +1665,7 @@ export default function App() {
   });
   const archivedEvaluations = evaluationsList.filter((ev) => {
     if (currentRole === 'super_admin') return false;
-    if (currentRole === 'school_admin') {
+    if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
       return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
         || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
@@ -1671,7 +1673,8 @@ export default function App() {
   });
   const isTeacherControlDestination = (activeTab === 'teacher-control'
     || activeTab === 'teacher-control-regularizations')
-    && ['teacher', 'school_admin', 'super_admin'].includes(currentRole);
+    && ['teacher', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole);
+  const canAccessAccounting = ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -1726,7 +1729,7 @@ export default function App() {
 
             <nav className="space-y-1" aria-label="Navigation principale">
               {/* Administration */}
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
+              {(currentRole === 'super_admin' || currentRole === 'school_admin' || currentRole === 'school_accountant') && <button
                 onClick={() => setActiveTab('administration')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'administration'
@@ -1740,7 +1743,7 @@ export default function App() {
               </button>}
 
               {/* Teacher control */}
-              {['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+              {['teacher', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole) && (
                 <SidebarNavigationGroup
                   id="teacher-control"
                   expanded={teacherControlGroupExpanded}
@@ -1792,19 +1795,19 @@ export default function App() {
               )}
 
               <button
-                disabled={currentRole !== 'super_admin'}
+                disabled={!canAccessAccounting}
                 onClick={() => {
-                  if (currentRole === 'super_admin') setActiveTab('accounting');
+                  if (canAccessAccounting) setActiveTab('accounting');
                 }}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  currentRole === 'super_admin'
+                  canAccessAccounting
                     ? activeTab === 'accounting'
                       ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10 cursor-pointer'
                       : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 cursor-pointer'
                     : 'cursor-not-allowed opacity-60 text-slate-400'
                 }`}
                 id="sidebar-nav-accounting"
-                aria-disabled={currentRole !== 'super_admin'}
+                aria-disabled={!canAccessAccounting}
               >
                 <SidebarNavigationIcon><Wallet className="h-4.5 w-4.5" /></SidebarNavigationIcon>
                 <span className="text-left">Comptabilité</span>
@@ -1826,7 +1829,7 @@ export default function App() {
                 id="absences"
                 expanded={absenceGroupExpanded}
                 activeChild={activeAbsenceSubmenu}
-                hasSubmenu={['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole)}
+                hasSubmenu={['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(currentRole)}
                 onToggle={() => toggleNavigationGroup('absences')}
                 parent={(
                   <button
@@ -1853,7 +1856,7 @@ export default function App() {
                   </button>
                 )}
               >
-                {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                {['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
                   <button
                     onClick={() => setActiveTab('absence-declaration-validations')}
                     className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
@@ -1877,7 +1880,7 @@ export default function App() {
                   </button>
                 )}
 
-                {['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                {['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
                   <button
                     onClick={() => setActiveTab('absence-validations')}
                     className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
@@ -1899,7 +1902,7 @@ export default function App() {
                   </button>
                 )}
 
-                {(currentRole === 'school_admin' || currentRole === 'surveillant') && (
+                {(currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'surveillant') && (
                   <button
                     onClick={() => setActiveTab('absence-controls')}
                     className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer ${
@@ -1974,23 +1977,23 @@ export default function App() {
 
               {currentRole !== 'surveillant' && <button
                 type="button"
-                disabled={currentRole !== 'super_admin' && currentRole !== 'school_admin'}
+                disabled={!['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)}
                 onClick={() => {
-                  if (currentRole === 'super_admin' || currentRole === 'school_admin') {
+                  if (['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)) {
                     setActiveTab('bulletins');
                   }
                 }}
                 className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  currentRole !== 'super_admin' && currentRole !== 'school_admin'
+                  !['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)
                     ? 'cursor-not-allowed opacity-60 text-slate-400'
                     : 'cursor-pointer text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                 } ${
-                  activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin')
+                  activeTab === 'bulletins' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
                     : ''
                 }`}
                 id="sidebar-nav-bulletins"
-                aria-disabled={currentRole !== 'super_admin' && currentRole !== 'school_admin'}
+                aria-disabled={!['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)}
               >
                 <div className="flex items-center gap-3">
                   <SidebarNavigationIcon><FileText className="h-4.5 w-4.5" /></SidebarNavigationIcon>
@@ -1998,14 +2001,14 @@ export default function App() {
                 </div>
                 {noteOverdueCount > 0 && (
                   <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                    activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin') ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
+                    activeTab === 'bulletins' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white'
                   }`}>
                     {noteOverdueCount}
                   </span>
                 )}
               </button>}
 
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <button
                   onClick={() => setActiveTab('class-results')}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -2020,7 +2023,7 @@ export default function App() {
                 </button>
               )}
 
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <button
                   onClick={() => setActiveTab('class-subject-pivot')}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -2105,7 +2108,7 @@ export default function App() {
             </div>
           )}
 
-          {shouldPrepareTeacherControl && ['teacher', 'school_admin', 'super_admin'].includes(currentRole) && (
+          {shouldPrepareTeacherControl && ['teacher', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole) && (
             <div
               className={!isSyncing && isTeacherControlDestination
                 ? 'bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in'
@@ -2257,14 +2260,14 @@ export default function App() {
               )}
 
               {activeTab === 'absence-declaration-validations'
-                && ['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
+                && ['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(currentRole) && (
                 <AbsenceDeclarationValidationsView
                   declarations={absenceDeclarationsList}
                   onReview={handleReviewAbsenceDeclaration}
                 />
               )}
 
-              {activeTab === 'absence-controls' && (currentRole === 'school_admin' || currentRole === 'surveillant') && (
+              {activeTab === 'absence-controls' && (currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'surveillant') && (
                 <AbsenceControlsView
                   absenceControlsList={absenceControlsList}
                   classesList={classesList}
@@ -2318,7 +2321,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'bulletins' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {activeTab === 'bulletins' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <BulletinsView
                   schoolsList={schoolsList}
                   classesList={classesList}
@@ -2329,9 +2332,9 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'bulletins' && currentRole !== 'super_admin' && currentRole !== 'school_admin' && null}
+              {activeTab === 'bulletins' && !['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && null}
 
-              {activeTab === 'accounting' && currentRole === 'super_admin' && (
+              {activeTab === 'accounting' && canAccessAccounting && (
                 <AccountingView
                   userRole={currentRole}
                   currentSchoolId={currentSchoolId ?? null}
@@ -2342,14 +2345,14 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'class-results' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {activeTab === 'class-results' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <ClassResultsView
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
                 />
               )}
 
-              {activeTab === 'class-subject-pivot' && (currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {activeTab === 'class-subject-pivot' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole) && (
                 <ClassSubjectPivotView
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}

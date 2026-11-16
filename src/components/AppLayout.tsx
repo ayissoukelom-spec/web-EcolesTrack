@@ -89,6 +89,19 @@ export default function AppLayout({
             </div>
 
             <nav className="space-y-1" aria-label="Navigation principale">
+              {(currentRole === 'super_admin' || currentRole === 'school_admin' || currentRole === 'school_accountant') && <button
+                onClick={() => onTabChange('administration')}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'administration'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+                id="sidebar-nav-admin"
+              >
+                <Building2 className="h-4.5 w-4.5" />
+                <span>Administration</span>
+              </button>}
+
               <button
                 onClick={() => onTabChange('tableau-de-bord')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
@@ -102,20 +115,7 @@ export default function AppLayout({
                 <span>Tableau de Bord</span>
               </button>
 
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && <button
-                onClick={() => onTabChange('administration')}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'administration'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-                id="sidebar-nav-admin"
-              >
-                <Building2 className="h-4.5 w-4.5" />
-                <span>Administration</span>
-              </button>}
-
-              {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+              {(currentRole === 'super_admin' || currentRole === 'school_admin' || currentRole === 'school_accountant') && (
                 <button
                   onClick={() => onTabChange('accounting')}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${

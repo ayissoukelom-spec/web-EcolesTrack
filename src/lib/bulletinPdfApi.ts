@@ -1016,7 +1016,7 @@ const loadAuthorizedBulletinHeader = async (actor: BulletinPdfActor, bulletinId:
     return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
 
-  if (actor.role === 'school_admin') {
+  if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
     if (actor.schoolId == null || header.studentSchoolId !== actor.schoolId) return null;
     return { ...resolvedHeader, classStudentCount, schoolHasLycee };
   }
@@ -3351,7 +3351,7 @@ interface RegisterBulletinPdfRouteOptions {
 }
 
 const requireBulletinSuperAdmin: express.RequestHandler = (req: any, res, next) => {
-  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin') {
+  if (req.user?.role !== 'super_admin' && req.user?.role !== 'school_admin' && req.user?.role !== 'school_accountant') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();
@@ -3391,7 +3391,7 @@ export const registerBulletinPdfRoute = (app: express.Express, options: Register
       for (const bulletinId of bulletinIds) {
         const bulletin = await dataProvider.getById(actor, bulletinId);
         if (!bulletin) {
-          if (actor.role === 'school_admin') {
+          if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
             return res.status(403).json({ error: 'Forbidden' });
           }
           continue;

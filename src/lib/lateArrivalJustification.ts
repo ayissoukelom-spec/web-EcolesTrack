@@ -1,5 +1,5 @@
 export type LateArrivalJustificationStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
-export type LateArrivalDecisionRole = 'teacher' | 'school_admin' | 'surveillant';
+export type LateArrivalDecisionRole = 'teacher' | 'school_admin' | 'school_accountant' | 'surveillant';
 
 export type LateArrivalJustificationTransition = {
   action: 'APPROVED' | 'REJECTED' | 'REEXAMINED_APPROVED';
@@ -16,7 +16,7 @@ export function planLateArrivalJustificationTransition(input: {
 }): LateArrivalJustificationTransition | null {
   if (input.decision === 'REEXAMINE') {
     if (input.currentStatus !== 'REJECTED'
-      || (input.actorRole !== 'school_admin' && input.actorRole !== 'surveillant')) return null;
+      || (input.actorRole !== 'school_admin' && input.actorRole !== 'school_accountant' && input.actorRole !== 'surveillant')) return null;
     return {
       action: 'REEXAMINED_APPROVED',
       fromStatus: 'REJECTED',
@@ -26,7 +26,7 @@ export function planLateArrivalJustificationTransition(input: {
   }
 
   if (input.currentStatus !== 'PENDING'
-    || !['teacher', 'school_admin', 'surveillant'].includes(input.actorRole)) return null;
+    || !['teacher', 'school_admin', 'school_accountant', 'surveillant'].includes(input.actorRole)) return null;
   if (input.decision === 'REJECTED') {
     const rejectionReason = input.rejectionReason?.trim() ?? '';
     if (!rejectionReason || rejectionReason.length > 2000) return null;

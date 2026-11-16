@@ -62,8 +62,9 @@ export default function ClassSubjectPivotView({
 }: ClassSubjectPivotViewProps) {
   const { role } = useAuth();
   const currentRole = role as UserRole;
+  const isSchoolOperationsRole = currentRole === 'school_admin' || currentRole === 'school_accountant';
   const [schoolId, setSchoolId] = useState(
-    currentRole === 'school_admin' && currentSchoolId != null ? String(currentSchoolId) : '',
+    isSchoolOperationsRole && currentSchoolId != null ? String(currentSchoolId) : '',
   );
   const [classOptions, setClassOptions] = useState<ClassOption[]>([]);
   const [academicYearId, setAcademicYearId] = useState('');
@@ -78,7 +79,7 @@ export default function ClassSubjectPivotView({
   const [filtersLoading, setFiltersLoading] = useState(false);
 
   useEffect(() => {
-    if (currentRole === 'school_admin' && currentSchoolId != null) {
+    if (isSchoolOperationsRole && currentSchoolId != null) {
       setSchoolId(String(currentSchoolId));
     } else if (currentRole === 'super_admin') {
       setSchoolId('');
@@ -86,7 +87,7 @@ export default function ClassSubjectPivotView({
     setAcademicYearId('');
     setPeriodId('');
     setPivot(null);
-  }, [currentRole, currentSchoolId]);
+  }, [currentRole, currentSchoolId, isSchoolOperationsRole]);
 
   useEffect(() => {
     let cancelled = false;

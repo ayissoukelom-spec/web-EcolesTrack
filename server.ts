@@ -48,6 +48,7 @@ import {
   appendAuditEvent,
   appendAuditEventAfterRollback,
   createAuditSnapshot,
+  type AuditEventExecutor,
   type AuditEventInput,
 } from './src/lib/auditEvents.ts';
 import { auditLabelFilterTerms, translateAuditFieldName, translateAuditLabel } from './src/lib/auditEventLabels.ts';
@@ -465,7 +466,7 @@ async function findExistingUsersByPhone(phone: string, excludeUserId?: number) {
 }
 
 // Resolved actor shape used by business routes.
-type ResolvedActorRole = 'super_admin' | 'school_admin' | 'teacher' | 'parent' | 'surveillant' | string;
+type ResolvedActorRole = 'super_admin' | 'school_admin' | 'school_accountant' | 'teacher' | 'parent' | 'surveillant' | string;
 
 interface ResolvedActor {
   id?: number | null;
@@ -476,6 +477,10 @@ interface ResolvedActor {
   schoolId: number | null;
   academicYearId?: number | null;
   simulated?: boolean;
+}
+
+function isSchoolOperationsRole(role: ResolvedActorRole): boolean {
+  return role === 'school_admin' || role === 'school_accountant';
 }
 
 // Helper to resolve actor with fallback to simulated profile in dev
@@ -696,7 +701,7 @@ export async function resolveActor(req: AuthRequest): Promise<ResolvedActor | nu
       simulated: true,
     };
 
-    if (simulatedActor.role === 'school_admin' && simulatedActor.schoolId == null) {
+    if (isSchoolOperationsRole(simulatedActor.role) && simulatedActor.schoolId == null) {
       return null;
     }
 
@@ -731,8 +736,8 @@ async function resolveGroupedPublicationSchoolScope(
   hasRequestedSchoolId: boolean,
 ): Promise<number | null> {
   const requestedSchoolId = parseGroupedPublicationSchoolId(rawSchoolId);
-  const membership = actor.role === 'school_admin'
-    ? await getActiveUserSchoolMembership(actor.id, actor.schoolId, 'school_admin')
+  const membership = isSchoolOperationsRole(actor.role)
+    ? await getActiveUserSchoolMembership(actor.id, actor.schoolId, actor.role)
     : null;
   const requestedSchoolExists = actor.role === 'super_admin'
     && requestedSchoolId != null
@@ -1063,10 +1068,36 @@ async function getUserSchoolMemberships(userId: number | null | undefined) {
   ));
 }
 
-const localMembershipRoles = ['parent', 'teacher', 'school_admin', 'surveillant'] as const;
+const localMembershipRoles = ['parent', 'teacher', 'school_admin', 'school_accountant', 'surveillant'] as const;
 type LocalMembershipRole = typeof localMembershipRoles[number];
 type MembershipDatabaseExecutor = Pick<typeof db, 'select' | 'insert'>;
 type TeacherCreationDatabaseExecutor = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>;
+
+async function canActivateSchoolFunction(
+  executor: MembershipDatabaseExecutor,
+  userId: number,
+  schoolId: number,
+  role: LocalMembershipRole,
+): Promise<boolean> {
+  if (role !== 'school_admin' && role !== 'school_accountant') return true;
+  const [school] = await executor.select({ id: schools.id })
+    .from(schools)
+    .where(eq(schools.id, schoolId))
+    .for('update')
+    .limit(1);
+  if (!school) return false;
+  const conflictingRole = role === 'school_admin' ? 'school_accountant' : 'school_admin';
+  const [conflictingMembership] = await executor.select({ id: userSchools.id })
+    .from(userSchools)
+    .where(and(
+      eq(userSchools.userId, userId),
+      eq(userSchools.schoolId, schoolId),
+      eq(userSchools.role, conflictingRole),
+      sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+    ))
+    .limit(1);
+  return !conflictingMembership;
+}
 
 function isLocalMembershipRole(role: unknown): role is LocalMembershipRole {
   return typeof role === 'string' && localMembershipRoles.includes(role as LocalMembershipRole);
@@ -1140,6 +1171,9 @@ async function upsertUserSchoolMembership(
     throw new Error('A valid membership role is required');
   }
   if (!userId || schoolId == null) return null;
+  if (!(await canActivateSchoolFunction(executor, userId, schoolId, role))) {
+    throw new Error('The active school_admin and school_accountant functions are mutually exclusive.');
+  }
 
   const existing = await ensureUserSchoolMembership(userId, schoolId, role, executor);
   if (existing) return existing;
@@ -1988,6 +2022,63 @@ function createAuditEventContext(
     resourceId,
     source: 'web',
   };
+}
+
+async function appendUserFunctionAuditEvent(
+  executor: AuditEventExecutor,
+  input: {
+    actor: ResolvedActor;
+    membershipId: number;
+    schoolId: number;
+    targetUserId: number;
+    role: LocalMembershipRole;
+    action: 'activate' | 'deactivate' | 'reactivate';
+    wasActive?: boolean;
+  },
+): Promise<void> {
+  const membershipBefore = input.wasActive === undefined
+    ? null
+    : createAuditSnapshot({
+      userId: input.targetUserId,
+      role: input.role,
+      schoolId: input.schoolId,
+      isActive: input.wasActive,
+    }, ['userId', 'role', 'schoolId', 'isActive']);
+  const membershipAfter = createAuditSnapshot({
+    userId: input.targetUserId,
+    role: input.role,
+    schoolId: input.schoolId,
+    isActive: input.action !== 'deactivate',
+  }, ['userId', 'role', 'schoolId', 'isActive']);
+  const roleLabel = translateAuditLabel('role', input.role);
+
+  await appendAuditEvent(executor, {
+    actor: {
+      userId: input.actor.id ?? null,
+      role: input.actor.role,
+      email: input.actor.email ?? null,
+      name: input.actor.name ?? null,
+      activeFunction: {
+        id: input.actor.role,
+        name: translateAuditLabel('role', input.actor.role),
+      },
+      activeSchool: input.actor.schoolId == null ? null : { id: input.actor.schoolId },
+    },
+    targetSchool: { id: input.schoolId },
+    module: 'user_management',
+    action: input.action,
+    resourceType: 'user_function',
+    resourceId: input.membershipId,
+    beforeValues: membershipBefore,
+    afterValues: membershipAfter,
+    result: 'success',
+    source: 'web',
+    description: input.action === 'deactivate'
+      ? `Fonction « ${roleLabel} » retirée du compte #${input.targetUserId}.`
+      : input.action === 'reactivate'
+        ? `Fonction « ${roleLabel} » réactivée pour le compte #${input.targetUserId}.`
+        : `Fonction « ${roleLabel} » attribuée au compte #${input.targetUserId}.`,
+  });
 }
 
 function isPostgresUniqueViolation(error: unknown): boolean {
@@ -3241,6 +3332,9 @@ export async function createApp() {
           code: 'INVALID_LOCAL_SCHOOL_ROLE',
         });
       }
+      if (membershipRole === 'school_accountant' && actor.id === userIdParam) {
+        return res.status(403).json({ error: 'A super_admin cannot assign the school_accountant function to their own account' });
+      }
 
       const [targetSchool] = await db.select().from(schools).where(eq(schools.id, parsedSchoolId)).limit(1);
       if (!targetSchool) return res.status(404).json({ error: 'SCHOOL_NOT_FOUND' });
@@ -3256,14 +3350,45 @@ export async function createApp() {
       };
       try {
         assignmentResult = await db.transaction(async (tx) => {
+          const [lockedUser] = await tx.select({ id: users.id, isDeleted: users.isDeleted })
+            .from(users)
+            .where(eq(users.id, userIdParam))
+            .for('update')
+            .limit(1);
+          if (!lockedUser) throw Object.assign(new Error('User not found'), { code: 'USER_NOT_FOUND' });
+          if (lockedUser.isDeleted) throw Object.assign(new Error('Account is disabled'), { code: 'ACCOUNT_NOT_ADMISSIBLE' });
+          const [lockedSchool] = await tx.select({ id: schools.id })
+            .from(schools)
+            .where(eq(schools.id, parsedSchoolId))
+            .for('update')
+            .limit(1);
+          if (!lockedSchool) throw Object.assign(new Error('School not found'), { code: 'SCHOOL_NOT_FOUND' });
+          if (
+            (membershipRole === 'school_admin' || membershipRole === 'school_accountant')
+            && !(await canActivateSchoolFunction(tx, userIdParam, parsedSchoolId, membershipRole))
+          ) {
+            throw Object.assign(new Error('Conflicting active school functions'), { code: 'SCHOOL_FUNCTION_CONFLICT' });
+          }
+
           const [existing] = await tx.select().from(userSchools)
-            .where(membershipCondition).limit(1);
+            .where(membershipCondition).for('update').limit(1);
           if (existing) {
             if (existing.isActive === false) {
               const [reactivated] = await tx.update(userSchools)
                 .set({ isActive: true })
                 .where(and(membershipCondition, eq(userSchools.isActive, false)))
                 .returning();
+              if (reactivated) {
+                await appendUserFunctionAuditEvent(tx, {
+                  actor,
+                  membershipId: reactivated.id,
+                  schoolId: parsedSchoolId,
+                  targetUserId: userIdParam,
+                  role: membershipRole,
+                  action: 'reactivate',
+                  wasActive: false,
+                });
+              }
               return { membership: reactivated ?? existing, alreadyExists: true };
             }
             return { membership: existing, alreadyExists: true };
@@ -3274,9 +3399,34 @@ export async function createApp() {
             schoolId: parsedSchoolId,
             role: membershipRole,
           }).returning();
+          if (inserted) {
+            await appendUserFunctionAuditEvent(tx, {
+              actor,
+              membershipId: inserted.id,
+              schoolId: parsedSchoolId,
+              targetUserId: userIdParam,
+              role: membershipRole,
+              action: 'activate',
+            });
+          }
           return { membership: inserted ?? null, alreadyExists: false };
         });
       } catch (insertError: any) {
+        if (insertError?.code === 'SCHOOL_FUNCTION_CONFLICT') {
+          return res.status(409).json({
+            error: 'This account already has the incompatible active function in this school.',
+            code: 'CONFLICTING_ACTIVE_SCHOOL_FUNCTION',
+          });
+        }
+        if (insertError?.code === 'USER_NOT_FOUND' || insertError?.code === 'SCHOOL_NOT_FOUND') {
+          return res.status(404).json({ error: insertError.message });
+        }
+        if (insertError?.code === 'ACCOUNT_NOT_ADMISSIBLE') {
+          return res.status(409).json({ error: insertError.message });
+        }
+        if (insertError?.code === 'SCHOOL_SUSPENDED') {
+          return res.status(423).json({ error: insertError.message, code: 'SCHOOL_SUSPENDED' });
+        }
         const postgresError = [insertError, insertError?.cause]
           .find((error) => error?.code === '23505');
         if (!postgresError) throw insertError;
@@ -3296,13 +3446,38 @@ export async function createApp() {
         if (concurrentExactMembership) {
           if (concurrentExactMembership.isActive === false) {
             const reactivated = await db.transaction(async (tx) => {
+              const [lockedUser] = await tx.select({ id: users.id, isDeleted: users.isDeleted })
+                .from(users).where(eq(users.id, userIdParam)).for('update').limit(1);
+              if (!lockedUser) throw Object.assign(new Error('User not found'), { code: 'USER_NOT_FOUND' });
+              if (lockedUser.isDeleted) throw Object.assign(new Error('Account is disabled'), { code: 'ACCOUNT_NOT_ADMISSIBLE' });
+              const [lockedSchool] = await tx.select({ id: schools.id, isSuspended: schools.isSuspended })
+                .from(schools).where(eq(schools.id, parsedSchoolId)).for('update').limit(1);
+              if (!lockedSchool) throw Object.assign(new Error('School not found'), { code: 'SCHOOL_NOT_FOUND' });
+              if (lockedSchool.isSuspended) throw Object.assign(new Error(schoolSuspendedMessage), { code: 'SCHOOL_SUSPENDED' });
+              if (
+                (membershipRole === 'school_admin' || membershipRole === 'school_accountant')
+                && !(await canActivateSchoolFunction(tx, userIdParam, parsedSchoolId, membershipRole))
+              ) {
+                throw Object.assign(new Error('Conflicting active school functions'), { code: 'SCHOOL_FUNCTION_CONFLICT' });
+              }
               const [currentMembership] = await tx.select().from(userSchools)
-                .where(membershipCondition).limit(1);
+                .where(membershipCondition).for('update').limit(1);
               if (!currentMembership || currentMembership.isActive !== false) return currentMembership ?? null;
               const [updatedMembership] = await tx.update(userSchools)
                 .set({ isActive: true })
                 .where(and(membershipCondition, eq(userSchools.isActive, false)))
                 .returning();
+              if (updatedMembership) {
+                await appendUserFunctionAuditEvent(tx, {
+                  actor,
+                  membershipId: updatedMembership.id,
+                  schoolId: parsedSchoolId,
+                  targetUserId: userIdParam,
+                  role: membershipRole,
+                  action: 'reactivate',
+                  wasActive: false,
+                });
+              }
               return updatedMembership ?? currentMembership;
             });
             return res.status(200).json({
@@ -3358,11 +3533,12 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         const schoolId = actor.schoolId;
         if (!Number.isSafeInteger(schoolId) || schoolId == null || schoolId <= 0) {
           return res.status(403).json({ error: 'Forbidden: missing school context' });
         }
+        const accountantManagedRoles = new Set(['teacher', 'parent', 'surveillant', 'school_admin']);
 
         const schoolMemberships = await db.select({
           userId: userSchools.userId,
@@ -3371,12 +3547,15 @@ export async function createApp() {
           isActive: userSchools.isActive,
         }).from(userSchools).where(eq(userSchools.schoolId, schoolId));
         const userIds = [...new Set(schoolMemberships
-          .filter((membership) => membership.isActive !== false && isLocalSchoolRole(membership.role))
+          .filter((membership) => membership.isActive !== false
+            && isLocalSchoolRole(membership.role)
+            && (actor.role !== 'school_accountant' || accountantManagedRoles.has(membership.role)))
           .map((membership) => membership.userId))];
         if (userIds.length === 0) return res.json([]);
         const functionsByUserId = new Map<number, Array<{ role: LocalMembershipRole; schoolId: number }>>();
         for (const membership of schoolMemberships) {
-          if (membership.schoolId !== schoolId || membership.isActive === false || !isLocalMembershipRole(membership.role)) continue;
+          if (membership.schoolId !== schoolId || membership.isActive === false || !isLocalMembershipRole(membership.role)
+            || (actor.role === 'school_accountant' && !accountantManagedRoles.has(membership.role))) continue;
           const functions = functionsByUserId.get(membership.userId) ?? [];
           functions.push({ role: membership.role, schoolId });
           functionsByUserId.set(membership.userId, functions);
@@ -3398,7 +3577,9 @@ export async function createApp() {
           inArray(users.id, userIds),
           eq(users.isDeleted, false),
         ));
-        const localUsers = selectedUsers.filter((user) => user.role !== 'super_admin');
+        const localUsers = selectedUsers.filter((user) => user.role !== 'super_admin'
+          && (actor.role !== 'school_accountant'
+            || (functionsByUserId.get(user.id) ?? []).some((membership) => accountantManagedRoles.has(membership.role))));
         if (localUsers.length === 0) return res.json([]);
 
         const localUserIds = new Set(localUsers.map((user) => user.id));
@@ -3441,6 +3622,20 @@ export async function createApp() {
         }
 
         return res.json(localUsers.map((user) => {
+          const functions = functionsByUserId.get(user.id) ?? [];
+          if (actor.role === 'school_accountant' && functions.some((membership) => membership.role === 'school_admin')) {
+            return {
+              id: user.id,
+              uid: user.uid,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+              functions,
+              schoolId,
+              schoolIds: [schoolId],
+              isDeleted: user.isDeleted,
+            };
+          }
           const teacher = teachersByUserId.get(user.id);
           const parent = parentsByUserId.get(user.id);
           return {
@@ -3449,7 +3644,7 @@ export async function createApp() {
             email: user.email,
             name: user.name,
             role: user.role,
-            functions: functionsByUserId.get(user.id) ?? [],
+            functions,
             schoolId,
             schoolIds: [schoolId],
             academicYearId: user.academicYearId != null && localAcademicYearIds.has(user.academicYearId)
@@ -3651,7 +3846,7 @@ export async function createApp() {
     }
   });
 
-  // Admin endpoint: create user account (super_admin only)
+  // Super admins and school admins may create accounts; protected roles are checked below.
   app.post('/api/admin/users', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
@@ -3671,12 +3866,18 @@ export async function createApp() {
       if (!teacherDisplayName) return res.status(400).json({ error: 'Missing required name' });
 
       // Ensure role is one of allowed
-      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
+      const allowed = ['super_admin', 'school_admin', 'school_accountant', 'teacher', 'surveillant', 'parent'];
       if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
       const schoolId = rawSchoolId != null && rawSchoolId !== '' ? parseInt(rawSchoolId, 10) : undefined;
       if (rawSchoolId != null && rawSchoolId !== '' && Number.isNaN(schoolId)) {
         return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (role === 'school_accountant' && rawSchoolId != null && rawSchoolId !== '') {
+        const exactSchoolId = Number(rawSchoolId);
+        if (!Number.isSafeInteger(exactSchoolId) || exactSchoolId <= 0 || exactSchoolId !== schoolId) {
+          return res.status(400).json({ error: 'Invalid schoolId' });
+        }
       }
 
       if (role === 'surveillant') {
@@ -3699,7 +3900,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid academicYearId' });
       }
 
-      // Enforce hierarchy: school_admin cannot create super_admin or school_admin
+      // Local administrators may create an accountant only for their active school.
       if (actor.role === 'school_admin' && ['super_admin', 'school_admin'].includes(role)) {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot create admin accounts' });
       }
@@ -3707,6 +3908,33 @@ export async function createApp() {
       // school_admin role requires a schoolId to be specified when creating another school_admin
       if (role === 'school_admin' && (schoolId == null)) {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for school_admin role' });
+      }
+      if (role === 'school_accountant' && schoolId == null) {
+        return res.status(400).json({ error: 'Missing required field: schoolId is required for school_accountant role' });
+      }
+      if ((role === 'school_admin' || role === 'school_accountant') && schoolId != null) {
+        const [adminSchool] = await db.select({ id: schools.id, isSuspended: schools.isSuspended })
+          .from(schools).where(eq(schools.id, schoolId)).limit(1);
+        if (!adminSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+        if (adminSchool.isSuspended) {
+          return res.status(423).json({ error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED' });
+        }
+      }
+      if (role === 'school_accountant' && actor.role === 'school_admin') {
+        if (actor.id == null || actor.schoolId == null) {
+          return res.status(403).json({ error: 'School admin must have an active school context to create a school accountant' });
+        }
+        const activeAdminMembership = await getActiveUserSchoolMembership(
+          actor.id,
+          actor.schoolId,
+          'school_admin',
+        );
+        if (!activeAdminMembership) {
+          return res.status(403).json({ error: 'School admin has no active function in the selected school' });
+        }
+        if (schoolId !== actor.schoolId) {
+          return res.status(403).json({ error: 'Forbidden: cannot create users for other schools' });
+        }
       }
 
       if ((role === 'teacher' || role === 'surveillant') && (schoolId == null) && actor.role === 'school_admin' && actor.schoolId == null) {
@@ -3741,6 +3969,18 @@ export async function createApp() {
         const [parentSchool] = await db.select({ id: schools.id }).from(schools)
           .where(eq(schools.id, resolvedSchoolId)).limit(1);
         if (!parentSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+      }
+      if (role === 'school_accountant') {
+        resolvedSchoolId = parsePositiveInteger(rawSchoolId);
+        if (resolvedSchoolId == null) {
+          return res.status(400).json({ error: 'schoolId is required for school_accountant role' });
+        }
+        const [accountantSchool] = await db.select({ id: schools.id, isSuspended: schools.isSuspended })
+          .from(schools).where(eq(schools.id, resolvedSchoolId)).limit(1);
+        if (!accountantSchool) return res.status(400).json({ error: 'Invalid schoolId: school not found' });
+        if (accountantSchool.isSuspended) {
+          return res.status(423).json({ error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED' });
+        }
       }
       if (role === 'teacher' && resolvedSchoolId == null) {
         return res.status(400).json({ error: 'Missing required field: schoolId is required for teacher role' });
@@ -3871,7 +4111,7 @@ export async function createApp() {
           salt: temporaryCredential.salt,
           mustReset: true,
         });
-        if ((role === 'school_admin' || role === 'surveillant') && resolvedSchoolId != null) {
+        if ((role === 'school_admin' || role === 'school_accountant' || role === 'surveillant') && resolvedSchoolId != null) {
           await upsertUserSchoolMembership(newUser.id, resolvedSchoolId, role, true, tx);
         }
 
@@ -4005,12 +4245,12 @@ export async function createApp() {
     }
   });
 
-  // Admin: update user account (super_admin or school_admin for same school)
+  // Admin: update user account; school operations roles are limited to same-school teacher/parent profiles.
   app.put('/api/admin/users/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
 
       const id = parseInt(req.params.id);
       const { email, name, lastName, firstNames, role, additionalRole, schoolId: incomingSchoolId, academicYearId: rawAcademicYearId, phone, specialization, subjectIds, globalSubjectIds, gender, classIds, classSelectionScopeIds, teachingAssignments, teachingAssignmentScope, teachingAssignmentOverrides, studentId } = req.body;
@@ -4025,7 +4265,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid schoolId' });
       }
       if (!role) return res.status(400).json({ error: 'Missing required field: role' });
-      const allowed = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
+      const allowed = ['super_admin', 'school_admin', 'school_accountant', 'teacher', 'surveillant', 'parent'];
       if (!allowed.includes(role)) return res.status(400).json({ error: 'Invalid role' });
       if (additionalRole != null && (!isLocalMembershipRole(additionalRole) || additionalRole === role)) {
         return res.status(400).json({ error: 'Invalid additionalRole' });
@@ -4049,11 +4289,35 @@ export async function createApp() {
       // Check if school_admin is modifying a user outside their school
       const [targetUser] = await db.select().from(users).where(eq(users.id, id));
       if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      if (actor.role === 'school_accountant') {
+        if (
+          actor.schoolId == null
+          || role !== targetUser.role
+          || !['teacher', 'parent'].includes(role)
+          || additionalRole != null
+          || (parsedSchoolId != null && parsedSchoolId !== actor.schoolId)
+        ) {
+          return res.status(403).json({ error: 'Un secrétaire comptable ne peut modifier que les profils des enseignants ou des parents de son établissement actif.' });
+        }
+        const membership = await getActiveUserSchoolMembership(id, actor.schoolId, role);
+        const profileRows = role === 'teacher'
+          ? await db.select({ schoolId: teachers.schoolId }).from(teachers).where(eq(teachers.userId, id))
+          : await db.select({ schoolId: parents.schoolId }).from(parents).where(eq(parents.userId, id));
+        if (!membership || !profileRows.some((profile) => profile.schoolId === actor.schoolId)) {
+          return res.status(403).json({ error: 'Cannot modify a profile outside the active school' });
+        }
+      }
       const isAddingFunction = additionalRole != null;
       if (isAddingFunction) {
+        if (targetUser.isDeleted) {
+          return res.status(409).json({ error: 'A globally disabled account cannot have a function changed' });
+        }
         if (actor.role !== 'super_admin') return res.status(403).json({ error: 'Only a super_admin can add a user function' });
         if (role !== targetUser.role || !isLocalMembershipRole(targetUser.role)) {
           return res.status(400).json({ error: 'The primary role must remain unchanged when adding a function' });
+        }
+        if (additionalRole === 'school_accountant' && actor.id === id) {
+          return res.status(403).json({ error: 'A super_admin cannot assign the school_accountant function to their own account' });
         }
         if (additionalRole === 'school_admin') {
           return res.status(409).json({ error: 'An additional school_admin function requires a role-scoped academic year' });
@@ -4061,6 +4325,30 @@ export async function createApp() {
         if ((parsedSchoolId ?? targetUser.schoolId) == null) {
           return res.status(400).json({ error: 'A school is required to add a user function' });
         }
+        if (isSchoolOperationsRole(actor.role)
+          && (['super_admin', 'school_admin', 'school_accountant'].includes(role)
+            || ['school_admin', 'school_accountant'].includes(targetUser.role)
+            || additionalRole === 'school_accountant')) {
+          return res.status(403).json({ error: 'Forbidden: school_admin cannot modify protected administrative functions' });
+        }
+      }
+      if (!isAddingFunction && role !== targetUser.role
+        && ['school_admin', 'school_accountant'].some((protectedRole) => (
+          protectedRole === role || protectedRole === targetUser.role
+        ))) {
+        return res.status(409).json({
+          error: 'Use function management to assign school_admin or school_accountant to an existing account.',
+        });
+      }
+      if (!isAddingFunction && actor.role === 'super_admin' && actor.id === id
+        && role === 'school_accountant' && targetUser.role !== 'school_accountant') {
+        return res.status(403).json({ error: 'A super_admin cannot assign the school_accountant function to their own account' });
+      }
+      if (isSchoolOperationsRole(actor.role)
+        && (['super_admin', 'school_admin', 'school_accountant'].includes(role)
+          || ['school_admin', 'school_accountant'].includes(targetUser.role)
+          || additionalRole === 'school_accountant')) {
+        return res.status(403).json({ error: 'Forbidden: school_admin cannot modify protected administrative functions' });
       }
       const emailWasProvided = Object.prototype.hasOwnProperty.call(req.body, 'email');
       let effectiveEmail = emailWasProvided ? normalizeEmail(email) : targetUser.email ?? null;
@@ -4075,19 +4363,19 @@ export async function createApp() {
       const teacherProfileRows = role === 'teacher'
         ? await db.select().from(teachers).where(eq(teachers.userId, id))
         : [];
-      if (actor.role === 'school_admin' && targetUser.role === 'teacher'
+      if (isSchoolOperationsRole(actor.role) && targetUser.role === 'teacher'
         && teacherProfileRows.length > 0
         && !teacherProfileRows.some((profile) => profile.schoolId === actor.schoolId)) {
         return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
       }
-      const requestedTeacherSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
+      const requestedTeacherSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : parsedSchoolId;
       const existingTeacherForUpdate = requestedTeacherSchoolId != null
         ? teacherProfileRows.find((profile) => profile.schoolId === requestedTeacherSchoolId)
         : teacherProfileRows.length === 1 ? teacherProfileRows[0] : undefined;
       if (role === 'teacher' && teacherProfileRows.length > 1 && requestedTeacherSchoolId == null) {
         return res.status(400).json({ error: 'schoolId is required to select a teacher profile' });
       }
-      const teacherProfileSchoolId = actor.role === 'school_admin'
+      const teacherProfileSchoolId = isSchoolOperationsRole(actor.role)
         ? actor.schoolId
         : parsedSchoolId ?? existingTeacherForUpdate?.schoolId ?? null;
       if (role === 'teacher' && !isAddingFunction && !existingTeacherForUpdate) {
@@ -4108,7 +4396,7 @@ export async function createApp() {
           return res.status(403).json({ error: 'An active teacher membership is required to create this profile' });
         }
       }
-      const teachingAssignmentSchoolId = actor.role === 'school_admin'
+      const teachingAssignmentSchoolId = isSchoolOperationsRole(actor.role)
         ? actor.schoolId
         : teacherProfileSchoolId ?? targetUser.schoolId;
       const teacherSelectionsProvided = role === 'teacher'
@@ -4216,8 +4504,8 @@ export async function createApp() {
       })
         .from(parents)
         .where(eq(parents.userId, id));
-      const requestedParentSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
-      if (actor.role === 'school_admin' && targetUser.role === 'parent'
+      const requestedParentSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : parsedSchoolId;
+      if (isSchoolOperationsRole(actor.role) && targetUser.role === 'parent'
         && parentProfileRows.length > 0
         && !parentProfileRows.some((profile) => profile.schoolId === actor.schoolId)) {
         return res.status(403).json({ error: 'Forbidden: cannot modify users outside your school' });
@@ -4237,7 +4525,7 @@ export async function createApp() {
       if ((targetUser.role === 'teacher' || targetUser.role === 'surveillant') && role !== targetUser.role) {
         return res.status(403).json({ error: 'Forbidden: cannot change role for teacher accounts' });
       }
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (['teacher', 'parent'].includes(targetUser.role)) {
           const [membership] = actor.schoolId == null ? [] : await db.select({ id: userSchools.id })
             .from(userSchools)
@@ -4262,7 +4550,7 @@ export async function createApp() {
         }
       }
 
-      if (actor.role === 'school_admin' && parsedSchoolId !== undefined && parsedSchoolId !== actor.schoolId) {
+      if (isSchoolOperationsRole(actor.role) && parsedSchoolId !== undefined && parsedSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Forbidden: cannot move user to another school' });
       }
 
@@ -4278,13 +4566,13 @@ export async function createApp() {
         if (actor.role === 'super_admin' && requestedParentSchoolId == null) {
           return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
         }
-        if (actor.role === 'school_admin' && actor.schoolId == null) {
+        if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
           return res.status(400).json({ error: 'School admin must be attached to a school' });
         }
-        if (actor.role === 'school_admin' && requestedParentSchoolId != null && requestedParentSchoolId !== actor.schoolId) {
+        if (isSchoolOperationsRole(actor.role) && requestedParentSchoolId != null && requestedParentSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Forbidden: cannot create a parent profile for another school' });
         }
-        parentProfileSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedParentSchoolId;
+        parentProfileSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedParentSchoolId;
         if (parentProfileSchoolId == null) {
           return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
         }
@@ -4328,13 +4616,12 @@ export async function createApp() {
         });
       }
 
-      // Enforce hierarchy: school_admin cannot modify to super_admin or school_admin
-      if (actor.role === 'school_admin' && ['super_admin', 'school_admin'].includes(role)) {
+      // School operations roles cannot modify protected administrative accounts.
+      if (isSchoolOperationsRole(actor.role) && ['super_admin', 'school_admin', 'school_accountant'].includes(role)) {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot modify admin accounts' });
       }
 
-      // school_admin cannot modify other admins even if in same school
-      if (actor.role === 'school_admin' && ['super_admin', 'school_admin'].includes(targetUser.role)) {
+      if (isSchoolOperationsRole(actor.role) && ['super_admin', 'school_admin', 'school_accountant'].includes(targetUser.role)) {
         return res.status(403).json({ error: 'Forbidden: school_admin cannot modify admin accounts' });
       }
 
@@ -4391,24 +4678,59 @@ export async function createApp() {
         }
         try {
           await db.transaction(async (tx) => {
+            if (membershipRoleToAdd === 'school_admin' || membershipRoleToAdd === 'school_accountant') {
+              const [lockedUser] = await tx.select({ id: users.id, isDeleted: users.isDeleted })
+                .from(users)
+                .where(eq(users.id, id))
+                .for('update')
+                .limit(1);
+              if (!lockedUser) throw new Error('Target account was not found.');
+              if (lockedUser.isDeleted) {
+                const disabledAccount = new Error('A globally disabled account cannot have a function changed');
+                (disabledAccount as Error & { code: string }).code = 'ACCOUNT_NOT_ADMISSIBLE';
+                throw disabledAccount;
+              }
+              if (!(await canActivateSchoolFunction(tx, id, membershipSchoolId, membershipRoleToAdd))) {
+                const conflict = new Error('The active school_admin and school_accountant functions are mutually exclusive.');
+                (conflict as Error & { code: string }).code = 'SCHOOL_FUNCTION_CONFLICT';
+                throw conflict;
+              }
+            }
             const [existingMembership] = await tx.select().from(userSchools).where(and(
               eq(userSchools.userId, id),
               eq(userSchools.schoolId, membershipSchoolId),
               eq(userSchools.role, membershipRoleToAdd),
-            ));
+            )).for('update').limit(1);
+            let membershipChanged = false;
+            let membershipId = existingMembership?.id ?? null;
             if (existingMembership?.isActive === false) {
-              await tx.update(userSchools).set({ isActive: true }).where(and(
+              const [reactivated] = await tx.update(userSchools).set({ isActive: true }).where(and(
                 eq(userSchools.userId, id),
                 eq(userSchools.schoolId, membershipSchoolId),
                 eq(userSchools.role, membershipRoleToAdd),
                 eq(userSchools.isActive, false),
-              ));
+              )).returning({ id: userSchools.id });
+              membershipId = reactivated?.id ?? membershipId;
+              membershipChanged = reactivated != null;
             } else if (!existingMembership) {
-              await tx.insert(userSchools).values({
+              const [inserted] = await tx.insert(userSchools).values({
                 userId: id,
                 schoolId: membershipSchoolId,
                 role: membershipRoleToAdd,
                 isActive: true,
+              }).returning({ id: userSchools.id });
+              membershipId = inserted?.id ?? null;
+              membershipChanged = inserted != null;
+            }
+            if (membershipChanged && membershipId != null) {
+              await appendUserFunctionAuditEvent(tx, {
+                actor,
+                membershipId,
+                schoolId: membershipSchoolId,
+                targetUserId: id,
+                role: membershipRoleToAdd,
+                action: existingMembership?.isActive === false ? 'reactivate' : 'activate',
+                ...(existingMembership?.isActive === false ? { wasActive: false } : {}),
               });
             }
 
@@ -4441,6 +4763,15 @@ export async function createApp() {
             }
           });
         } catch (error: any) {
+          if (error?.code === 'SCHOOL_FUNCTION_CONFLICT') {
+            return res.status(409).json({
+              error: 'This account already has the incompatible active function in this school.',
+              code: 'CONFLICTING_ACTIVE_SCHOOL_FUNCTION',
+            });
+          }
+          if (error?.code === 'ACCOUNT_NOT_ADMISSIBLE') {
+            return res.status(409).json({ error: error.message });
+          }
           if (error?.code === '23505') {
             return res.status(409).json({
               error: 'This additional school function is blocked by the current user-school uniqueness constraint',
@@ -4453,14 +4784,45 @@ export async function createApp() {
         && isLocalMembershipRole(role)
         && membershipSchoolId != null
       ) {
-        await db.transaction(async (tx) => {
-          await tx.update(userSchools).set({ isActive: true }).where(and(
-            eq(userSchools.userId, id),
-            eq(userSchools.schoolId, membershipSchoolId),
-            eq(userSchools.role, role),
-            eq(userSchools.isActive, false),
-          ));
-        });
+        if (role === 'school_admin' || role === 'school_accountant') {
+          const activation = await new DrizzleGenerationAwareAccessSessionStore(db).activateMembership({
+            userId: id,
+            schoolId: membershipSchoolId,
+            role,
+            mutation: async (tx, membershipId, action) => {
+              await appendUserFunctionAuditEvent(tx, {
+                actor,
+                membershipId,
+                schoolId: membershipSchoolId,
+                targetUserId: id,
+                role,
+                action,
+                ...(action === 'reactivate' ? { wasActive: false } : {}),
+              });
+            },
+          });
+          if (activation.status === 'conflicting_active_role') {
+            return res.status(409).json({
+              error: 'This account already has the incompatible active function in this school.',
+              code: 'CONFLICTING_ACTIVE_SCHOOL_FUNCTION',
+            });
+          }
+          if (activation.status === 'account_not_admissible') {
+            return res.status(409).json({ error: 'A globally disabled account cannot have a function changed' });
+          }
+          if (activation.status === 'user_not_found' || activation.status === 'school_not_found') {
+            return res.status(404).json({ error: 'User or school not found' });
+          }
+        } else {
+          await db.transaction(async (tx) => {
+            await tx.update(userSchools).set({ isActive: true }).where(and(
+              eq(userSchools.userId, id),
+              eq(userSchools.schoolId, membershipSchoolId),
+              eq(userSchools.role, role),
+              eq(userSchools.isActive, false),
+            ));
+          });
+        }
       }
 
       const updatedUsers = isAddingFunction
@@ -4500,13 +4862,6 @@ export async function createApp() {
 
       if (updatedUsers.length === 0) {
         return res.status(404).json({ error: 'User not found' });
-      }
-
-      const effectiveSchoolIdForMembership = role === 'school_admin'
-        ? (parsedSchoolId !== undefined ? parsedSchoolId : targetUser.schoolId)
-        : null;
-      if (!isAddingFunction && role === 'school_admin' && effectiveSchoolIdForMembership != null) {
-        await upsertUserSchoolMembership(id, effectiveSchoolIdForMembership, 'school_admin', true);
       }
 
       if (!isAddingFunction && role === 'teacher') {
@@ -4593,8 +4948,13 @@ export async function createApp() {
       }
 
       const [updatedUser] = await db.select().from(users).where(eq(users.id, id));
+      const actorLabel = actor.role === 'school_admin'
+        ? 'Administrateur d’établissement'
+        : actor.role === 'school_accountant'
+          ? 'Secrétaire comptable'
+          : 'Super administrateur';
       const diffDescription = isAddingFunction
-        ? `Added ${additionalRole} function in school ${parsedSchoolId ?? targetUser.schoolId}.`
+        ? `Added ${additionalRole === 'school_accountant' ? 'Secrétaire comptable' : additionalRole} function in school ${parsedSchoolId ?? targetUser.schoolId}.`
         : formatUserUpdateDiff(targetUser, {
           email: updatedUser.email ?? null,
           name: updatedUser.name ?? '',
@@ -4609,7 +4969,7 @@ export async function createApp() {
         'user',
         updatedUser.id,
         actor.schoolId ?? null,
-        `${actor.role === 'school_admin' ? 'School admin' : 'Super admin'} ${actor.email || actor.uid} updated an account. ${diffDescription}`,
+        `${actorLabel} ${actor.email || actor.uid} updated an account. ${diffDescription}`,
       );
       
       // If teacher role, include classIds in response
@@ -4666,7 +5026,7 @@ export async function createApp() {
         new DrizzleGenerationAwareAccessSessionStore(lockedDb).transitionAccountLifecycle({
           userId: id,
           operation: 'deactivate',
-          allowedRoles: ['teacher', 'school_admin', 'parent'],
+          allowedRoles: ['teacher', 'school_admin', 'school_accountant', 'parent'],
           protectLastSchoolAdmin: true,
           mutation: async (tx, targetUser) => {
             if (targetUser.role === 'parent') {
@@ -4698,7 +5058,7 @@ export async function createApp() {
 
       if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
       if (result.status === 'account_not_eligible') {
-        return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be deactivated here' });
+        return res.status(400).json({ error: 'Seuls les comptes Enseignant, Administrateur d’établissement, Secrétaire comptable et Parent peuvent être désactivés ici.' });
       }
       if (result.status === 'last_school_admin') {
         return res.status(409).json({
@@ -4739,7 +5099,7 @@ export async function createApp() {
         new DrizzleGenerationAwareAccessSessionStore(lockedDb).transitionAccountLifecycle({
           userId: id,
           operation: 'reactivate',
-          allowedRoles: ['teacher', 'school_admin', 'parent'],
+          allowedRoles: ['teacher', 'school_admin', 'school_accountant', 'parent'],
           mutation: async (tx, targetUser) => {
             if (targetUser.role === 'parent') {
               await tx.execute(sql`
@@ -4780,7 +5140,13 @@ export async function createApp() {
       ));
 
       if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
-      if (result.status === 'account_not_eligible') return res.status(400).json({ error: 'Only teacher, school admin, and parent accounts can be reactivated here' });
+      if (result.status === 'account_not_eligible') return res.status(400).json({ error: 'Seuls les comptes Enseignant, Administrateur d’établissement, Secrétaire comptable et Parent peuvent être réactivés ici.' });
+      if (result.status === 'conflicting_active_role') {
+        return res.status(409).json({
+          error: 'This account has incompatible active administrative functions in the same school.',
+          code: 'CONFLICTING_ACTIVE_SCHOOL_FUNCTION',
+        });
+      }
       if (result.status === 'invalid_state'
         || result.status === 'invalid_generation'
         || result.status === 'generation_exhausted') {
@@ -6100,16 +6466,14 @@ export async function createApp() {
         role: membership.role,
         nowEpochMs: Date.now(),
         mutation: async (tx) => {
-          await tx.insert(auditEvents).values({
-            actorUserId: actor.id,
-            actorRole: actor.role,
-            actorEmail: actor.email ?? null,
-            actorName: actor.name,
-            action: 'membership_deactivated',
-            resourceType: 'user',
-            resourceId: targetUserId,
+          await appendUserFunctionAuditEvent(tx, {
+            actor,
+            membershipId,
             schoolId: membership.schoolId,
-            description: `${actor.role} ${actor.email || actor.uid} deactivated ${membership.role} membership ${membershipId}`,
+            targetUserId,
+            role: membership.role,
+            action: 'deactivate',
+            wasActive: true,
           });
         },
       });
@@ -6164,6 +6528,9 @@ export async function createApp() {
         && (!schoolId || !isLocalSchoolRole(role))
       ) {
         return res.status(400).json({ error: 'A valid school and local role are required' });
+      }
+      if (role === 'school_accountant' && actor.id === targetId) {
+        return res.status(403).json({ error: 'A super_admin cannot assign the school_accountant function to their own account' });
       }
       if (!canGrantUserFunction({
         actorId: actor.id,
@@ -6227,72 +6594,71 @@ export async function createApp() {
         return res.status(423).json({ error: schoolSuspendedMessage, code: 'SCHOOL_SUSPENDED' });
       }
 
-      const result = await db.transaction(async (tx) => {
-        const [existing] = await tx.select({
-          id: userSchools.id,
-          isActive: userSchools.isActive,
-        })
-          .from(userSchools).where(and(
-            eq(userSchools.userId, targetId),
-            eq(userSchools.schoolId, schoolId),
-            eq(userSchools.role, role),
-          )).limit(1);
-        let membershipId = existing?.id ?? null;
-        if (existing?.isActive === false) {
-          await tx.update(userSchools).set({ isActive: true }).where(and(
-            eq(userSchools.userId, targetId),
-            eq(userSchools.schoolId, schoolId),
-            eq(userSchools.role, role),
-            eq(userSchools.isActive, false),
-          ));
-        } else if (!existing) {
-          const [inserted] = await tx.insert(userSchools).values({
-            userId: targetId,
+      const store = new DrizzleGenerationAwareAccessSessionStore(db);
+      const result = await store.activateMembership({
+        userId: targetId,
+        schoolId,
+        role,
+        mutation: async (tx, membershipId, action) => {
+          if (role === 'parent') {
+            const [profile] = await tx.select({ id: parents.id }).from(parents)
+              .where(and(
+                eq(parents.userId, targetId),
+                eq(parents.schoolId, schoolId),
+              )).limit(1);
+            if (!profile) {
+              await tx.insert(parents).values({
+                userId: targetId,
+                schoolId,
+                phone: targetUser.phone ?? '',
+                address: '',
+              });
+            }
+          } else if (role === 'teacher') {
+            const [profile] = await tx.select({ id: teachers.id }).from(teachers)
+              .where(and(
+                eq(teachers.userId, targetId),
+                eq(teachers.schoolId, schoolId),
+              )).limit(1);
+            if (!profile) {
+              await tx.insert(teachers).values({
+                userId: targetId,
+                schoolId,
+                phone: targetUser.phone ?? '',
+                specialization: null,
+              });
+            }
+          }
+          await appendUserFunctionAuditEvent(tx, {
+            actor,
+            membershipId,
             schoolId,
+            targetUserId: targetId,
             role,
-            isActive: true,
-          }).returning({ id: userSchools.id });
-          membershipId = inserted?.id ?? null;
-        }
-
-        if (role === 'parent') {
-          const [profile] = await tx.select({ id: parents.id }).from(parents)
-            .where(and(
-              eq(parents.userId, targetId),
-              eq(parents.schoolId, schoolId),
-            )).limit(1);
-          if (!profile) {
-            await tx.insert(parents).values({
-              userId: targetId,
-              schoolId,
-              phone: targetUser.phone ?? '',
-              address: '',
-            });
-          }
-        } else if (role === 'teacher') {
-          const [profile] = await tx.select({ id: teachers.id }).from(teachers)
-            .where(and(
-              eq(teachers.userId, targetId),
-              eq(teachers.schoolId, schoolId),
-            )).limit(1);
-          if (!profile) {
-            await tx.insert(teachers).values({
-              userId: targetId,
-              schoolId,
-              phone: targetUser.phone ?? '',
-              specialization: null,
-            });
-          }
-        }
-        return { membershipId, alreadyAssigned: Boolean(existing) };
+            action,
+            ...(action === 'reactivate' ? { wasActive: false } : {}),
+          });
+        },
       });
 
-      return res.status(result.alreadyAssigned ? 200 : 201).json({
+      if (result.status === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+      if (result.status === 'school_not_found') return res.status(404).json({ error: 'School not found' });
+      if (result.status === 'account_not_admissible') {
+        return res.status(409).json({ error: 'A globally disabled account cannot have a function changed' });
+      }
+      if (result.status === 'conflicting_active_role') {
+        return res.status(409).json({
+          error: 'This account already has the incompatible active function in this school.',
+          code: 'CONFLICTING_ACTIVE_SCHOOL_FUNCTION',
+        });
+      }
+
+      return res.status(result.status === 'already_active' ? 200 : 201).json({
         userId: targetId,
         schoolId,
         role,
         membershipId: result.membershipId,
-        alreadyAssigned: result.alreadyAssigned,
+        alreadyAssigned: result.status === 'already_active',
       });
     } catch (error: any) {
       if (error?.code === '23505' || error?.cause?.code === '23505') {
@@ -6407,6 +6773,13 @@ export async function createApp() {
         }
       }
 
+      if (role === 'school_accountant') {
+        return res.status(403).json({
+          error: 'The school_accountant function cannot be provisioned by register-or-login.',
+          code: 'ACCOUNTANT_SELF_PROVISIONING_FORBIDDEN',
+        });
+      }
+
       // If user is simulated or we need to auto-create, preserve known roles, otherwise default to parent
       const allowedRoles = ['super_admin', 'school_admin', 'teacher', 'surveillant', 'parent'];
       const normalizedRole = String(role || '').trim();
@@ -6467,21 +6840,15 @@ export async function createApp() {
             role: 'teacher',
             isActive: true,
           });
+        } else if (finalRole === 'school_admin') {
+          await upsertUserSchoolMembership(newUser.id, resolvedSchoolId, 'school_admin', true, tx);
         }
 
         return newUser;
       });
 
       // Create linked profile type
-      if (finalRole === 'school_admin') {
-        if (resolvedSchoolId != null) {
-          try {
-            await upsertUserSchoolMembership(createdUser.id, resolvedSchoolId, 'school_admin', true);
-          } catch (e: any) {
-            console.warn('Failed to insert user_schools for register-or-login school_admin', e?.message || e);
-          }
-        }
-      } else if (finalRole === 'teacher') {
+      if (finalRole === 'teacher') {
         try {
           const createdTeacherRow = await db.select({ id: teachers.id }).from(teachers).where(and(
             eq(teachers.userId, createdUser.id),
@@ -6531,7 +6898,7 @@ export async function createApp() {
       if (actor.role === 'super_admin') {
         // Super admin can see all schools
         list = await db.select().from(schools);
-      } else if ((actor.role === 'school_admin' || actor.role === 'parent' || actor.role === 'teacher') && actor.schoolId) {
+      } else if ((isSchoolOperationsRole(actor.role) || actor.role === 'parent' || actor.role === 'teacher') && actor.schoolId) {
         // School admin and parent see only their assigned school
         list = await db.select().from(schools).where(eq(schools.id, actor.schoolId));
       } else {
@@ -6947,7 +7314,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         await recordAuditOutcomeAfterRollback({
           actor: {
             userId: actor.id ?? null,
@@ -6989,7 +7356,7 @@ export async function createApp() {
         }, new Error('Only a super admin may modify the school time zone.'));
         return res.status(403).json({ error: 'Only super admin can modify the school time zone' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId !== id) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== id) {
         await recordAuditOutcomeAfterRollback({
           actor: {
             userId: actor.id ?? null,
@@ -7116,10 +7483,10 @@ export async function createApp() {
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid school id' });
     const actor = await resolveActor(req);
     if (!actor) return res.status(404).json({ error: 'User not found' });
-    if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+    if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
       return res.status(403).json({ error: 'Only school administrators can modify school information' });
     }
-    if (actor.role === 'school_admin' && actor.schoolId !== id) {
+    if (isSchoolOperationsRole(actor.role) && actor.schoolId !== id) {
       return res.status(403).json({ error: 'Cannot modify another school' });
     }
     const [school] = await db.select({ id: schools.id }).from(schools).where(eq(schools.id, id));
@@ -7137,10 +7504,10 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Only school administrators can modify school information' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId !== id) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== id) {
         return res.status(403).json({ error: 'Cannot modify another school' });
       }
 
@@ -7339,9 +7706,12 @@ export async function createApp() {
         console.log('Simulated super_admin detected and no DB profile found; bypassing user lookup for dev.');
       }
 
-      // Only super_admin or school_admin may import students
-      if (!['super_admin', 'school_admin'].includes(userRecord.role)) {
+      // School operations roles may import students only in their active school.
+      if (userRecord.role !== 'super_admin' && !isSchoolOperationsRole(userRecord.role)) {
         return res.status(403).json({ error: 'Permission denied' });
+      }
+      if (isSchoolOperationsRole(userRecord.role) && userRecord.schoolId == null) {
+        return res.status(403).json({ error: 'School context is required' });
       }
 
       const payload = req.body;
@@ -7350,7 +7720,9 @@ export async function createApp() {
       const validGenderValues = ['M', 'F', 'Masculin', 'Féminin', 'Feminin', 'm', 'f', 'male', 'female', 'masculin', 'feminin', 'homme', 'femme', 'garcon', 'fille'];
 
       // Pre-validate referenced IDs to provide clear errors instead of DB constraint failures
-      const schoolIds = Array.from(new Set(payload.map((p: any) => p.schoolId).filter(Boolean).map((v: any) => parseInt(v))));
+      const schoolIds = isSchoolOperationsRole(userRecord.role)
+        ? [userRecord.schoolId]
+        : Array.from(new Set(payload.map((p: any) => p.schoolId).filter(Boolean).map((v: any) => parseInt(v))));
       const classIds = Array.from(new Set(payload.map((p: any) => p.classId).filter(Boolean).map((v: any) => parseInt(v))));
       const parentIds = Array.from(new Set(payload.map((p: any) => p.parentId).filter(Boolean).map((v: any) => parseInt(v))));
       const parentEmails = Array.from(new Set(payload
@@ -7363,10 +7735,6 @@ export async function createApp() {
       const canonicalParentPhones = parentPhoneInputs
         .map(({ phone, prefix }) => phone ? canonicalizeUserPhone(phone, prefix || undefined) : null)
         .filter((phone): phone is string => Boolean(phone));
-
-      if (userRecord.role === 'school_admin' && userRecord.schoolId) {
-        schoolIds.push(userRecord.schoolId);
-      }
 
       const existingSchoolRows = schoolIds.length > 0 ? await db.select().from(schools).where(sql`${schools.id} IN ${schoolIds}`) : [];
       const existingClassRows = classIds.length > 0 ? await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(sql`${classes.id} IN ${classIds}`) : [];
@@ -7400,7 +7768,7 @@ export async function createApp() {
       const existingClassIds = new Set(existingClassRows.map((r: any) => r.id));
       const existingParentIds = new Set(existingParentRows.map((r: any) => r.id));
 
-      if (userRecord.role === 'school_admin') {
+      if (isSchoolOperationsRole(userRecord.role)) {
         const lockedSchool = existingSchoolRows.find((r: any) => r.studentsCreationLocked === true);
         if (lockedSchool) {
           return res.status(403).json({ error: "L'import d'élèves est impossible : la création d'élèves est verrouillée pour cet établissement." });
@@ -7464,7 +7832,12 @@ export async function createApp() {
         const normalizedStudentStatus = s.studentStatus !== undefined && s.studentStatus !== null && String(s.studentStatus).trim() !== ''
           ? String(s.studentStatus).trim()
           : null;
-        const resolvedSchoolId = userRecord.role === 'school_admin' ? userRecord.schoolId : s.schoolId;
+        if (isSchoolOperationsRole(userRecord.role) && s.schoolId != null
+          && parsePositiveInteger(s.schoolId) !== userRecord.schoolId) {
+          errors.push({ row: importRowNumber, reason: 'Cannot import students for another school', data: s });
+          continue;
+        }
+        const resolvedSchoolId = isSchoolOperationsRole(userRecord.role) ? userRecord.schoolId : s.schoolId;
         const schoolId = resolvedSchoolId ? parseInt(resolvedSchoolId) : null;
         const classId = s.classId ? parseInt(s.classId) : null;
         const hasParentId = s.parentId !== undefined && s.parentId !== null && String(s.parentId).trim() !== '';
@@ -7619,7 +7992,7 @@ export async function createApp() {
 
         try {
           const resolvedSchoolAdminId = await (async () => {
-            if (userRecord.role === 'school_admin') {
+            if (isSchoolOperationsRole(userRecord.role)) {
               return userRecord.id;
             }
 
@@ -8626,14 +8999,13 @@ export async function createApp() {
       let list: any[];
       if (actor.role === 'super_admin') {
         list = await db.select().from(academicYears);
-      } else if (actor.role === 'school_admin') {
-        // School admin sees ONLY their assigned academic year
-        if (actor.academicYearId) {
-          list = await db.select().from(academicYears).where(eq(academicYears.id, actor.academicYearId));
-        } else {
-          // If no assigned year, return empty list (admin must have an assigned year)
-          list = [];
-        }
+      } else if (isSchoolOperationsRole(actor.role)) {
+        list = actor.schoolId == null
+          ? []
+          : await db.select().from(academicYears).where(or(
+              sql`${academicYears.schoolId} IS NULL`,
+              eq(academicYears.schoolId, actor.schoolId),
+            ));
       } else {
         // Teachers and parents see global academic years plus any legacy school-specific ones
         list = await db.select().from(academicYears).where(
@@ -8875,10 +9247,10 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.params.schoolId);
       if (!Number.isInteger(schoolId) || schoolId <= 0) return res.status(400).json({ error: 'Invalid schoolId' });
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       const rows = await db.select().from(schoolCycles).where(eq(schoolCycles.schoolId, schoolId));
       return res.json(rows);
     } catch (err) {
@@ -8891,9 +9263,9 @@ export async function createApp() {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.params.schoolId);
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       const requestedCodes = Array.isArray(req.body?.cycleCodes) ? req.body.cycleCodes.map((value: unknown) => String(value)) : [];
       const availableCycles = await db.select().from(cycles).where(eq(cycles.isActive, true));
       const selectedCycles = availableCycles.filter((cycle) => requestedCodes.includes(cycle.code));
@@ -8939,8 +9311,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       const schoolId = parsePositiveInteger(req.params.schoolId);
       if (!actor || schoolId == null) return res.status(403).json({ error: 'Forbidden' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       return res.json(await getSchoolPeriodTypeStates(schoolId));
     } catch (error) {
       console.error('Failed to list school period type approvals:', error);
@@ -8955,8 +9327,8 @@ export async function createApp() {
       const periodType = String(req.params.periodType);
       const decision = String(req.params.decision);
       if (!actor || schoolId == null) return res.status(403).json({ error: 'Forbidden' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       if (!['trimester', 'semester'].includes(periodType)) return res.status(400).json({ error: 'Invalid period type' });
       if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'Invalid period type decision' });
 
@@ -9029,7 +9401,7 @@ export async function createApp() {
         } else {
           rows = await db.select().from(schoolTerms);
         }
-      } else if (actor.role === 'school_admin') {
+      } else if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
         const targetSchoolId = actor.schoolId;
         if (!targetSchoolId) return res.status(403).json({ error: 'School context required' });
         if (academicYearId != null) {
@@ -9272,7 +9644,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const academicYearId = Number(req.query.academicYearId);
       if (!Number.isInteger(academicYearId) || academicYearId <= 0) return res.status(400).json({ error: 'academicYearId is required' });
 
@@ -9302,7 +9674,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const academicYearId = Number(req.query.academicYearId);
       const rows = await db.select().from(classProgressions).where(eq(classProgressions.isActive, true));
       if (!Number.isInteger(academicYearId) || academicYearId <= 0) return res.json(rows);
@@ -9407,7 +9779,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.query.schoolId ?? actor.schoolId);
       const academicYearId = Number(req.query.academicYearId);
       if (!Number.isInteger(schoolId) || schoolId <= 0 || !Number.isInteger(academicYearId) || academicYearId <= 0) {
@@ -9435,7 +9807,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
       const schoolId = Number(req.body?.schoolId ?? actor.schoolId);
       const academicYearId = Number(req.body?.academicYearId);
       const sourceClassId = Number(req.body?.sourceClassId);
@@ -9517,11 +9889,13 @@ export async function createApp() {
   app.get('/api/class-exam-configurations', requireAuth, async (req: AuthRequest, res) => {
     try {
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const requestedSchoolId = parsePositiveInteger(req.query.schoolId);
       const requestedYearId = parsePositiveInteger(req.query.academicYearId);
-      const schoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
-      if (actor.role === 'school_admin' && schoolId == null) return res.status(403).json({ error: 'School context required' });
+      const schoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
+      if (isSchoolOperationsRole(actor.role) && (schoolId == null || (requestedSchoolId != null && requestedSchoolId !== schoolId))) {
+        return res.status(403).json({ error: 'School context required' });
+      }
       const conditions = [] as any[];
       if (schoolId != null) {
         conditions.push(or(eq(classExamConfigurations.schoolId, schoolId), sql`${classExamConfigurations.schoolId} IS NULL`));
@@ -9542,15 +9916,14 @@ export async function createApp() {
   app.post('/api/class-exam-configurations', requireAuth, async (req: AuthRequest, res) => {
     try {
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const classId = parsePositiveInteger(req.body?.classId);
       const academicYearId = parsePositiveInteger(req.body?.academicYearId);
       const requestedSchoolId = parsePositiveInteger(req.body?.schoolId);
-      const schoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+      const schoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
       const examType = req.body?.examType;
       if (classId == null || academicYearId == null || !isExamType(examType)) return res.status(400).json({ error: 'classId, academicYearId and a valid examType are required' });
-      if (actor.role === 'school_admin' && schoolId == null) return res.status(403).json({ error: 'School context required' });
-      if (actor.role === 'school_admin' && schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && (schoolId == null || (requestedSchoolId != null && schoolId !== requestedSchoolId))) return res.status(403).json({ error: 'Forbidden' });
 
       const [classRow] = await db.select({ id: classes.id, schoolId: classes.schoolId, academicYearId: classes.academicYearId }).from(classes).where(eq(classes.id, classId));
       if (!classRow || classRow.academicYearId !== academicYearId) return res.status(400).json({ error: 'Class and academic year do not match' });
@@ -9599,13 +9972,13 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       const id = parsePositiveInteger(req.params.id);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) || id == null) return res.status(403).json({ error: 'Forbidden' });
       const result = await db.transaction(async (tx) => {
         const [configuration] = await tx.select().from(classExamConfigurations)
           .where(eq(classExamConfigurations.id, id))
           .for('update');
         if (!configuration) return { kind: 'not_found' as const };
-        if (actor.role === 'school_admin' && configuration.schoolId !== actor.schoolId) {
+        if (isSchoolOperationsRole(actor.role) && configuration.schoolId !== actor.schoolId) {
           return { kind: 'forbidden' as const };
         }
         const [updated] = await tx.update(classExamConfigurations)
@@ -9634,7 +10007,7 @@ export async function createApp() {
   app.get('/api/exam-results', requireAuth, async (req: AuthRequest, res) => {
     try {
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const classId = parsePositiveInteger(req.query.classId);
       const studentId = parsePositiveInteger(req.query.studentId);
       const academicYearId = parsePositiveInteger(req.query.academicYearId);
@@ -9642,7 +10015,7 @@ export async function createApp() {
       if (studentId != null) {
         const [student] = await db.select({ id: students.id, schoolId: students.schoolId }).from(students).where(eq(students.id, studentId));
         if (!student) return res.status(404).json({ error: 'Student not found' });
-        if (actor.role === 'school_admin' && student.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
+        if (isSchoolOperationsRole(actor.role) && student.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
         const historyConditions = [eq(examResults.studentId, studentId)];
         if (academicYearId != null) historyConditions.push(eq(examResults.academicYearId, academicYearId));
         if (isExamType(examType)) historyConditions.push(eq(examResults.examType, examType));
@@ -9651,11 +10024,14 @@ export async function createApp() {
       }
       if (classId == null || academicYearId == null || !isExamType(examType)) return res.status(400).json({ error: 'classId, academicYearId and a valid examType are required' });
       const requestedSchoolId = parsePositiveInteger(req.query.schoolId);
-      const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+      const effectiveSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
+      if (isSchoolOperationsRole(actor.role) && (effectiveSchoolId == null || (requestedSchoolId != null && requestedSchoolId !== effectiveSchoolId))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const configuration = await findActiveClassExamConfiguration({ classId, academicYearId, examType: String(examType), schoolId: effectiveSchoolId });
-      if (!configuration || (actor.role === 'school_admin' && configuration.schoolId != null && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
+      if (!configuration || (isSchoolOperationsRole(actor.role) && configuration.schoolId != null && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
       const studentRows = await db.select({ id: students.id, firstName: students.firstName, lastName: students.lastName, schoolId: students.schoolId, classId: students.classId }).from(students).where(and(eq(students.classId, classId), eq(students.isActive, true)));
-      if (actor.role === 'school_admin' && studentRows.some((row) => row.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && studentRows.some((row) => row.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Forbidden' });
       const rows = studentRows.length > 0
         ? await db.select().from(examResults).where(and(eq(examResults.academicYearId, academicYearId), eq(examResults.examType, examType), inArray(examResults.studentId, studentRows.map((row) => row.id))))
         : [];
@@ -9670,7 +10046,7 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       const id = parsePositiveInteger(req.params.id);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role) || id == null) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) || id == null) return res.status(403).json({ error: 'Forbidden' });
       const deletionResult = await db.transaction(async (tx) => {
         const [before] = await tx.select().from(examResults)
           .where(eq(examResults.id, id))
@@ -9679,7 +10055,7 @@ export async function createApp() {
         const [student] = await tx.select({ schoolId: students.schoolId, isActive: students.isActive })
           .from(students).where(eq(students.id, before.studentId));
         if (!student) return { kind: 'not_found' as const };
-        if (actor.role === 'school_admin' && student.schoolId !== actor.schoolId) {
+        if (isSchoolOperationsRole(actor.role) && student.schoolId !== actor.schoolId) {
           return { kind: 'forbidden' as const };
         }
         if (student.isActive !== true) return { kind: 'historical' as const };
@@ -9709,19 +10085,22 @@ export async function createApp() {
   app.put('/api/exam-results/batch', requireAuth, async (req: AuthRequest, res) => {
     try {
       const actor = await resolveActor(req);
-      if (!actor || !['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!actor || (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role))) return res.status(403).json({ error: 'Forbidden' });
       const classId = parsePositiveInteger(req.body?.classId);
       const academicYearId = parsePositiveInteger(req.body?.academicYearId);
       const examType = req.body?.examType;
       const entries = Array.isArray(req.body?.results) ? req.body.results : [];
       if (classId == null || academicYearId == null || !isExamType(examType) || entries.length === 0) return res.status(400).json({ error: 'classId, academicYearId, examType and results are required' });
       const requestedSchoolId = parsePositiveInteger(req.body?.schoolId);
-      const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+      const effectiveSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
+      if (isSchoolOperationsRole(actor.role) && (effectiveSchoolId == null || (requestedSchoolId != null && requestedSchoolId !== effectiveSchoolId))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const configuration = await findActiveClassExamConfiguration({ classId, academicYearId, examType: String(examType), schoolId: effectiveSchoolId });
-      if (!configuration || (actor.role === 'school_admin' && configuration.schoolId != null && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
+      if (!configuration || (isSchoolOperationsRole(actor.role) && configuration.schoolId != null && configuration.schoolId !== actor.schoolId)) return res.status(403).json({ error: 'Active exam configuration not found for this school' });
       const studentIds = entries.map((entry: any) => parsePositiveInteger(entry.studentId)).filter((id: number | null): id is number => id != null);
       const studentRows = await db.select({ id: students.id, classId: students.classId, schoolId: students.schoolId, isActive: students.isActive }).from(students).where(inArray(students.id, studentIds));
-      if (studentRows.length !== studentIds.length || studentRows.some((student) => student.isActive !== true || student.classId !== classId || (actor.role === 'school_admin' && student.schoolId !== actor.schoolId))) return res.status(403).json({ error: 'Every student must be active and belong to the configured class and school' });
+      if (studentRows.length !== studentIds.length || studentRows.some((student) => student.isActive !== true || student.classId !== classId || (isSchoolOperationsRole(actor.role) && student.schoolId !== actor.schoolId))) return res.status(403).json({ error: 'Every student must be active and belong to the configured class and school' });
       const validatedEntries: Array<{
         studentId: number;
         resultStatus: string;
@@ -10094,8 +10473,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       const schoolId = parsePositiveInteger(req.params.schoolId);
       if (!actor || schoolId == null) return res.status(403).json({ error: 'Forbidden' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
 
       const rows = await db.select({
         classId: classHomeroomAssignments.classId,
@@ -10128,19 +10507,19 @@ export async function createApp() {
   app.get('/api/classes', requireAuth, async (req: AuthRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-      if (req.user.role === 'school_admin' && req.user.schoolId == null) {
-        return res.status(403).json({ error: 'School admin school context is required' });
+      if (isSchoolOperationsRole(req.user.role) && req.user.schoolId == null) {
+        return res.status(403).json({ error: 'School context is required' });
       }
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role === 'school_admin' && actor.schoolId == null) {
-        return res.status(403).json({ error: 'School admin school context is required' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
+        return res.status(403).json({ error: 'School context is required' });
       }
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
-      const targetSchoolId = actor.role === 'school_admin' || actor.role === 'surveillant'
+      const targetSchoolId = isSchoolOperationsRole(actor.role) || actor.role === 'surveillant'
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
@@ -10417,17 +10796,17 @@ export async function createApp() {
 
       const parsedSchoolId = validation.schoolId;
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      if (actor.role === 'school_admin' && !actor.schoolId) {
-        return res.status(403).json({ error: 'School admin must belong to a school' });
+      if (isSchoolOperationsRole(actor.role) && !actor.schoolId) {
+        return res.status(403).json({ error: 'School operations role must belong to a school' });
       }
 
       const resolvedSchoolId = parsedSchoolId;
 
-      if (actor.role === 'school_admin' && resolvedSchoolId == null) {
+      if (isSchoolOperationsRole(actor.role) && resolvedSchoolId == null) {
         return res.status(400).json({ error: 'schoolId is required to create a class' });
       }
 
@@ -10562,7 +10941,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -10570,7 +10949,7 @@ export async function createApp() {
       const classId = Number(req.params.classId);
       if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
 
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -10621,7 +11000,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -10629,7 +11008,7 @@ export async function createApp() {
       const classId = Number(req.params.classId);
       if (!schoolId || !classId) return res.status(400).json({ error: 'Invalid class or school ID' });
 
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -10678,9 +11057,9 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin or school_admin may delete classes.
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
-        return res.status(403).json({ error: 'Forbidden: only super_admin or school_admin can delete classes' });
+      // School operations roles may only delete classes in their active school.
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
       }
 
       const deletionResult = await db.transaction(async (tx) => {
@@ -10688,7 +11067,7 @@ export async function createApp() {
           .where(eq(classes.id, id))
           .for('update');
         if (!classToDelete) return { kind: 'not_found' as const };
-        if (actor.role === 'school_admin') {
+        if (isSchoolOperationsRole(actor.role)) {
           if (!actor.schoolId) return { kind: 'forbidden' as const, missingSchool: true as const };
           if (classToDelete.schoolId !== actor.schoolId) return { kind: 'forbidden' as const, missingSchool: false as const };
         }
@@ -10724,7 +11103,7 @@ export async function createApp() {
       if (deletionResult.kind === 'forbidden') {
         return res.status(403).json({
           error: deletionResult.missingSchool
-            ? 'Forbidden: school_admin must have a schoolId'
+            ? 'Forbidden: school context is required'
             : 'Cannot delete class in another school',
         });
       }
@@ -10883,8 +11262,8 @@ export async function createApp() {
 
       // School admin can only update classes in their own school
       if (actor.role !== 'super_admin') {
-        if (actor.role !== 'school_admin') {
-          return res.status(403).json({ error: 'Only super_admin or school_admin can update classes' });
+        if (!isSchoolOperationsRole(actor.role)) {
+          return res.status(403).json({ error: 'Only super_admin or school operations roles can update classes' });
         }
         if (actor.schoolId == null) return res.status(403).json({ error: 'School admin school context is required' });
         const classBelongsToSchool = classToUpdate.schoolId === actor.schoolId;
@@ -10971,14 +11350,14 @@ export async function createApp() {
         source: 'web',
         result: 'denied' as const,
       };
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         await recordAuditOutcomeAfterRollback({
           ...assignmentDeniedEvent,
           description: 'Homeroom assignment was refused for an unauthorized role.',
         }, new Error('Unauthorized role.'));
         return res.status(403).json({ error: 'Forbidden' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) {
         await recordAuditOutcomeAfterRollback({
           ...assignmentDeniedEvent,
           description: 'Homeroom assignment was refused outside the actor school.',
@@ -11053,7 +11432,7 @@ export async function createApp() {
       }
 
       let querySchoolIds: number[] | null = filterSchoolId == null ? null : [filterSchoolId];
-      if (actor.role === 'school_admin') {
+      if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
         if (actor.schoolId == null) {
           return res.status(403).json({ error: 'School context is required' });
         }
@@ -11078,7 +11457,7 @@ export async function createApp() {
         firstNames: users.firstNames,
         email: users.email,
         gender: users.gender,
-        ...(['super_admin', 'school_admin'].includes(actor.role)
+        ...(['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)
           ? { lastLoginAt: users.lastLoginAt }
           : {}),
         phone: teachers.phone,
@@ -11316,7 +11695,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         await recordTeacherAssignmentDenial(actor, actor.schoolId, 'insufficient_role');
         return res.status(403).json({ error: 'Forbidden: only admin roles can create teachers' });
       }
@@ -11328,7 +11707,14 @@ export async function createApp() {
       const fallbackName = typeof name === 'string' ? name.trim() : '';
       const derivedLastName = String(lastName ?? '').trim() || (fallbackName ? fallbackName.split(/\s+/).filter(Boolean)[0] ?? '' : '');
       const derivedFirstNames = String(firstNames ?? '').trim() || (fallbackName ? fallbackName.split(/\s+/).filter(Boolean).slice(1).join(' ') || fallbackName : '');
-      const resolvedSchoolId = schoolId != null && schoolId !== '' ? parseInt(String(schoolId), 10) : actor.role === 'school_admin' ? actor.schoolId : null;
+      const requestedSchoolId = schoolId != null && schoolId !== '' ? parsePositiveInteger(schoolId) : null;
+      if (schoolId != null && schoolId !== '' && requestedSchoolId == null) {
+        return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (isSchoolOperationsRole(actor.role) && (actor.schoolId == null || (requestedSchoolId != null && requestedSchoolId !== actor.schoolId))) {
+        return res.status(403).json({ error: 'Cannot create teacher outside the active school' });
+      }
+      const resolvedSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
 
       if (!derivedLastName || !derivedFirstNames || !normalizedEmail || !resolvedSchoolId) {
         return res.status(400).json({ error: 'Missing compulsory details: lastName, firstNames, email and schoolId are required' });
@@ -11366,7 +11752,7 @@ export async function createApp() {
         ...validatedTeachingAssignments.map((assignment) => assignment.subjectId),
       ]));
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId == null) {
           await recordTeacherAssignmentDenial(actor, null, 'missing_school_context');
           return res.status(403).json({ error: 'Forbidden: missing school context' });
@@ -11405,7 +11791,7 @@ export async function createApp() {
 
       const teacherResult = await db.insert(teachers).values({
         userId: createdUser.id,
-        schoolId: parseInt(schoolId),
+        schoolId: parsedSchoolId,
         phone,
         specialization: normalizeSpecialization(specialization) || null,
       }).returning();
@@ -11731,10 +12117,10 @@ export async function createApp() {
           // Load user and validate school permission
           const actor = await resolveActor(req);
           if (!actor) return res.status(404).json({ error: 'User not found' });
-          if (!['super_admin', 'school_admin'].includes(actor.role)) {
+          if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
             return res.status(403).json({ error: 'Forbidden: only admin roles can create parents' });
           }
-          if (actor.role === 'school_admin' && actor.schoolId == null) {
+          if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
             return res.status(403).json({ error: 'Forbidden: missing school context' });
           }
 
@@ -11746,10 +12132,10 @@ export async function createApp() {
           if (actor.role === 'super_admin' && requestedSchoolId == null) {
             return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
           }
-          if (actor.role === 'school_admin' && requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
+          if (isSchoolOperationsRole(actor.role) && requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
             return res.status(403).json({ error: 'Cannot create parent in another school' });
           }
-          const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : requestedSchoolId;
+          const effectiveSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : requestedSchoolId;
           if (effectiveSchoolId == null) {
             return res.status(400).json({ error: 'schoolId is required to create a parent profile' });
           }
@@ -11920,7 +12306,7 @@ export async function createApp() {
           eq(parents.userId, actor.id!),
           eq(parents.schoolId, actor.schoolId!),
         );
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
         parentConditions.push(eq(parents.schoolId, actor.schoolId));
       }
@@ -11965,7 +12351,7 @@ export async function createApp() {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         const membership = await getActiveUserSchoolMembership(parent.userId, actor.schoolId, 'parent');
         if (actor.schoolId === parent.schoolId && membership) return res.json(parent);
         return res.status(403).json({ error: 'Forbidden' });
@@ -11984,7 +12370,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(401).json({ error: 'Unauthenticated' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const rows: any[] = Array.isArray(req.body) ? req.body : req.body.rows;
       if (!rows || !Array.isArray(rows)) return res.status(400).json({ error: 'Invalid payload: expected array of rows' });
@@ -12011,7 +12397,7 @@ export async function createApp() {
         }
 
         let schoolId: number | null = null;
-        if (actor.role === 'school_admin') {
+        if (isSchoolOperationsRole(actor.role)) {
           if (actor.schoolId == null) {
             const rowName = (typeof r.name === 'string' ? r.name : '').trim();
             errors.push({ row: i + 2, name: rowName || undefined, email: normalizeEmail(r.email || '') || undefined, error: 'Forbidden: missing school context' });
@@ -12275,7 +12661,7 @@ export async function createApp() {
           if (!authorizedIds || authorizedIds.length === 0) return res.json([]);
 
           queryConditions.push(inArray(students.id, authorizedIds));
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId) {
           queryConditions.push(eq(students.schoolId, actor.schoolId));
         } else {
@@ -12337,14 +12723,17 @@ export async function createApp() {
       // Load user and validate school permission
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
-        return res.status(403).json({ error: 'Only super_admin or school_admin can create students' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
+        return res.status(403).json({ error: 'Only super_admin, school_admin, or school_accountant can create students' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId == null) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         return res.status(403).json({ error: 'Forbidden: missing school context' });
       }
 
-      const effectiveSchoolId = actor.role === 'school_admin' ? actor.schoolId : parsedSchoolId;
+      if (isSchoolOperationsRole(actor.role) && parsedSchoolId != null && parsedSchoolId !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot create student in another school' });
+      }
+      const effectiveSchoolId = isSchoolOperationsRole(actor.role) ? actor.schoolId : parsedSchoolId;
 
       if (!normalizedFirstName || !lastName || !effectiveSchoolId || !parsedClassId) {
         return res.status(400).json({ error: `Missing compulsory student parameters. Received firstName=${firstName}, lastName=${lastName}, schoolId=${schoolId}, classId=${classId}` });
@@ -12379,9 +12768,9 @@ export async function createApp() {
       if (normalizedStudentStatus !== null && !isStudentAcademicYearStatus(normalizedStudentStatus)) {
         return res.status(400).json({ error: 'Invalid student status' });
       }
-      // Enforce per-school student creation lock: school_admins cannot create when locked
+      // Enforce the per-school student creation lock for school operations roles.
       const [schoolRow] = await db.select().from(schools).where(eq(schools.id, targetSchoolId));
-      if (schoolRow && (schoolRow.studentsCreationLocked ?? false) && actor.role === 'school_admin') {
+      if (schoolRow && (schoolRow.studentsCreationLocked ?? false) && isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'La création d\'élèves est temporairement verrouillée par le Super Admin pour cet établissement.' });
       }
       if (classRecord.schoolId !== targetSchoolId) {
@@ -12405,7 +12794,7 @@ export async function createApp() {
       }
 
       // School admin can only create students in their own school
-      if (actor.role === 'school_admin' && effectiveSchoolId !== actor.schoolId) {
+      if (isSchoolOperationsRole(actor.role) && effectiveSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot create student in another school' });
       }
 
@@ -12532,10 +12921,10 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
-        return res.status(403).json({ error: 'Only super_admin or school_admin can update students' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
+        return res.status(403).json({ error: 'Only super_admin, school_admin, or school_accountant can update students' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId == null) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         return res.status(403).json({ error: 'School context is required' });
       }
 
@@ -12543,7 +12932,7 @@ export async function createApp() {
       if (!existingStudent) return res.status(404).json({ error: 'Student not found' });
 
       if (classId === null && Object.keys(req.body).length === 1) {
-        if (actor.role === 'school_admin' && (actor.schoolId == null || existingStudent.schoolId !== actor.schoolId)) {
+        if (isSchoolOperationsRole(actor.role) && (actor.schoolId == null || existingStudent.schoolId !== actor.schoolId)) {
           return res.status(403).json({ error: 'You can only update students from your school' });
         }
         if (existingStudent.classId == null) return res.status(200).json(existingStudent);
@@ -12570,7 +12959,7 @@ export async function createApp() {
               .where(eq(students.id, studentId))
               .for('update');
             if (!currentStudent) return { kind: 'not_found' as const };
-            if (actor.role === 'school_admin' && currentStudent.schoolId !== actor.schoolId) {
+            if (isSchoolOperationsRole(actor.role) && currentStudent.schoolId !== actor.schoolId) {
               return { kind: 'conflict' as const };
             }
             if (currentStudent.classId == null) {
@@ -12617,7 +13006,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Invalid schoolId' });
       }
 
-      if (actor.role === 'school_admin' && actor.schoolId != null) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId != null) {
         if (existingStudent.schoolId != null && actor.schoolId !== existingStudent.schoolId) {
           return res.status(403).json({ error: 'You can only update students from your school' });
         }
@@ -12689,7 +13078,7 @@ export async function createApp() {
       if (newStudentStatus !== null && !isStudentAcademicYearStatus(newStudentStatus)) {
         return res.status(400).json({ error: 'Invalid student status' });
       }
-      if (actor.role === 'school_admin' && actor.schoolId != null && resolvedSchoolId != null && resolvedSchoolId !== actor.schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId != null && resolvedSchoolId != null && resolvedSchoolId !== actor.schoolId) {
         return res.status(403).json({ error: 'Cannot assign student to another school' });
       }
 
@@ -13175,7 +13564,7 @@ export async function createApp() {
         const result: any = await runParentDeclarationAction(actor, actor.id, actor.schoolId, 'list', {});
         return res.status(result.status).json(result.body);
       }
-      if (!['super_admin', 'school_admin', 'surveillant', 'teacher'].includes(actor.role)) {
+      if (!['super_admin', 'school_admin', 'school_accountant', 'surveillant', 'teacher'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to view absence declarations' });
       }
       if (actor.role === 'teacher') return res.json([]);
@@ -13410,7 +13799,7 @@ export async function createApp() {
     if (actor.role === 'super_admin') return student;
     if (actor.schoolId == null || student.schoolId !== actor.schoolId) return null;
     if (actor.role === 'teacher') return null;
-    if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+    if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
       if (student.classId == null) return student;
       return (await isApprovedClassForSchool(student.classId, actor.schoolId)) ||
         (await db.select({ id: classes.id }).from(classes).where(and(
@@ -13425,7 +13814,7 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(actor.role)) {
+      if (!['teacher', 'school_admin', 'school_accountant', 'surveillant', 'super_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to review absence declarations' });
       }
       const id = Number(req.params.id);
@@ -13476,7 +13865,7 @@ export async function createApp() {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(actor.role)) {
+      if (!['teacher', 'school_admin', 'school_accountant', 'surveillant', 'super_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to close absence declarations' });
       }
       const id = Number(req.params.id);
@@ -13847,7 +14236,7 @@ export async function createApp() {
       if (actor.role === 'parent') {
         return res.status(403).json({ error: 'Parents are not allowed to record late arrivals' });
       }
-      if (!['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(actor.role)) {
+      if (!['super_admin', 'school_admin', 'school_accountant', 'teacher', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to record late arrivals' });
       }
       if (actor.role === 'teacher' && !hasSubjectInput) {
@@ -14016,7 +14405,7 @@ export async function createApp() {
       const [existing] = await db.select().from(lateArrivals).where(eq(lateArrivals.id, id));
       if (!existing) return res.status(404).json({ error: 'Late arrival not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin' && actor.role !== 'teacher' && actor.role !== 'surveillant') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role) && actor.role !== 'teacher' && actor.role !== 'surveillant') {
         return res.status(403).json({ error: 'Not authorized to update late arrivals' });
       }
       if (!await canManageLateArrival(actor, existing.studentId, existing.classId)) {
@@ -14094,7 +14483,7 @@ export async function createApp() {
       if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(actor.role)) {
+      if (!['super_admin', 'school_admin', 'school_accountant', 'teacher', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to delete late arrivals' });
       }
 
@@ -14215,7 +14604,7 @@ export async function createApp() {
       };
     }
 
-    if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+    if (actor.role === 'school_admin' || actor.role === 'school_accountant' || actor.role === 'surveillant') {
       if (actor.schoolId == null
         || !await getActiveUserSchoolMembership(actor.id, actor.schoolId, actor.role)) {
         return async () => false;
@@ -14418,7 +14807,7 @@ export async function createApp() {
         const studentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
         if (studentIds.length === 0) return res.json([]);
         conditions.push(inArray(lateArrivals.studentId, studentIds));
-      } else if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+      } else if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
         if (actor.schoolId == null) return res.json([]);
         conditions.push(eq(students.schoolId, actor.schoolId));
       } else if (actor.role === 'teacher') {
@@ -14626,7 +15015,7 @@ export async function createApp() {
       }
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['teacher', 'school_admin', 'surveillant'].includes(actor.role)) {
+      if (!['teacher', 'school_admin', 'school_accountant', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to review late-arrival justifications' });
       }
       const context = await loadLateArrivalJustificationContext(id);
@@ -14707,7 +15096,7 @@ export async function createApp() {
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid late-arrival id' });
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['school_admin', 'surveillant'].includes(actor.role)) {
+      if (!['school_admin', 'school_accountant', 'surveillant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Only an authorized school administrator or surveillant may reexamine a justification' });
       }
       const context = await loadLateArrivalJustificationContext(id);
@@ -15297,7 +15686,7 @@ export async function createApp() {
           || !canTeacherAccessAbsence(absence, assignmentContext.teacherId, assignmentContext.assignments)) {
           return res.status(403).json({ error: 'Teacher is not assigned to this absence teaching assignment' });
         }
-      } else if (actor.role === 'school_admin' || actor.role === 'surveillant') {
+      } else if (isSchoolOperationsRole(actor.role) || actor.role === 'surveillant') {
         if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Actor is outside the student school' });
         }
@@ -15432,7 +15821,7 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['school_admin', 'surveillant', 'super_admin'].includes(actor.role)) {
+      if (!['school_admin', 'school_accountant', 'surveillant', 'super_admin'].includes(actor.role)) {
         return res.status(403).json({ error: 'Not authorized to reexamine absence justifications' });
       }
       if (actor.role !== 'super_admin'
@@ -16182,7 +16571,7 @@ export async function createApp() {
         if (!childStudentIds.includes(absenceStudent.id)) {
           return res.status(403).json({ error: 'Cannot access absence justification for student you do not represent' });
         }
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         if (actor.id == null || actor.schoolId == null) {
           return res.status(403).json({ error: 'School context is required' });
         }
@@ -16237,7 +16626,7 @@ export async function createApp() {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && actor.role !== 'school_admin' && actor.role !== 'school_accountant') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -16531,7 +16920,7 @@ export async function createApp() {
 
       const schoolIdParam = req.query.schoolId ? Number(req.query.schoolId) : undefined;
       const approvedOnly = req.query.approvedOnly === 'true' || req.query.approvedOnly === '1';
-      const targetSchoolId = actor.role === 'school_admin' || actor.role === 'surveillant'
+      const targetSchoolId = isSchoolOperationsRole(actor.role) || actor.role === 'surveillant'
         ? actor.schoolId
         : actor.role === 'teacher'
           ? actor.schoolId
@@ -16589,7 +16978,7 @@ export async function createApp() {
         return;
       }
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (!targetSchoolId) {
           return res.status(403).json({ error: 'School context is required' });
         }
@@ -16710,8 +17099,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin and school_admin can create subjects
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      // School operations roles can only create subjects in their active school.
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -16726,7 +17115,7 @@ export async function createApp() {
       }
 
       let finalSchoolId: number | null = null;
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         const validation = resolveClassCreationSchoolId({
           actorRole: actor.role,
           requestedSchoolId: bodySchoolId,
@@ -16793,8 +17182,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin and school_admin can update subjects
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      // School operations roles can only update subjects in their active school.
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -16804,7 +17193,7 @@ export async function createApp() {
       const [subject] = await db.select().from(subjects).where(eq(subjects.id, subjectId));
       if (!subject) return res.status(404).json({ error: 'Subject not found' });
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId == null) return res.status(403).json({ error: 'School context is required' });
         if (subject.schoolId != null && subject.schoolId !== actor.schoolId) return res.status(403).json({ error: 'Forbidden' });
         const requestedName = req.body?.name === undefined ? undefined : String(req.body.name).trim();
@@ -16857,15 +17246,15 @@ export async function createApp() {
         }
         return after;
       });
-      if (name !== undefined && actor.role !== 'school_admin') {
+      if (name !== undefined && !isSchoolOperationsRole(actor.role)) {
         updateValues.name = name.trim();
       }
-      if (code !== undefined && actor.role !== 'school_admin') {
+      if (code !== undefined && !isSchoolOperationsRole(actor.role)) {
         updateValues.code = String(code ?? '').trim() || null;
       }
 
       if (hasSubjectTypeId) {
-        if (actor.role === 'school_admin') {
+        if (isSchoolOperationsRole(actor.role)) {
           const targetSchoolId = actor.schoolId;
           if (!targetSchoolId) {
             return res.status(403).json({ error: 'School context is required' });
@@ -16934,7 +17323,7 @@ export async function createApp() {
         }
       }
 
-      if (subject.schoolId === null && actor.role === 'school_admin' && !hasSubjectTypeId) {
+      if (subject.schoolId === null && isSchoolOperationsRole(actor.role) && !hasSubjectTypeId) {
         const [relation] = await db.select().from(schoolSubjects).where(and(
           eq(schoolSubjects.schoolId, actor.schoolId),
           eq(schoolSubjects.subjectId, subjectId),
@@ -16979,8 +17368,8 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      // Only super_admin and school_admin can delete subjects
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      // School operations roles can only delete subjects in their active school.
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -16992,7 +17381,7 @@ export async function createApp() {
           .where(eq(subjects.id, subjectId))
           .for('update');
         if (!subject) return { kind: 'not_found' as const };
-        if (actor.role === 'school_admin' && subject.schoolId !== actor.schoolId) {
+        if (isSchoolOperationsRole(actor.role) && subject.schoolId !== actor.schoolId) {
           return { kind: 'forbidden' as const };
         }
         const schoolLinks = await tx.select().from(schoolSubjects)
@@ -17032,7 +17421,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -17040,7 +17429,7 @@ export async function createApp() {
       const subjectId = Number(req.params.subjectId);
       if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
 
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -17095,7 +17484,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
 
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -17103,7 +17492,7 @@ export async function createApp() {
       const subjectId = Number(req.params.subjectId);
       if (!schoolId || !subjectId) return res.status(400).json({ error: 'Invalid subject or school ID' });
 
-      if (actor.role === 'school_admin' && actor.schoolId !== schoolId) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId !== schoolId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -17348,7 +17737,7 @@ export async function createApp() {
       if (!actor) return res.status(404).json({ error: 'User not found' });
       const body = req.body ?? {};
       const hasRequestedSchoolId = Object.prototype.hasOwnProperty.call(body, 'schoolId');
-      if (actor.role === 'school_admin' && hasRequestedSchoolId) {
+      if ((actor.role === 'school_admin' || actor.role === 'school_accountant') && hasRequestedSchoolId) {
         return res.status(400).json({
           error: {
             code: 'school_context_missing',
@@ -17525,7 +17914,7 @@ export async function createApp() {
       }
 
       let list = await query;
-      if ((actor.role === 'school_admin' || actor.role === 'teacher') && actor.schoolId != null) {
+      if ((isSchoolOperationsRole(actor.role) || actor.role === 'teacher') && actor.schoolId != null) {
         const classApprovalById = new Map<number, Promise<boolean>>();
         const inSchoolScope = await Promise.all(list.map(async (evaluation) => {
           if (evaluation.schoolId !== actor.schoolId) return false;
@@ -17554,7 +17943,7 @@ export async function createApp() {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') {
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) {
         return res.status(403).json({ error: 'Only school administrators can validate evaluations' });
       }
 
@@ -17568,7 +17957,7 @@ export async function createApp() {
         .from(evaluations).where(eq(evaluations.id, evaluationId));
       if (!evaluation) return res.status(404).json({ error: 'Evaluation not found' });
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId == null || evaluation.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot validate an evaluation for another school' });
         }
@@ -17687,7 +18076,7 @@ export async function createApp() {
         return res.status(400).json({ error: 'Must specify a valid Teacher ID for this evaluation' });
       }
 
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         const [evaluationTeacher] = await db.select({ id: teachers.id, userId: teachers.userId, schoolId: teachers.schoolId })
           .from(teachers).where(eq(teachers.id, resolvedTeacherId));
         if (!evaluationTeacher) return res.status(400).json({ error: 'Invalid teacherId' });
@@ -17713,6 +18102,10 @@ export async function createApp() {
         : actor.schoolId;
       if (requestedSchoolId != null && requestedSchoolId !== '' && parsePositiveInteger(requestedSchoolId) == null) {
         return res.status(400).json({ error: 'Invalid schoolId' });
+      }
+      if (isSchoolOperationsRole(actor.role) && requestedSchoolId != null && requestedSchoolId !== ''
+        && parsePositiveInteger(requestedSchoolId) !== actor.schoolId) {
+        return res.status(403).json({ error: 'Cannot create an evaluation outside the actor school' });
       }
       if (evaluationSchoolId == null) {
         const approvedSchoolClasses = await db.select({ schoolId: schoolClasses.schoolId }).from(schoolClasses).where(and(
@@ -17919,7 +18312,7 @@ export async function createApp() {
         } else {
           classStudentParentsRows = await baseClassStudentParentsQuery.where(inArray(students.id, authorizedIds));
         }
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         classStudentParentsRows = await baseClassStudentParentsQuery.where(and(eq(students.classId, parseInt(classId)), eq(students.schoolId, actor.schoolId), eq(students.isActive, true)));
       } else {
         classStudentParentsRows = await baseClassStudentParentsQuery.where(and(eq(students.classId, parseInt(classId)), eq(students.isActive, true)));
@@ -17989,7 +18382,7 @@ if (uniqueParentIds.length > 0) {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'surveillant') return res.status(403).json({ error: 'Forbidden' });
-      if (!['super_admin', 'school_admin', 'teacher'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
+      if (!['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       const { evaluationId, studentId, status } = req.body ?? {};
       const parsedEvaluationId = Number(evaluationId);
@@ -18127,7 +18520,7 @@ if (uniqueParentIds.length > 0) {
             inArray(evaluations.classId, readableClassIds),
           )) as any;
         } else {
-          if (actor.role !== 'school_admin' || actor.schoolId == null) return res.json([]);
+          if (!isSchoolOperationsRole(actor.role) || actor.schoolId == null) return res.json([]);
           query = query.where(and(
             eq(students.schoolId, actor.schoolId),
             eq(evaluations.schoolId, actor.schoolId),
@@ -18243,7 +18636,7 @@ if (uniqueParentIds.length > 0) {
       }
 
       // School admin can only record grades for students in their own school
-      if (actor.role === 'school_admin') {
+      if (isSchoolOperationsRole(actor.role)) {
         if (actor.schoolId == null || student.schoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Cannot record grade for student in another school' });
         }
@@ -18404,7 +18797,7 @@ if (uniqueParentIds.length > 0) {
             .from(students)
             .where(inArray(students.id, authorizedIds));
         }
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         totalStudentsInClass = await db
           .select({ count: sql<number>`count(*)::integer` })
           .from(students)
@@ -18473,13 +18866,13 @@ if (uniqueParentIds.length > 0) {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
       if (actor.role === 'parent' || actor.role === 'teacher') return res.status(403).json({ error: 'Forbidden' });
-      if (actor.role !== 'super_admin' && actor.role !== 'school_admin') return res.status(403).json({ error: 'Forbidden' });
+      if (actor.role !== 'super_admin' && !isSchoolOperationsRole(actor.role)) return res.status(403).json({ error: 'Forbidden' });
 
       let evaluationIds: number[] = [];
       if (actor.role === 'super_admin') {
         const rows = await db.select({ id: evaluations.id }).from(evaluations);
         evaluationIds = rows.map((row) => row.id);
-      } else if (actor.role === 'school_admin') {
+      } else if (isSchoolOperationsRole(actor.role)) {
         const rows = await db
           .select({ id: evaluations.id })
           .from(evaluations)
@@ -18513,7 +18906,7 @@ if (uniqueParentIds.length > 0) {
 
       const deletionResult = await db.transaction(async (tx) => {
         const currentEvaluations = await tx.select().from(evaluations)
-          .where(actor.role === 'school_admin'
+          .where(isSchoolOperationsRole(actor.role)
             ? and(inArray(evaluations.id, evaluationIds), eq(evaluations.schoolId, actor.schoolId!))
             : inArray(evaluations.id, evaluationIds))
           .for('update');
@@ -18714,6 +19107,9 @@ if (uniqueParentIds.length > 0) {
 
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
+        return res.status(403).json({ error: 'Verified school context is required' });
+      }
 
       // Build filter condition based on user role
       let schoolFilter: any = undefined;
@@ -18864,7 +19260,7 @@ if (uniqueParentIds.length > 0) {
         eq(students.isActive, true),
         isNotNull(students.classId),
       ];
-      if (actor.role === 'school_admin' && actor.schoolId == null) {
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         ageStudentFilters.push(sql`false`);
       } else if (actor.role === 'parent' && parentChildIds?.length) {
         ageStudentFilters.push(inArray(students.id, parentChildIds));
@@ -19278,7 +19674,7 @@ if (uniqueParentIds.length > 0) {
 
       const [recipient] = await db.select({ id: users.id, schoolId: users.schoolId }).from(users).where(eq(users.id, notification.userId));
       const isOwner = notification.userId === actor.id;
-      const isSchoolAdminAllowed = actor.role === 'school_admin' && actor.schoolId != null && recipient?.schoolId === actor.schoolId;
+      const isSchoolAdminAllowed = isSchoolOperationsRole(actor.role) && actor.schoolId != null && recipient?.schoolId === actor.schoolId;
       const isSuperAdminAllowed = actor.role === 'super_admin';
       if (!isOwner && !isSchoolAdminAllowed && !isSuperAdminAllowed) {
         return res.status(403).json({ error: 'Forbidden' });
@@ -19366,8 +19762,8 @@ if (uniqueParentIds.length > 0) {
 
       const actor = await resolveActor(req);
       if (!actor) return rejectAfterUpload(404, 'User not found');
-      if (!['super_admin', 'school_admin'].includes(actor.role)) return rejectAfterUpload(403, 'Forbidden');
-      if (actor.role === 'school_admin' && actor.schoolId == null) {
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) return rejectAfterUpload(403, 'Forbidden');
+      if (isSchoolOperationsRole(actor.role) && actor.schoolId == null) {
         return rejectAfterUpload(403, 'Forbidden: missing school context');
       }
 
@@ -19408,7 +19804,7 @@ if (uniqueParentIds.length > 0) {
           ? []
           : await getUserSchoolMemberships(targetUser.id);
 
-        if (actor.role === 'school_admin') {
+        if (isSchoolOperationsRole(actor.role)) {
           const hasMembershipInActorSchool = targetMemberships.some((membership) => (
             membership.schoolId === actor.schoolId
           ));
@@ -19419,11 +19815,11 @@ if (uniqueParentIds.length > 0) {
 
         const hasActiveParentFunction = targetMemberships.some((membership) => (
           membership.role === 'parent'
-          && (actor.role !== 'school_admin' || membership.schoolId === actor.schoolId)
+          && (!isSchoolOperationsRole(actor.role) || membership.schoolId === actor.schoolId)
         ));
         if (hasActiveParentFunction) {
           const activeParentUserIds = await resolveActiveParentUserIds(
-            actor.role === 'school_admin' ? { schoolId: actor.schoolId! } : undefined,
+            isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : undefined,
           );
           if (!activeParentUserIds.includes(targetUser.id)) return rejectAfterUpload(403, 'Parent has no active students in this school');
         }
@@ -19435,11 +19831,11 @@ if (uniqueParentIds.length > 0) {
 
         targetUserIds = await resolveActiveParentUserIds({
           classId: parsedClassId,
-          ...(actor.role === 'school_admin' ? { schoolId: actor.schoolId! } : {}),
+          ...(isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : {}),
         });
       } else {
         // Send to all parents (or all parents in school if school_admin)
-        targetUserIds = await resolveActiveParentUserIds(actor.role === 'school_admin' ? { schoolId: actor.schoolId! } : undefined);
+        targetUserIds = await resolveActiveParentUserIds(isSchoolOperationsRole(actor.role) ? { schoolId: actor.schoolId! } : undefined);
       }
 
       try {

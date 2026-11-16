@@ -121,7 +121,7 @@ export const users = pgTable('users', {
   name: text('name').notNull(),
   lastName: text('last_name'),
   firstNames: text('first_name'),
-  role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'teacher' | 'parent'
+  role: text('role').notNull(), // 'super_admin' | 'school_admin' | 'school_accountant' | 'teacher' | 'parent'
   schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }),
   academicYearId: integer('academic_year_id').references(() => academicYears.id, { onDelete: 'set null' }),
   phone: text('phone').notNull().unique('users_phone_unique'),
@@ -1532,6 +1532,130 @@ export const financialAdjustmentAllocations = pgTable('financial_adjustment_allo
   adjustmentIdx: index('financial_adjustment_allocations_adjustment_idx').on(table.adjustmentId),
   allocationIdx: index('financial_adjustment_allocations_payment_allocation_idx').on(table.paymentAllocationId),
   amountCheck: check('financial_adjustment_allocations_amount_check', sql`${table.amount} > 0`),
+}));
+
+export const financialAdjustmentRequests = pgTable('financial_adjustment_requests', {
+  id: serial('id').primaryKey(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'restrict' }).notNull(),
+  paymentId: integer('payment_id').references(() => financialPayments.id, { onDelete: 'restrict' }).notNull(),
+  kind: text('kind').notNull(),
+  amount: integer('amount'),
+  reason: text('reason').notNull(),
+  status: text('status').default('pending').notNull(),
+  requestedByUserId: integer('requested_by_user_id').notNull(),
+  requestedByRole: text('requested_by_role').notNull(),
+  requestedByName: text('requested_by_name'),
+  requestedByEmail: text('requested_by_email'),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).defaultNow().notNull(),
+  decidedByUserId: integer('decided_by_user_id'),
+  decidedByRole: text('decided_by_role'),
+  decidedByName: text('decided_by_name'),
+  decidedByEmail: text('decided_by_email'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decisionReason: text('decision_reason'),
+  idempotencyKey: text('idempotency_key').notNull(),
+  resultingAdjustmentId: integer('resulting_adjustment_id')
+    .references(() => financialAdjustments.id, { onDelete: 'restrict' }),
+  refundConfirmedByUserId: integer('refund_confirmed_by_user_id'),
+  refundConfirmedByRole: text('refund_confirmed_by_role'),
+  refundConfirmedByName: text('refund_confirmed_by_name'),
+  refundConfirmedByEmail: text('refund_confirmed_by_email'),
+  refundConfirmedAt: timestamp('refund_confirmed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  idempotencyUniqueIdx: uniqueIndex('financial_adjustment_requests_school_idempotency_idx')
+    .on(table.schoolId, table.idempotencyKey),
+  schoolCreatedIdx: index('financial_adjustment_requests_school_created_idx')
+    .on(table.schoolId, sql`${table.createdAt} DESC`),
+  paymentCreatedIdx: index('financial_adjustment_requests_payment_created_idx')
+    .on(table.paymentId, sql`${table.createdAt} DESC`),
+  resultingAdjustmentUniqueIdx: uniqueIndex('financial_adjustment_requests_resulting_adjustment_idx')
+    .on(table.resultingAdjustmentId)
+    .where(sql`${table.resultingAdjustmentId} IS NOT NULL`),
+  activePaymentRequestUniqueIdx: uniqueIndex('financial_adjustment_requests_active_payment_idx')
+    .on(table.paymentId)
+    .where(sql`${table.status} = 'pending' OR (${table.status} = 'approved' AND ${table.kind} = 'refund' AND ${table.refundConfirmedAt} IS NULL)`),
+  amountCheck: check(
+    'financial_adjustment_requests_amount_check',
+    sql`(${table.kind} = 'cancellation' AND ${table.amount} IS NULL)
+      OR (${table.kind} = 'refund' AND ${table.amount} IS NOT NULL AND ${table.amount} > 0)`,
+  ),
+  kindCheck: check('financial_adjustment_requests_kind_check', sql`${table.kind} IN ('cancellation', 'refund')`),
+  statusCheck: check('financial_adjustment_requests_status_check', sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+  reasonCheck: check(
+    'financial_adjustment_requests_reason_check',
+    sql`length(btrim(${table.reason})) BETWEEN 1 AND 500 AND length(btrim(${table.idempotencyKey})) BETWEEN 1 AND 120`,
+  ),
+  requesterCheck: check(
+    'financial_adjustment_requests_requester_check',
+    sql`${table.requestedByRole} = 'school_accountant'`,
+  ),
+  noSelfApprovalCheck: check(
+    'financial_adjustment_requests_no_self_approval_check',
+    sql`${table.decidedByUserId} IS NULL OR ${table.decidedByUserId} <> ${table.requestedByUserId}`,
+  ),
+  decisionCheck: check(
+    'financial_adjustment_requests_decision_check',
+    sql`(
+      (${table.status} = 'pending'
+        AND ${table.decidedByUserId} IS NULL
+        AND ${table.decidedByRole} IS NULL
+        AND ${table.decidedByName} IS NULL
+        AND ${table.decidedByEmail} IS NULL
+        AND ${table.decidedAt} IS NULL
+        AND ${table.decisionReason} IS NULL
+        AND ${table.resultingAdjustmentId} IS NULL
+        AND ${table.refundConfirmedByUserId} IS NULL
+        AND ${table.refundConfirmedByRole} IS NULL
+        AND ${table.refundConfirmedByName} IS NULL
+        AND ${table.refundConfirmedByEmail} IS NULL
+        AND ${table.refundConfirmedAt} IS NULL)
+      OR
+      (${table.status} IN ('approved', 'rejected')
+        AND ${table.decidedByUserId} IS NOT NULL
+        AND ${table.decidedByUserId} <> ${table.requestedByUserId}
+        AND ${table.decidedByRole} IS NOT NULL
+        AND ${table.decidedByRole} = 'school_admin'
+        AND ${table.decidedAt} IS NOT NULL
+        AND ${table.decisionReason} IS NOT NULL
+        AND length(btrim(${table.decisionReason})) BETWEEN 1 AND 500
+        AND (
+          (${table.status} = 'rejected'
+            AND ${table.resultingAdjustmentId} IS NULL
+            AND ${table.refundConfirmedByUserId} IS NULL
+            AND ${table.refundConfirmedByRole} IS NULL
+            AND ${table.refundConfirmedByName} IS NULL
+            AND ${table.refundConfirmedByEmail} IS NULL
+            AND ${table.refundConfirmedAt} IS NULL)
+          OR
+          (${table.status} = 'approved' AND (
+            (${table.kind} = 'cancellation'
+              AND ${table.resultingAdjustmentId} IS NOT NULL
+              AND ${table.refundConfirmedByUserId} IS NULL
+              AND ${table.refundConfirmedByRole} IS NULL
+              AND ${table.refundConfirmedByName} IS NULL
+              AND ${table.refundConfirmedByEmail} IS NULL
+              AND ${table.refundConfirmedAt} IS NULL)
+            OR
+            (${table.kind} = 'refund' AND (
+              (${table.resultingAdjustmentId} IS NULL
+                AND ${table.refundConfirmedByUserId} IS NULL
+                AND ${table.refundConfirmedByRole} IS NULL
+                AND ${table.refundConfirmedByName} IS NULL
+                AND ${table.refundConfirmedByEmail} IS NULL
+                AND ${table.refundConfirmedAt} IS NULL)
+              OR
+              (${table.resultingAdjustmentId} IS NOT NULL
+                AND ${table.refundConfirmedByUserId} IS NOT NULL
+                AND ${table.refundConfirmedByRole} IS NOT NULL
+                AND ${table.refundConfirmedByRole} = 'school_accountant'
+                AND ${table.refundConfirmedAt} IS NOT NULL)
+            ))
+          ))
+        ))
+    )`,
+  ),
 }));
 
 export const financialReceipts = pgTable('financial_receipts', {

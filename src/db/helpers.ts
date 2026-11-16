@@ -672,7 +672,8 @@ export async function verifyRestrictedRuntimeSchema() {
         ('class_homeroom_assignments'), ('user_schools'),
         ('absence_declarations'), ('absences'), ('teacher_class_subjects'),
         ('teachers'), ('academic_years'), ('subjects'),
-        ('audit_events'), ('user_login_events'), ('teacher_control_audit_events')
+        ('audit_events'), ('user_login_events'), ('teacher_control_audit_events'),
+        ('financial_adjustment_requests')
     ),
     required_columns(table_name, column_name) AS (
       VALUES
@@ -763,7 +764,34 @@ export async function verifyRestrictedRuntimeSchema() {
         ('teacher_control_audit_events', 'before_values'),
         ('teacher_control_audit_events', 'after_values'),
         ('teacher_control_audit_events', 'reason'),
-        ('teacher_control_audit_events', 'created_at')
+        ('teacher_control_audit_events', 'created_at'),
+        ('financial_adjustment_requests', 'id'),
+        ('financial_adjustment_requests', 'school_id'),
+        ('financial_adjustment_requests', 'payment_id'),
+        ('financial_adjustment_requests', 'kind'),
+        ('financial_adjustment_requests', 'amount'),
+        ('financial_adjustment_requests', 'reason'),
+        ('financial_adjustment_requests', 'status'),
+        ('financial_adjustment_requests', 'requested_by_user_id'),
+        ('financial_adjustment_requests', 'requested_by_role'),
+        ('financial_adjustment_requests', 'requested_by_name'),
+        ('financial_adjustment_requests', 'requested_by_email'),
+        ('financial_adjustment_requests', 'requested_at'),
+        ('financial_adjustment_requests', 'decided_by_user_id'),
+        ('financial_adjustment_requests', 'decided_by_role'),
+        ('financial_adjustment_requests', 'decided_by_name'),
+        ('financial_adjustment_requests', 'decided_by_email'),
+        ('financial_adjustment_requests', 'decided_at'),
+        ('financial_adjustment_requests', 'decision_reason'),
+        ('financial_adjustment_requests', 'idempotency_key'),
+        ('financial_adjustment_requests', 'resulting_adjustment_id'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_user_id'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_role'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_name'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_email'),
+        ('financial_adjustment_requests', 'refund_confirmed_at'),
+        ('financial_adjustment_requests', 'created_at'),
+        ('financial_adjustment_requests', 'updated_at')
     ),
     required_column_shapes(table_name, column_name, data_type, is_nullable) AS (
       VALUES
@@ -870,7 +898,34 @@ export async function verifyRestrictedRuntimeSchema() {
         ('teacher_class_subjects', 'school_id', 'integer', 'NO'),
         ('teacher_class_subjects', 'class_id', 'integer', 'NO'),
         ('teacher_class_subjects', 'subject_id', 'integer', 'NO'),
-        ('teacher_class_subjects', 'is_active', 'boolean', 'NO')
+        ('teacher_class_subjects', 'is_active', 'boolean', 'NO'),
+        ('financial_adjustment_requests', 'id', 'integer', 'NO'),
+        ('financial_adjustment_requests', 'school_id', 'integer', 'NO'),
+        ('financial_adjustment_requests', 'payment_id', 'integer', 'NO'),
+        ('financial_adjustment_requests', 'kind', 'text', 'NO'),
+        ('financial_adjustment_requests', 'amount', 'integer', 'YES'),
+        ('financial_adjustment_requests', 'reason', 'text', 'NO'),
+        ('financial_adjustment_requests', 'status', 'text', 'NO'),
+        ('financial_adjustment_requests', 'requested_by_user_id', 'integer', 'NO'),
+        ('financial_adjustment_requests', 'requested_by_role', 'text', 'NO'),
+        ('financial_adjustment_requests', 'requested_by_name', 'text', 'YES'),
+        ('financial_adjustment_requests', 'requested_by_email', 'text', 'YES'),
+        ('financial_adjustment_requests', 'requested_at', 'timestamp with time zone', 'NO'),
+        ('financial_adjustment_requests', 'decided_by_user_id', 'integer', 'YES'),
+        ('financial_adjustment_requests', 'decided_by_role', 'text', 'YES'),
+        ('financial_adjustment_requests', 'decided_by_name', 'text', 'YES'),
+        ('financial_adjustment_requests', 'decided_by_email', 'text', 'YES'),
+        ('financial_adjustment_requests', 'decided_at', 'timestamp with time zone', 'YES'),
+        ('financial_adjustment_requests', 'decision_reason', 'text', 'YES'),
+        ('financial_adjustment_requests', 'idempotency_key', 'text', 'NO'),
+        ('financial_adjustment_requests', 'resulting_adjustment_id', 'integer', 'YES'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_user_id', 'integer', 'YES'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_role', 'text', 'YES'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_name', 'text', 'YES'),
+        ('financial_adjustment_requests', 'refund_confirmed_by_email', 'text', 'YES'),
+        ('financial_adjustment_requests', 'refund_confirmed_at', 'timestamp with time zone', 'YES'),
+        ('financial_adjustment_requests', 'created_at', 'timestamp with time zone', 'NO'),
+        ('financial_adjustment_requests', 'updated_at', 'timestamp with time zone', 'NO')
     ),
     required_defaults(table_name, column_name, expected_default) AS (
       VALUES
@@ -885,7 +940,11 @@ export async function verifyRestrictedRuntimeSchema() {
         ('school_classes', 'status', '''pending'''),
         ('user_schools', 'is_active', 'true'),
         ('absence_declarations', 'status', '''RECEIVED'''),
-        ('teacher_class_subjects', 'is_active', 'true')
+        ('teacher_class_subjects', 'is_active', 'true'),
+        ('financial_adjustment_requests', 'status', '''pending'''),
+        ('financial_adjustment_requests', 'requested_at', 'now()'),
+        ('financial_adjustment_requests', 'created_at', 'now()'),
+        ('financial_adjustment_requests', 'updated_at', 'now()')
     ),
     required_append_only_triggers(table_name, trigger_name, trigger_type) AS (
       VALUES
@@ -908,7 +967,12 @@ export async function verifyRestrictedRuntimeSchema() {
         ('absence_declarations', 'absence_declarations_student_date_status_idx', false),
         ('absences', 'absences_declaration_id_idx', false),
         ('teacher_class_subjects', 'teacher_class_subjects_school_teacher_active_idx', false),
-        ('absences', 'absences_teaching_assignment_id_idx', false)
+        ('absences', 'absences_teaching_assignment_id_idx', false),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_school_idempotency_idx', true),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_school_created_idx', false),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_payment_created_idx', false),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_resulting_adjustment_idx', true),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_active_payment_idx', true)
     ),
     required_unique_indexes(table_name, index_name, key_columns, predicate) AS (
       VALUES
@@ -916,13 +980,25 @@ export async function verifyRestrictedRuntimeSchema() {
         ('class_homeroom_assignments', 'class_homeroom_assignments_school_class_idx', ARRAY['school_id', 'class_id']::text[], NULL::text),
         ('class_exam_configurations', 'class_exam_configurations_school_context_unique', ARRAY['class_id', 'school_id', 'academic_year_id', 'exam_type']::text[], 'school_id IS NOT NULL'),
         ('class_exam_configurations', 'class_exam_configurations_global_context_unique', ARRAY['class_id', 'academic_year_id', 'exam_type']::text[], 'school_id IS NULL'),
-        ('user_schools', 'user_schools_user_id_school_id_role_idx', ARRAY['user_id', 'school_id', 'role']::text[], NULL::text)
+        ('user_schools', 'user_schools_user_id_school_id_role_idx', ARRAY['user_id', 'school_id', 'role']::text[], NULL::text),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_school_idempotency_idx',
+          ARRAY['school_id', 'idempotency_key']::text[], NULL::text),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_resulting_adjustment_idx',
+          ARRAY['resulting_adjustment_id']::text[], 'resulting_adjustment_id IS NOT NULL')
     ),
     required_constraints(table_name, constraint_name) AS (
       VALUES
         ('students', 'students_matricule_unique'),
         ('student_academic_year_statuses', 'student_academic_year_statuses_student_year_unique'),
-        ('student_academic_year_statuses', 'student_academic_year_statuses_status_check')
+        ('student_academic_year_statuses', 'student_academic_year_statuses_status_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_kind_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_amount_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_status_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_requester_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_reason_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_no_self_approval_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_decision_check'),
+        ('financial_adjustment_requests', 'financial_adjustment_requests_pkey')
     ),
     required_unique_constraints(table_name, constraint_name, key_columns) AS (
       VALUES
@@ -1065,6 +1141,112 @@ export async function verifyRestrictedRuntimeSchema() {
           AND protected_function.prosrc ILIKE '%RAISE EXCEPTION%'
           AND protected_function.prosrc ILIKE '%append-only%'
       )
+
+      UNION ALL
+
+      SELECT 'financial adjustment request history ownership'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class request_table
+        JOIN pg_roles protected_owner
+          ON protected_owner.rolname = 'ecoletrack_history_owner'
+        JOIN pg_class request_sequence
+          ON request_sequence.oid = to_regclass('public.financial_adjustment_requests_id_seq')
+        JOIN pg_depend sequence_dependency
+          ON sequence_dependency.classid = 'pg_catalog.pg_class'::regclass
+         AND sequence_dependency.objid = request_sequence.oid
+         AND sequence_dependency.refclassid = 'pg_catalog.pg_class'::regclass
+         AND sequence_dependency.refobjid = request_table.oid
+         AND sequence_dependency.deptype = 'a'
+        WHERE request_table.oid = to_regclass('public.financial_adjustment_requests')
+          AND request_table.relowner = protected_owner.oid
+          AND request_sequence.relkind = 'S'
+          AND request_sequence.relowner = protected_owner.oid
+      )
+
+      UNION ALL
+
+      SELECT 'financial adjustment request protection-function ownership'
+      WHERE EXISTS (
+        SELECT 1
+        FROM (VALUES
+          ('public.validate_financial_adjustment_request_school()'),
+          ('public.validate_financial_adjustment_request_result()'),
+          ('public.protect_financial_adjustment_request_history()'),
+          ('public.reject_financial_adjustment_requests_truncate()'),
+          ('technical_audit.capture_financial_adjustment_requests_row()'),
+          ('technical_audit.capture_financial_adjustment_requests_truncate()')
+        ) expected(function_signature)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM pg_proc protected_function
+          JOIN pg_roles protected_owner
+            ON protected_owner.rolname = 'ecoletrack_history_owner'
+          WHERE protected_function.oid = to_regprocedure(expected.function_signature)
+            AND protected_function.proowner = protected_owner.oid
+        )
+      )
+
+      UNION ALL
+
+      SELECT 'financial adjustment request protection trigger public.' || expected.trigger_name
+      FROM (VALUES
+        ('financial_adjustment_requests_school_scope', 23, 'public.validate_financial_adjustment_request_school()'),
+        ('financial_adjustment_requests_result_guard', 23, 'public.validate_financial_adjustment_request_result()'),
+        ('financial_adjustment_requests_history_guard', 31, 'public.protect_financial_adjustment_request_history()'),
+        ('financial_adjustment_requests_no_truncate', 34, 'public.reject_financial_adjustment_requests_truncate()'),
+        ('db_audit_row_financial_adjustment_requests', 29, 'technical_audit.capture_financial_adjustment_requests_row()'),
+        ('db_audit_truncate_financial_adjustment_requests', 32, 'technical_audit.capture_financial_adjustment_requests_truncate()')
+      ) AS expected(trigger_name, trigger_type, function_signature)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger trigger_object
+        WHERE trigger_object.tgrelid = to_regclass('public.financial_adjustment_requests')
+          AND trigger_object.tgname = expected.trigger_name
+          AND trigger_object.tgtype = expected.trigger_type
+          AND trigger_object.tgenabled = 'A'
+          AND trigger_object.tgfoid = to_regprocedure(expected.function_signature)
+          AND NOT trigger_object.tgisinternal
+      )
+
+      UNION ALL
+
+      SELECT 'runtime role has forbidden privileges on financial adjustment requests'
+      WHERE has_table_privilege(current_user, 'public.financial_adjustment_requests', 'DELETE')
+         OR has_table_privilege(current_user, 'public.financial_adjustment_requests', 'TRUNCATE')
+         OR has_table_privilege(current_user, 'public.financial_adjustment_requests', 'TRIGGER')
+         OR has_table_privilege(current_user, 'public.financial_adjustment_requests', 'INSERT')
+         OR has_table_privilege(current_user, 'public.financial_adjustment_requests', 'UPDATE')
+
+      UNION ALL
+
+      SELECT 'runtime role lacks required financial adjustment request privileges'
+      WHERE NOT has_table_privilege(current_user, 'public.financial_adjustment_requests', 'SELECT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'school_id', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'payment_id', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'kind', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'amount', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'reason', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'requested_by_user_id', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'requested_by_role', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'requested_by_name', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'requested_by_email', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'idempotency_key', 'INSERT')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'status', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decided_by_user_id', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decided_by_role', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decided_by_name', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decided_by_email', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decided_at', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'decision_reason', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'resulting_adjustment_id', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'refund_confirmed_by_user_id', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'refund_confirmed_by_role', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'refund_confirmed_by_name', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'refund_confirmed_by_email', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'refund_confirmed_at', 'UPDATE')
+         OR NOT has_column_privilege(current_user, 'public.financial_adjustment_requests', 'updated_at', 'UPDATE')
+         OR NOT has_sequence_privilege(current_user, 'public.financial_adjustment_requests_id_seq', 'USAGE')
 
       UNION ALL
 

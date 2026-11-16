@@ -19,6 +19,7 @@ import {
   classes,
   financialAdjustmentAllocations,
   financialAdjustments,
+  financialAdjustmentRequests,
   financialInstallments,
   financialObligations,
   financialPaymentAllocations,
@@ -79,6 +80,23 @@ type AccountingActor = {
   academicYearId?: number | null;
   email?: string | null;
   name?: string | null;
+};
+
+type AccountingPermission =
+  | 'read'
+  | 'configure'
+  | 'generate_obligations'
+  | 'collect_payment'
+  | 'manual_reminder'
+  | 'adjustment'
+  | 'request_adjustment'
+  | 'review_adjustment'
+  | 'confirm_refund';
+
+const ACCOUNTING_ROLE_PERMISSIONS: Readonly<Record<string, readonly AccountingPermission[]>> = {
+  super_admin: ['read', 'configure', 'generate_obligations', 'collect_payment', 'manual_reminder', 'adjustment'],
+  school_admin: ['read', 'configure', 'generate_obligations', 'manual_reminder', 'review_adjustment'],
+  school_accountant: ['read', 'collect_payment', 'manual_reminder', 'request_adjustment', 'confirm_refund'],
 };
 
 type PaymentAllocationState = {
@@ -251,7 +269,7 @@ const getSchoolId = async (
   requestedSchoolId: unknown,
   res: express.Response,
 ): Promise<number | null> => {
-  if (actor.role === 'school_admin') {
+  if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
     if (!actor.schoolId) {
       res.status(403).json({ error: 'School context is required' });
       return null;
@@ -285,6 +303,7 @@ const addAudit = async (
   description: string,
   beforeValues?: AuditSnapshot | null,
   afterValues?: AuditSnapshot | null,
+  reason?: string | null,
 ) => {
   await appendAuditEvent(tx, {
     actor: {
@@ -292,6 +311,16 @@ const addAudit = async (
       role: actor.role,
       email: actor.email ?? null,
       name: actor.name ?? null,
+      activeFunction: {
+        id: actor.role,
+        name: actor.role === 'school_accountant'
+          ? 'Secrétaire comptable'
+          : actor.role === 'school_admin'
+            ? 'Administrateur d’établissement'
+            : actor.role === 'super_admin'
+              ? 'Super administrateur'
+              : actor.role,
+      },
       activeSchool: actor.schoolId == null ? null : { id: actor.schoolId },
     },
     targetSchool: { id: schoolId },
@@ -303,6 +332,7 @@ const addAudit = async (
     afterValues,
     result: 'success',
     source: 'web',
+    reason: reason ?? null,
     description,
   });
 };
@@ -1253,13 +1283,17 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     error: 'Tariff versioning is unavailable until its schema is installed and activation is explicitly authorized',
     code: 'ACCOUNTING_TARIFF_VERSIONING_UNAVAILABLE',
   };
-  const actorFor = async (req: any, res: express.Response) => {
+  const actorFor = async (
+    req: any,
+    res: express.Response,
+    permission: AccountingPermission = 'read',
+  ) => {
     const actor = await options.resolveActor(req);
     if (!actor) {
       res.status(404).json({ error: 'User not found' });
       return null;
     }
-    if (!['school_admin', 'super_admin'].includes(actor.role)) {
+    if (!ACCOUNTING_ROLE_PERMISSIONS[actor.role]?.includes(permission)) {
       res.status(403).json({ error: 'Forbidden' });
       return null;
     }
@@ -1271,10 +1305,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     res: express.Response,
     requestedSchoolId: unknown,
     ids: unknown[],
+    permission: AccountingPermission,
     invalidIdMessage = 'Valid tariff id is required',
   ) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, permission);
       if (!actor) return;
       const schoolId = await getSchoolId(actor, requestedSchoolId, res);
       if (!schoolId) return;
@@ -1289,25 +1324,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
   };
 
   app.get('/api/accounting/tariffs/:tariffId/versions', async (req, res) => {
-    return respondTariffVersioningUnavailable(req, res, req.query.schoolId, [req.params.tariffId]);
+    return respondTariffVersioningUnavailable(req, res, req.query.schoolId, [req.params.tariffId], 'read');
   });
 
   app.post('/api/accounting/tariffs/:tariffId/versions', async (req, res) => {
-    return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [req.params.tariffId]);
+    return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [req.params.tariffId], 'configure');
   });
 
   app.post('/api/accounting/tariffs/:tariffId/versions/:versionId/replace', async (req, res) => {
     return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [
       req.params.tariffId,
       req.params.versionId,
-    ], 'Valid tariff and version ids are required');
+    ], 'configure', 'Valid tariff and version ids are required');
   });
 
   app.post('/api/accounting/tariffs/:tariffId/versions/:versionId/cancel', async (req, res) => {
     return respondTariffVersioningUnavailable(req, res, req.body?.schoolId, [
       req.params.tariffId,
       req.params.versionId,
-    ], 'Valid tariff and version ids are required');
+    ], 'configure', 'Valid tariff and version ids are required');
   });
 
   const validateClassAndYear = async (schoolId: number, classId: number, academicYearId: number) => {
@@ -1852,7 +1887,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/obligation-generation/preview', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'generate_obligations');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -1875,7 +1910,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/obligation-generation/confirm', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'generate_obligations');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2023,7 +2058,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.put('/api/accounting/categories/:id', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2098,7 +2133,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.delete('/api/accounting/tariffs/:tariffId', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.query.schoolId, res);
       if (!schoolId) return;
@@ -2142,16 +2177,33 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     } catch (error) {
       if (typeof error === 'object' && error && 'code' in error && error.code === '23503') {
         try {
-          const actor = await actorFor(req, res);
+          const actor = await actorFor(req, res, 'configure');
           if (!actor) return;
           const schoolId = await getSchoolId(actor, req.query.schoolId, res);
           if (!schoolId) return;
           const tariffId = asPositiveInt(req.params.tariffId);
           if (!tariffId) return res.status(400).json({ error: 'Valid tariff id is required' });
-          await db.update(accountingTariffs).set({ isEnabled: false, updatedAt: new Date() }).where(and(
-            eq(accountingTariffs.id, tariffId),
-            eq(accountingTariffs.schoolId, schoolId),
-          ));
+          const archived = await db.transaction(async (tx) => {
+            const [before] = await tx.select().from(accountingTariffs).where(and(
+              eq(accountingTariffs.id, tariffId),
+              eq(accountingTariffs.schoolId, schoolId),
+            )).for('update');
+            if (!before) return false;
+            const [after] = await tx.update(accountingTariffs).set({
+              isEnabled: false,
+              updatedAt: new Date(),
+            }).where(and(
+              eq(accountingTariffs.id, tariffId),
+              eq(accountingTariffs.schoolId, schoolId),
+            )).returning();
+            if (!after) return false;
+            await addAudit(tx, actor, schoolId, 'archive', 'accounting_tariff', tariffId,
+              'Tarif comptable archivé après conflit de référence.',
+              createAuditSnapshot(before, ['classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled']),
+              createAuditSnapshot(after, ['classId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled']));
+            return true;
+          });
+          if (!archived) return res.status(404).json({ error: 'Tariff not found' });
           return res.json({ success: true, archived: true });
         } catch (archiveError) {
           console.error('Failed to archive accounting tariff after reference conflict:', archiveError);
@@ -2165,7 +2217,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/tariffs', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2268,12 +2320,6 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
               throw Object.assign(new Error('An enabled tariff range already overlaps these classes for this fee and year'), { statusCode: 409 });
             }
           }
-          const [before] = await tx.select().from(accountingTariffs).where(and(
-            eq(accountingTariffs.schoolId, schoolId),
-            eq(accountingTariffs.academicYearId, academicYearId),
-            eq(accountingTariffs.classId, classId),
-            eq(accountingTariffs.categoryId, category.id),
-          )).for('update');
           const [row] = await tx.insert(accountingTariffs).values({
             schoolId,
             academicYearId,
@@ -2285,13 +2331,16 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             amount,
             createdBy: actor.id ?? null,
           }).onConflictDoNothing().returning();
-          if (!row) return { duplicate: true as const, row: null };
+          if (!row) {
+            return { duplicate: true as const, row: null };
+          }
+          const afterSnapshot = createAuditSnapshot(row, [
+            'academicYearId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled',
+          ]);
           await addAudit(tx, actor, schoolId, 'create', 'accounting_tariff', row.id,
             'Accounting tariff range created.',
             null,
-            createAuditSnapshot(row, [
-              'academicYearId', 'classFromId', 'classToId', 'categoryId', 'label', 'amount', 'isEnabled',
-            ]));
+            afterSnapshot);
           return { duplicate: false as const, row };
         }
         if (usesLabel) {
@@ -2315,16 +2364,25 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             amount,
             createdBy: actor.id ?? null,
           }).onConflictDoNothing().returning();
-          if (!row) return { duplicate: true as const, row: null };
+          if (!row) {
+            return { duplicate: true as const, row: null };
+          }
+          const afterSnapshot = createAuditSnapshot(row, [
+            'academicYearId', 'classId', 'categoryId', 'label', 'amount', 'isEnabled',
+          ]);
           await addAudit(tx, actor, schoolId, 'create', 'accounting_tariff', row.id,
             'Accounting tariff created.',
             null,
-            createAuditSnapshot(row, [
-              'academicYearId', 'classId', 'categoryId', 'label', 'amount', 'isEnabled',
-            ]));
+            afterSnapshot);
           return { duplicate: false as const, row };
         }
 
+        const [before] = await tx.select().from(accountingTariffs).where(and(
+          eq(accountingTariffs.schoolId, schoolId),
+          eq(accountingTariffs.academicYearId, academicYearId),
+          eq(accountingTariffs.classId, classId),
+          eq(accountingTariffs.categoryId, category.id),
+        )).for('update');
         const [row] = await tx.insert(accountingTariffs).values({
           schoolId,
           academicYearId,
@@ -2337,9 +2395,11 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
           target: [accountingTariffs.schoolId, accountingTariffs.academicYearId, accountingTariffs.classId, accountingTariffs.categoryId],
           set: { label: tariffLabel, amount, isEnabled: true, updatedAt: new Date(), createdBy: actor.id ?? null },
         }).returning();
+        const beforeSnapshot = createAuditSnapshot(before, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']);
+        const afterSnapshot = createAuditSnapshot(row, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']);
         await addAudit(tx, actor, schoolId, 'upsert', 'accounting_tariff', row.id, 'Accounting tariff saved.',
-          createAuditSnapshot(before, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']),
-          createAuditSnapshot(row, ['classId', 'categoryId', 'label', 'amount', 'isEnabled']));
+          beforeSnapshot,
+          afterSnapshot);
         return { duplicate: false as const, row };
       });
       if (saved.duplicate) return res.status(409).json({ error: 'A fee with this label is already configured for this class or range and school year. Use Modify instead.' });
@@ -2352,14 +2412,14 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         const statusCode = Number(error.statusCode);
         if ([400, 409].includes(statusCode)) return res.status(statusCode).json({ error: (error as Error).message });
       }
-      console.error('Failed to save accounting tariff:', error);
+      console.error('Failed to save accounting tariff.');
       return res.status(500).json({ error: 'Failed to save accounting tariff' });
     }
   });
 
   app.put('/api/accounting/tariffs/:id', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2558,7 +2618,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.put('/api/accounting/schedules', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2641,7 +2701,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/fees', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2729,7 +2789,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.put('/api/accounting/fees/:id/status', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'configure');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -2769,7 +2829,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/obligations', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'generate_obligations');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -3085,9 +3145,9 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
         id: academicYears.id,
         schoolId: academicYears.schoolId,
       }).from(academicYears).where(eq(academicYears.id, academicYearId));
-      const yearBelongsToSchool = year?.schoolId === schoolId
-        || (year?.schoolId == null
-          && (actor.role === 'super_admin' || actor.academicYearId === academicYearId));
+      const yearBelongsToSchool = Boolean(
+        year && (year.schoolId == null || year.schoolId === schoolId),
+      );
       if (!year || !yearBelongsToSchool) {
         return res.status(404).json({ error: 'Academic year not found in this school' });
       }
@@ -3590,7 +3650,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/payments', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'collect_payment');
       if (!actor) return;
       const schoolId = await getSchoolId(actor, req.body?.schoolId, res);
       if (!schoolId) return;
@@ -4129,6 +4189,342 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
     return handlePaymentAdjustment(req, res, options, actorFor, getSchoolId, 'refund');
   });
 
+  app.get('/api/accounting/adjustment-requests', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res);
+      if (!actor) return;
+      const schoolId = await getSchoolId(actor, req.query.schoolId, res);
+      if (!schoolId) return;
+      const status = req.query.status == null ? null : String(req.query.status);
+      const paymentId = req.query.paymentId == null ? null : asPositiveInt(req.query.paymentId);
+      if ((status != null && !['pending', 'approved', 'rejected'].includes(status))
+        || (req.query.paymentId != null && !paymentId)) {
+        return res.status(400).json({ error: 'Invalid adjustment request filter' });
+      }
+      const conditions = [
+        eq(financialAdjustmentRequests.schoolId, schoolId),
+        ...(status ? [eq(financialAdjustmentRequests.status, status)] : []),
+        ...(paymentId ? [eq(financialAdjustmentRequests.paymentId, paymentId)] : []),
+      ];
+      const rows = await db.select({
+        id: financialAdjustmentRequests.id,
+        schoolId: financialAdjustmentRequests.schoolId,
+        paymentId: financialAdjustmentRequests.paymentId,
+        kind: financialAdjustmentRequests.kind,
+        amount: financialAdjustmentRequests.amount,
+        reason: financialAdjustmentRequests.reason,
+        status: financialAdjustmentRequests.status,
+        requestedByUserId: financialAdjustmentRequests.requestedByUserId,
+        requestedByRole: financialAdjustmentRequests.requestedByRole,
+        requestedByName: financialAdjustmentRequests.requestedByName,
+        requestedByEmail: financialAdjustmentRequests.requestedByEmail,
+        requestedAt: financialAdjustmentRequests.requestedAt,
+        decidedByUserId: financialAdjustmentRequests.decidedByUserId,
+        decidedByRole: financialAdjustmentRequests.decidedByRole,
+        decidedByName: financialAdjustmentRequests.decidedByName,
+        decidedByEmail: financialAdjustmentRequests.decidedByEmail,
+        decidedAt: financialAdjustmentRequests.decidedAt,
+        decisionReason: financialAdjustmentRequests.decisionReason,
+        resultingAdjustmentId: financialAdjustmentRequests.resultingAdjustmentId,
+        refundConfirmedByUserId: financialAdjustmentRequests.refundConfirmedByUserId,
+        refundConfirmedByRole: financialAdjustmentRequests.refundConfirmedByRole,
+        refundConfirmedByName: financialAdjustmentRequests.refundConfirmedByName,
+        refundConfirmedByEmail: financialAdjustmentRequests.refundConfirmedByEmail,
+        refundConfirmedAt: financialAdjustmentRequests.refundConfirmedAt,
+      }).from(financialAdjustmentRequests)
+        .where(and(...conditions))
+        .orderBy(desc(financialAdjustmentRequests.createdAt))
+        .limit(500);
+      return res.json(rows);
+    } catch (error) {
+      console.error('Failed to load accounting adjustment requests:', error);
+      return res.status(500).json({ error: 'Failed to load adjustment requests' });
+    }
+  });
+
+  app.post('/api/accounting/payments/:id/adjustment-requests', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res, 'request_adjustment');
+      if (!actor) return;
+      if (!actor.id) return res.status(401).json({ error: 'Authenticated account identity is unavailable' });
+      const schoolId = await getSchoolId(actor, undefined, res);
+      if (!schoolId) return;
+      const paymentId = asPositiveInt(req.params.id);
+      const kind = req.body?.kind;
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const idempotencyKey = typeof req.body?.idempotencyKey === 'string'
+        ? req.body.idempotencyKey.trim()
+        : '';
+      const amount = kind === 'refund' ? asMoney(req.body?.amount) : null;
+      if (!paymentId || (kind !== 'cancellation' && kind !== 'refund')
+        || (kind === 'cancellation' && req.body?.amount != null)
+        || (kind === 'refund' && !amount)
+        || !reason || reason.length > 500
+        || !idempotencyKey || idempotencyKey.length > 120) {
+        return res.status(400).json({ error: 'Invalid adjustment request' });
+      }
+
+      const result = await db.transaction(async (tx) => {
+        await assertSchoolActiveInTransaction(tx, schoolId);
+        const [payment] = await tx.select().from(financialPayments).where(and(
+          eq(financialPayments.id, paymentId),
+          eq(financialPayments.schoolId, schoolId),
+        )).for('update').limit(1);
+        if (!payment) throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
+
+        const [existingByKey] = await tx.select().from(financialAdjustmentRequests).where(and(
+          eq(financialAdjustmentRequests.schoolId, schoolId),
+          eq(financialAdjustmentRequests.idempotencyKey, idempotencyKey),
+        )).for('update').limit(1);
+        if (existingByKey) {
+          const sameRequest = existingByKey.paymentId === paymentId
+            && existingByKey.kind === kind
+            && existingByKey.amount === amount
+            && existingByKey.reason === reason
+            && existingByKey.requestedByUserId === actor.id;
+          if (!sameRequest) {
+            throw Object.assign(new Error('Idempotency key was already used for a different request'), { statusCode: 409 });
+          }
+          return { request: existingByKey, duplicate: true };
+        }
+        if (payment.status !== 'posted') {
+          throw Object.assign(new Error('Only posted payments can be adjusted'), { statusCode: 409 });
+        }
+        const balance = await loadRemainingPaymentBalance(tx, paymentId);
+        if (!balance.remaining || (amount != null && amount > balance.remaining)) {
+          throw Object.assign(new Error('Requested amount exceeds the unreversed payment amount'), { statusCode: 409 });
+        }
+
+        const [request] = await tx.insert(financialAdjustmentRequests).values({
+          schoolId,
+          paymentId,
+          kind,
+          amount,
+          reason,
+          requestedByUserId: actor.id,
+          requestedByRole: actor.role,
+          requestedByName: actor.name ?? null,
+          requestedByEmail: actor.email ?? null,
+          idempotencyKey,
+        }).returning();
+        await addAudit(tx, actor, schoolId, 'request', 'financial_adjustment_request', request.id,
+          `${kind} request created for payment ${paymentId}.`,
+          null,
+          createAuditSnapshot(request, [
+            'paymentId', 'kind', 'amount', 'status', 'requestedByUserId', 'requestedByRole', 'requestedAt',
+          ]),
+          reason);
+        return { request, duplicate: false };
+      });
+      return res.status(result.duplicate ? 200 : 201).json(result);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      if (typeof error === 'object' && error && 'code' in error && error.code === '23505') {
+        return res.status(409).json({ error: 'An active adjustment request already exists for this payment' });
+      }
+      console.error('Failed to create accounting adjustment request:', error);
+      return res.status(500).json({ error: 'Failed to create adjustment request' });
+    }
+  });
+
+  app.post('/api/accounting/adjustment-requests/:id/decision', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res, 'review_adjustment');
+      if (!actor) return;
+      if (!actor.id) return res.status(401).json({ error: 'Authenticated account identity is unavailable' });
+      const schoolId = await getSchoolId(actor, undefined, res);
+      if (!schoolId) return;
+      const requestId = asPositiveInt(req.params.id);
+      const decision = req.body?.decision;
+      const decisionReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (!requestId || (decision !== 'approve' && decision !== 'reject')
+        || !decisionReason || decisionReason.length > 500) {
+        return res.status(400).json({ error: 'A valid decision and reason are required' });
+      }
+      const [scopedRequest] = await db.select({
+        paymentId: financialAdjustmentRequests.paymentId,
+      }).from(financialAdjustmentRequests).where(and(
+        eq(financialAdjustmentRequests.id, requestId),
+        eq(financialAdjustmentRequests.schoolId, schoolId),
+      )).limit(1);
+      if (!scopedRequest) return res.status(404).json({ error: 'Adjustment request not found' });
+
+      const result = await db.transaction(async (tx) => {
+        await assertSchoolActiveInTransaction(tx, schoolId);
+        const [payment] = await tx.select().from(financialPayments).where(and(
+          eq(financialPayments.id, scopedRequest.paymentId),
+          eq(financialPayments.schoolId, schoolId),
+        )).for('update').limit(1);
+        if (!payment) throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
+        const [request] = await tx.select().from(financialAdjustmentRequests).where(and(
+          eq(financialAdjustmentRequests.id, requestId),
+          eq(financialAdjustmentRequests.schoolId, schoolId),
+          eq(financialAdjustmentRequests.paymentId, payment.id),
+        )).for('update').limit(1);
+        if (!request) throw Object.assign(new Error('Adjustment request not found'), { statusCode: 404 });
+        if (request.requestedByUserId === actor.id) {
+          throw Object.assign(new Error('A requester cannot decide their own adjustment request'), { statusCode: 403 });
+        }
+        const nextStatus = decision === 'approve' ? 'approved' : 'rejected';
+        if (request.status !== 'pending') {
+          const sameDecision = request.status === nextStatus
+            && request.decidedByUserId === actor.id
+            && request.decisionReason === decisionReason;
+          if (sameDecision) return { request, duplicate: true };
+          throw Object.assign(new Error('Adjustment request has already been decided'), { statusCode: 409 });
+        }
+
+        let resultingAdjustmentId: number | null = null;
+        if (decision === 'approve') {
+          if (payment.status !== 'posted') {
+            throw Object.assign(new Error('Only posted payments can be adjusted'), { statusCode: 409 });
+          }
+          const balance = await loadRemainingPaymentBalance(tx, payment.id);
+          if (!balance.remaining || (request.amount != null && request.amount > balance.remaining)) {
+            throw Object.assign(new Error('The remaining refundable amount has changed'), { statusCode: 409 });
+          }
+          if (request.kind === 'cancellation') {
+            const sourceKey = `cancel:${payment.id}`;
+            const [existingCancellation] = await tx.select({ id: financialAdjustments.id })
+              .from(financialAdjustments)
+              .where(eq(financialAdjustments.sourceKey, sourceKey))
+              .limit(1);
+            if (existingCancellation) {
+              throw Object.assign(new Error('Payment already has a cancellation adjustment'), { statusCode: 409 });
+            }
+            const applied = await applyPaymentAdjustmentInTransaction(tx, {
+              actor,
+              schoolId,
+              payment,
+              kind: 'cancellation',
+              amount: null,
+              reason: request.reason,
+              sourceKey,
+            });
+            resultingAdjustmentId = applied.adjustment.id;
+          }
+        }
+
+        const before = request;
+        const [updatedRequest] = await tx.update(financialAdjustmentRequests).set({
+          status: nextStatus,
+          decidedByUserId: actor.id,
+          decidedByRole: actor.role,
+          decidedByName: actor.name ?? null,
+          decidedByEmail: actor.email ?? null,
+          decidedAt: new Date(),
+          decisionReason,
+          resultingAdjustmentId,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(financialAdjustmentRequests.id, requestId),
+          eq(financialAdjustmentRequests.status, 'pending'),
+        )).returning();
+        if (!updatedRequest) throw Object.assign(new Error('Adjustment request has already been decided'), { statusCode: 409 });
+        await addAudit(tx, actor, schoolId, decision, 'financial_adjustment_request', requestId,
+          `${request.kind} request ${nextStatus} for payment ${payment.id}.`,
+          createAuditSnapshot(before, ['status', 'kind', 'amount', 'resultingAdjustmentId']),
+          createAuditSnapshot(updatedRequest, ['status', 'decidedByUserId', 'decidedByRole', 'decidedAt', 'resultingAdjustmentId']),
+          decisionReason);
+        return { request: updatedRequest, duplicate: false };
+      });
+      return res.json(result);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      console.error('Failed to decide accounting adjustment request:', error);
+      return res.status(500).json({ error: 'Failed to decide adjustment request' });
+    }
+  });
+
+  app.post('/api/accounting/adjustment-requests/:id/refund-confirmation', async (req, res) => {
+    try {
+      const actor = await actorFor(req, res, 'confirm_refund');
+      if (!actor) return;
+      if (!actor.id) return res.status(401).json({ error: 'Authenticated account identity is unavailable' });
+      const schoolId = await getSchoolId(actor, undefined, res);
+      if (!schoolId) return;
+      const requestId = asPositiveInt(req.params.id);
+      if (!requestId) return res.status(400).json({ error: 'Invalid adjustment request id' });
+      const [scopedRequest] = await db.select({
+        paymentId: financialAdjustmentRequests.paymentId,
+      }).from(financialAdjustmentRequests).where(and(
+        eq(financialAdjustmentRequests.id, requestId),
+        eq(financialAdjustmentRequests.schoolId, schoolId),
+      )).limit(1);
+      if (!scopedRequest) return res.status(404).json({ error: 'Adjustment request not found' });
+
+      const result = await db.transaction(async (tx) => {
+        await assertSchoolActiveInTransaction(tx, schoolId);
+        const [payment] = await tx.select().from(financialPayments).where(and(
+          eq(financialPayments.id, scopedRequest.paymentId),
+          eq(financialPayments.schoolId, schoolId),
+        )).for('update').limit(1);
+        if (!payment) throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
+        const [request] = await tx.select().from(financialAdjustmentRequests).where(and(
+          eq(financialAdjustmentRequests.id, requestId),
+          eq(financialAdjustmentRequests.schoolId, schoolId),
+          eq(financialAdjustmentRequests.paymentId, payment.id),
+        )).for('update').limit(1);
+        if (!request) throw Object.assign(new Error('Adjustment request not found'), { statusCode: 404 });
+        if (request.kind !== 'refund' || request.status !== 'approved') {
+          throw Object.assign(new Error('Only approved refund requests can be confirmed'), { statusCode: 409 });
+        }
+        if (request.resultingAdjustmentId != null) {
+          const [adjustment] = await tx.select().from(financialAdjustments)
+            .where(eq(financialAdjustments.id, request.resultingAdjustmentId)).limit(1);
+          if (!adjustment) throw new Error('The confirmed refund adjustment is missing');
+          return { request, adjustment, duplicate: true };
+        }
+        if (payment.status !== 'posted' || request.amount == null) {
+          throw Object.assign(new Error('Payment is no longer eligible for this refund'), { statusCode: 409 });
+        }
+        const balance = await loadRemainingPaymentBalance(tx, payment.id);
+        if (request.amount > balance.remaining) {
+          throw Object.assign(new Error('The remaining refundable amount is lower than the approved amount'), { statusCode: 409 });
+        }
+        const applied = await applyPaymentAdjustmentInTransaction(tx, {
+          actor,
+          schoolId,
+          payment,
+          kind: 'refund',
+          amount: request.amount,
+          reason: request.reason,
+          sourceKey: `refund-request:${request.id}`,
+        });
+        const [updatedRequest] = await tx.update(financialAdjustmentRequests).set({
+          resultingAdjustmentId: applied.adjustment.id,
+          refundConfirmedByUserId: actor.id,
+          refundConfirmedByRole: actor.role,
+          refundConfirmedByName: actor.name ?? null,
+          refundConfirmedByEmail: actor.email ?? null,
+          refundConfirmedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(and(
+          eq(financialAdjustmentRequests.id, request.id),
+          eq(financialAdjustmentRequests.status, 'approved'),
+          isNull(financialAdjustmentRequests.resultingAdjustmentId),
+        )).returning();
+        if (!updatedRequest) throw Object.assign(new Error('Refund has already been confirmed'), { statusCode: 409 });
+        await addAudit(tx, actor, schoolId, 'refund_confirmed', 'financial_adjustment_request', request.id,
+          `Approved refund request executed for payment ${payment.id}.`,
+          createAuditSnapshot(request, ['status', 'amount', 'resultingAdjustmentId']),
+          createAuditSnapshot(updatedRequest, [
+            'status', 'amount', 'resultingAdjustmentId', 'refundConfirmedByUserId', 'refundConfirmedByRole', 'refundConfirmedAt',
+          ]),
+          request.reason);
+        return { request: updatedRequest, adjustment: applied.adjustment, duplicate: false };
+      });
+      return res.status(result.duplicate ? 200 : 201).json(result);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
+      if (statusCode !== 500) return res.status(statusCode).json({ error: (error as Error).message });
+      console.error('Failed to confirm accounting refund:', error);
+      return res.status(500).json({ error: 'Failed to confirm refund' });
+    }
+  });
+
   app.get('/api/accounting/cash', async (req, res) => {
     try {
       const actor = await actorFor(req, res);
@@ -4378,7 +4774,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
   });
 
   app.post('/api/accounting/notifications/overdue', async (req, res) => {
-    const actor = await actorFor(req, res);
+    const actor = await actorFor(req, res, 'manual_reminder');
     if (!actor) return;
     return res.status(410).json({
       error: 'Les rappels globaux implicites sont désactivés. Utilisez l’aperçu puis confirmez les élèves sélectionnés.',
@@ -4388,7 +4784,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.get('/api/accounting/reminders/candidates', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'manual_reminder');
       if (!actor) return;
       const scope = await resolveReminderScope(
         actor,
@@ -4417,7 +4813,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
 
   app.post('/api/accounting/reminders/preview', async (req, res) => {
     try {
-      const actor = await actorFor(req, res);
+      const actor = await actorFor(req, res, 'manual_reminder');
       if (!actor) return;
       const scope = await resolveReminderScope(
         actor,
@@ -4453,7 +4849,7 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
   });
 
   app.post('/api/accounting/reminders/confirm', async (req, res) => {
-    const actor = await actorFor(req, res);
+    const actor = await actorFor(req, res, 'manual_reminder');
     if (!actor) return;
     try {
       const scope = await resolveReminderScope(
@@ -4562,8 +4958,20 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
             type: 'info',
             dedupeKey: candidate.dedupeKey,
           }).onConflictDoNothing().returning({ id: notifications.id });
-          if (insertedNotification) operationResult.createdNotifications += 1;
-          else operationResult.duplicateCount += 1;
+          if (insertedNotification) {
+            operationResult.createdNotifications += 1;
+            await addAudit(tx, actor, scope.schoolId, 'send_manual_reminder', 'payment_reminder',
+              insertedNotification.id, 'Rappel manuel de scolarité envoyé.', null,
+              createAuditSnapshot({
+                studentId: candidate.studentId,
+                academicYearId: scope.academicYearId,
+                amount: candidate.totalRemaining,
+                status: candidate.status,
+                installmentCount: candidate.installments.length,
+              }, ['studentId', 'academicYearId', 'amount', 'status', 'installmentCount']));
+          } else {
+            operationResult.duplicateCount += 1;
+          }
         }
         return operationResult;
       });
@@ -4596,9 +5004,16 @@ export const registerAccountingRoutes = (app: express.Express, options: Register
       if (!actor) return;
       const receiptId = asPositiveInt(req.params.id);
       if (!receiptId) return res.status(400).json({ error: 'Invalid receipt id' });
-      const [receipt] = await db.select().from(financialReceipts).where(eq(financialReceipts.id, receiptId));
+      const activeSchoolId = actor.role === 'school_admin' || actor.role === 'school_accountant'
+        ? await getSchoolId(actor, undefined, res)
+        : null;
+      if ((actor.role === 'school_admin' || actor.role === 'school_accountant') && !activeSchoolId) return;
+      const [receipt] = await db.select().from(financialReceipts).where(and(
+        eq(financialReceipts.id, receiptId),
+        ...(activeSchoolId == null ? [] : [eq(financialReceipts.schoolId, activeSchoolId)]),
+      ));
       if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
-      const schoolId = await getSchoolId(actor, actor.role === 'school_admin' ? undefined : receipt.schoolId, res);
+      const schoolId = await getSchoolId(actor, activeSchoolId ?? receipt.schoolId, res);
       if (!schoolId) return;
       if (receipt.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
       const [payment] = await db.select({
@@ -5085,23 +5500,135 @@ const publicAccountingReminderCandidate = (candidate: AccountingReminderCandidat
   return publicCandidate;
 };
 
+const loadRemainingPaymentBalance = async (
+  tx: AccountingTuitionProgressExecutor,
+  paymentId: number,
+) => {
+  const allocations = await tx.select({
+    id: financialPaymentAllocations.id,
+    amount: financialPaymentAllocations.amount,
+  }).from(financialPaymentAllocations).where(eq(financialPaymentAllocations.paymentId, paymentId));
+  const adjustments = allocations.length
+    ? await tx.select({
+      paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
+      amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
+    }).from(financialAdjustmentAllocations)
+      .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
+      .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allocations.map((row) => row.id)))
+      .groupBy(financialAdjustmentAllocations.paymentAllocationId)
+    : [];
+  const adjustedById = getAdjustmentTotals(
+    allocations.map((row) => ({ ...row, obligationId: 0, installmentId: null })),
+    adjustments,
+  );
+  return {
+    allocations,
+    adjustedById,
+    remaining: allocations.reduce(
+      (sum, row) => sum + row.amount - (adjustedById.get(row.id) ?? 0),
+      0,
+    ),
+  };
+};
+
+const applyPaymentAdjustmentInTransaction = async (
+  tx: AccountingTuitionProgressExecutor,
+  input: {
+    actor: AccountingActor;
+    schoolId: number;
+    payment: typeof financialPayments.$inferSelect;
+    kind: 'cancellation' | 'refund';
+    amount: number | null;
+    reason: string;
+    sourceKey: string;
+  },
+) => {
+  if (input.payment.status !== 'posted') {
+    throw Object.assign(new Error('Only posted payments can be adjusted'), { statusCode: 409 });
+  }
+  const { allocations, adjustedById, remaining } = await loadRemainingPaymentBalance(tx, input.payment.id);
+  const adjustmentAmount = input.kind === 'cancellation' ? remaining : input.amount;
+  if (!remaining || adjustmentAmount == null || adjustmentAmount <= 0 || adjustmentAmount > remaining) {
+    throw Object.assign(new Error('Adjustment exceeds the unreversed payment amount'), { statusCode: 409 });
+  }
+
+  const [adjustment] = await tx.insert(financialAdjustments).values({
+    paymentId: input.payment.id,
+    kind: input.kind,
+    amount: adjustmentAmount,
+    reason: input.reason,
+    sourceKey: input.sourceKey,
+    recordedBy: input.actor.id ?? null,
+  }).returning();
+  let left = adjustmentAmount;
+  for (const allocation of allocations) {
+    if (!left) break;
+    const available = allocation.amount - (adjustedById.get(allocation.id) ?? 0);
+    if (!available) continue;
+    const adjusted = Math.min(left, available);
+    await tx.insert(financialAdjustmentAllocations).values({
+      adjustmentId: adjustment.id,
+      paymentAllocationId: allocation.id,
+      amount: adjusted,
+    });
+    left -= adjusted;
+  }
+  if (left) throw new Error('Adjustment allocation failed');
+
+  let paymentAfter = input.payment;
+  if (input.kind === 'cancellation') {
+    const [cancelled] = await tx.update(financialPayments).set({ status: 'cancelled' })
+      .where(and(
+        eq(financialPayments.id, input.payment.id),
+        eq(financialPayments.status, 'posted'),
+      )).returning();
+    if (!cancelled) throw Object.assign(new Error('Payment state changed during cancellation'), { statusCode: 409 });
+    paymentAfter = cancelled;
+  }
+
+  await addAudit(tx, input.actor, input.schoolId, input.kind, 'financial_payment', input.payment.id,
+    `${input.kind} recorded. ${input.actor.role === 'super_admin' ? 'Super admin direct adjustment.' : ''}`.trim(),
+    createAuditSnapshot(input.payment, ['amount', 'method', 'status']),
+    createAuditSnapshot({
+      amount: paymentAfter.amount,
+      method: paymentAfter.method,
+      status: paymentAfter.status,
+      adjustmentId: adjustment.id,
+      adjustmentKind: adjustment.kind,
+      adjustmentAmount: adjustment.amount,
+    }, ['amount', 'method', 'status', 'adjustmentId', 'adjustmentKind', 'adjustmentAmount']),
+    input.reason);
+  return { adjustment, paymentAfter };
+};
+
 async function handlePaymentAdjustment(
   req: any,
   res: express.Response,
   options: RegisterAccountingApiOptions,
-  actorFor: (req: any, res: express.Response) => Promise<AccountingActor | null>,
+  actorFor: (
+    req: any,
+    res: express.Response,
+    permission?: AccountingPermission,
+  ) => Promise<AccountingActor | null>,
   getSchoolIdFn: typeof getSchoolId,
   kind: 'cancellation' | 'refund',
 ) {
   const db = options.database ?? defaultDb;
   try {
-    const actor = await actorFor(req, res);
+    const actor = await actorFor(req, res, 'adjustment');
     if (!actor) return;
     const paymentId = asPositiveInt(req.params.id);
     if (!paymentId) return res.status(400).json({ error: 'Invalid payment id' });
-    const [payment] = await db.select().from(financialPayments).where(eq(financialPayments.id, paymentId));
+    const actorSchoolId = actor.role === 'school_admin' || actor.role === 'school_accountant'
+      ? await getSchoolIdFn(actor, undefined, res)
+      : null;
+    if ((actor.role === 'school_admin' || actor.role === 'school_accountant') && !actorSchoolId) return;
+    const [payment] = await db.select().from(financialPayments).where(and(
+      eq(financialPayments.id, paymentId),
+      ...(actorSchoolId == null ? [] : [eq(financialPayments.schoolId, actorSchoolId)]),
+    ));
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
-    const schoolId = await getSchoolIdFn(actor, actor.role === 'school_admin' ? undefined : payment.schoolId, res);
+    const schoolId = await getSchoolIdFn(actor, actorSchoolId ?? payment.schoolId, res);
     if (!schoolId) return;
     if (payment.schoolId !== schoolId) return res.status(403).json({ error: 'Forbidden' });
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
@@ -5118,6 +5645,23 @@ async function handlePaymentAdjustment(
       if (!paymentBefore || paymentBefore.schoolId !== schoolId) {
         throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
       }
+      const [activeRequest] = await tx.select({ id: financialAdjustmentRequests.id })
+        .from(financialAdjustmentRequests)
+        .where(and(
+          eq(financialAdjustmentRequests.paymentId, paymentId),
+          or(
+            eq(financialAdjustmentRequests.status, 'pending'),
+            and(
+              eq(financialAdjustmentRequests.status, 'approved'),
+              eq(financialAdjustmentRequests.kind, 'refund'),
+              isNull(financialAdjustmentRequests.refundConfirmedAt),
+            ),
+          ),
+        ))
+        .limit(1);
+      if (activeRequest) {
+        throw Object.assign(new Error('A pending adjustment request must be resolved before a direct adjustment'), { statusCode: 409 });
+      }
       const [existing] = await tx.select().from(financialAdjustments).where(eq(
         financialAdjustments.sourceKey,
         kind === 'cancellation' ? `cancel:${paymentId}` : `refund:${paymentId}:${idempotencyKey}`,
@@ -5129,65 +5673,16 @@ async function handlePaymentAdjustment(
         }
         return { adjustment: existing, duplicate: true };
       }
-      const allocations = await tx.select({
-        id: financialPaymentAllocations.id,
-        amount: financialPaymentAllocations.amount,
-      }).from(financialPaymentAllocations).where(eq(financialPaymentAllocations.paymentId, paymentId));
-      const adjustments = allocations.length
-        ? await tx.select({
-          paymentAllocationId: financialAdjustmentAllocations.paymentAllocationId,
-          amount: sql<number>`sum(${financialAdjustmentAllocations.amount})::int`,
-        }).from(financialAdjustmentAllocations)
-          .innerJoin(financialAdjustments, eq(financialAdjustments.id, financialAdjustmentAllocations.adjustmentId))
-          .where(inArray(financialAdjustmentAllocations.paymentAllocationId, allocations.map((row) => row.id)))
-          .groupBy(financialAdjustmentAllocations.paymentAllocationId)
-        : [];
-      const adjustedById = getAdjustmentTotals(
-        allocations.map((row) => ({ ...row, obligationId: 0, installmentId: null })),
-        adjustments,
-      );
-      const remaining = allocations.reduce((sum, row) => sum + row.amount - (adjustedById.get(row.id) ?? 0), 0);
-      const adjustmentAmount = kind === 'cancellation' ? remaining : amount!;
-      if (!remaining || adjustmentAmount > remaining) {
-        throw Object.assign(new Error('Adjustment exceeds the unreversed payment amount'), { statusCode: 409 });
-      }
-      const [adjustment] = await tx.insert(financialAdjustments).values({
-        paymentId,
+      const applied = await applyPaymentAdjustmentInTransaction(tx, {
+        actor,
+        schoolId,
+        payment: paymentBefore,
         kind,
-        amount: adjustmentAmount,
+        amount,
         reason,
         sourceKey: kind === 'cancellation' ? `cancel:${paymentId}` : `refund:${paymentId}:${idempotencyKey}`,
-        recordedBy: actor.id ?? null,
-      }).returning();
-      let left = adjustmentAmount;
-      for (const allocation of allocations) {
-        if (!left) break;
-        const available = allocation.amount - (adjustedById.get(allocation.id) ?? 0);
-        if (!available) continue;
-        const adjusted = Math.min(left, available);
-        await tx.insert(financialAdjustmentAllocations).values({
-          adjustmentId: adjustment.id,
-          paymentAllocationId: allocation.id,
-          amount: adjusted,
-        });
-        left -= adjusted;
-      }
-      if (left) throw new Error('Adjustment allocation failed');
-      const paymentAfter = kind === 'cancellation'
-        ? (await tx.update(financialPayments).set({ status: 'cancelled' })
-          .where(eq(financialPayments.id, paymentId)).returning())[0] ?? paymentBefore
-        : paymentBefore;
-      await addAudit(tx, actor, schoolId, kind, 'financial_payment', paymentId, `${kind} recorded.`,
-        createAuditSnapshot(paymentBefore, ['amount', 'method', 'status']),
-        createAuditSnapshot({
-          amount: paymentAfter.amount,
-          method: paymentAfter.method,
-          status: paymentAfter.status,
-          adjustmentId: adjustment.id,
-          adjustmentKind: adjustment.kind,
-          adjustmentAmount: adjustment.amount,
-        }, ['amount', 'method', 'status', 'adjustmentId', 'adjustmentKind', 'adjustmentAmount']));
-      return { adjustment, duplicate: false };
+      });
+      return { adjustment: applied.adjustment, duplicate: false };
     });
     return res.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) {

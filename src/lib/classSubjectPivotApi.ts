@@ -46,14 +46,14 @@ export const registerClassSubjectPivotRoute = (
   const {
     resolveActor,
     verifyMiddleware = verifyToken as any,
-    accessMiddleware = requireRole(['school_admin', 'super_admin']) as any,
+    accessMiddleware = requireRole(['school_admin', 'school_accountant', 'super_admin']) as any,
   } = options;
 
   app.get('/api/results/class-subject-pivot', verifyMiddleware, accessMiddleware, async (req: any, res) => {
     try {
       const actor = await resolveActor(req);
       if (!actor) return res.status(404).json({ error: 'User not found' });
-      if (!['super_admin', 'school_admin'].includes(actor.role)) {
+      if (!['super_admin', 'school_admin', 'school_accountant'].includes(actor.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -64,7 +64,7 @@ export const registerClassSubjectPivotRoute = (
         return res.status(400).json({ error: 'academicYearId and periodId are required' });
       }
 
-      if (actor.role === 'school_admin') {
+      if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
         if (actor.schoolId == null) return res.status(403).json({ error: 'School context required' });
         if (requestedSchoolId != null && requestedSchoolId !== actor.schoolId) {
           return res.status(403).json({ error: 'Forbidden' });
@@ -74,7 +74,7 @@ export const registerClassSubjectPivotRoute = (
         }
       }
 
-      const schoolId = actor.role === 'school_admin' ? actor.schoolId! : requestedSchoolId;
+      const schoolId = actor.role === 'school_admin' || actor.role === 'school_accountant' ? actor.schoolId! : requestedSchoolId;
       if (schoolId == null) return res.status(400).json({ error: 'schoolId is required' });
 
       const [school] = await db.select({

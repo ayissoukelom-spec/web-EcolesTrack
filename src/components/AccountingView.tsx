@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, Download, Printer } from 'lucide-react';
 import type { AcademicYear, Class, School, Student, UserRole } from '../types.ts';
 import { apiFetch, apiFetchBlob } from '../lib/api.ts';
+import { useAuth } from '../contexts/AuthContext.tsx';
 import {
   compareAccountingClassOrder,
   ACCOUNTING_ENROLLMENT_KINDS,
@@ -17,6 +18,7 @@ import { generateClassSituationPdf } from '../lib/classSituationPdf.ts';
 import { buildClassSituationExcel } from '../lib/classSituationExcel.ts';
 import type { ClassSituationExcelInstallment } from '../lib/classSituationExcel.ts';
 import PaymentRemindersPanel from './PaymentRemindersPanel.tsx';
+import AccountingAdjustmentWorkflow from './AccountingAdjustmentWorkflow.tsx';
 import ModalSurface from './ModalSurface.tsx';
 
 type Category = { id: number; code: string; label: string; isEnabled: boolean };
@@ -38,7 +40,7 @@ type Tariff = {
 };
 type EducationLevel = { id: number; orderIndex: number };
 type Fee = { id: number; schoolId?: number; academicYearId: number; classId: number | null; studentId: number | null; categoryId: number; label: string; amount: number; status: string };
-type AccountingTab = 'dashboard' | 'configuration' | 'fees' | 'students' | 'reminders';
+type AccountingTab = 'dashboard' | 'configuration' | 'fees' | 'students' | 'reminders' | 'history';
 type PaymentConfirmation = {
   amount: number | null;
   studentName: string | null;
@@ -170,6 +172,12 @@ interface AccountingViewProps {
 }
 
 const formatMoney = (amount: number) => `${Number(amount || 0).toLocaleString('fr-FR')} FCFA`;
+const getActiveAccountingYearId = (years: AcademicYear[], schoolId: number | null) => {
+  if (schoolId == null) return null;
+  return years.find((year) => year.isActive && year.schoolId === schoolId)?.id
+    ?? years.find((year) => year.isActive && year.schoolId == null)?.id
+    ?? null;
+};
 const getTariffPaymentLimit = (category: { remaining?: number; indicativeTariffAmount?: number | null }) =>
   category.remaining || category.indicativeTariffAmount || 0;
 const normalizeFeeLabel = (label: string) => label.trim().normalize('NFKC').replace(/\s+/g, ' ').toLocaleLowerCase('fr');
@@ -250,10 +258,9 @@ export default function AccountingView({
   classes,
   students,
 }: AccountingViewProps) {
+  const { user } = useAuth();
   const [schoolId, setSchoolId] = useState<number | null>(currentSchoolId);
-  const [yearId, setYearId] = useState<number | null>(() =>
-    years.find((year) => year.isActive
-      && (!currentSchoolId || !year.schoolId || year.schoolId === currentSchoolId))?.id ?? null);
+  const [yearId, setYearId] = useState<number | null>(() => getActiveAccountingYearId(years, currentSchoolId));
   const [tab, setTab] = useState<AccountingTab>('dashboard');
   const [categories, setCategories] = useState<Category[]>([]);
   const [tariffs, setTariffs] = useState<Tariff[]>([]);
@@ -341,15 +348,22 @@ export default function AccountingView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [accountingRefreshToken, setAccountingRefreshToken] = useState(0);
   const [paymentOutcomeUncertain, setPaymentOutcomeUncertain] = useState(false);
   const paymentAttempt = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const paymentSubmitInFlight = useRef(false);
   const receiptObjectUrls = useRef(new Set<string>());
   const paymentFormRef = useRef<HTMLDivElement>(null);
-  const authorized = userRole === 'school_admin' || userRole === 'super_admin';
+  const authorized = ['school_admin', 'school_accountant', 'super_admin'].includes(userRole);
+  const canConfigure = userRole === 'school_admin' || userRole === 'super_admin';
+  const canGenerateObligations = canConfigure;
+  const canCollectPayments = userRole === 'school_accountant' || userRole === 'super_admin';
+  const currentUserId = typeof user?.id === 'number' && Number.isSafeInteger(user.id) ? user.id : null;
 
   const visibleYears = useMemo(
-    () => years.filter((year) => !schoolId || !year.schoolId || year.schoolId === schoolId),
+    () => schoolId == null
+      ? []
+      : years.filter((year) => year.schoolId == null || year.schoolId === schoolId),
     [years, schoolId],
   );
   const visibleClasses = useMemo(
@@ -642,8 +656,14 @@ export default function AccountingView({
 
   useEffect(() => {
     if (!authorized) return;
-    if (userRole === 'school_admin') setSchoolId(currentSchoolId);
-  }, [authorized, currentSchoolId, userRole]);
+    const selectedSchoolId = userRole === 'super_admin' ? schoolId : currentSchoolId;
+    if (userRole !== 'super_admin') setSchoolId(currentSchoolId);
+    setYearId(getActiveAccountingYearId(years, selectedSchoolId));
+  }, [authorized, currentSchoolId, schoolId, userRole, years]);
+
+  useEffect(() => {
+    if (!canConfigure && tab === 'configuration') setTab('dashboard');
+  }, [canConfigure, tab]);
 
   useEffect(() => {
     setSituationClassId(null);
@@ -722,7 +742,7 @@ export default function AccountingView({
       if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Impossible de charger la comptabilité.');
     });
     return () => { cancelled = true; };
-  }, [accountQuery, authorized, cashQuery, schoolId, yearQuery]);
+  }, [accountQuery, accountingRefreshToken, authorized, cashQuery, schoolId, yearQuery]);
 
   useEffect(() => {
     if (!authorized || !schoolId || !yearId || !scheduleClassId || !tuitionCategory || !scheduleTariff) {
@@ -828,7 +848,7 @@ export default function AccountingView({
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Impossible de charger les paiements par frais.');
       });
     return () => { cancelled = true; };
-  }, [authorized, feesCashQuery, schoolId]);
+  }, [accountingRefreshToken, authorized, feesCashQuery, schoolId]);
 
   useEffect(() => {
     if (!authorized || !schoolId || !yearId) {
@@ -848,7 +868,7 @@ export default function AccountingView({
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Impossible de charger les situations des élèves.');
       });
     return () => { cancelled = true; };
-  }, [authorized, dashboard, schoolId, situationQuery, selectedTariffIds, yearId]);
+  }, [accountingRefreshToken, authorized, dashboard, schoolId, situationQuery, selectedTariffIds, yearId]);
 
   useEffect(() => {
     if (!authorized || !schoolId || !yearId || studentSituationStatus == null) {
@@ -899,7 +919,7 @@ export default function AccountingView({
         if (!cancelled) setIsClassSituationLoading(false);
       });
     return () => { cancelled = true; };
-  }, [authorized, classSituationQuery, isClassSituationVisible, schoolId, studentSituationClassId, yearId]);
+  }, [accountingRefreshToken, authorized, classSituationQuery, isClassSituationVisible, schoolId, studentSituationClassId, yearId]);
 
   useEffect(() => {
     if (!authorized || !studentId || !schoolId || !yearId) {
@@ -1396,6 +1416,7 @@ export default function AccountingView({
 
   const submitPayment = async (event?: React.FormEvent) => {
     event?.preventDefault();
+    if (!canCollectPayments) return;
     if (paymentSubmitInFlight.current) return;
     if (!schoolId || !yearId || !studentId || (!feePaymentMode && !multiPaymentEnabled && !paymentCategoryId)) return;
     if (initialTuitionInputInvalid) {
@@ -1488,6 +1509,7 @@ export default function AccountingView({
     setBusy(false);
     setPaymentOutcomeUncertain(false);
     paymentAttempt.current = null;
+    setAccountingRefreshToken((current) => current + 1);
     const receiptSnapshot = payment.receipt.snapshot ?? {};
     const paymentDetails = payment.payment ?? receiptSnapshot.payment ?? {};
     const amountValue = payment.payment?.amount ?? receiptSnapshot.payment?.amount;
@@ -1582,6 +1604,7 @@ export default function AccountingView({
   };
 
   const renderPaymentForm = () => {
+    if (!canCollectPayments) return null;
     if ((!selectedPaymentStudent && !activeRubricRow)
       || (!feePaymentMode && !multiPaymentEnabled && paymentCategoryId == null)) return null;
     const multiPaymentCategories = feePaymentMode
@@ -1806,8 +1829,7 @@ export default function AccountingView({
             <select className="rounded-lg border border-slate-200 p-2 text-sm" value={schoolId ?? ''} onChange={(event) => {
               const nextSchoolId = Number(event.target.value) || null;
               setSchoolId(nextSchoolId);
-              setYearId(years.find((year) => year.isActive
-                && (!nextSchoolId || !year.schoolId || year.schoolId === nextSchoolId))?.id ?? null);
+              setYearId(getActiveAccountingYearId(years, nextSchoolId));
             }} aria-label="Établissement">
               <option value="">Choisir une école</option>
               {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
@@ -1939,7 +1961,6 @@ export default function AccountingView({
           <nav className="flex flex-wrap gap-2" aria-label="Sections comptables">
             {([
               ['dashboard', 'Tableau de bord'],
-              ['configuration', 'Configuration des frais'],
               ['students', 'Situation des élèves'],
               ['reminders', 'Rappels de paiement'],
             ] as const).map(([key, label]) => (
@@ -1947,8 +1968,18 @@ export default function AccountingView({
                 {label}
               </button>
             ))}
-            <button type="button" onClick={() => setTab('fees')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${tab === 'fees' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              Frais scolaires
+            {canConfigure && (
+              <button type="button" onClick={() => setTab('configuration')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${tab === 'configuration' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                Configuration des frais
+              </button>
+            )}
+            {userRole !== 'school_admin' && (
+              <button type="button" onClick={() => setTab('fees')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${tab === 'fees' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                Frais scolaires
+              </button>
+            )}
+            <button type="button" onClick={() => setTab('history')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${tab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              Historique et demandes
             </button>
           </nav>
 
@@ -2069,13 +2100,27 @@ export default function AccountingView({
             />
           )}
 
+          {tab === 'history' && schoolId && (
+            <AccountingAdjustmentWorkflow
+              userRole={userRole}
+              schoolId={schoolId}
+              academicYearId={yearId}
+              currentUserId={currentUserId}
+              refreshToken={accountingRefreshToken}
+              onFinancialDataChanged={() => setAccountingRefreshToken((current) => current + 1)}
+              renderReceiptActions={renderReceiptActions}
+            />
+          )}
+
           {tab === 'fees' && (
             <section className="space-y-5" aria-label="Frais scolaires">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">Frais scolaires</h2>
+                <h2 className="text-xl font-bold text-slate-900">
+                  {userRole === 'school_admin' ? 'Génération des obligations' : 'Frais scolaires'}
+                </h2>
                 <p className="mt-1 text-sm text-slate-500">Sélectionnez un ou plusieurs frais configurés pour filtrer les paiements et les situations.</p>
               </div>
-              <button
+              {canGenerateObligations && <button
                 type="button"
                 aria-expanded={isGenerationPanelOpen}
                 aria-controls={isGenerationPanelOpen ? 'obligation-generation-panel' : undefined}
@@ -2083,8 +2128,8 @@ export default function AccountingView({
                 className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-bold text-indigo-800"
               >
                 Générer les frais
-              </button>
-              {isGenerationPanelOpen && (
+              </button>}
+              {canGenerateObligations && isGenerationPanelOpen && (
               <section id="obligation-generation-panel" className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4" aria-label="Générer les frais">
                 <div>
                   <h3 className="font-bold text-slate-900">Générer les frais</h3>
@@ -2701,7 +2746,7 @@ export default function AccountingView({
                               <td className="px-4 py-3">{formatMoney(row.paid)}</td>
                               <td className="px-4 py-3">{row.paid > row.due ? formatMoney(row.paid - row.due) : '—'}</td>
                               <td className="px-4 py-3 font-semibold">{formatMoney(row.remaining)}</td>
-                              <td className="px-4 py-3"><button type="button" disabled={row.remaining <= 0 && !row.indicativeTariffAmount} className="rounded-lg bg-indigo-600 px-3 py-2 font-bold text-white disabled:opacity-50" onClick={() => {
+                              <td className="px-4 py-3">{canCollectPayments ? <button type="button" disabled={row.remaining <= 0 && !row.indicativeTariffAmount} className="rounded-lg bg-indigo-600 px-3 py-2 font-bold text-white disabled:opacity-50" onClick={() => {
                                 setStudentId(row.studentId);
                                 setPaymentSituationRow(row);
                                 setPaymentCategoryId(row.categoryId);
@@ -2714,7 +2759,7 @@ export default function AccountingView({
                                 setMultiPaymentAmounts({});
                                 setError('');
                                 setShowRubricPayment(true);
-                              }}>{row.indicativeTariffAmount && row.due === 0 ? 'Encaisser (crée l’obligation)' : 'Encaisser'}</button></td>
+                              }}>{row.indicativeTariffAmount && row.due === 0 ? 'Encaisser (crée l’obligation)' : 'Encaisser'}</button> : <span className="text-xs text-slate-500">Consultation</span>}</td>
                             </tr>
                           ))}
                           {!rows.length && (
@@ -2727,7 +2772,7 @@ export default function AccountingView({
                         </tbody>
                       </table>
                     </div>
-                    {showRubricPayment && paymentSituationRow && (
+                    {canCollectPayments && showRubricPayment && paymentSituationRow && (
                       <div><p className="mb-3 text-sm text-slate-500">Encaissement pour {paymentSituationRow.className} · {selectedYearName}</p>{renderPaymentForm()}</div>
                     )}
                   </div>
@@ -3092,7 +3137,7 @@ export default function AccountingView({
                       {renderReceiptActions(payment.receiptId, payment.receiptNumber, payment.status)}
                     </div>
                   ))}
-                  <div className="space-y-3">
+                  {canCollectPayments && <div className="space-y-3">
                     <select required className="rounded-lg border border-slate-200 p-2" value={paymentCategoryId ?? ''} onChange={(event) => {
                       setPaymentCategoryId(Number(event.target.value) || null);
                       setPaymentSituationRow(null);
@@ -3111,8 +3156,8 @@ export default function AccountingView({
                       ))}
                     </select>
                     {renderPaymentForm()}
-                  </div>
-                  {fees.filter((fee) => fee.status === 'active'
+                  </div>}
+                  {canGenerateObligations && fees.filter((fee) => fee.status === 'active'
                     && fee.academicYearId === yearId
                     && (fee.studentId == null || fee.studentId === studentId)
                     && (fee.classId == null || fee.classId === studentFinance.student.classId)).length > 0 && (
@@ -3139,14 +3184,27 @@ export default function AccountingView({
             </div>
           )}
 
-          {tab === 'configuration' && (
+          {tab === 'configuration' && canConfigure && (
             <section className="space-y-4" aria-label="Configuration des frais">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-bold">Configuration des frais</h2>
                   <p className="mt-1 text-sm text-slate-500">Configurez les montants à payer par classe pour l’année sélectionnée.</p>
                 </div>
-                {!isFeeFormOpen && (
+                <div className="flex flex-wrap gap-2">
+                  {userRole === 'school_admin' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTab('fees');
+                        setIsGenerationPanelOpen(true);
+                      }}
+                      className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-800"
+                    >
+                      Générer les obligations
+                    </button>
+                  )}
+                  {!isFeeFormOpen && (
                   <button type="button" disabled={busy} onClick={() => {
                     setEditingTariffId(null);
                     setConfigurationMode('single');
@@ -3161,7 +3219,8 @@ export default function AccountingView({
                   }} className="rounded-lg bg-indigo-600 px-4 py-2 font-bold text-white">
                     + Créer un frais
                   </button>
-                )}
+                  )}
+                </div>
               </div>
 
               <section className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4" aria-label="Échéancier de scolarité">

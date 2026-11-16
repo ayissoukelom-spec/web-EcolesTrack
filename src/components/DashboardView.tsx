@@ -119,7 +119,7 @@ export default function DashboardView({
     accepted: 0,
     refused: 0,
   };
-  const showAdministrativeAbsenceRequestStats = ['super_admin', 'school_admin', 'surveillant'].includes(userRole ?? '');
+  const showAdministrativeAbsenceRequestStats = ['super_admin', 'school_admin', 'school_accountant', 'surveillant'].includes(userRole ?? '');
   const ageStatsSummary = ageStatsByClass.reduce((summary, classStats) => {
     summary.students += classStats.includedStudents;
     for (const item of classStats.distribution) {

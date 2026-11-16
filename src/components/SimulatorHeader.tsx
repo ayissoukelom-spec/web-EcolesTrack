@@ -444,6 +444,13 @@ export default function SimulatorHeader({
       description: 'Administration de son lycée, classes et inscrits'
     },
     {
+      id: 'school_accountant',
+      label: 'Secrétaire comptable',
+      color: 'bg-amber-500/10 text-amber-700 border-amber-200 hover:bg-amber-500/20',
+      activeColor: 'bg-amber-600 text-white border-amber-600 focus:ring-amber-500',
+      description: 'Administration scolaire et opérations comptables de son établissement'
+    },
+    {
       id: 'teacher',
       label: 'Enseignant',
       color: 'bg-indigo-500/10 text-indigo-700 border-indigo-200 hover:bg-indigo-500/20',
@@ -801,7 +808,7 @@ export default function SimulatorHeader({
                   className="w-full p-2 border rounded"
                   value={loginRole}
                   onChange={(e) => {
-                    const nextRole = e.target.value as 'super_admin' | 'school_admin' | 'teacher' | 'surveillant' | 'parent';
+                    const nextRole = e.target.value as UserRole;
                     setLoginRole(nextRole);
                     if (nextRole !== 'super_admin') {
                       setLoginSchoolId(defaultSchoolId);
@@ -810,6 +817,7 @@ export default function SimulatorHeader({
                 >
                   <option value="super_admin">Super Admin</option>
                   <option value="school_admin">Admin École</option>
+                  <option value="school_accountant">Secrétaire comptable</option>
                   <option value="teacher">Enseignant</option>
                   <option value="surveillant">Surveillant</option>
                   <option value="parent">Parent</option>
@@ -966,7 +974,9 @@ export default function SimulatorHeader({
                   onChange={(e) => {
                     const selectedRole = e.target.value;
                     setCreateRole(selectedRole);
-                    if (selectedRole !== 'school_admin' && !(selectedRole === 'teacher' && currentRole === 'school_admin') && !(selectedRole === 'surveillant' && currentRole === 'school_admin')) {
+                    if (selectedRole === 'school_accountant') {
+                      setCreateSchoolId(currentRole === 'school_admin' && activeSchoolId != null ? String(activeSchoolId) : '');
+                    } else if (selectedRole !== 'school_admin' && !(selectedRole === 'teacher' && currentRole === 'school_admin') && !(selectedRole === 'surveillant' && currentRole === 'school_admin')) {
                       setCreateSchoolId('');
                     }
                     if (selectedRole !== 'school_admin') {
@@ -997,6 +1007,9 @@ export default function SimulatorHeader({
                       <option value="school_admin">Admin École</option>
                     </>
                   ) : null}
+                  {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
+                    <option value="school_accountant">Secrétaire comptable</option>
+                  )}
                   <option value="teacher">Enseignant</option>
                   <option value="surveillant">Surveillant</option>
                   <option value="parent">Parent</option>
@@ -1041,6 +1054,27 @@ export default function SimulatorHeader({
                     </select>
                   </div>
                 </>
+              )}
+
+              {createRole === 'school_accountant' && (
+                <div>
+                  <label className="block text-xs">
+                    <RequiredLabel label="Établissement" required />
+                  </label>
+                  {currentRole === 'school_admin' ? (
+                    <div className="w-full rounded border bg-slate-50 p-2 text-slate-600">
+                      {schoolsList.find((school) => Number(school.id) === activeSchoolId)?.name
+                        || 'Établissement actif indisponible'}
+                    </div>
+                  ) : (
+                    <select className="w-full p-2 border rounded" value={createSchoolId} onChange={(e) => setCreateSchoolId(e.target.value)}>
+                      <option value="">-- Choisir un établissement --</option>
+                      {schoolsList.map((school) => (
+                        <option key={school.id} value={String(school.id)}>{school.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               )}
 
               {createRole === 'parent' && (
@@ -1357,6 +1391,12 @@ export default function SimulatorHeader({
                     setCreateError('Une année scolaire est requise pour un Admin École');
                     return;
                   }
+                  if (createRole === 'school_accountant' && (
+                    currentRole === 'school_admin' ? activeSchoolId == null : !createSchoolId
+                  )) {
+                    setCreateError('Un établissement est requis pour un Secrétaire comptable');
+                    return;
+                  }
                   if (createRole === 'parent' && !createParentSchoolId) {
                     setCreateError('Une école est requise pour un parent');
                     return;
@@ -1458,6 +1498,10 @@ export default function SimulatorHeader({
                   if (createRole === 'school_admin') {
                     payload.schoolId = parseInt(createSchoolId);
                     payload.academicYearId = parseInt(createAcademicYearId);
+                  } else if (createRole === 'school_accountant') {
+                    payload.schoolId = currentRole === 'school_admin'
+                      ? activeSchoolId
+                      : parseInt(createSchoolId);
                   } else if (createRole === 'teacher' || createRole === 'surveillant') {
                     payload.schoolId = currentRole === 'school_admin'
                       ? simUser?.schoolId
@@ -1577,7 +1621,7 @@ export default function SimulatorHeader({
           <button
             onClick={onRefreshData}
             disabled={isSyncing}
-            className={`flex items-center justify-center gap-2 px-3 py-2 min-h-[40px] text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'} disabled:opacity-50`}
+            className={`flex items-center justify-center gap-2 px-3 py-2 min-h-[40px] text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' || currentRole === 'school_accountant' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'} disabled:opacity-50`}
             title="Rafraîchir les données"
             id="btn-sim-refresh"
           >
@@ -1589,7 +1633,7 @@ export default function SimulatorHeader({
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className={`ml-2 px-3 py-2 min-h-[40px] flex items-center gap-2 text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'}`}
+              className={`ml-2 px-3 py-2 min-h-[40px] flex items-center gap-2 text-xs font-medium rounded-xl transition-colors border ${activeRoleDetails.activeColor} ${currentRole === 'teacher' ? 'shadow-lg shadow-indigo-900/30' : currentRole === 'parent' ? 'shadow-lg shadow-emerald-900/30' : currentRole === 'school_admin' || currentRole === 'school_accountant' ? 'shadow-lg shadow-amber-900/30' : 'shadow-lg shadow-red-900/30'}`}
               title="Profil"
               id="btn-sim-profile"
             >
@@ -1618,7 +1662,7 @@ export default function SimulatorHeader({
                       Changer d’espace
                     </button>
                   )}
-                  {currentRole !== 'parent' && currentRole !== 'teacher' && (
+                  {(currentRole === 'super_admin' || currentRole === 'school_admin') && (
                     <button
                       type="button"
                       className="text-left px-2 py-2 text-sm hover:bg-slate-100 rounded text-indigo-600 font-medium"

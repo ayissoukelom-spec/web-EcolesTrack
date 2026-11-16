@@ -120,8 +120,8 @@ export function isAuthorizedGroupedPublicationActor(
     role: string;
     isActive: boolean | null;
   } | null,
-): actor is { id: number; role: 'school_admin'; schoolId: number } {
-  return actor?.role === 'school_admin'
+): actor is { id: number; role: 'school_admin' | 'school_accountant'; schoolId: number } {
+  return (actor?.role === 'school_admin' || actor?.role === 'school_accountant')
     && Number.isInteger(actor.id)
     && actor.id != null
     && actor.id > 0
@@ -131,7 +131,7 @@ export function isAuthorizedGroupedPublicationActor(
     && membership != null
     && membership.userId === actor.id
     && membership.schoolId === actor.schoolId
-    && membership.role === 'school_admin'
+    && membership.role === actor.role
     && membership.isActive !== false;
 }
 
@@ -147,7 +147,7 @@ export function resolveGroupedPublicationSchoolId(
   } | null,
   requestedSchoolExists: boolean,
 ): number | null {
-  if (actor?.role === 'school_admin') {
+  if (actor?.role === 'school_admin' || actor?.role === 'school_accountant') {
     return !hasRequestedSchoolId && isAuthorizedGroupedPublicationActor(actor, membership)
       ? actor.schoolId
       : null;

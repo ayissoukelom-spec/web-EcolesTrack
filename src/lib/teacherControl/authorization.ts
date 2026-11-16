@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { schools, teacherClassSubjects, teachers, userSchools } from '../../db/schema.ts';
 
-export type TeacherControlRole = 'teacher' | 'school_admin' | 'super_admin';
+export type TeacherControlRole = 'teacher' | 'school_admin' | 'school_accountant' | 'super_admin';
 
 export interface TeacherControlActor {
   id?: number | null;
@@ -31,7 +31,7 @@ export function authorizeTeacherControlSchool(
   membership: TeacherControlMembership | null,
   school: TeacherControlSchool | null,
 ): TeacherControlSchoolAccess {
-  if (actor.role !== 'teacher' && actor.role !== 'school_admin' && actor.role !== 'super_admin') {
+  if (actor.role !== 'teacher' && actor.role !== 'school_admin' && actor.role !== 'school_accountant' && actor.role !== 'super_admin') {
     return { allowed: false, reason: 'unsupported_role' };
   }
   if (actor.id == null) return { allowed: false, reason: 'missing_actor' };
@@ -60,7 +60,7 @@ export async function resolveTeacherControlSchoolAccess(
   actor: TeacherControlActor,
   selectedSchoolId?: number | null,
 ): Promise<TeacherControlSchoolAccess> {
-  if (actor.role !== 'teacher' && actor.role !== 'school_admin' && actor.role !== 'super_admin') {
+  if (actor.role !== 'teacher' && actor.role !== 'school_admin' && actor.role !== 'school_accountant' && actor.role !== 'super_admin') {
     return { allowed: false, reason: 'unsupported_role' };
   }
 

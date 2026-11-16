@@ -196,6 +196,8 @@ export default function AppShell() {
         }
       } else if (newRole === 'school_admin') {
         setSimulatedUser({ uid: `sim_schooladmin_${Date.now()}`, email: 'sim_schooladmin@example.test', name: 'Admin Ecole', schoolId: currentSchoolId });
+      } else if (newRole === 'school_accountant') {
+        setSimulatedUser({ uid: `sim_school_accountant_${Date.now()}`, email: 'sim_school_accountant@example.test', name: 'Secrétaire comptable', schoolId: currentSchoolId });
       } else if (newRole === 'parent') {
         setSimulatedUser({ uid: `sim_parent_${Date.now()}`, email: 'sim_parent@example.test', name: 'Parent Simulé', schoolId: currentSchoolId });
       }
@@ -421,7 +423,7 @@ export default function AppShell() {
     // Centralized filtering of evaluations: separate active from archived
     const activeEvaluations = evaluationsList.filter((ev) => {
       if (currentRole === 'super_admin') return true;
-      if (currentRole === 'school_admin') {
+      if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
         return !isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
           && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
       }
@@ -429,7 +431,7 @@ export default function AppShell() {
     });
     const archivedEvaluations = evaluationsList.filter((ev) => {
       if (currentRole === 'super_admin') return false;
-      if (currentRole === 'school_admin') {
+      if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
         return isEvaluationLockedBySchoolAdmin(ev, studentsList, gradesList)
           || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
       }
@@ -546,7 +548,7 @@ export default function AppShell() {
       return <AuditView page={auditPage} isLoading={isAuditLoading} onReload={fetchAuditEvents} schoolsList={schoolsList} />;
     }
 
-    if (activeTab === 'accounting' && (currentRole === 'super_admin' || currentRole === 'school_admin')) {
+    if (activeTab === 'accounting' && ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)) {
       return (
         <AccountingView
           userRole={currentRole}

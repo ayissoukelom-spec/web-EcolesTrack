@@ -76,10 +76,10 @@ export default function BulletinsView({
   gradesList,
   teacherClassIds = [],
 }: BulletinsViewProps) {
-  const { role, user: simulated } = useAuth();
+  const { role, user: simulated, activeSchoolId } = useAuth();
   const currentRole: UserRole = role as UserRole;
-  const canGenerate = currentRole === 'school_admin' || currentRole === 'super_admin';
-  const canList = currentRole === 'school_admin' || currentRole === 'super_admin' || currentRole === 'teacher' || currentRole === 'parent';
+  const canGenerate = currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'super_admin';
+  const canList = currentRole === 'school_admin' || currentRole === 'school_accountant' || currentRole === 'super_admin' || currentRole === 'teacher' || currentRole === 'parent';
   const isTeacher = currentRole === 'teacher';
   const isParent = currentRole === 'parent';
 
@@ -123,8 +123,11 @@ export default function BulletinsView({
   const visibleStudentIds = useMemo(() => new Set(visibleStudents.map((student) => student.id)), [visibleStudents]);
 
   const generateSchools = useMemo(() => {
-    if (currentRole === 'super_admin' || currentRole === 'school_admin') {
+    if (currentRole === 'super_admin') {
       return schoolsList;
+    }
+    if (currentRole === 'school_admin' || currentRole === 'school_accountant') {
+      return activeSchoolId == null ? [] : schoolsList.filter((school) => school.id === activeSchoolId);
     }
 
     const classSchoolIds = new Set(
@@ -133,7 +136,7 @@ export default function BulletinsView({
         .filter((schoolId): schoolId is number => schoolId != null),
     );
     return schoolsList.filter((school) => classSchoolIds.has(school.id));
-  }, [classesList, currentRole, schoolsList]);
+  }, [activeSchoolId, classesList, currentRole, schoolsList]);
 
   const generateClasses = useMemo(() => {
     if (!generateSchoolId) return classesList;

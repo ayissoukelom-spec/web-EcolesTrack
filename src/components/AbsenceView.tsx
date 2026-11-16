@@ -281,7 +281,7 @@ export default function AbsenceView({
     reason: '',
   });
   const declarationToday = new Date().toISOString().split('T')[0];
-  const canReviewAbsenceDeclarations = ['school_admin', 'super_admin', 'surveillant', 'teacher'].includes(userRole);
+  const canReviewAbsenceDeclarations = ['school_admin', 'school_accountant', 'super_admin', 'surveillant', 'teacher'].includes(userRole);
   const receivedAbsenceDeclarationsCount = absenceDeclarationsList.filter((declaration) => declaration.status === 'RECEIVED').length;
 
   const resetDeclarationForm = () => {
@@ -792,11 +792,11 @@ export default function AbsenceView({
     }
   };
 
-  const canReviewJustification = ['teacher', 'school_admin', 'surveillant', 'super_admin'].includes(userRole);
-  const canReexamineJustification = ['school_admin', 'surveillant', 'super_admin'].includes(userRole);
+  const canReviewJustification = ['teacher', 'school_admin', 'school_accountant', 'surveillant', 'super_admin'].includes(userRole);
+  const canReexamineJustification = ['school_admin', 'school_accountant', 'surveillant', 'super_admin'].includes(userRole);
   const getJustificationStatus = getEffectiveAbsenceJustificationStatus;
-  const canReviewLateArrivalJustification = ['teacher', 'school_admin', 'surveillant'].includes(userRole);
-  const canReexamineLateArrivalJustification = ['school_admin', 'surveillant'].includes(userRole);
+  const canReviewLateArrivalJustification = ['teacher', 'school_admin', 'school_accountant', 'surveillant'].includes(userRole);
+  const canReexamineLateArrivalJustification = ['school_admin', 'school_accountant', 'surveillant'].includes(userRole);
 
 
   const submitReview = async (status: 'APPROVED' | 'REJECTED') => {
@@ -976,7 +976,7 @@ export default function AbsenceView({
         </div>
 
         {/* Teachers and admins can take attendance */}
-        {['super_admin', 'school_admin', 'teacher', 'surveillant'].includes(userRole) && (
+        {['super_admin', 'school_admin', 'school_accountant', 'teacher', 'surveillant'].includes(userRole) && (
           <button
             onClick={() => {
               if (sortedStudents.length > 0) {

@@ -2,6 +2,7 @@ export const LOCAL_SCHOOL_ROLES = [
   'parent',
   'teacher',
   'school_admin',
+  'school_accountant',
   'surveillant',
 ] as const;
 

@@ -51,7 +51,7 @@ export async function getAuthorizedStudentIds(actor: Actor, opts?: { classIds?: 
     return rows.map((row) => row.id);
   }
 
-  if (actor.role === 'school_admin') {
+  if (actor.role === 'school_admin' || actor.role === 'school_accountant') {
     if (actor.schoolId == null) return [];
     const rows = await getActiveStudentsForClassScope(opts?.classIds, actor.schoolId);
     return rows.map((row) => row.id);

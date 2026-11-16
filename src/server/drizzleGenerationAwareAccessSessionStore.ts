@@ -31,6 +31,7 @@ import type {
   AccessSessionGlobalRevocationResult,
   AccessSessionIndividualRevocationResult,
   MembershipDeactivationResult,
+  MembershipActivationResult,
   CreateGenerationBoundAccessSessionInput,
   GenerationAwareContextTransitionResult,
   GenerationAwareAccessSessionStore,
@@ -158,6 +159,26 @@ implements GenerationAwareAccessSessionStore<AccessSessionTransaction> {
       ))
       .limit(1);
     return Boolean(otherAdmin);
+  }
+
+  private async hasConflictingActiveSchoolFunction(
+    transaction: AccessSessionTransaction,
+    userId: number,
+    schoolId: number,
+    role: LocalSchoolRole,
+  ): Promise<boolean> {
+    if (role !== 'school_admin' && role !== 'school_accountant') return false;
+    const conflictingRole = role === 'school_admin' ? 'school_accountant' : 'school_admin';
+    const [membership] = await transaction.select({ id: userSchools.id })
+      .from(userSchools)
+      .where(and(
+        eq(userSchools.userId, userId),
+        eq(userSchools.schoolId, schoolId),
+        eq(userSchools.role, conflictingRole),
+        sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+      ))
+      .limit(1);
+    return Boolean(membership);
   }
 
   private async wouldRemoveLastSchoolAdmin(
@@ -530,6 +551,73 @@ implements GenerationAwareAccessSessionStore<AccessSessionTransaction> {
     return revoked;
   }
 
+  async activateMembership(input: {
+    readonly userId: number;
+    readonly schoolId: number;
+    readonly role: LocalSchoolRole;
+    readonly mutation?: (
+      transaction: AccessSessionTransaction,
+      membershipId: number,
+      action: 'activate' | 'reactivate',
+    ) => Promise<void>;
+  }): Promise<MembershipActivationResult> {
+    if (
+      !Number.isSafeInteger(input.userId) || input.userId <= 0
+      || !Number.isSafeInteger(input.schoolId) || input.schoolId <= 0
+      || !isLocalSchoolRole(input.role)
+    ) {
+      return { status: 'membership_not_found' };
+    }
+
+    return this.client.transaction(async (tx) => {
+      const user = await lockUserForGenerationTransition(tx, input.userId);
+      if (!user) return { status: 'user_not_found' };
+      if (user.isDeleted) return { status: 'account_not_admissible' };
+
+      if (!(await this.lockSchools(tx, [input.schoolId]))) {
+        return { status: 'school_not_found' };
+      }
+      if (await this.hasConflictingActiveSchoolFunction(tx, input.userId, input.schoolId, input.role)) {
+        return { status: 'conflicting_active_role' };
+      }
+
+      const [existing] = await tx.select({
+        id: userSchools.id,
+        isActive: userSchools.isActive,
+      }).from(userSchools).where(and(
+        eq(userSchools.userId, input.userId),
+        eq(userSchools.schoolId, input.schoolId),
+        eq(userSchools.role, input.role),
+      )).for('update').limit(1);
+
+      let membershipId = existing?.id ?? null;
+      if (existing?.isActive === false) {
+        await tx.update(userSchools).set({ isActive: true }).where(and(
+          eq(userSchools.id, existing.id),
+          eq(userSchools.isActive, false),
+        ));
+      } else if (!existing) {
+        const [inserted] = await tx.insert(userSchools).values({
+          userId: input.userId,
+          schoolId: input.schoolId,
+          role: input.role,
+          isActive: true,
+        }).returning({ id: userSchools.id });
+        membershipId = inserted?.id ?? null;
+      }
+      if (membershipId == null) return { status: 'membership_not_found' };
+
+      const changed = existing?.isActive === false || !existing;
+      if (changed && input.mutation) {
+        await input.mutation(tx, membershipId, existing?.isActive === false ? 'reactivate' : 'activate');
+      }
+      return {
+        status: changed ? 'activated' : 'already_active',
+        membershipId,
+      };
+    });
+  }
+
   async deactivateMembership(input: {
     readonly userId: number;
     readonly membershipId: number;
@@ -683,6 +771,31 @@ implements GenerationAwareAccessSessionStore<AccessSessionTransaction> {
         && await this.wouldRemoveLastSchoolAdmin(tx, input.userId)
       ) {
         return { status: 'last_school_admin' };
+      }
+      if (input.operation === 'reactivate') {
+        const memberships = await tx.select({
+          schoolId: userSchools.schoolId,
+          role: userSchools.role,
+        }).from(userSchools).where(and(
+          eq(userSchools.userId, input.userId),
+          sql`${userSchools.isActive} IS DISTINCT FROM FALSE`,
+          sql`${userSchools.role} IN ('school_admin', 'school_accountant')`,
+        ));
+        const rolesBySchool = new Map<number, Set<string>>();
+        for (const membership of memberships) {
+          const roles = rolesBySchool.get(membership.schoolId) ?? new Set<string>();
+          roles.add(membership.role);
+          rolesBySchool.set(membership.schoolId, roles);
+        }
+        const conflictingSchoolIds = [...rolesBySchool.entries()]
+          .filter(([, roles]) => roles.has('school_admin') && roles.has('school_accountant'))
+          .map(([schoolId]) => schoolId);
+        if (conflictingSchoolIds.length > 0) {
+          if (!(await this.lockSchools(tx, conflictingSchoolIds))) {
+            return { status: 'conflicting_active_role' };
+          }
+          return { status: 'conflicting_active_role' };
+        }
       }
 
       let previousGeneration: AccessSessionGeneration;

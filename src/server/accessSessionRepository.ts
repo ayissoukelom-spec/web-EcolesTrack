@@ -113,6 +113,17 @@ export type MembershipDeactivationResult =
   | { readonly status: 'deactivated' | 'already_inactive'; readonly revokedSessionCount: number }
   | { readonly status: 'user_not_found' | 'school_not_found' | 'membership_not_found' | 'account_not_admissible' | 'last_school_admin' };
 
+export type MembershipActivationResult =
+  | { readonly status: 'activated' | 'already_active'; readonly membershipId: number }
+  | {
+      readonly status:
+        | 'user_not_found'
+        | 'school_not_found'
+        | 'membership_not_found'
+        | 'account_not_admissible'
+        | 'conflicting_active_role';
+    };
+
 export type AccountLifecycleOperation = 'deactivate' | 'reactivate';
 
 export type AccountLifecycleTransitionResult =
@@ -127,6 +138,7 @@ export type AccountLifecycleTransitionResult =
   | { readonly status: 'invalid_state' }
   | { readonly status: 'invalid_generation' }
   | { readonly status: 'generation_exhausted' }
+  | { readonly status: 'conflicting_active_role' }
   | { readonly status: 'last_school_admin' };
 
 export interface GenerationBoundAccessSessionSnapshot {

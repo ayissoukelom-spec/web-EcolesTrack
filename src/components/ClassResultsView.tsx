@@ -110,9 +110,10 @@ const evaluationTypeLabel = (type: AvailableEvaluation['type']): string => {
 export default function ClassResultsView({ schoolsList, currentSchoolId }: ClassResultsViewProps) {
   const { role } = useAuth();
   const currentRole = role as UserRole;
+  const isSchoolOperationsRole = currentRole === 'school_admin' || currentRole === 'school_accountant';
   const [mode, setMode] = useState<'official' | 'custom'>('official');
   const [schoolId, setSchoolId] = useState(
-    currentRole === 'school_admin' && currentSchoolId != null ? String(currentSchoolId) : '',
+    isSchoolOperationsRole && currentSchoolId != null ? String(currentSchoolId) : '',
   );
   const [classes, setClasses] = useState<ResultClass[]>([]);
   const [classId, setClassId] = useState('');
@@ -145,7 +146,7 @@ export default function ClassResultsView({ schoolsList, currentSchoolId }: Class
   };
 
   useEffect(() => {
-    if (currentRole === 'school_admin' && currentSchoolId != null) {
+    if (isSchoolOperationsRole && currentSchoolId != null) {
       setSchoolId(String(currentSchoolId));
     } else if (currentRole === 'super_admin') {
       setSchoolId('');
@@ -345,12 +346,12 @@ export default function ClassResultsView({ schoolsList, currentSchoolId }: Class
   const selectedSchool = schoolsList.find((school) => String(school.id) === schoolId);
   const hasAnyAverage = ranking?.students.some((student) => student.average != null) ?? false;
   const officialRankingIsCurrent = mode === 'official'
-    && (currentRole !== 'school_admin' || String(currentSchoolId ?? '') === schoolId)
+    && (!isSchoolOperationsRole || String(currentSchoolId ?? '') === schoolId)
     && ranking?.school.id === Number(schoolId)
     && ranking.class.id === Number(classId)
     && ranking.period.id === Number(periodId);
   const customRankingIsCurrent = mode === 'custom'
-    && (currentRole !== 'school_admin' || String(currentSchoolId ?? '') === schoolId)
+    && (!isSchoolOperationsRole || String(currentSchoolId ?? '') === schoolId)
     && customRanking?.school.id === Number(schoolId)
     && customRanking.class.id === Number(classId)
     && customRanking.period.id === Number(periodId)

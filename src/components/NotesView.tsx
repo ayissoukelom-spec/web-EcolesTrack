@@ -77,6 +77,7 @@ export default function NotesView({
 }: NotesViewProps) {
   const { role, activeSchoolId } = useAuth();
   const userRole = role as UserRole;
+  const isSchoolOperationsRole = userRole === 'school_admin' || userRole === 'school_accountant';
   const currentSchoolId = activeSchoolId;
   const sortedClasses = useMemo(() => sortClasses(classesList || []), [classesList]);
   const isApprovedForSchool = (cls: Class, schoolId?: number | null) => isClassVisibleToSchool(cls, schoolId);
@@ -88,7 +89,7 @@ export default function NotesView({
 
   const availableClasses = useMemo(() => userRole === 'teacher'
     ? sortedClasses.filter((c) => readableTeacherClassIds.has(Number(c.id)))
-    : userRole === 'school_admin'
+    : isSchoolOperationsRole
       ? sortedClasses.filter((c) => isApprovedForSchool(c, currentSchoolId))
       : sortedClasses, [userRole, readableTeacherClassIds, sortedClasses, currentSchoolId]);
   const filteredClasses = useMemo(() => schoolFilterId
@@ -257,13 +258,13 @@ export default function NotesView({
         return;
       }
 
-      if (userRole === 'school_admin' && isGradeModified(existingGrade)) {
+      if (isSchoolOperationsRole && isGradeModified(existingGrade)) {
         setSaveStatus('Cette note a déjà été modifiée. Veuillez contacter le super admin pour toute correction supplémentaire.');
         setTimeout(() => setSaveStatus(null), 4000);
         return;
       }
 
-      if (userRole === 'school_admin' || userRole === 'super_admin') {
+      if (isSchoolOperationsRole || userRole === 'super_admin') {
         if (onUpdateGrade && existingGrade.id != null) {
           try {
             await onUpdateGrade({
@@ -347,7 +348,7 @@ export default function NotesView({
       const input = gradeInputValues[student.id];
       if (!input || input.score === undefined || input.score === '') continue;
 
-      if (existingGrade && (userRole === 'teacher' || (userRole === 'school_admin' && isGradeModified(existingGrade)))) {
+      if (existingGrade && (userRole === 'teacher' || (isSchoolOperationsRole && isGradeModified(existingGrade)))) {
         continue;
       }
 
@@ -479,7 +480,7 @@ export default function NotesView({
 
     if (userRole === 'teacher') return !isEvaluationCompleted(ev);
 
-    if (userRole === 'school_admin') {
+    if (isSchoolOperationsRole) {
       return !isSchoolAdminEvaluationLocked(ev)
         && !isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
     }
@@ -618,7 +619,7 @@ export default function NotesView({
         return isEvaluationCompleted(ev);
       }
 
-      if (userRole === 'school_admin') {
+      if (isSchoolOperationsRole) {
         return isSchoolAdminEvaluationLocked(ev)
           || isEvaluationArchivedForSchoolAdminByAge(ev, studentsList, gradesList);
       }
@@ -742,7 +743,7 @@ export default function NotesView({
         </div>
 
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-          {(userRole === 'school_admin' || userRole === 'super_admin') && (
+          {(isSchoolOperationsRole || userRole === 'super_admin') && (
             <button
               type="button"
               aria-expanded={isGroupedPublicationFormOpen}
@@ -754,7 +755,7 @@ export default function NotesView({
               {isGroupedPublicationFormOpen ? 'Fermer Publication groupée' : 'Publication groupée'}
             </button>
           )}
-          {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+          {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) && (
             <button
               type="button"
               onClick={() => {
@@ -782,7 +783,7 @@ export default function NotesView({
         </div>
       </div>
 
-      {(userRole === 'school_admin' || userRole === 'super_admin') && isGroupedPublicationFormOpen && (
+      {(isSchoolOperationsRole || userRole === 'super_admin') && isGroupedPublicationFormOpen && (
         <div id="grouped-evaluation-publication-panel">
           <GroupedEvaluationPublicationForm
             role={userRole}
@@ -809,7 +810,7 @@ export default function NotesView({
         </div>
       )}
 
-      {['super_admin', 'school_admin', 'teacher'].includes(userRole) && overdueEvaluationRows.length > 0 && (
+      {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) && overdueEvaluationRows.length > 0 && (
         <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
             <div>
@@ -1141,7 +1142,7 @@ export default function NotesView({
             <option value="">-- Sélectionnez un devoir --</option>
             {filteredSelectableEvaluations.map((ev) => (
               <option key={ev.id} value={ev.id}>
-                {ev.subject} — {ev.title} ({ev.date}){userRole === 'school_admin' && isEvaluationCompleted(ev) ? ' — Archivée' : ''}
+                {ev.subject} — {ev.title} ({ev.date}){isSchoolOperationsRole && isEvaluationCompleted(ev) ? ' — Archivée' : ''}
               </option>
             ))}
           </select>
@@ -1291,7 +1292,7 @@ export default function NotesView({
                       <>
                         <th className="px-6 py-4">Note au devoir ({scoreScaleSuffix})</th>
                         <th className="px-6 py-4">Appréciation / Remarques</th>
-                        {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+                        {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) && (
                           <th className="px-6 py-4 text-right">Actions</th>
                         )}
                       </>
@@ -1306,8 +1307,8 @@ export default function NotesView({
                       const existingGrade = gradesList.find(
                         (g) => String(g.evaluationId) === selectedEvalId && g.studentId === st.id
                       );
-                      const canEditGrade = ['super_admin', 'school_admin', 'teacher'].includes(userRole);
-                      const isLockedBySchoolAdmin = userRole === 'school_admin' ? (existingGrade ? isGradeModified(existingGrade) : false) : false;
+                      const canEditGrade = ['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole);
+                      const isLockedBySchoolAdmin = isSchoolOperationsRole ? (existingGrade ? isGradeModified(existingGrade) : false) : false;
                       const isEligible = eligibleStudentsForSelectedEval.some((s) => s.id === st.id);
                       const isIneligibleWithGrade = !isEligible && existingGrade;
                       const existingGradeBand = existingGrade ? getGradeBand(existingGrade.score, currentEvaluation?.maxScore ?? 20) : 'unknown';
@@ -1326,7 +1327,7 @@ export default function NotesView({
                         {isEvaluationSelected && (
                           <>
                             <td className="px-6 py-4">
-                              {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
+                              {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) ? (
                                 existingGrade && userRole === 'teacher' ? (
                                   <div className="text-xs space-y-1">
                                     <div className={`inline-block font-mono font-bold px-2 py-1 rounded-lg ${existingGradeClass}`}>
@@ -1388,7 +1389,7 @@ export default function NotesView({
                             </td>
 
                             <td className="px-6 py-4">
-                              {['super_admin', 'school_admin', 'teacher'].includes(userRole) ? (
+                              {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) ? (
                                 existingGrade && userRole === 'teacher' ? (
                                   <div className="text-xs text-slate-500 italic">Remarque enregistrée</div>
                                 ) : isEligible ? (
@@ -1419,7 +1420,7 @@ export default function NotesView({
                               )}
                             </td>
 
-                            {['super_admin', 'school_admin', 'teacher'].includes(userRole) && (
+                            {['super_admin', 'school_admin', 'school_accountant', 'teacher'].includes(userRole) && (
                               <td className="px-6 py-4 text-right">
                                 {existingGrade ? (
                                   userRole === 'teacher' ? (
