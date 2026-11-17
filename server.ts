@@ -1353,7 +1353,6 @@ async function isApprovedClassForSchool(
   const [cls] = await executor.select().from(classes).where(eq(classes.id, classId));
   if (!cls) return false;
   if (cls.schoolId === targetSchoolId) return true;
-  if (cls.schoolId != null) return false;
   const [schoolClass] = await executor.select().from(schoolClasses).where(
     and(
       eq(schoolClasses.classId, classId),
@@ -10605,7 +10604,7 @@ export async function createApp() {
 
         return classRows.map((klass: any) => {
           const assignment = assignmentByClassId.get(klass.id);
-          if (klass.schoolId == null) {
+          if (klass.schoolId == null || (schoolId != null && klass.schoolId !== schoolId)) {
             return {
               ...klass,
               teacherId: assignment?.teacherId ?? null,
@@ -10657,7 +10656,7 @@ export async function createApp() {
           }))
           .filter((klass) => (
             klass.schoolId === targetSchoolId
-            || (klass.schoolId == null && klass.status === 'approved')
+            || klass.status === 'approved'
           ));
 
         const classesForTeacher = await resolveClassesForSchool(scopedAssignedClasses, targetSchoolId);
@@ -10729,7 +10728,10 @@ export async function createApp() {
 
           query = query.where(inArray(classes.id, childClassIds)) as any;
         } else if (actor.schoolId != null) {
-          query = query.where(or(eq(classes.schoolId, actor.schoolId), sql`${classes.schoolId} IS NULL`)) as any;
+          query = query.where(or(
+            eq(classes.schoolId, actor.schoolId),
+            sql`${schoolClasses.id} IS NOT NULL`,
+          )) as any;
         } else {
           return res.json([]);
         }
@@ -10737,7 +10739,7 @@ export async function createApp() {
         query = query
           .where(or(
             eq(classes.schoolId, schoolIdParam),
-            sql`${classes.schoolId} IS NULL AND ${schoolClasses.id} IS NOT NULL`,
+            sql`${schoolClasses.id} IS NOT NULL`,
           )) as any;
       }
 
@@ -10784,11 +10786,10 @@ export async function createApp() {
           status: statusMap.get(klass.id) ?? (klass.schoolId === targetSchoolId ? 'approved' : 'pending'),
         }));
 
-        // Only return classes that belong to the requested school OR global classes
-        // that have been approved for that school. This keeps the client-side
-        // schoolId-based filters working without frontend changes.
+        // A class may be shared with a school even when its owning school differs.
+        // The school-scoped join above admits only an approved association.
         result = result.filter((klass) => (
-          klass.schoolId === targetSchoolId || (klass.schoolId == null && klass.status === 'approved')
+          klass.schoolId === targetSchoolId || klass.status === 'approved'
         ));
 
         if (approvedOnly) {
@@ -12690,10 +12691,7 @@ export async function createApp() {
           eq(students.classId, classes.id),
           or(
             eq(classes.schoolId, students.schoolId),
-            and(
-              isNull(classes.schoolId),
-              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${students.schoolId} AND sc.status = 'approved')`,
-            ),
+            sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${students.schoolId} AND sc.status = 'approved')`,
           ),
         ))
         .leftJoin(academicYears, and(
@@ -18244,16 +18242,12 @@ export async function createApp() {
           eq(evaluations.schoolId, requestedSchoolId),
           or(
             eq(classes.schoolId, requestedSchoolId),
-            and(
-              sql`${classes.schoolId} IS NULL`,
-              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${requestedSchoolId} AND sc.status = 'approved')`,
-            ),
+            sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${requestedSchoolId} AND sc.status = 'approved')`,
           ),
         )) as any;
       } else if (actor.role !== 'super_admin') {
-        // School admin, teacher, and others see only their school's evaluations.
-        // Also allow global classes (classes.schoolId IS NULL) that have been
-        // explicitly approved for this school via `school_classes`.
+        // School roles see only their school's evaluations and classes approved
+        // for that school, including classes owned by another school.
         if (actor.role === 'parent') {
           const childStudentIds = await getParentChildStudentIds(actor.id, actor.schoolId);
           if (childStudentIds.length === 0) {
@@ -18283,10 +18277,7 @@ export async function createApp() {
             eq(evaluations.schoolId, actor.schoolId),
             or(
               eq(classes.schoolId, actor.schoolId),
-              and(
-                sql`${classes.schoolId} IS NULL`,
-                sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${actor.schoolId} AND sc.status = 'approved')`
-              )
+              sql`EXISTS (SELECT 1 FROM school_classes sc WHERE sc.class_id = ${classes.id} AND sc.school_id = ${actor.schoolId} AND sc.status = 'approved')`
             ),
           )) as any;
         } else {

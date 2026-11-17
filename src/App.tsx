@@ -168,17 +168,81 @@ function isAuditEventDeactivationSummary(value: unknown): value is AuditEventDea
     && (typeof value.createdAt === 'string' || value.createdAt === null);
 }
 
+type SuperAdminSchoolDataSnapshot = {
+  stats: {
+    totalStudents: number;
+    totalAbsences: number;
+    totalClasses: number;
+    totalTeachers: number;
+    attendanceRate: number;
+    absenceStatusCounts: {
+      justified: number;
+      unjustified: number;
+      pending: number;
+      declared: number;
+    };
+  };
+  absenceDeclarationStats: {
+    total: number;
+    received: number;
+    accepted: number;
+    refused: number;
+    cancelled: number;
+    notRealized: number;
+  };
+  absenceJustificationStats: {
+    total: number;
+    pending: number;
+    accepted: number;
+    refused: number;
+  };
+  chartData: Array<{ name: string; taux: number }>;
+  ageStatsByClass: ClassAgeStats[];
+  ageStatsAsOf: string;
+  years: AcademicYear[];
+  classes: Class[];
+  teachers: Teacher[];
+  students: Student[];
+  parents: Parent[];
+  absences: any[];
+  absenceDeclarations: AbsenceDeclaration[];
+  lateArrivalJustifications: LateArrivalJustificationListItem[];
+  absenceControls: any[];
+  lateArrivals: any[];
+  recentAbsences: any[];
+  evaluations: any[];
+  grades: any[];
+  recentGrades: any[];
+  notifications: SystemNotification[];
+  subjects: any[];
+  approvedSubjects: any[];
+};
+
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
   const { justifyAbsence, recordAbsenceControl } = useAbsences();
   const { lateArrivals: lateArrivalsList, setLateArrivals, addLateArrival } = useLateArrivals();
   const currentRole = role as UserRole;
   const currentSchoolId = activeSchoolId;
+  const authContextScope = `${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${currentRole}`;
   const [superAdminSchoolFilterId, setSuperAdminSchoolFilterId] = useState<number | null>(null);
   const previousSuperAdminSchoolFilterIdRef = useRef(superAdminSchoolFilterId);
   const dataRefreshSequenceRef = useRef(0);
   const dataScopeRef = useRef('');
-  dataScopeRef.current = `${currentRole}:${currentRole === 'super_admin' ? superAdminSchoolFilterId ?? 'all' : currentSchoolId ?? 'none'}`;
+  const superAdminSchoolDataCacheRef = useRef(new Map<string, SuperAdminSchoolDataSnapshot>());
+  const cacheRefreshInFlightRef = useRef(new Map<string, number>());
+  const cacheableDataScopeRef = useRef<string | null>(null);
+  dataScopeRef.current = `${authContextScope}:${currentRole}:${currentRole === 'super_admin' ? superAdminSchoolFilterId ?? 'all' : currentSchoolId ?? 'none'}`;
+  const getSuperAdminSchoolDataScope = (schoolId: number | null) => (
+    `${authContextScope}:super_admin:${schoolId ?? 'all'}`
+  );
+  const invalidateSuperAdminSchoolDataCache = (scope = dataScopeRef.current) => {
+    superAdminSchoolDataCacheRef.current.delete(scope);
+  };
+  useEffect(() => {
+    superAdminSchoolDataCacheRef.current.clear();
+    cacheRefreshInFlightRef.current.clear();
+  }, [authContextScope]);
   const [activeTab, setActiveTab] = useState('tableau-de-bord');
   const [expandedNavigationGroups, setExpandedNavigationGroups] = useState({
     absences: true,
@@ -254,6 +318,7 @@ export default function App() {
   }, []);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadedDataScope, setLoadedDataScope] = useState('');
+  const [schoolDataCacheRevision, setSchoolDataCacheRevision] = useState(0);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
   const importCredentialsSessionRef = useRef(`${token ?? ''}:${authenticatedUser?.id ?? ''}:${authenticatedUser?.uid ?? ''}:${role}`);
@@ -280,6 +345,9 @@ export default function App() {
       const schoolId = Number.isInteger(detail?.schoolId) ? Number(detail.schoolId) : activeSchoolId;
       if (schoolId != null && suspendedSchoolNoticeRef.current === schoolId) return;
       suspendedSchoolNoticeRef.current = schoolId;
+      if (schoolId != null) {
+        superAdminSchoolDataCacheRef.current.delete(getSuperAdminSchoolDataScope(schoolId));
+      }
       setSuspendedSchoolId(schoolId);
       setSchoolsList([]);
       setYearsList([]);
@@ -347,7 +415,7 @@ export default function App() {
     };
     window.addEventListener('schoolSuspended', handleSchoolSuspended);
     return () => window.removeEventListener('schoolSuspended', handleSchoolSuspended);
-  }, [activeSchoolId, setLateArrivals]);
+  }, [activeSchoolId, authContextScope, setLateArrivals]);
 
   // States loaded from backend
   const [stats, setStats] = useState({
@@ -441,6 +509,102 @@ export default function App() {
   const parentFocusCheckInFlightRef = useRef(false);
 
   const currentTeacherProfile = findTeacherProfileFromSimulatedUser(currentRole, authenticatedUser, teachersList, usersList);
+
+  const applySuperAdminSchoolDataSnapshot = (
+    snapshot: SuperAdminSchoolDataSnapshot,
+    scope: string,
+  ) => {
+    snapshot.notifications.forEach((notification) => {
+      processedNotificationIdsRef.current.add(notification.id);
+    });
+    setStats(snapshot.stats);
+    setAbsenceDeclarationStats(snapshot.absenceDeclarationStats);
+    setAbsenceJustificationStats(snapshot.absenceJustificationStats);
+    setChartData(snapshot.chartData);
+    setAgeStatsByClass(snapshot.ageStatsByClass);
+    setAgeStatsAsOf(snapshot.ageStatsAsOf);
+    setYearsList(snapshot.years);
+    setClassesList(snapshot.classes);
+    setTeachersList(snapshot.teachers);
+    setStudentsList(snapshot.students);
+    setParentsList(snapshot.parents);
+    setAbsencesList(snapshot.absences);
+    setAbsenceDeclarationsList(snapshot.absenceDeclarations);
+    setLateArrivalJustificationsList(snapshot.lateArrivalJustifications);
+    setAbsenceControlsList(snapshot.absenceControls);
+    setLateArrivals(snapshot.lateArrivals);
+    setSummaryRecentAbsences(snapshot.recentAbsences);
+    setEvaluationsList(snapshot.evaluations);
+    setGradesList(snapshot.grades);
+    setSummaryRecentGrades(snapshot.recentGrades);
+    setNotificationsList(snapshot.notifications);
+    setSubjectsList(snapshot.subjects);
+    setApprovedSubjectsList(snapshot.approvedSubjects);
+    setLoadedDataScope(scope);
+  };
+
+  useEffect(() => {
+    if (
+      currentRole !== 'super_admin'
+      || suspendedSchoolId != null
+      || loadedDataScope !== dataScopeRef.current
+      || cacheRefreshInFlightRef.current.has(dataScopeRef.current)
+      || cacheableDataScopeRef.current !== dataScopeRef.current
+    ) return;
+
+    superAdminSchoolDataCacheRef.current.set(dataScopeRef.current, {
+      stats,
+      absenceDeclarationStats,
+      absenceJustificationStats,
+      chartData,
+      ageStatsByClass,
+      ageStatsAsOf,
+      years: yearsList,
+      classes: classesList,
+      teachers: teachersList,
+      students: studentsList,
+      parents: parentsList,
+      absences: absencesList,
+      absenceDeclarations: absenceDeclarationsList,
+      lateArrivalJustifications: lateArrivalJustificationsList,
+      absenceControls: absenceControlsList,
+      lateArrivals: lateArrivalsList,
+      recentAbsences: summaryRecentAbsences,
+      evaluations: evaluationsList,
+      grades: gradesList,
+      recentGrades: summaryRecentGrades,
+      notifications: notificationsList,
+      subjects: subjectsList,
+      approvedSubjects: approvedSubjectsList,
+    });
+  }, [
+    absenceControlsList,
+    absenceDeclarationStats,
+    absenceDeclarationsList,
+    absenceJustificationStats,
+    absencesList,
+    ageStatsAsOf,
+    ageStatsByClass,
+    approvedSubjectsList,
+    chartData,
+    classesList,
+    currentRole,
+    gradesList,
+    lateArrivalJustificationsList,
+    lateArrivalsList,
+    loadedDataScope,
+    notificationsList,
+    parentsList,
+    stats,
+    studentsList,
+    subjectsList,
+    summaryRecentAbsences,
+    summaryRecentGrades,
+    teachersList,
+    yearsList,
+    suspendedSchoolId,
+    schoolDataCacheRevision,
+  ]);
 
   const currentTeacherTeachingAssignments = (currentTeacherProfile?.teachingAssignments || [])
     .filter((assignment) => assignment.isActive === true && assignment.schoolId === currentSchoolId);
@@ -545,9 +709,15 @@ export default function App() {
 
     const requestId = ++dataRefreshSequenceRef.current;
     const requestScope = dataScopeRef.current;
+    if (currentRole === 'super_admin') {
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      cacheRefreshInFlightRef.current.set(requestScope, requestId);
+      cacheableDataScopeRef.current = null;
+    }
     const isCurrentRequest = () => requestId === dataRefreshSequenceRef.current
       && requestScope === dataScopeRef.current;
     const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
+    let cacheableResult = false;
     if (showSpinner) setIsSyncing(true);
     setErrorMsg(null);
     try {
@@ -675,6 +845,9 @@ export default function App() {
           : Promise.resolve([] as LateArrivalJustificationListItem[]),
       ]);
       if (!isCurrentRequest()) return;
+      cacheableResult = currentRole === 'super_admin'
+        && results.every(Array.isArray)
+        && Array.isArray(lateArrivalJustifications);
 
       const map = Object.fromEntries(endpoints.map((e, i) => [e, results[i]]));
       logTeachersPayload('RAW_API_RESPONSE_/api/teachers', results[endpoints.indexOf('/api/teachers')]);
@@ -754,6 +927,7 @@ export default function App() {
         setAuditPage(null);
       }
       if (!isCurrentRequest()) return;
+      cacheableDataScopeRef.current = cacheableResult ? requestScope : null;
       setLoadedDataScope(requestScope);
     } catch (err: any) {
       if (!isCurrentRequest()) return;
@@ -765,6 +939,15 @@ export default function App() {
       console.warn('[students-load] keeping existing student list because the refresh failed.', err);
     } finally {
       if (isCurrentRequest()) setIsSyncing(false);
+      if (
+        currentRole === 'super_admin'
+        && cacheRefreshInFlightRef.current.get(requestScope) === requestId
+      ) {
+        cacheRefreshInFlightRef.current.delete(requestScope);
+        if (isCurrentRequest() && cacheableResult) {
+          setSchoolDataCacheRevision((revision) => revision + 1);
+        }
+      }
     }
   };
 
@@ -773,6 +956,11 @@ export default function App() {
 
     const requestId = ++dataRefreshSequenceRef.current;
     const requestScope = dataScopeRef.current;
+    if (superAdminSchoolDataCacheRef.current.has(requestScope)) {
+      return;
+    }
+    cacheableDataScopeRef.current = null;
+    cacheRefreshInFlightRef.current.delete(requestScope);
     const isCurrentRequest = () => requestId === dataRefreshSequenceRef.current
       && requestScope === dataScopeRef.current;
     const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
@@ -798,7 +986,6 @@ export default function App() {
       { key: 'approvedSubjects', url: withSchoolFilter('/api/subjects?approvedOnly=true') },
     ];
 
-    setIsSyncing(false);
     setErrorMsg(null);
     try {
       const [summary, results, lateArrivalJustifications] = await Promise.all([
@@ -851,6 +1038,9 @@ export default function App() {
       setAbsenceControlsList(map.absenceControls);
       setEvaluationsList(map.evaluations);
       setGradesList(map.grades);
+      map.notifications.forEach((notification: SystemNotification) => {
+        processedNotificationIdsRef.current.add(notification.id);
+      });
       setNotificationsList(map.notifications);
       setSubjectsList(map.subjects);
       setApprovedSubjectsList(map.approvedSubjects);
@@ -858,6 +1048,7 @@ export default function App() {
       setLateArrivalJustificationsList(
         lateArrivalJustifications.filter((item) => selectedSchoolLateArrivalIds.has(item.lateArrival.id)),
       );
+      cacheableDataScopeRef.current = requestScope;
       setLoadedDataScope(requestScope);
     } catch (error: any) {
       if (!isCurrentRequest()) return;
@@ -866,8 +1057,61 @@ export default function App() {
     }
   };
 
+  const handleSuperAdminSchoolFilterChange = (schoolId: number | null) => {
+    if (schoolId === superAdminSchoolFilterId) return;
+
+    const nextScope = getSuperAdminSchoolDataScope(schoolId);
+    const cachedSnapshot = superAdminSchoolDataCacheRef.current.get(nextScope);
+    dataRefreshSequenceRef.current += 1;
+    absenceRefreshSequenceRef.current.begin();
+    setSuperAdminSchoolFilterId(schoolId);
+    setIsSyncing(false);
+    setErrorMsg(null);
+
+    if (cachedSnapshot) {
+      applySuperAdminSchoolDataSnapshot(cachedSnapshot, nextScope);
+      return;
+    }
+
+    setStats({
+      totalStudents: 0,
+      totalAbsences: 0,
+      totalClasses: 0,
+      totalTeachers: 0,
+      attendanceRate: 0,
+      absenceStatusCounts: { justified: 0, unjustified: 0, pending: 0, declared: 0 },
+    });
+    setAbsenceDeclarationStats({ total: 0, received: 0, accepted: 0, refused: 0, cancelled: 0, notRealized: 0 });
+    setAbsenceJustificationStats({ total: 0, pending: 0, accepted: 0, refused: 0 });
+    setSummaryRecentGrades([]);
+    setSummaryRecentAbsences([]);
+    setChartData([]);
+    setAgeStatsByClass([]);
+    setAgeStatsAsOf('');
+    setYearsList([]);
+    setClassesList([]);
+    setTeachersList([]);
+    setStudentsList([]);
+    setParentsList([]);
+    setAbsencesList([]);
+    setAbsenceDeclarationsList([]);
+    setLateArrivalJustificationsList([]);
+    setAbsenceControlsList([]);
+    setLateArrivals([]);
+    setEvaluationsList([]);
+    setGradesList([]);
+    setNotificationsList([]);
+    setSubjectsList([]);
+    setApprovedSubjectsList([]);
+  };
+
   const refreshGrades = async () => {
-    const grades = await apiFetch('/api/grades');
+    const requestScope = dataScopeRef.current;
+    const endpoint = currentRole === 'super_admin' && superAdminSchoolFilterId != null
+      ? `/api/grades?schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`
+      : '/api/grades';
+    const grades = await apiFetch(endpoint);
+    if (requestScope !== dataScopeRef.current) return;
     if (Array.isArray(grades)) setGradesList(grades);
   };
 
@@ -886,7 +1130,7 @@ export default function App() {
     if (currentRole === 'super_admin' || activeSchoolId != null) {
       fetchAllData();
     }
-  }, [activeSchoolId, currentRole, role]);
+  }, [activeSchoolId, authContextScope, currentRole, role]);
 
   useEffect(() => {
     if (currentRole !== 'super_admin') {
@@ -895,6 +1139,11 @@ export default function App() {
     }
     if (previousSuperAdminSchoolFilterIdRef.current === superAdminSchoolFilterId) return;
     previousSuperAdminSchoolFilterIdRef.current = superAdminSchoolFilterId;
+    if (superAdminSchoolDataCacheRef.current.has(dataScopeRef.current)) {
+      setLoadedDataScope(dataScopeRef.current);
+      setIsSyncing(false);
+      return;
+    }
     void refreshSuperAdminSchoolData();
   }, [currentRole, superAdminSchoolFilterId]);
 
@@ -1307,13 +1556,18 @@ export default function App() {
 
   const handleAddParent = async (data: { name: string; email?: string | null; phone: string; address: string; schoolId?: number; studentId?: number; gender?: string }) => {
     try {
+      const requestScope = dataScopeRef.current;
+      const parentsEndpoint = currentRole === 'super_admin' && superAdminSchoolFilterId != null
+        ? `/api/parents?schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`
+        : '/api/parents';
       const created = await apiFetch('/api/parents', {
         method: 'POST',
         body: JSON.stringify(data),
       });
+      invalidateSuperAdminSchoolDataCache(requestScope);
       // Refresh only parent list to avoid closing/reinitializing the student form
-      const parents = await apiFetch('/api/parents');
-      setParentsList(parents);
+      const parents = await apiFetch(parentsEndpoint);
+      if (requestScope === dataScopeRef.current && Array.isArray(parents)) setParentsList(parents);
       return created;
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -1558,21 +1812,30 @@ export default function App() {
   };
 
   const refreshApprovedSubjects = async () => {
+    const requestScope = dataScopeRef.current;
     try {
-      const approved = await apiFetch('/api/subjects?approvedOnly=true');
-      if (Array.isArray(approved)) setApprovedSubjectsList(approved);
+      const endpoint = currentRole === 'super_admin' && superAdminSchoolFilterId != null
+        ? `/api/subjects?approvedOnly=true&schoolId=${encodeURIComponent(superAdminSchoolFilterId)}`
+        : '/api/subjects?approvedOnly=true';
+      const approved = await apiFetch(endpoint);
+      if (requestScope === dataScopeRef.current && Array.isArray(approved)) {
+        setApprovedSubjectsList(approved);
+      }
     } catch (err: any) {
+      if (currentRole === 'super_admin') invalidateSuperAdminSchoolDataCache(requestScope);
       console.warn('Unable to refresh approved subject list:', err);
     }
   };
 
   const handleAddGrade = async (data: { evaluationId: number; studentId: number; score: string; remarks: string }) => {
     try {
+      const requestScope = dataScopeRef.current;
       await apiFetch('/api/grades', {
         method: 'POST',
         body: JSON.stringify(data),
       });
-      await refreshGrades();
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope === dataScopeRef.current) await refreshGrades();
     } catch (err: any) {
       setErrorMsg(err.message);
       throw err;
@@ -1581,10 +1844,13 @@ export default function App() {
 
   const handleAddSubject = async (data: { name: string; code?: string; schoolId?: number; subjectTypeId?: number | null }) => {
     try {
+      const requestScope = dataScopeRef.current;
       const createdSubject = await apiFetch('/api/subjects', {
         method: 'POST',
         body: JSON.stringify(data),
       });
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope !== dataScopeRef.current) return;
       setSubjectsList((prev) => [...prev, createdSubject]);
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -1594,10 +1860,13 @@ export default function App() {
 
   const handleUpdateSubject = async (id: number, data: { name?: string; code?: string; subjectTypeId?: number | null }) => {
     try {
+      const requestScope = dataScopeRef.current;
       const updatedSubject = await apiFetch(`/api/subjects/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),
       });
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope !== dataScopeRef.current) return;
       setSubjectsList((prev) =>
         prev.map((s) => (s.id === id ? updatedSubject : s))
       );
@@ -1627,9 +1896,12 @@ export default function App() {
 
   const handleDeleteSubject = async (id: number) => {
     try {
+      const requestScope = dataScopeRef.current;
       await apiFetch(`/api/subjects/${id}`, {
         method: 'DELETE',
       });
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope !== dataScopeRef.current) return;
       setSubjectsList((prev) => prev.filter((s) => s.id !== id));
       await refreshApprovedSubjects();
     } catch (err: any) {
@@ -1640,9 +1912,12 @@ export default function App() {
 
   const handleApproveSubject = async (id: number) => {
     try {
+      const requestScope = dataScopeRef.current;
       const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/approve`, { method: 'POST' });
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope !== dataScopeRef.current) return;
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'approved' } : s)));
       await refreshApprovedSubjects();
     } catch (err: any) {
@@ -1653,9 +1928,12 @@ export default function App() {
 
   const handleRejectSubject = async (id: number) => {
     try {
+      const requestScope = dataScopeRef.current;
       const schoolId = currentSchoolId;
       if (!schoolId) throw new Error('Aucun établissement sélectionné');
       await apiFetch(`/api/schools/${schoolId}/subjects/${id}/reject`, { method: 'POST' });
+      invalidateSuperAdminSchoolDataCache(requestScope);
+      if (requestScope !== dataScopeRef.current) return;
       setSubjectsList((prev) => prev.map((s) => (s.id === id ? { ...s, status: 'rejected' } : s)));
       await refreshApprovedSubjects();
     } catch (err: any) {
@@ -1809,6 +2087,9 @@ export default function App() {
     || activeTab === 'teacher-control-regularizations')
     && ['teacher', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole);
   const canAccessAccounting = ['super_admin', 'school_admin', 'school_accountant'].includes(currentRole);
+  const isSuperAdminSchoolScopeTransition = currentRole === 'super_admin'
+    && loadedDataScope !== ''
+    && loadedDataScope !== dataScopeRef.current;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -2256,7 +2537,7 @@ export default function App() {
                   schoolsList={schoolsList}
                   teachersList={teachersList}
                   superAdminSchoolFilterId={superAdminSchoolFilterId}
-                  onSuperAdminSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSuperAdminSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                   viewMode={activeTab === 'teacher-control-regularizations' ? 'regularizations' : 'full'}
                   initialTab={activeTab === 'teacher-control-regularizations' ? 'requests' : teacherControlRequestedTab}
                   onTabChange={handleTeacherControlTabChange}
@@ -2270,7 +2551,7 @@ export default function App() {
           )}
 
           {/* LOADING SCREEN */}
-          {(isSyncing || loadedDataScope !== dataScopeRef.current) && (
+          {(isSyncing || (loadedDataScope !== dataScopeRef.current && !isSuperAdminSchoolScopeTransition)) && (
             <div className="bg-white/60 p-12 text-center rounded-2xl border border-slate-50 shadow-sm flex flex-col justify-center items-center gap-3 my-12">
               {isSyncing
                 ? <RefreshCw className="h-10 w-10 text-indigo-600 animate-spin" />
@@ -2282,7 +2563,7 @@ export default function App() {
           )}
 
           {/* DYNAMIC RENDERING PANEL BASED ON ACTIVE TABS */}
-          {!isSyncing && loadedDataScope === dataScopeRef.current && !isTeacherControlDestination && (
+          {!isSyncing && (loadedDataScope === dataScopeRef.current || isSuperAdminSchoolScopeTransition) && !isTeacherControlDestination && (
             <div className="bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in" id="content-card">
               {currentRole === 'super_admin' && (
                 <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
@@ -2292,7 +2573,7 @@ export default function App() {
                   <select
                     id="global-school-filter"
                     value={superAdminSchoolFilterId ?? ''}
-                    onChange={(event) => setSuperAdminSchoolFilterId(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => handleSuperAdminSchoolFilterChange(event.target.value ? Number(event.target.value) : null)}
                     className="min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                   >
                     <option value="">Toutes les écoles</option>
@@ -2302,6 +2583,12 @@ export default function App() {
                   </select>
                 </div>
               )}
+              {isSuperAdminSchoolScopeTransition && activeTab !== 'audit' && !errorMsg && (
+                <p className="mb-4 text-xs text-slate-500" role="status">
+                  Actualisation des données de l’établissement…
+                </p>
+              )}
+              <div className={isSuperAdminSchoolScopeTransition && activeTab !== 'audit' ? 'hidden' : 'contents'}>
               {activeTab === 'tableau-de-bord' && (
                 <DashboardView
                   stats={stats}
@@ -2375,7 +2662,7 @@ export default function App() {
                   onRejectClass={handleRejectClass}
                   currentSchoolId={currentSchoolId}
                   schoolFilterId={currentRole === 'super_admin' ? superAdminSchoolFilterId : null}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                   onRefreshClasses={refreshClassesForSchool}
                   />
                 </ErrorBoundary>
@@ -2452,7 +2739,8 @@ export default function App() {
                     classesList={classesList}
                     schoolsList={schoolsList}
                     schoolFilterId={currentRole === 'super_admin' ? superAdminSchoolFilterId : null}
-                    onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                    dataReady={loadedDataScope === dataScopeRef.current}
+                    onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                     teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
                     teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
                     approvedSubjectsList={approvedSubjectsList}
@@ -2473,7 +2761,7 @@ export default function App() {
                   classesList={classesList}
                   schoolsList={schoolsList}
                   schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                   teacherHomeroomClassIds={currentRole === 'teacher' ? currentTeacherHomeroomClassIds : []}
                   teacherTeachingAssignments={currentRole === 'teacher' ? currentTeacherTeachingAssignments : []}
                   teacherId={currentRole === 'teacher' ? currentTeacherProfile?.id : undefined}
@@ -2484,7 +2772,7 @@ export default function App() {
                 <BulletinsView
                   schoolsList={schoolsList}
                   schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                   classesList={classesList}
                   studentsList={studentsList}
                   evaluationsList={activeEvaluations}
@@ -2500,7 +2788,7 @@ export default function App() {
                   userRole={currentRole}
                   currentSchoolId={currentSchoolId ?? null}
                   schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                   schools={schoolsList}
                   years={yearsList}
                   classes={classesList}
@@ -2513,7 +2801,7 @@ export default function App() {
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
                   schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                 />
               )}
 
@@ -2522,7 +2810,7 @@ export default function App() {
                   schoolsList={schoolsList}
                   currentSchoolId={currentSchoolId}
                   schoolFilterId={superAdminSchoolFilterId}
-                  onSchoolFilterChange={setSuperAdminSchoolFilterId}
+                  onSchoolFilterChange={handleSuperAdminSchoolFilterChange}
                 />
               )}
 
@@ -2560,6 +2848,7 @@ export default function App() {
                   onNotificationRead={handleNotificationRead}
                 />
               )}
+              </div>
             </div>
           )}
 

@@ -40,6 +40,7 @@ interface NotesViewProps {
   classesList: Class[];
   schoolsList: { id: number; name: string }[];
   schoolFilterId?: number | null;
+  dataReady?: boolean;
   onSchoolFilterChange?: (schoolId: number | null) => void;
   teacherHomeroomClassIds?: number[];
   teacherTeachingAssignments?: Array<{ classId: number; subjectId: number; isActive?: boolean }>;
@@ -63,6 +64,7 @@ export default function NotesView({
   classesList,
   schoolsList,
   schoolFilterId,
+  dataReady = true,
   onSchoolFilterChange,
   teacherTeachingAssignments = [],
   approvedSubjectsList = [],
@@ -139,7 +141,6 @@ export default function NotesView({
   const [isGroupedPublicationFormOpen, setIsGroupedPublicationFormOpen] = useState(false);
 
   useEffect(() => {
-    setSelectedClassId('');
     setSelectedEvalId('');
     setGradeInputValues({});
     setGradeValidationErrors({});
@@ -546,6 +547,8 @@ export default function NotesView({
   }, [pendingScrollTarget, selectedClassId, selectedEvalId]);
 
   useEffect(() => {
+    if (!dataReady) return;
+
     if (!filteredClasses.length) {
       if (selectedClassId) setSelectedClassId('');
       if (selectedEvalId) setSelectedEvalId('');
@@ -586,15 +589,18 @@ export default function NotesView({
       return;
     }
 
-    if (selectedEvalId && !filteredSelectableEvaluations.some((evaluation) => String(evaluation.id) === selectedEvalId)) {
-      setSelectedEvalId('');
+    const selectedEvaluationIsValid = selectedEvalId
+      && filteredSelectableEvaluations.some((evaluation) => String(evaluation.id) === selectedEvalId);
+    if (selectedEvalId && !selectedEvaluationIsValid) {
+      const firstSelectableEval = filteredSelectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
+      setSelectedEvalId(firstSelectableEval ? String(firstSelectableEval.id) : '');
       setGradeInputValues({});
       setGradeValidationErrors({});
+      if (firstSelectableEval) populateGradeInputsForEvaluation(String(firstSelectableEval.id));
       return;
     }
 
-    // Only auto-select if no evaluation is currently selected for this class
-    if (!selectedEvalId && !selectedEvaluationType && !selectedEvaluationSubject) {
+    if (!selectedEvalId) {
       const firstSelectableEval = filteredSelectableEvaluations.find((ev) => String(ev.classId) === selectedClassId);
       if (firstSelectableEval) {
         if (initialSelectedEvalId != null) {
@@ -617,6 +623,7 @@ export default function NotesView({
   }, [
     filteredClasses,
     filteredSelectableEvaluations,
+    dataReady,
     selectedClassId,
     selectedEvalId,
     selectedEvaluationType,
@@ -1060,7 +1067,6 @@ export default function NotesView({
               onChange={(e) => {
                 const value = e.target.value;
                 if (onSchoolFilterChange) onSchoolFilterChange(value ? parseInt(value, 10) : null);
-                setSelectedClassId('');
                 setSelectedEvalId('');
                 setGradeValidationErrors({});
               }}
@@ -1101,9 +1107,9 @@ export default function NotesView({
             </p>
           )}
 
-          {userRole === 'super_admin' && schoolFilterId != null && filteredClasses.length === 0 && (
+          {userRole === 'super_admin' && dataReady && schoolFilterId != null && filteredClasses.length === 0 && (
             <p className="mt-2 text-[11px] text-amber-600 italic">
-              Aucun résultat pour cette école. Vérifiez que les classes sont bien rattachées à l’école sélectionnée et que leur `schoolId` est correct.
+              Aucune classe n’est autorisée pour cette école. Vérifiez son rattachement approuvé dans les associations d’écoles.
             </p>
           )}
         </div>
