@@ -707,8 +707,12 @@ export default function App() {
   const fetchAllData = async (showSpinner = true) => {
     if (!role || (role !== 'super_admin' && activeSchoolId == null)) return;
 
+    const requestScope = currentRole === 'super_admin'
+      ? getSuperAdminSchoolDataScope(superAdminSchoolFilterId)
+      : `${authContextScope}:${currentRole}:${currentSchoolId ?? 'none'}`;
+    if (requestScope !== dataScopeRef.current) return;
+
     const requestId = ++dataRefreshSequenceRef.current;
-    const requestScope = dataScopeRef.current;
     if (currentRole === 'super_admin') {
       invalidateSuperAdminSchoolDataCache(requestScope);
       cacheRefreshInFlightRef.current.set(requestScope, requestId);
@@ -954,8 +958,9 @@ export default function App() {
   const refreshSuperAdminSchoolData = async () => {
     if (currentRole !== 'super_admin') return;
 
+    const requestScope = getSuperAdminSchoolDataScope(superAdminSchoolFilterId);
+    if (requestScope !== dataScopeRef.current) return;
     const requestId = ++dataRefreshSequenceRef.current;
-    const requestScope = dataScopeRef.current;
     if (superAdminSchoolDataCacheRef.current.has(requestScope)) {
       return;
     }
@@ -1239,7 +1244,7 @@ export default function App() {
     };
     window.addEventListener('focus', refreshDashboardOnFocus);
     return () => window.removeEventListener('focus', refreshDashboardOnFocus);
-  }, [currentRole]);
+  }, [activeSchoolId, authContextScope, currentRole, superAdminSchoolFilterId]);
 
   const handleRoleChange = (newRole: string) => {
     setImportResult(null);
