@@ -2056,33 +2056,6 @@ export default function TeacherControlView({
                 ))}
               </section>
             )}
-            <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3" onSubmit={applySessionFilters}>
-                <SessionFilterControls
-                  filters={filterDraft}
-                  setFilters={setFilterDraft}
-                  options={sessionFilterOptions}
-                  optionsLoading={sessionFilterOptionsLoading}
-                  resultsLoading={filterResultsLoading}
-                  optionsError={sessionFilterOptionsError}
-                  isSuperAdmin={isSuperAdmin}
-                  showAdministrativeFilters={!isTeacher}
-                  schoolsList={schoolsList}
-                  selectedSchoolId={schoolId}
-                  onSchoolChange={handleSuperAdminSchoolChange}
-                />
-                <button type="submit" className={secondaryButtonClass} disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}>Appliquer les filtres</button>
-                <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
-                {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des statistiques…</span>}
-              </form>
-            <TeacherHoursReportControls
-              isTeacher={isTeacher}
-              teachers={reportTeacherOptions}
-              selection={reportSelection}
-              setSelection={setReportSelection}
-              exporting={exportingReport}
-              disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}
-              onExport={(format) => void exportTeacherHours(format)}
-            />
             <div className="space-y-4 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.10),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.12),_transparent_30%)] p-1 md:p-2">
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="teacher-control-statistics-grid">
                 <StatCard label="Séances" value={String(globalStatistics.totalSessions)} detail={`${globalStatistics.openSessions} en cours · ${globalStatistics.incompleteSessions} sans fin validée`} tone="indigo" icon={CalendarClock} />
@@ -2122,6 +2095,33 @@ export default function TeacherControlView({
                 {globalStatistics.schools.length === 0 && <p className="p-4 text-sm text-slate-500">Aucun établissement disponible.</p>}
               </div>
             </div>
+            <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3" onSubmit={applySessionFilters}>
+                <SessionFilterControls
+                  filters={filterDraft}
+                  setFilters={setFilterDraft}
+                  options={sessionFilterOptions}
+                  optionsLoading={sessionFilterOptionsLoading}
+                  resultsLoading={filterResultsLoading}
+                  optionsError={sessionFilterOptionsError}
+                  isSuperAdmin={isSuperAdmin}
+                  showAdministrativeFilters={!isTeacher}
+                  schoolsList={schoolsList}
+                  selectedSchoolId={schoolId}
+                  onSchoolChange={handleSuperAdminSchoolChange}
+                />
+                <button type="submit" className={secondaryButtonClass} disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}>Appliquer les filtres</button>
+                <span className="text-xs text-slate-500">Périodes calculées en UTC (Africa/Lome).</span>
+                {filterResultsLoading && <span className="text-xs text-slate-500" role="status" aria-live="polite">Actualisation des statistiques…</span>}
+              </form>
+            <TeacherHoursReportControls
+              isTeacher={isTeacher}
+              teachers={reportTeacherOptions}
+              selection={reportSelection}
+              setSelection={setReportSelection}
+              exporting={exportingReport}
+              disabled={loading || filterResultsLoading || sessionFilterOptionsLoading}
+              onExport={(format) => void exportTeacherHours(format)}
+            />
           </>
         )}
         {!loading && !globalStatistics && <EmptyState>Les statistiques globales ne sont pas disponibles.</EmptyState>}
@@ -3276,7 +3276,7 @@ function SessionCard({
           {hasPendingRequest && <span className="self-center text-xs font-semibold text-amber-700">Demande en attente de décision</span>}
         </div>
       )}
-      {canManageSchoolControl && session.status === 'open' && !hasPendingRequest && (
+      {isSchoolAdmin && session.status === 'open' && !hasPendingRequest && (
         <form className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={(event) => { event.preventDefault(); onClose(closeReason); }}>
           <label className="text-xs font-semibold text-slate-700">
             Motif obligatoire de clôture administrative
