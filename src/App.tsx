@@ -1607,6 +1607,8 @@ export default function App() {
   };
 
   const handleBatchCreateParents = async (records: any[]) => {
+    setImportResult(null);
+    setErrorMsg(null);
     try {
       const json = await apiFetch('/api/parents/batch', {
         method: 'POST',
@@ -1616,6 +1618,7 @@ export default function App() {
       if (json.insertedCount && json.insertedCount > 0) fetchAllData();
     } catch (err: any) {
       setErrorMsg(err.message || 'Import parents impossible');
+      throw err;
     }
   };
 

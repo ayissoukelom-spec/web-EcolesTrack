@@ -12638,7 +12638,10 @@ export async function createApp() {
         }
 
         inserted.push({
-          user: createdUser,
+          user: {
+            ...createdUser,
+            accessSessionGeneration: createdUser.accessSessionGeneration.toString(),
+          },
           parentId,
           temporaryPassword: temporaryCredential.temporaryPassword,
         });

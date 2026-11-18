@@ -2121,6 +2121,13 @@ export default function AdminView({
   const parentHandleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setValidImportRecords(null);
+    setImportPreviewRecords(null);
+    setImportPreviewHeaders(null);
+    setImportErrorsList(null);
+    setImportRowErrors(null);
+    setParentImportRecords(null);
+    setParentImportSubmissionError(null);
     const name = (file.name || '').toLowerCase();
     try {
       let records: any[] = [];
@@ -2204,7 +2211,7 @@ export default function AdminView({
       for (let i = 0; i < normalized.length; i++) {
         const result = validateParentImportRow(normalized[i], { requireSchoolId: !hasSchoolAdminWorkspace });
         previewRecords.push(result.normalized);
-        if (result.errors.length > 0) rowErrors.push({ row: i + 2, errors: result.errors }); else valid.push(result.normalized);
+        if (result.errors.length > 0) rowErrors.push({ row: i + 1, errors: result.errors }); else valid.push(result.normalized);
       }
 
       if (rowErrors.length > 0) {
@@ -2217,6 +2224,7 @@ export default function AdminView({
 
       setValidImportRecords(valid.length > 0 ? valid : null);
       setImportPreviewRecords(previewRecords.slice(0, 100));
+      setParentImportRecords(previewRecords);
       setImportPreviewHeaders(Object.keys(normalized[0] || {}));
       setShowImportDetails(true);
 
@@ -2415,6 +2423,8 @@ export default function AdminView({
   const [importPreviewHeaders, setImportPreviewHeaders] = useState<string[] | null>(null);
   const [importErrorsList, setImportErrorsList] = useState<string[] | null>(null);
   const [importRowErrors, setImportRowErrors] = useState<{row: number; errors: string[]}[] | null>(null);
+  const [parentImportRecords, setParentImportRecords] = useState<any[] | null>(null);
+  const [parentImportSubmissionError, setParentImportSubmissionError] = useState<string | null>(null);
   const [parentEmailSearchQuery, setParentEmailSearchQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
 
@@ -2423,17 +2433,30 @@ export default function AdminView({
     if (activeTab === 'parents') {
       if (isImporting) return;
       setIsImporting(true);
-      const recordsToImport = validImportRecords && validImportRecords.length > 0 ? validImportRecords : importPreviewRecords;
+      const recordsToImport = parentImportRecords
+        ?? (validImportRecords && validImportRecords.length > 0 ? validImportRecords : importPreviewRecords);
+      let completed = false;
       try {
-        if (onBatchCreateParents) await onBatchCreateParents(recordsToImport || []);
+        if (!onBatchCreateParents) throw new Error('Importation des parents indisponible.');
+        await onBatchCreateParents(recordsToImport || []);
+        completed = true;
+      } catch (error) {
+        const detail = error instanceof Error && error.message ? ` (${error.message})` : '';
+        setParentImportSubmissionError(
+          `La réponse du serveur n’a pas été confirmée${detail}. L’importation peut être partielle ; vérifiez les parents enregistrés avant de la relancer.`,
+        );
       } finally {
         setIsImporting(false);
-        setValidImportRecords(null);
-        setImportPreviewRecords(null);
-        setImportPreviewHeaders(null);
-        setImportErrorsList(null);
-        setImportRowErrors(null);
-        setShowImportDetails(false);
+        if (completed) {
+          setValidImportRecords(null);
+          setImportPreviewRecords(null);
+          setParentImportRecords(null);
+          setImportPreviewHeaders(null);
+          setImportErrorsList(null);
+          setImportRowErrors(null);
+          setParentImportSubmissionError(null);
+          setShowImportDetails(false);
+        }
       }
       return;
     }
@@ -5123,9 +5146,11 @@ export default function AdminView({
               setShowImportDetails(false);
               setValidImportRecords(null);
               setImportPreviewRecords(null);
+              setParentImportRecords(null);
               setImportPreviewHeaders(null);
               setImportErrorsList(null);
               setImportRowErrors(null);
+              setParentImportSubmissionError(null);
             }}
             contentClassName="max-w-3xl shadow-lg"
             overlayClassName="z-[9999]"
@@ -5134,8 +5159,13 @@ export default function AdminView({
             <div className="w-full max-h-[80vh] overflow-auto">
               <div className="flex items-start justify-between mb-4">
                 <h3 className="text-lg font-bold">Aperçu avant import</h3>
-                <button className="text-slate-400 hover:text-slate-600" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); }}>✕</button>
+                <button className="text-slate-400 hover:text-slate-600" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setParentImportRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); setParentImportSubmissionError(null); }}>✕</button>
               </div>
+              {parentImportSubmissionError && (
+                <p role="alert" className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  {parentImportSubmissionError}
+                </p>
+              )}
               {(importErrorsList && importErrorsList.length > 0) || (importRowErrors && importRowErrors.length > 0) ? (
                 <div className="space-y-4">
                   <div className="p-4 bg-rose-50 border border-rose-200 rounded text-rose-700 text-sm">
@@ -5146,7 +5176,7 @@ export default function AdminView({
                   </div>
                   {importPreviewRecords && importPreviewRecords.length > 0 && (
                     <div className="space-y-3">
-                      <div className="text-sm text-slate-600">Aperçu des lignes valides ({importPreviewRecords.length} affichées jusqu'à 50):</div>
+                      <div className="text-sm text-slate-600">Aperçu du fichier (50 premières lignes au maximum):</div>
                       <div className="overflow-x-auto border rounded">
                         <table className="w-full text-left text-sm">
                           <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
@@ -5188,12 +5218,12 @@ export default function AdminView({
                 </div>
               )}
               <div className="flex justify-end gap-2 mt-4">
-                <button className="px-4 py-2 bg-slate-100 rounded" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); }}>Annuler</button>
+                <button className="px-4 py-2 bg-slate-100 rounded" onClick={() => { setShowImportDetails(false); setValidImportRecords(null); setImportPreviewRecords(null); setParentImportRecords(null); setImportPreviewHeaders(null); setImportErrorsList(null); setImportRowErrors(null); setParentImportSubmissionError(null); }}>Annuler</button>
                 {(validImportRecords && validImportRecords.length > 0) ? (
                   <button
                     className="px-4 py-2 bg-indigo-600 text-white rounded disabled:cursor-not-allowed disabled:opacity-70"
                     onClick={confirmImport}
-                    disabled={isImporting}
+                    disabled={isImporting || parentImportSubmissionError !== null}
                   >
                     {isImporting && <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />}
                     {isImporting ? 'Importation en cours...' : 'Importer les lignes valides'}
