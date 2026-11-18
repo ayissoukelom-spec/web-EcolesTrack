@@ -13599,12 +13599,13 @@ export async function createApp() {
     if (action === 'create') {
       const [targetStudent] = await db.select({
         schoolId: students.schoolId,
+        classId: students.classId,
       }).from(students).where(eq(students.id, studentId));
       const eventSchoolId = await resolveAttendanceSchoolIdForNewEvent(
         date,
         targetStudent?.schoolId ?? null,
         studentId,
-        parsePositiveInteger(classId) ?? 0,
+        parsePositiveInteger(targetStudent?.classId) ?? 0,
       );
       if (eventSchoolId == null) {
         return {
