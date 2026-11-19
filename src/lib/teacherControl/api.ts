@@ -10,9 +10,9 @@ import {
   subjects,
   teacherClassSubjects,
   teacherControlAuditEvents,
+  teacherControlClassSubjectRates,
   teacherControlGpsChallenges,
   teacherControlGpsSettings,
-  teacherControlHourlyRates,
   teacherControlRegularizationDecisions,
   teacherControlRegularizationRequests,
   teacherControlSessions,
@@ -87,6 +87,84 @@ function selectTeacherPedagogicalPairs(
       eq(schoolSubjects.status, 'approved'),
     ))
     .where(and(...conditions));
+}
+
+function selectSchoolPedagogicalPairs(
+  executor: TeacherControlExecutor,
+  schoolId: number,
+  selectedPair?: { classId: number; subjectId: number },
+) {
+  const conditions = [
+    eq(teacherClassSubjects.schoolId, schoolId),
+    eq(teacherClassSubjects.isActive, true),
+    eq(teachers.schoolId, schoolId),
+    or(
+      eq(classes.schoolId, schoolId),
+      isNotNull(schoolClasses.id),
+    ),
+    or(
+      eq(subjects.schoolId, schoolId),
+      isNotNull(schoolSubjects.id),
+    ),
+  ];
+  if (selectedPair) {
+    conditions.push(
+      eq(teacherClassSubjects.classId, selectedPair.classId),
+      eq(teacherClassSubjects.subjectId, selectedPair.subjectId),
+    );
+  }
+  return executor.select({
+    classId: classes.id,
+    className: classes.name,
+    subjectId: subjects.id,
+    subjectName: subjects.name,
+  }).from(teacherClassSubjects)
+    .innerJoin(teachers, and(
+      eq(teachers.id, teacherClassSubjects.teacherId),
+      eq(teachers.schoolId, schoolId),
+    ))
+    .innerJoin(classes, eq(classes.id, teacherClassSubjects.classId))
+    .innerJoin(subjects, eq(subjects.id, teacherClassSubjects.subjectId))
+    .leftJoin(schoolClasses, and(
+      eq(schoolClasses.classId, teacherClassSubjects.classId),
+      eq(schoolClasses.schoolId, schoolId),
+      eq(schoolClasses.status, 'approved'),
+    ))
+    .leftJoin(schoolSubjects, and(
+      eq(schoolSubjects.subjectId, teacherClassSubjects.subjectId),
+      eq(schoolSubjects.schoolId, schoolId),
+      eq(schoolSubjects.status, 'approved'),
+    ))
+    .where(and(...conditions));
+}
+
+function selectSchoolScopedClassSubjectPair(
+  executor: TeacherControlExecutor,
+  schoolId: number,
+  selectedPair: { classId: number; subjectId: number },
+) {
+  return executor.select({
+    classId: classes.id,
+    className: classes.name,
+    subjectId: subjects.id,
+    subjectName: subjects.name,
+  }).from(classes)
+    .innerJoin(subjects, eq(subjects.id, selectedPair.subjectId))
+    .leftJoin(schoolClasses, and(
+      eq(schoolClasses.classId, classes.id),
+      eq(schoolClasses.schoolId, schoolId),
+      eq(schoolClasses.status, 'approved'),
+    ))
+    .leftJoin(schoolSubjects, and(
+      eq(schoolSubjects.subjectId, subjects.id),
+      eq(schoolSubjects.schoolId, schoolId),
+      eq(schoolSubjects.status, 'approved'),
+    ))
+    .where(and(
+      eq(classes.id, selectedPair.classId),
+      or(eq(classes.schoolId, schoolId), isNotNull(schoolClasses.id)),
+      or(eq(subjects.schoolId, schoolId), isNotNull(schoolSubjects.id)),
+    ));
 }
 
 type SessionStatus = 'open' | 'completed' | 'closed_without_end';
@@ -794,93 +872,165 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
     });
   }, resolveActor));
 
-  app.put('/api/teacher-control/teachers/:teacherId/hourly-rate', handleRoute(async (req, _res, actor) => {
-    const body = req.body as Record<string, unknown>;
-    const access = await requireSchoolAccess(actor, body.schoolId, ['school_admin', 'school_accountant', 'super_admin']);
-    const teacherId = positiveInteger(req.params.teacherId);
-    if (!teacherId) throw new TeacherControlApiError(400, 'teacherId is invalid');
-    const [teacher] = await db.select({ id: teachers.id, userId: teachers.userId })
-      .from(teachers)
-      .where(and(eq(teachers.id, teacherId), eq(teachers.schoolId, access.schoolId)))
-      .limit(1);
-    if (!teacher) throw new TeacherControlApiError(404, 'Teacher not found');
-    const rate = body.hourlyRateXof == null ? null : Number(body.hourlyRateXof);
-    if (rate != null && (!Number.isSafeInteger(rate) || rate < 0 || rate > 2_147_483_647)) {
-      throw new TeacherControlApiError(400, 'hourlyRateXof must be a non-negative whole number or null');
-    }
-    return db.transaction(async (tx) => {
-      const [lockedTeacher] = await tx.select({ id: teachers.id })
-        .from(teachers)
-        .where(and(eq(teachers.id, teacher.id), eq(teachers.schoolId, access.schoolId)))
-        .for('update')
-        .limit(1);
-      if (!lockedTeacher) throw new TeacherControlApiError(404, 'Teacher not found');
-      const [previous] = await tx.select().from(teacherControlHourlyRates)
-        .where(and(
-          eq(teacherControlHourlyRates.schoolId, access.schoolId),
-          eq(teacherControlHourlyRates.teacherId, teacher.id),
-        ))
-        .limit(1);
-      let saved = null;
-      if (rate == null) {
-        await tx.delete(teacherControlHourlyRates).where(and(
-          eq(teacherControlHourlyRates.schoolId, access.schoolId),
-          eq(teacherControlHourlyRates.teacherId, teacher.id),
-        ));
-      } else {
-        const [teacherUser] = await tx.select({ name: users.name })
-          .from(users)
-          .where(eq(users.id, teacher.userId))
-          .limit(1);
-        const [result] = await tx.insert(teacherControlHourlyRates).values({
-          schoolId: access.schoolId,
-          schoolNameSnapshot: access.schoolName,
-          teacherId: teacher.id,
-          teacherNameSnapshot: teacherUser?.name ?? `Enseignant ${teacher.id}`,
-          hourlyRateXof: rate,
-          updatedByUserId: actor.id ?? null,
-          updatedByNameSnapshot: actorAuditName(actor),
-          updatedAt: new Date(),
-        }).onConflictDoUpdate({
-          target: [teacherControlHourlyRates.schoolId, teacherControlHourlyRates.teacherId],
-          set: {
-            schoolNameSnapshot: access.schoolName,
-            hourlyRateXof: rate,
-            updatedByUserId: actor.id ?? null,
-            updatedByNameSnapshot: actorAuditName(actor),
-            updatedAt: new Date(),
-          },
-        }).returning();
-        saved = result;
-      }
-      await insertAudit(tx, auditInput({
-        schoolId: access.schoolId,
-        schoolNameSnapshot: access.schoolName,
-        action: rate == null ? 'teacher_hourly_rate_removed' : 'teacher_hourly_rate_updated',
-        resourceType: 'teacher_hourly_rate',
-        resourceId: teacher.id,
-        beforeValues: previous ? { hourlyRateXof: previous.hourlyRateXof } : null,
-        afterValues: rate == null ? null : { hourlyRateXof: rate },
-      }, actor));
-      return saved;
-    });
-  }, resolveActor));
-
-  app.get('/api/teacher-control/teachers/:teacherId/hourly-rate', handleRoute(async (req, _res, actor) => {
+  app.get('/api/teacher-control/class-subject-rates', handleRoute(async (req, res, actor) => {
+    res.setHeader('Cache-Control', 'no-store');
     const access = await requireSchoolAccess(
       actor,
       req.query.schoolId,
       ['school_admin', 'school_accountant', 'super_admin'],
     );
-    const teacherId = positiveInteger(req.params.teacherId);
-    if (!teacherId) throw new TeacherControlApiError(400, 'teacherId is invalid');
-    const [rate] = await db.select().from(teacherControlHourlyRates)
-      .where(and(
-        eq(teacherControlHourlyRates.schoolId, access.schoolId),
-        eq(teacherControlHourlyRates.teacherId, teacherId),
-      ))
-      .limit(1);
-    return rate ?? null;
+    const pairRows = await selectSchoolPedagogicalPairs(db, access.schoolId);
+    const pairs = Array.from(new Map(pairRows.map((pair) => [
+      `${pair.classId}:${pair.subjectId}`,
+      {
+        classId: pair.classId,
+        className: pair.className,
+        subjectId: pair.subjectId,
+        subjectName: pair.subjectName,
+      },
+    ])).values()).sort((left, right) => (
+      left.className.localeCompare(right.className, 'fr')
+      || left.subjectName.localeCompare(right.subjectName, 'fr')
+    ));
+    const rates = await db.select({
+      id: teacherControlClassSubjectRates.id,
+      classId: teacherControlClassSubjectRates.classId,
+      className: classes.name,
+      subjectId: teacherControlClassSubjectRates.subjectId,
+      subjectName: subjects.name,
+      hourlyRateXof: teacherControlClassSubjectRates.hourlyRateXof,
+      updatedAt: teacherControlClassSubjectRates.updatedAt,
+    }).from(teacherControlClassSubjectRates)
+      .innerJoin(classes, eq(classes.id, teacherControlClassSubjectRates.classId))
+      .innerJoin(subjects, eq(subjects.id, teacherControlClassSubjectRates.subjectId))
+      .where(eq(teacherControlClassSubjectRates.schoolId, access.schoolId))
+      .orderBy(asc(classes.name), asc(subjects.name));
+    return { pairs, rates };
+  }, resolveActor));
+
+  app.put('/api/teacher-control/class-subject-rates', handleRoute(async (req, _res, actor) => {
+    const body = req.body as Record<string, unknown>;
+    const access = await requireSchoolAccess(
+      actor,
+      body.schoolId,
+      ['school_admin', 'school_accountant', 'super_admin'],
+    );
+    const classId = positiveInteger(body.classId);
+    const subjectId = positiveInteger(body.subjectId);
+    const rate = typeof body.hourlyRateXof === 'number' ? body.hourlyRateXof : Number.NaN;
+    if (!classId || !subjectId) throw new TeacherControlApiError(400, 'classId and subjectId must be positive integers');
+    if (!Number.isSafeInteger(rate) || rate < 0 || rate > 2_147_483_647) {
+      throw new TeacherControlApiError(400, 'hourlyRateXof must be a non-negative whole number');
+    }
+
+    return db.transaction(async (tx) => {
+      const [previous] = await tx.select().from(teacherControlClassSubjectRates)
+        .where(and(
+          eq(teacherControlClassSubjectRates.schoolId, access.schoolId),
+          eq(teacherControlClassSubjectRates.classId, classId),
+          eq(teacherControlClassSubjectRates.subjectId, subjectId),
+        ))
+        .for('update')
+        .limit(1);
+      const [activePair] = await selectSchoolPedagogicalPairs(tx, access.schoolId, { classId, subjectId }).limit(1);
+      if (!activePair && !previous) {
+        throw new TeacherControlApiError(403, 'A new rate requires an active teaching association in this school');
+      }
+      let pair = activePair;
+      if (!pair && previous) {
+        const [scopedPair] = await selectSchoolScopedClassSubjectPair(tx, access.schoolId, { classId, subjectId }).limit(1);
+        pair = scopedPair;
+      }
+      if (!pair) throw new TeacherControlApiError(403, 'The class and subject are outside this school scope');
+      const [saved] = await tx.insert(teacherControlClassSubjectRates).values({
+        schoolId: access.schoolId,
+        classId,
+        subjectId,
+        hourlyRateXof: rate,
+        updatedByUserId: actor.id ?? null,
+        updatedByNameSnapshot: actorAuditName(actor),
+        updatedAt: new Date(),
+      }).onConflictDoUpdate({
+        target: [
+          teacherControlClassSubjectRates.schoolId,
+          teacherControlClassSubjectRates.classId,
+          teacherControlClassSubjectRates.subjectId,
+        ],
+        set: {
+          hourlyRateXof: rate,
+          updatedByUserId: actor.id ?? null,
+          updatedByNameSnapshot: actorAuditName(actor),
+          updatedAt: new Date(),
+        },
+      }).returning();
+      await insertAudit(tx, auditInput({
+        schoolId: access.schoolId,
+        schoolNameSnapshot: access.schoolName,
+        action: 'class_subject_hourly_rate_updated',
+        resourceType: 'class_subject_hourly_rate',
+        resourceId: saved.id,
+        beforeValues: previous ? {
+          classId,
+          className: pair.className,
+          subjectId,
+          subjectName: pair.subjectName,
+          hourlyRateXof: previous.hourlyRateXof,
+        } : null,
+        afterValues: {
+          classId,
+          className: pair.className,
+          subjectId,
+          subjectName: pair.subjectName,
+          hourlyRateXof: rate,
+        },
+      }, actor));
+      return {
+        ...saved,
+        className: pair.className,
+        subjectName: pair.subjectName,
+      };
+    });
+  }, resolveActor));
+
+  app.delete('/api/teacher-control/class-subject-rates/:classId/:subjectId', handleRoute(async (req, _res, actor) => {
+    const access = await requireSchoolAccess(
+      actor,
+      req.query.schoolId,
+      ['school_admin', 'school_accountant', 'super_admin'],
+    );
+    const classId = positiveInteger(req.params.classId);
+    const subjectId = positiveInteger(req.params.subjectId);
+    if (!classId || !subjectId) throw new TeacherControlApiError(400, 'classId and subjectId must be positive integers');
+    return db.transaction(async (tx) => {
+      const [previous] = await tx.select().from(teacherControlClassSubjectRates)
+        .where(and(
+          eq(teacherControlClassSubjectRates.schoolId, access.schoolId),
+          eq(teacherControlClassSubjectRates.classId, classId),
+          eq(teacherControlClassSubjectRates.subjectId, subjectId),
+        ))
+        .for('update')
+        .limit(1);
+      if (!previous) throw new TeacherControlApiError(404, 'Class and subject rate not found');
+      await tx.delete(teacherControlClassSubjectRates).where(and(
+        eq(teacherControlClassSubjectRates.schoolId, access.schoolId),
+        eq(teacherControlClassSubjectRates.classId, classId),
+        eq(teacherControlClassSubjectRates.subjectId, subjectId),
+      ));
+      await insertAudit(tx, auditInput({
+        schoolId: access.schoolId,
+        schoolNameSnapshot: access.schoolName,
+        action: 'class_subject_hourly_rate_removed',
+        resourceType: 'class_subject_hourly_rate',
+        resourceId: previous.id,
+        beforeValues: {
+          classId,
+          subjectId,
+          hourlyRateXof: previous.hourlyRateXof,
+        },
+        afterValues: null,
+      }, actor));
+      return { deleted: true };
+    });
   }, resolveActor));
 
   app.get('/api/teacher-control/assignments', handleRoute(async (_req, _res, actor) => {
@@ -1028,10 +1178,11 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         .from(schools).where(eq(schools.id, access.schoolId)).limit(1);
       if (!school || school.isSuspended) throw new TeacherControlApiError(423, 'School is suspended or unavailable');
 
-      const [rate] = await tx.select({ hourlyRateXof: teacherControlHourlyRates.hourlyRateXof })
-        .from(teacherControlHourlyRates).where(and(
-          eq(teacherControlHourlyRates.schoolId, access.schoolId),
-          eq(teacherControlHourlyRates.teacherId, teacherId),
+      const [rate] = await tx.select({ hourlyRateXof: teacherControlClassSubjectRates.hourlyRateXof })
+        .from(teacherControlClassSubjectRates).where(and(
+          eq(teacherControlClassSubjectRates.schoolId, access.schoolId),
+          eq(teacherControlClassSubjectRates.classId, classId),
+          eq(teacherControlClassSubjectRates.subjectId, subjectId),
         )).limit(1);
       await consumeGpsChallenge(tx, {
         token: body.gpsChallenge,
@@ -1870,10 +2021,11 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           requestRow.subjectId,
         );
         const [rate] = await tx.select({
-          hourlyRateXof: teacherControlHourlyRates.hourlyRateXof,
-        }).from(teacherControlHourlyRates).where(and(
-          eq(teacherControlHourlyRates.schoolId, access.schoolId),
-          eq(teacherControlHourlyRates.teacherId, requestRow.teacherId),
+          hourlyRateXof: teacherControlClassSubjectRates.hourlyRateXof,
+        }).from(teacherControlClassSubjectRates).where(and(
+          eq(teacherControlClassSubjectRates.schoolId, access.schoolId),
+          eq(teacherControlClassSubjectRates.classId, pair.classId),
+          eq(teacherControlClassSubjectRates.subjectId, pair.subjectId),
         )).limit(1);
         const [createdSession] = await tx.insert(teacherControlSessions).values({
           schoolId: access.schoolId,
@@ -2196,10 +2348,10 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           FILTER (WHERE ${teacherControlSessions.validatedEndedAt} IS NOT NULL), 0)::bigint
       `,
       estimatedCompensationXof: sql<number>`
-        coalesce(sum(round(${teacherControlSessions.hourlyRateXofSnapshot}
-          * extract(epoch FROM (${teacherControlSessions.validatedEndedAt} - ${teacherControlSessions.startedAt})) / 3600))
+        coalesce(sum(${teacherControlSessions.hourlyRateXofSnapshot}
+          * extract(epoch FROM (${teacherControlSessions.validatedEndedAt} - ${teacherControlSessions.startedAt})))
           FILTER (WHERE ${teacherControlSessions.validatedEndedAt} IS NOT NULL
-            AND ${teacherControlSessions.hourlyRateXofSnapshot} IS NOT NULL), 0)::bigint
+            AND ${teacherControlSessions.hourlyRateXofSnapshot} IS NOT NULL), 0)::numeric / 3600
       `,
     }).from(teacherControlSessions).where(and(...conditions));
     const pendingConditions = [
@@ -2270,10 +2422,10 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
           FILTER (WHERE ${teacherControlSessions.validatedEndedAt} IS NOT NULL), 0)::bigint
       `,
       estimatedCompensationXof: sql<number>`
-        coalesce(sum(round(${teacherControlSessions.hourlyRateXofSnapshot}
-          * extract(epoch FROM (${teacherControlSessions.validatedEndedAt} - ${teacherControlSessions.startedAt})) / 3600))
+        coalesce(sum(${teacherControlSessions.hourlyRateXofSnapshot}
+          * extract(epoch FROM (${teacherControlSessions.validatedEndedAt} - ${teacherControlSessions.startedAt})))
           FILTER (WHERE ${teacherControlSessions.validatedEndedAt} IS NOT NULL
-            AND ${teacherControlSessions.hourlyRateXofSnapshot} IS NOT NULL), 0)::bigint
+            AND ${teacherControlSessions.hourlyRateXofSnapshot} IS NOT NULL), 0)::numeric / 3600
       `,
     }).from(teacherControlSessions)
       .leftJoin(schools, eq(teacherControlSessions.schoolId, schools.id));

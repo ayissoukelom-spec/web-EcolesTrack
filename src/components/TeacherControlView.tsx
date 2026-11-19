@@ -38,6 +38,27 @@ type Assignment = {
   subjectName: string;
 };
 
+type ClassSubjectRatePair = Assignment;
+
+type ClassSubjectRate = Assignment & {
+  id: number;
+  hourlyRateXof: number;
+  updatedAt: string;
+};
+
+type ClassSubjectRatesResponse = {
+  pairs: ClassSubjectRatePair[];
+  rates: ClassSubjectRate[];
+};
+
+type ClassSubjectRatesLoadState = {
+  contextKey: string;
+  status: 'loading' | 'loaded' | 'error';
+  pairs: ClassSubjectRatePair[];
+  rates: ClassSubjectRate[];
+  error?: string;
+};
+
 type GpsStatus =
   | 'idle'
   | 'locating'
@@ -481,14 +502,18 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
 const buttonClass = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50';
 const secondaryButtonClass = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
 
-function formatLomeDate(value: string | null | undefined, includeTime = true): string {
+function formatLomeDate(
+  value: string | null | undefined,
+  includeTime = true,
+  includeSeconds = false,
+): string {
   if (!value) return '—';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '—';
   return new Intl.DateTimeFormat('fr-FR', {
     timeZone,
     dateStyle: 'medium',
-    ...(includeTime ? { timeStyle: 'short' as const } : {}),
+    ...(includeTime ? { timeStyle: includeSeconds ? 'medium' as const : 'short' as const } : {}),
   }).format(date);
 }
 
@@ -525,15 +550,16 @@ function parseLomeInput(value: string): string | null {
 
 function formatAmount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(Number(value))) return 'Non estimé';
-  return `${new Intl.NumberFormat('fr-FR').format(Number(value))} XOF`;
+  return `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 }).format(Number(value))} XOF`;
 }
 
 function formatDuration(milliseconds: number | null | undefined): string {
   if (milliseconds == null || !Number.isFinite(milliseconds)) return 'Non validée';
-  const totalMinutes = Math.floor(milliseconds / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours} h ${String(minutes).padStart(2, '0')} min`;
+  const totalSeconds = Math.floor(milliseconds / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours} h ${String(minutes).padStart(2, '0')} min ${String(seconds).padStart(2, '0')} s`;
 }
 
 function sessionStatusLabel(status: Session['status']): string {
@@ -1108,6 +1134,7 @@ export default function TeacherControlView({
   const gpsMapCandidateKeySequenceRef = useRef(0);
   const gpsCandidateBlockRef = useRef<HTMLDivElement>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  const [correctionSessionId, setCorrectionSessionId] = useState<number | null>(null);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
   const [gpsStatus, setGpsStatus] = useState<GpsStatus>('idle');
@@ -1124,9 +1151,14 @@ export default function TeacherControlView({
   const initialTabRef = useRef(initialTab);
   const actionInFlight = useRef(false);
   const reportExportInFlight = useRef(false);
-  const [selectedTeacherId, setSelectedTeacherId] = useState('');
-  const [hourlyRate, setHourlyRate] = useState('');
-  const [rateLoaded, setRateLoaded] = useState(false);
+  const [rateClassId, setRateClassId] = useState('');
+  const [rateSubjectId, setRateSubjectId] = useState('');
+  const [rateAmount, setRateAmount] = useState('');
+  const [editingRatePair, setEditingRatePair] = useState<{ classId: number; subjectId: number } | null>(null);
+  const [rateLoadState, setRateLoadState] = useState<ClassSubjectRatesLoadState | null>(null);
+  const rateLoadRequestIdRef = useRef(0);
+  const [rateReloadVersion, setRateReloadVersion] = useState(0);
+  const rateContextKey = JSON.stringify([userRole, activeTab, schoolId, schoolQuery, rateReloadVersion]);
   const [filterDraft, setFilterDraft] = useState<SessionFilters>(EMPTY_SESSION_FILTERS);
   const filtersRef = useRef(EMPTY_SESSION_FILTERS);
   const [filterResultsLoading, setFilterResultsLoading] = useState(false);
@@ -1532,30 +1564,63 @@ export default function TeacherControlView({
   }, [isSuperAdmin, isTeacher, schoolId, viewMode]);
 
   useEffect(() => {
-    if (isTeacher || schoolId == null) return;
-    const available = teachersList.filter((teacher) => teacher.schoolId === schoolId && !teacher.isDeleted);
-    if (!available.some((teacher) => String(teacher.id) === selectedTeacherId)) {
-      setSelectedTeacherId(available[0] ? String(available[0].id) : '');
-    }
-    setRateLoaded(false);
-  }, [isTeacher, schoolId, selectedTeacherId, teachersList]);
-
-  useEffect(() => {
-    if (isTeacher || schoolId == null || !selectedTeacherId || activeTab !== 'rates') return;
+    if (isTeacher || schoolId == null || activeTab !== 'rates') return;
     let active = true;
-    setRateLoaded(false);
-    apiFetch(`/api/teacher-control/teachers/${selectedTeacherId}/hourly-rate${schoolQuery}`)
-      .then((rate: { hourlyRateXof?: number } | null) => {
-        if (active) setHourlyRate(rate?.hourlyRateXof == null ? '' : String(rate.hourlyRateXof));
+    const requestId = ++rateLoadRequestIdRef.current;
+    const isCurrentRequest = () => active && requestId === rateLoadRequestIdRef.current;
+    setRateClassId('');
+    setRateSubjectId('');
+    setRateAmount('');
+    setEditingRatePair(null);
+    setRateLoadState({
+      contextKey: rateContextKey,
+      status: 'loading',
+      pairs: [],
+      rates: [],
+    });
+    apiFetch(`/api/teacher-control/class-subject-rates${schoolQuery}`)
+      .then((response: ClassSubjectRatesResponse) => {
+        if (!response || !Array.isArray(response.pairs) || !Array.isArray(response.rates)) {
+          throw new TypeError('La réponse des tarifs par classe et matière est invalide.');
+        }
+        if (!isCurrentRequest()) return;
+        setRateLoadState({
+          contextKey: rateContextKey,
+          status: 'loaded',
+          pairs: response.pairs,
+          rates: response.rates,
+        });
       })
       .catch((rateError: unknown) => {
-        if (active) setError(rateError instanceof Error ? rateError.message : 'Impossible de charger le taux horaire.');
-      })
-      .finally(() => {
-        if (active) setRateLoaded(true);
+        if (!isCurrentRequest()) return;
+        setRateLoadState({
+          contextKey: rateContextKey,
+          status: 'error',
+          pairs: [],
+          rates: [],
+          error: rateError instanceof Error && rateError.message.trim()
+            ? rateError.message
+            : 'Impossible de charger les tarifs par classe et matière. Vérifiez votre connexion puis réessayez.',
+        });
       });
-    return () => { active = false; };
-  }, [activeTab, isTeacher, schoolId, schoolQuery, selectedTeacherId]);
+    return () => {
+      active = false;
+      if (requestId === rateLoadRequestIdRef.current) rateLoadRequestIdRef.current += 1;
+    };
+  }, [activeTab, isTeacher, rateContextKey, rateReloadVersion, schoolId, schoolQuery]);
+
+  useEffect(() => {
+    if (!rateLoadState || rateLoadState.contextKey !== rateContextKey || rateLoadState.status !== 'loaded') return;
+    const selectedPairExists = rateLoadState.pairs.some((pair) => (
+      pair.classId === Number(rateClassId) && pair.subjectId === Number(rateSubjectId)
+    ));
+    if (selectedPairExists) return;
+    const firstPair = rateLoadState.pairs[0];
+    setRateClassId(firstPair ? String(firstPair.classId) : '');
+    setRateSubjectId(firstPair ? String(firstPair.subjectId) : '');
+    setRateAmount('');
+    setEditingRatePair(null);
+  }, [rateClassId, rateLoadState, rateSubjectId, rateContextKey]);
 
   const selectedOpenSession = useMemo(
     () => teacherOpenSessions.find((session) => session.id === selectedOpenSessionId) ?? null,
@@ -1585,7 +1650,24 @@ export default function TeacherControlView({
   )) ?? null;
   const filteredSessions = sessions;
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
-  const visibleTeachers = teachersList.filter((teacher) => teacher.schoolId === schoolId && !teacher.isDeleted);
+  const currentRateLoad = rateLoadState?.contextKey === rateContextKey ? rateLoadState : null;
+  const ratePairs = currentRateLoad?.status === 'loaded' ? currentRateLoad.pairs : [];
+  const editingStoredRate = editingRatePair && currentRateLoad?.status === 'loaded'
+    ? currentRateLoad.rates.find((rate) => (
+      rate.classId === editingRatePair.classId && rate.subjectId === editingRatePair.subjectId
+    ))
+    : undefined;
+  const editingPairIsActive = editingStoredRate && ratePairs.some((pair) => (
+    pair.classId === editingStoredRate.classId && pair.subjectId === editingStoredRate.subjectId
+  ));
+  const ratePairOptions: ClassSubjectRatePair[] = editingStoredRate && !editingPairIsActive
+    ? [...ratePairs, editingStoredRate]
+    : ratePairs;
+  const availableRateClasses = Array.from(new Map(ratePairOptions.map((pair) => [
+    String(pair.classId),
+    { id: pair.classId, name: pair.className },
+  ])).values());
+  const availableRateSubjects = ratePairOptions.filter((pair) => String(pair.classId) === rateClassId);
   const visibleRegularizations = regularizations.filter((entry) => entry.request.status === 'pending');
   const assignmentLoadErrorMessage = 'Vos associations pédagogiques n’ont pas pu être vérifiées. Consultez le message d’erreur avant de réessayer.';
 
@@ -2563,28 +2645,87 @@ export default function TeacherControlView({
     beginBatch(0);
   };
 
-  const saveRate = async (event: FormEvent<HTMLFormElement>) => {
+  const saveClassSubjectRate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const parsedRate = hourlyRate.trim() === '' ? null : Number(hourlyRate);
-    if (parsedRate != null && (!Number.isSafeInteger(parsedRate) || parsedRate < 0)) {
-      setError('Le taux doit être un montant entier positif ou nul en XOF.');
+    if (!canManage) {
+      setError('Vous n’êtes pas autorisé à modifier les tarifs horaires.');
       return;
     }
-    if (!selectedTeacherId) {
-      setError('Sélectionnez un enseignant.');
+    if (currentRateLoad?.status !== 'loaded') {
+      setError('Les tarifs doivent être chargés correctement avant de pouvoir être enregistrés.');
       return;
     }
-    setBusyAction('hourly-rate');
+    const classId = Number(rateClassId);
+    const subjectId = Number(rateSubjectId);
+    const selectedPair = currentRateLoad.pairs.find((pair) => (
+      pair.classId === classId && pair.subjectId === subjectId
+    ));
+    const existingRate = currentRateLoad.rates.find((rate) => (
+      rate.classId === classId && rate.subjectId === subjectId
+    ));
+    const pairLabel = selectedPair ?? (
+      editingRatePair?.classId === classId && editingRatePair.subjectId === subjectId
+        ? existingRate
+        : undefined
+    );
+    if (!pairLabel) {
+      setError('Sélectionnez une classe et une matière associées à un enseignant de cet établissement.');
+      return;
+    }
+    const parsedRate = rateAmount.trim() === '' ? Number.NaN : Number(rateAmount);
+    if (!Number.isSafeInteger(parsedRate) || parsedRate < 0 || parsedRate > 2_147_483_647) {
+      setError('Le montant horaire doit être un nombre entier positif ou nul en F CFA.');
+      return;
+    }
+    setBusyAction('class-subject-rate');
     setError(null);
+    setSuccess(null);
     try {
-      await putJson(`/api/teacher-control/teachers/${selectedTeacherId}/hourly-rate`, {
+      await putJson('/api/teacher-control/class-subject-rates', {
         ...(isSuperAdmin ? { schoolId } : {}),
+        classId,
+        subjectId,
         hourlyRateXof: parsedRate,
       });
-      await refreshAfterAction(parsedRate == null ? 'Le taux horaire a été supprimé.' : 'Le taux horaire a été enregistré.');
-      setRateLoaded(true);
+      setEditingRatePair(null);
+      setRateAmount('');
+      setRateReloadVersion((version) => version + 1);
+      setSuccess(`Tarif enregistré pour ${pairLabel.className} · ${pairLabel.subjectName}.`);
     } catch (actionError) {
-      showError(actionError, 'Impossible d’enregistrer le taux horaire.');
+      showError(actionError, 'Impossible d’enregistrer le tarif classe/matière.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const editClassSubjectRate = (rate: ClassSubjectRate) => {
+    if (!canManage) return;
+    setRateClassId(String(rate.classId));
+    setRateSubjectId(String(rate.subjectId));
+    setRateAmount(String(rate.hourlyRateXof));
+    setEditingRatePair({ classId: rate.classId, subjectId: rate.subjectId });
+    setError(null);
+  };
+
+  const removeClassSubjectRate = async (rate: ClassSubjectRate) => {
+    if (!canManage) return;
+    if (!window.confirm(`Supprimer le tarif de ${rate.className} · ${rate.subjectName} ?`)) return;
+    setBusyAction(`class-subject-rate-${rate.classId}-${rate.subjectId}`);
+    setError(null);
+    setSuccess(null);
+    try {
+      await apiFetch(
+        `/api/teacher-control/class-subject-rates/${rate.classId}/${rate.subjectId}${schoolQuery}`,
+        { method: 'DELETE' },
+      );
+      if (editingRatePair?.classId === rate.classId && editingRatePair.subjectId === rate.subjectId) {
+        setEditingRatePair(null);
+        setRateAmount('');
+      }
+      setRateReloadVersion((version) => version + 1);
+      setSuccess(`Tarif supprimé pour ${rate.className} · ${rate.subjectName}.`);
+    } catch (actionError) {
+      showError(actionError, 'Impossible de supprimer le tarif classe/matière.');
     } finally {
       setBusyAction(null);
     }
@@ -2772,17 +2913,14 @@ export default function TeacherControlView({
     setFilterDraft(EMPTY_SESSION_FILTERS);
     setSessionCursors([null]);
     setSelectedSessionId(null);
+    setCorrectionSessionId(null);
     setSessionAudit({});
     onSuperAdminSchoolFilterChange(nextSchoolId);
     setFilterRevision((revision) => revision + 1);
     setError(null);
   };
 
-  const toggleSessionDetails = async (session: Session) => {
-    if (selectedSessionId === session.id) {
-      setSelectedSessionId(null);
-      return;
-    }
+  const selectSessionDetails = async (session: Session) => {
     setSelectedSessionId(session.id);
     if (isTeacher) return;
     if (sessionAudit[session.id]) return;
@@ -2795,6 +2933,25 @@ export default function TeacherControlView({
     } finally {
       setAuditLoadingSessionId(null);
     }
+  };
+
+  const toggleSessionDetails = async (session: Session) => {
+    if (selectedSessionId === session.id) {
+      setSelectedSessionId(null);
+      setCorrectionSessionId(null);
+      return;
+    }
+    setCorrectionSessionId(null);
+    await selectSessionDetails(session);
+  };
+
+  const toggleSessionCorrection = async (session: Session) => {
+    if (correctionSessionId === session.id) {
+      setCorrectionSessionId(null);
+      return;
+    }
+    setCorrectionSessionId(session.id);
+    await selectSessionDetails(session);
   };
 
   const goToNextSessionPage = () => {
@@ -3333,7 +3490,7 @@ export default function TeacherControlView({
                             }}
                           >
                             <span className="block font-semibold text-slate-900">{session.classNameSnapshot} · {session.subjectNameSnapshot}</span>
-                            <span className="mt-1 block text-sm text-slate-600">Début : {formatLomeDate(session.startedAt)}</span>
+                            <span className="mt-1 block text-sm text-slate-600">Début : {formatLomeDate(session.startedAt, true, true)}</span>
                           </button>
                         ))}
                       </div>
@@ -3559,7 +3716,11 @@ export default function TeacherControlView({
                     isSuperAdmin={isSuperAdmin}
                     busyAction={busyAction}
                     selected={session.id === selectedSessionId}
+                    correctionOpen={session.id === correctionSessionId}
                     onSelect={() => void toggleSessionDetails(session)}
+                    onSelectForCorrection={() => void toggleSessionCorrection(session)}
+                    onCancelCorrection={() => setCorrectionSessionId(null)}
+                    onCorrect={(correction) => void correctCompletedSession(session, correction)}
                     onClose={(reason) => void closeIncompleteSession(session, reason)}
                     closeReason={closeReasons[session.id] ?? ''}
                     onCloseReasonChange={(reason) => setCloseReasons((previous) => ({ ...previous, [session.id]: reason }))}
@@ -3568,16 +3729,6 @@ export default function TeacherControlView({
                 ))}
               </div>
             </div>
-          )}
-
-          {selectedSession && canManageSchoolControl && selectedSession.status === 'completed' && (
-            <SessionTimeCorrectionForm
-              key={`${selectedSession.id}:${selectedSession.startedAt}:${selectedSession.validatedEndedAt}`}
-              session={selectedSession}
-              busy={busyAction === `correct-session-${selectedSession.id}`}
-              disabled={busyAction != null}
-              onSubmit={(correction) => void correctCompletedSession(selectedSession, correction)}
-            />
           )}
 
           {selectedSession && !isTeacher && (
@@ -4058,34 +4209,167 @@ export default function TeacherControlView({
       {activeTab === 'rates' && !isTeacher && (
         <div className="space-y-5">
           <div>
-            <h2 className="font-bold text-slate-900">Taux horaires des enseignants</h2>
-            <p className="mt-1 text-sm text-slate-600">Le taux est enregistré par enseignant et établissement. Chaque séance conserve son taux instantané au démarrage.</p>
+            <h2 className="font-bold text-slate-900">Tarifs horaires par classe et matière</h2>
+            <p className="mt-1 text-sm text-slate-600">Chaque tarif s’applique à tous les enseignants affectés à cette classe et à cette matière. Le montant est figé dans chaque nouvelle séance.</p>
           </div>
-          <label className="block max-w-xl text-sm font-semibold text-slate-700">
-            Enseignant
-            <select className={`${inputClass} mt-1`} aria-label="Enseignant pour le taux" value={selectedTeacherId} onChange={(event) => setSelectedTeacherId(event.target.value)}>
-              {visibleTeachers.length === 0 && <option value="">Aucun enseignant disponible</option>}
-              {visibleTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name || teacher.email}</option>)}
-            </select>
-          </label>
-          {selectedTeacherId && rateLoaded && canManage && (
-            <form className="max-w-xl space-y-4 rounded-2xl border border-slate-200 p-4" onSubmit={(event) => void saveRate(event)}>
-              <label className="block text-sm font-semibold text-slate-700">
-                Taux horaire en XOF
-                <input className={`${inputClass} mt-1`} type="number" step="1" min="0" value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} placeholder="Laisser vide pour supprimer le taux" />
-              </label>
-              <button type="submit" className={buttonClass} disabled={busyAction != null}>
-                {busyAction === 'hourly-rate' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Enregistrer le taux
+          {currentRateLoad?.status === 'loading' && (
+            <p className="text-sm text-slate-600" role="status">Chargement des tarifs et des associations pédagogiques…</p>
+          )}
+          {currentRateLoad?.status === 'error' && (
+            <div className="space-y-3 rounded-xl bg-red-50 p-4 text-sm text-red-700" role="alert">
+              <p>Impossible de charger les tarifs par classe et matière : {currentRateLoad.error}</p>
+              <button
+                type="button"
+                className={secondaryButtonClass}
+                onClick={() => setRateReloadVersion((version) => version + 1)}
+              >
+                Réessayer
               </button>
+            </div>
+          )}
+          {currentRateLoad?.status === 'loaded' && canManage && (
+            <form className="max-w-3xl space-y-4 rounded-2xl border border-slate-200 p-4" onSubmit={(event) => void saveClassSubjectRate(event)}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-semibold text-slate-700">
+                  Classe
+                  <select
+                    className={`${inputClass} mt-1`}
+                    aria-label="Classe du tarif horaire"
+                    value={rateClassId}
+                    disabled={busyAction != null || editingRatePair != null}
+                    onChange={(event) => {
+                      const nextClassId = event.target.value;
+                      const firstPair = currentRateLoad.pairs.find((pair) => String(pair.classId) === nextClassId);
+                      setRateClassId(nextClassId);
+                      setRateSubjectId(firstPair ? String(firstPair.subjectId) : '');
+                      setRateAmount('');
+                      setEditingRatePair(null);
+                    }}
+                  >
+                    {availableRateClasses.length === 0 && <option value="">Aucune classe affectée</option>}
+                    {availableRateClasses.map((classOption) => (
+                      <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm font-semibold text-slate-700">
+                  Matière
+                  <select
+                    className={`${inputClass} mt-1`}
+                    aria-label="Matière du tarif horaire"
+                    value={rateSubjectId}
+                    disabled={busyAction != null || editingRatePair != null || availableRateSubjects.length === 0}
+                    onChange={(event) => {
+                      setRateSubjectId(event.target.value);
+                      setRateAmount('');
+                      setEditingRatePair(null);
+                    }}
+                  >
+                    {availableRateSubjects.length === 0 && <option value="">Aucune matière affectée pour cette classe</option>}
+                    {availableRateSubjects.map((pair) => (
+                      <option key={pair.subjectId} value={pair.subjectId}>{pair.subjectName}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="block max-w-sm text-sm font-semibold text-slate-700">
+                Montant horaire (F CFA)
+                <input
+                  className={`${inputClass} mt-1`}
+                  type="number"
+                  step="1"
+                  min="0"
+                  max="2147483647"
+                  required
+                  value={rateAmount}
+                  onChange={(event) => setRateAmount(event.target.value)}
+                  placeholder="Ex. 100"
+                  disabled={busyAction != null || ratePairOptions.length === 0}
+                />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button type="submit" className={buttonClass} disabled={busyAction != null || ratePairOptions.length === 0}>
+                  {busyAction === 'class-subject-rate' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Enregistrer
+                </button>
+                {editingRatePair && (
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    disabled={busyAction != null}
+                    onClick={() => {
+                      setEditingRatePair(null);
+                      setRateAmount('');
+                    }}
+                  >
+                    Annuler la modification
+                  </button>
+                )}
+              </div>
             </form>
           )}
-          {selectedTeacherId && rateLoaded && isSuperAdmin && (
-            <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-              Taux enregistré : {hourlyRate === '' ? 'aucun taux' : formatAmount(Number(hourlyRate))}. Le Super Administrateur dispose ici d’un accès consultatif.
-            </p>
+          {currentRateLoad?.status === 'loaded' && isSuperAdmin && (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">Le Super Administrateur dispose ici d’un accès consultatif.</p>
           )}
-          {visibleTeachers.length === 0 && <EmptyState>Aucun enseignant actif connu dans la liste de l’application pour cet établissement.</EmptyState>}
+          {currentRateLoad?.status === 'loaded' && currentRateLoad.rates.length === 0 ? (
+            <EmptyState>Aucun tarif horaire n’est configuré pour cet établissement.</EmptyState>
+          ) : currentRateLoad?.status === 'loaded' && (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-4 py-3">Classe</th>
+                    <th className="px-4 py-3">Matière</th>
+                    <th className="px-4 py-3">Montant horaire</th>
+                    {canManage && <th className="px-4 py-3">Actions</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {currentRateLoad.rates.map((rate) => {
+                    const hasActivePair = currentRateLoad.pairs.some((pair) => (
+                      pair.classId === rate.classId && pair.subjectId === rate.subjectId
+                    ));
+                    return (
+                      <tr key={`${rate.classId}:${rate.subjectId}`}>
+                        <td className="px-4 py-3 font-medium text-slate-900">{rate.className}</td>
+                        <td className="px-4 py-3 text-slate-700">{rate.subjectName}</td>
+                        <td className="px-4 py-3 text-slate-700">{new Intl.NumberFormat('fr-FR').format(rate.hourlyRateXof)} F CFA</td>
+                        {canManage && (
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className={secondaryButtonClass}
+                                disabled={busyAction != null}
+                                title={hasActivePair ? 'Modifier le tarif' : 'Modifier un tarif existant sans créer d’affectation'}
+                                onClick={() => editClassSubjectRate(rate)}
+                              >
+                                Modifier
+                              </button>
+                              <button
+                                type="button"
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50"
+                                disabled={busyAction != null}
+                                onClick={() => void removeClassSubjectRate(rate)}
+                              >
+                                {busyAction === `class-subject-rate-${rate.classId}-${rate.subjectId}`
+                                  ? <RefreshCw className="h-4 w-4 animate-spin" />
+                                  : <X className="h-4 w-4" />}
+                                Supprimer
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {currentRateLoad?.status === 'loaded' && currentRateLoad.pairs.length === 0 && (
+            <p className="text-sm text-amber-800">Aucune association pédagogique active n’est disponible pour créer un tarif. Les tarifs existants restent modifiables s’ils sont toujours rattachés à cet établissement, et peuvent être supprimés.</p>
+          )}
         </div>
       )}
     </section>
@@ -4376,7 +4660,11 @@ function SessionCard({
   isSuperAdmin,
   busyAction,
   selected,
+  correctionOpen,
   onSelect,
+  onSelectForCorrection,
+  onCancelCorrection,
+  onCorrect,
   onClose,
   closeReason,
   onCloseReasonChange,
@@ -4388,7 +4676,11 @@ function SessionCard({
   isSuperAdmin: boolean;
   busyAction: string | null;
   selected: boolean;
+  correctionOpen: boolean;
   onSelect: () => void;
+  onSelectForCorrection: () => void;
+  onCancelCorrection: () => void;
+  onCorrect: (correction: { startedAt?: string; endedAt?: string; reason: string }) => void;
   onClose: (reason: string) => void;
   closeReason: string;
   onCloseReasonChange: (reason: string) => void;
@@ -4407,7 +4699,7 @@ function SessionCard({
             }`}>{sessionStatusLabel(session.status)}</span>
           </div>
           {!isTeacher && <p className="mt-1 text-sm text-slate-600">{session.teacherNameSnapshot} · {session.schoolNameSnapshot}</p>}
-          <p className="mt-1 text-sm text-slate-500">Début : {formatLomeDate(session.startedAt)} · Fin validée : {formatLomeDate(session.validatedEndedAt)}</p>
+          <p className="mt-1 text-sm text-slate-500">Début : {formatLomeDate(session.startedAt, true, true)} · Fin validée : {formatLomeDate(session.validatedEndedAt, true, true)}</p>
         </button>
         {!isTeacher && <span className="text-sm font-semibold text-slate-800">{formatAmount(session.estimatedAmountXof)}</span>}
       </div>
@@ -4421,6 +4713,13 @@ function SessionCard({
         <p>Taux instantané : {formatAmount(session.hourlyRateXofSnapshot)}</p>
         <p>Fin : {session.endSource === 'gps' ? 'contrôle GPS validé' : session.endSource === 'regularization' ? 'régularisation validée' : session.status === 'closed_without_end' ? 'sans heure réelle' : '—'}</p>
       </div>
+      {isSchoolAdmin && session.status === 'completed' && (
+        <div className="mt-3">
+          <button type="button" className={buttonClass} onClick={onSelectForCorrection}>
+            <CalendarClock className="h-4 w-4" /> Corriger les horaires
+          </button>
+        </div>
+      )}
       {session.status === 'closed_without_end' && session.closeReason && (
         <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">Motif de clôture : {session.closeReason}</p>
       )}
@@ -4432,6 +4731,16 @@ function SessionCard({
           <p className="mt-1">Contrôle de fin : {session.endDistanceMeters == null ? 'Aucune fin GPS enregistrée' : `${session.endDistanceMeters} m · précision ${session.endAccuracyMeters} m / rayon ${session.endGeofenceRadiusMeters} m`}</p>
           <p className="mt-1">Montant estimé : {formatAmount(session.estimatedAmountXof)}. Une clôture administrative sans heure validée ne produit ni durée ni rémunération.</p>
         </div>
+      )}
+      {correctionOpen && isSchoolAdmin && session.status === 'completed' && (
+        <SessionTimeCorrectionForm
+          key={`${session.id}:${session.startedAt}:${session.validatedEndedAt}`}
+          session={session}
+          busy={busyAction === `correct-session-${session.id}`}
+          disabled={busyAction != null}
+          onSubmit={onCorrect}
+          onCancel={onCancelCorrection}
+        />
       )}
 
       {isTeacher && session.status === 'open' && (
@@ -4490,7 +4799,7 @@ function TeacherRegularizationForms({
           <form key={session.id} className="grid gap-3 rounded-xl border border-white bg-white p-3 sm:grid-cols-[1fr_auto]" onSubmit={(event) => { event.preventDefault(); onSubmit(session); }}>
             <div className="text-sm">
               <p className="font-semibold text-slate-900">{session.classNameSnapshot} · {session.subjectNameSnapshot}</p>
-              <p className="text-xs text-slate-500">Début : {formatLomeDate(session.startedAt)}</p>
+              <p className="text-xs text-slate-500">Début : {formatLomeDate(session.startedAt, true, true)}</p>
             </div>
             <div className="flex items-end">
               <button type="submit" className={buttonClass} disabled={busyAction != null}>
@@ -4556,8 +4865,8 @@ function SessionDetails({ session }: { session: Session }) {
       <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
         <Detail label="Enseignant" value={session.teacherNameSnapshot} />
         <Detail label="Classe / matière" value={`${session.classNameSnapshot} · ${session.subjectNameSnapshot}`} />
-        <Detail label="Début UTC affiché à Lomé" value={formatLomeDate(session.startedAt)} />
-        <Detail label="Fin validée" value={formatLomeDate(session.validatedEndedAt)} />
+        <Detail label="Début UTC affiché à Lomé" value={formatLomeDate(session.startedAt, true, true)} />
+        <Detail label="Fin validée" value={formatLomeDate(session.validatedEndedAt, true, true)} />
         <Detail label="Source de fin" value={session.endSource === 'gps' ? 'GPS' : session.endSource === 'regularization' ? 'Régularisation acceptée' : 'Aucune'} />
         <Detail label="Durée validée" value={formatDuration(session.durationMilliseconds)} />
         <Detail label="Rémunération estimée" value={formatAmount(session.estimatedAmountXof)} />
@@ -4576,11 +4885,13 @@ function SessionTimeCorrectionForm({
   busy,
   disabled,
   onSubmit,
+  onCancel,
 }: {
   session: Session;
   busy: boolean;
   disabled: boolean;
   onSubmit: (correction: { startedAt?: string; endedAt?: string; reason: string }) => void;
+  onCancel: () => void;
 }) {
   const originalStartedAt = formatLomeInput(new Date(session.startedAt));
   const originalEndedAt = formatLomeInput(new Date(session.validatedEndedAt ?? session.startedAt));
@@ -4645,10 +4956,13 @@ function SessionTimeCorrectionForm({
         />
       </label>
       {formError && <p role="alert" className="text-sm text-rose-700 sm:col-span-2">{formError}</p>}
-      <div className="sm:col-span-2">
+      <div className="flex flex-wrap gap-2 sm:col-span-2">
         <button type="submit" className={buttonClass} disabled={disabled || !reason.trim()}>
           {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
           Enregistrer et auditer la correction
+        </button>
+        <button type="button" className={secondaryButtonClass} disabled={busy} onClick={onCancel}>
+          Annuler
         </button>
       </div>
     </form>

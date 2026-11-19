@@ -21,7 +21,7 @@ const mockDatabaseState = vi.hoisted(() => ({
   teacherSubjectAssociations: [] as Array<Record<string, unknown>>,
   classes: [] as Array<Record<string, unknown>>,
   subjects: [] as Array<Record<string, unknown>>,
-  hourlyRates: [] as Array<Record<string, unknown>>,
+  classSubjectRates: [] as Array<Record<string, unknown>>,
   sessions: [] as Array<Record<string, unknown>>,
   regularizationRequests: [] as Array<Record<string, unknown>>,
   regularizationDecisions: [] as Array<Record<string, unknown>>,
@@ -75,7 +75,7 @@ vi.mock('../../db/index.ts', async () => {
     if (table === schema.teacherSubjects) return mockDatabaseState.teacherSubjectAssociations;
     if (table === schema.classes) return mockDatabaseState.classes;
     if (table === schema.subjects) return mockDatabaseState.subjects;
-    if (table === schema.teacherControlHourlyRates) return mockDatabaseState.hourlyRates;
+    if (table === schema.teacherControlClassSubjectRates) return mockDatabaseState.classSubjectRates;
     if (table === schema.teacherControlSessions) return mockDatabaseState.sessions;
     if (table === schema.teacherControlRegularizationRequests) return mockDatabaseState.regularizationRequests;
     if (table === schema.teacherControlRegularizationDecisions) return mockDatabaseState.regularizationDecisions;
@@ -179,7 +179,7 @@ vi.mock('../../db/index.ts', async () => {
               if (session.hourlyRateXofSnapshot == null) return total;
               const duration = new Date(session.validatedEndedAt as string | Date).getTime()
                 - new Date(session.startedAt as string | Date).getTime();
-              return total + Math.round(Number(session.hourlyRateXofSnapshot) * duration / 3_600_000);
+              return total + Number(session.hourlyRateXofSnapshot) * duration / 3_600_000;
             }, 0);
             return {
               schoolId,
@@ -311,9 +311,10 @@ vi.mock('../../db/index.ts', async () => {
             && builder.params.includes(row.schoolId));
         } else if (builder.table === schema.subjects) {
           rows = rows.filter((row) => builder.params.includes(row.id));
-        } else if (builder.table === schema.teacherControlHourlyRates) {
+        } else if (builder.table === schema.teacherControlClassSubjectRates) {
           rows = rows.filter((row) => builder.params.includes(row.schoolId)
-            && builder.params.includes(row.teacherId));
+            && builder.params.includes(row.classId)
+            && builder.params.includes(row.subjectId));
         } else if (builder.table === schema.teacherControlSessions) {
           rows = rows.filter((row) => builder.params.every((param: unknown) => (
             param instanceof Date || Object.values(row).includes(param)
@@ -371,8 +372,10 @@ vi.mock('../../db/index.ts', async () => {
         }
         const existingIndex = table === schema.teacherControlGpsSettings
           ? collection.findIndex((row) => row.schoolId === values?.schoolId)
-          : table === schema.teacherControlHourlyRates
-            ? collection.findIndex((row) => row.schoolId === values?.schoolId && row.teacherId === values?.teacherId)
+          : table === schema.teacherControlClassSubjectRates
+            ? collection.findIndex((row) => row.schoolId === values?.schoolId
+              && row.classId === values?.classId
+              && row.subjectId === values?.subjectId)
           : -1;
         const saved = existingIndex >= 0
           ? { ...collection[existingIndex], ...values, id: collection[existingIndex]?.id }
@@ -441,6 +444,11 @@ vi.mock('../../db/index.ts', async () => {
           if (table === schema.teacherControlGpsChallenges) {
             return !(row.expiresAt instanceof Date && row.expiresAt < new Date());
           }
+          if (table === schema.teacherControlClassSubjectRates) {
+            return !(params.includes(row.schoolId)
+              && params.includes(row.classId)
+              && params.includes(row.subjectId));
+          }
           return !params.includes(row.schoolId);
         });
         rows.splice(0, rows.length, ...retained);
@@ -471,7 +479,7 @@ vi.mock('../../db/index.ts', async () => {
         teacherSubjectAssociations: structuredClone(mockDatabaseState.teacherSubjectAssociations),
         classes: structuredClone(mockDatabaseState.classes),
         subjects: structuredClone(mockDatabaseState.subjects),
-        hourlyRates: structuredClone(mockDatabaseState.hourlyRates),
+        classSubjectRates: structuredClone(mockDatabaseState.classSubjectRates),
         sessions: structuredClone(mockDatabaseState.sessions),
         regularizationRequests: structuredClone(mockDatabaseState.regularizationRequests),
         regularizationDecisions: structuredClone(mockDatabaseState.regularizationDecisions),
@@ -509,7 +517,7 @@ describe('teacher control API authorization and input validation', () => {
     mockDatabaseState.teacherSubjectAssociations = [];
     mockDatabaseState.classes = [];
     mockDatabaseState.subjects = [];
-    mockDatabaseState.hourlyRates = [];
+    mockDatabaseState.classSubjectRates = [];
     mockDatabaseState.sessions = [];
     mockDatabaseState.regularizationRequests = [];
     mockDatabaseState.regularizationDecisions = [];
@@ -552,8 +560,8 @@ describe('teacher control API authorization and input validation', () => {
     mockDatabaseState.assignments = [{
       id: 33, teacherId: 21, schoolId: 8, classId: 41, subjectId: 51, isActive: true,
     }];
-    mockDatabaseState.hourlyRates = [{
-      id: 34, schoolId: 8, teacherId: 21, hourlyRateXof: 3600,
+    mockDatabaseState.classSubjectRates = [{
+      id: 34, schoolId: 8, classId: 41, subjectId: 51, hourlyRateXof: 3600,
     }];
   };
 
@@ -2023,7 +2031,7 @@ describe('teacher control API authorization and input validation', () => {
       const duration = new Date(listedSession.validatedEndedAt).getTime()
         - new Date(listedSession.startedAt).getTime();
       expect(listedSession.durationMilliseconds).toBe(duration);
-      expect(listedSession.estimatedAmountXof).toBe(Math.round(3600 * duration / 3_600_000));
+      expect(listedSession.estimatedAmountXof).toBe(3600 * duration / 3_600_000);
 
       const repeatedDecision = await request(createTestApp())
         .post(`/api/teacher-control/regularizations/${createResponse.body.id}/decision`)

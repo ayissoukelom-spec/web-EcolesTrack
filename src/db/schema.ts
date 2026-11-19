@@ -1098,20 +1098,20 @@ export const teacherControlGpsChallenges = pgTable('teacher_control_gps_challeng
   actionCheck: check('teacher_control_gps_challenges_action_check', sql`${table.action} IN ('start_session', 'end_session')`),
 }));
 
-export const teacherControlHourlyRates = pgTable('teacher_control_hourly_rates', {
+export const teacherControlClassSubjectRates = pgTable('teacher_control_class_subject_rates', {
   id: serial('id').primaryKey(),
-  schoolId: integer('school_id').notNull(),
-  schoolNameSnapshot: text('school_name_snapshot').notNull(),
-  teacherId: integer('teacher_id').notNull(),
-  teacherNameSnapshot: text('teacher_name_snapshot').notNull(),
+  schoolId: integer('school_id').references(() => schools.id, { onDelete: 'cascade' }).notNull(),
+  classId: integer('class_id').references(() => classes.id, { onDelete: 'restrict' }).notNull(),
+  subjectId: integer('subject_id').references(() => subjects.id, { onDelete: 'restrict' }).notNull(),
   hourlyRateXof: integer('hourly_rate_xof').notNull(),
-  updatedByUserId: integer('updated_by_user_id'),
+  updatedByUserId: integer('updated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   updatedByNameSnapshot: text('updated_by_name_snapshot'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  teacherSchoolUniqueIdx: uniqueIndex('teacher_control_hourly_rates_school_teacher_uidx').on(table.schoolId, table.teacherId),
-  hourlyRateCheck: check('teacher_control_hourly_rates_amount_check', sql`${table.hourlyRateXof} >= 0`),
+  schoolClassSubjectUniqueIdx: uniqueIndex('teacher_control_class_subject_rates_scope_uidx')
+    .on(table.schoolId, table.classId, table.subjectId),
+  hourlyRateCheck: check('teacher_control_class_subject_rates_amount_check', sql`${table.hourlyRateXof} >= 0`),
 }));
 
 export const teacherControlSessions = pgTable('teacher_control_sessions', {

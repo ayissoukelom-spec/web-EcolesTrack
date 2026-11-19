@@ -109,6 +109,6 @@ export function calculateTeacherControlCompensation(input: {
 
   return {
     durationMilliseconds,
-    estimatedAmountXof: Math.round(input.hourlyRateXof * durationMilliseconds / 3_600_000),
+    estimatedAmountXof: input.hourlyRateXof * durationMilliseconds / 3_600_000,
   };
 }

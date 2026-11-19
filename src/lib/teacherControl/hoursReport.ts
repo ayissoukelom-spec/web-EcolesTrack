@@ -66,7 +66,7 @@ export interface TeacherHoursReportOptions {
 }
 
 const timeZone = 'Africa/Lome';
-const workbookDurationFormat = '[h]" h "mm" min"';
+const workbookDurationFormat = '[h]" h "mm" min "ss" s"';
 
 function sessionDuration(session: TeacherHoursSession): number {
   if (!session.validatedEndedAt) return 0;
@@ -76,7 +76,7 @@ function sessionDuration(session: TeacherHoursSession): number {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
     throw new Error(`Intervalle de séance invalide (#${session.id}).`);
   }
-  return Math.floor((end - start) / 60_000) * 60_000;
+  return end - start;
 }
 
 function aggregateBy(
@@ -95,8 +95,11 @@ function aggregateBy(
 }
 
 export function formatTeacherHoursDuration(milliseconds: number): string {
-  const totalMinutes = Math.floor(milliseconds / 60_000);
-  return `${Math.floor(totalMinutes / 60)} h ${String(totalMinutes % 60).padStart(2, '0')} min`;
+  const totalSeconds = Math.floor(milliseconds / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours} h ${String(minutes).padStart(2, '0')} min ${String(seconds).padStart(2, '0')} s`;
 }
 
 export function formatTeacherHoursDate(value: string, includeTime = false): string {
@@ -105,7 +108,7 @@ export function formatTeacherHoursDate(value: string, includeTime = false): stri
   return new Intl.DateTimeFormat('fr-FR', {
     timeZone,
     dateStyle: 'medium',
-    ...(includeTime ? { timeStyle: 'short' as const } : {}),
+    ...(includeTime ? { timeStyle: 'medium' as const } : {}),
   }).format(date);
 }
 
@@ -117,6 +120,7 @@ export function formatTeacherHoursTime(value: string | null): string {
     timeZone,
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
   }).format(date);
 }
 
@@ -272,7 +276,7 @@ export async function createTeacherHoursExcel(report: TeacherHoursReport): Promi
   const overviewTitle = summary.addRow(['Synthèse générale']);
   styleSection(overviewTitle);
   summary.addRow(['Nombre total de séances', report.sessionCount]);
-  const grandTotalRow = summary.addRow(['Total général des heures et minutes effectuées', durationInExcelDays(report.durationMilliseconds)]);
+  const grandTotalRow = summary.addRow(['Total général des heures, minutes et secondes effectuées', durationInExcelDays(report.durationMilliseconds)]);
   grandTotalRow.getCell(2).numFmt = workbookDurationFormat;
   const teachersHeader = summary.addRow(['Établissement', 'Enseignant', 'Nombre de séances', 'Total effectué']);
   styleHeader(teachersHeader);
@@ -291,7 +295,7 @@ export async function createTeacherHoursExcel(report: TeacherHoursReport): Promi
     const individualTitle = summary.addRow([`Relevé individuel - ${teacher.teacherName} - ${teacher.schoolName}`]);
     styleSection(individualTitle);
     summary.addRow(['Nombre total de séances', teacher.sessionCount]);
-    const totalRow = summary.addRow(['Total des heures et minutes effectuées', durationInExcelDays(teacher.durationMilliseconds)]);
+    const totalRow = summary.addRow(['Total des heures, minutes et secondes effectuées', durationInExcelDays(teacher.durationMilliseconds)]);
     totalRow.getCell(2).numFmt = workbookDurationFormat;
 
     const classSubjectTitle = summary.addRow(['Synthèse par classe et matière', 'Classe', 'Matière', 'Nombre de séances', 'Total effectué']);
@@ -353,8 +357,8 @@ export async function createTeacherHoursExcel(report: TeacherHoursReport): Promi
         'Terminée et validée',
       ]);
       row.getCell(3).numFmt = 'dd/mm/yyyy';
-      row.getCell(6).numFmt = 'hh:mm';
-      row.getCell(7).numFmt = 'hh:mm';
+      row.getCell(6).numFmt = 'hh:mm:ss';
+      row.getCell(7).numFmt = 'hh:mm:ss';
       row.getCell(9).numFmt = workbookDurationFormat;
       row.getCell(10).numFmt = workbookDurationFormat;
     }

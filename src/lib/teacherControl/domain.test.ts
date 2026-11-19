@@ -92,12 +92,12 @@ describe('teacher control GPS and compensation rules', () => {
     })).toEqual({ durationMilliseconds: 5_400_000, estimatedAmountXof: null });
   });
 
-  it('rounds estimated compensation to the nearest XOF and rejects reversed validated times', () => {
+  it('preserves prorated compensation precision and rejects reversed validated times', () => {
     expect(calculateTeacherControlCompensation({
       startedAt: new Date('2026-10-31T07:00:00.000Z'),
-      validatedEndedAt: new Date('2026-10-31T07:00:30.000Z'),
-      hourlyRateXof: 1,
-    }).estimatedAmountXof).toBe(0);
+      validatedEndedAt: new Date('2026-10-31T07:03:52.000Z'),
+      hourlyRateXof: 2_000,
+    }).estimatedAmountXof).toBeCloseTo(128.88888888888889, 10);
     expect(() => calculateTeacherControlCompensation({
       startedAt: new Date('2026-10-31T08:00:00.000Z'),
       validatedEndedAt: new Date('2026-10-31T07:00:00.000Z'),
