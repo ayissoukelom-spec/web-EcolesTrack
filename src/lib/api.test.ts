@@ -159,6 +159,28 @@ describe('apiFetch', () => {
     await expect(apiFetch('/api/test')).rejects.toMatchObject({ status: 401, isUnauthorized: true });
   });
 
+  it('preserves non-coordinate GPS validation diagnostics from the API error response', async () => {
+    const gpsDiagnostic = {
+      reason: 'outside_geofence',
+      accuracyMeters: 24,
+      distanceMeters: 32_000,
+      geofenceRadiusMeters: 200,
+    };
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: () => Promise.resolve({
+        error: 'GPS validation failed: outside_geofence',
+        gpsDiagnostic,
+      }),
+    } as any);
+
+    await expect(apiFetch('/api/teacher-control/sessions/start')).rejects.toMatchObject({
+      status: 400,
+      gpsDiagnostic,
+    });
+  });
+
   it('clears auth state, marks the session expired, and redirects to login on token/session 401 errors', async () => {
     const replaceMock = vi.fn();
     Object.defineProperty(globalThis, 'location', {

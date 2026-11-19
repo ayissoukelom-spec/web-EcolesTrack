@@ -7,6 +7,43 @@ const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
 
 vi.mock('../lib/api.ts', () => ({ apiFetch: apiFetchMock }));
 
+vi.mock('./TeacherControlGpsMapPreview.tsx', async () => {
+  const ReactModule = await import('react');
+  type MockMapProps = {
+    candidateKey: number;
+    latitude: number;
+    longitude: number;
+    onAvailabilityChange: (candidateKey: number, status: 'loading' | 'ready' | 'error') => void;
+    onPositionChange: (candidateKey: number, latitude: number, longitude: number) => void;
+  };
+  const MockMapPreview = ({ candidateKey, latitude, longitude, onAvailabilityChange, onPositionChange }: MockMapProps) => {
+    const callbackRef = ReactModule.useRef(onAvailabilityChange);
+    const positionChangeRef = ReactModule.useRef(onPositionChange);
+    callbackRef.current = onAvailabilityChange;
+    positionChangeRef.current = onPositionChange;
+    ReactModule.useEffect(() => {
+      callbackRef.current(candidateKey, 'loading');
+    }, [candidateKey]);
+    return ReactModule.createElement(
+      'div',
+      { 'aria-label': `Mock map preview ${latitude}, ${longitude}` },
+      ReactModule.createElement('button', {
+        type: 'button',
+        onClick: () => callbackRef.current(candidateKey, 'error'),
+      }, 'Simuler une erreur de carte'),
+      ReactModule.createElement('button', {
+        type: 'button',
+        onClick: () => callbackRef.current(candidateKey, 'ready'),
+      }, 'Simuler une carte chargée'),
+      ReactModule.createElement('button', {
+        type: 'button',
+        onClick: () => positionChangeRef.current(candidateKey, 6.141, 1.216),
+      }, 'Simuler un déplacement du marqueur'),
+    );
+  };
+  return { default: MockMapPreview };
+});
+
 const session = {
   id: 1,
   schoolId: 8,
@@ -80,7 +117,7 @@ function configureTeacherApi() {
   });
 }
 
-function configureAdminGpsApi() {
+function configureAdminGpsApi(savedCoordinates = { latitude: null as number | null, longitude: null as number | null }) {
   apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
     if (url.startsWith('/api/teacher-control/filter-options')) {
       return { teachers: [], classes: [], subjects: [] };
@@ -106,8 +143,8 @@ function configureAdminGpsApi() {
         schoolId: 8,
         schoolName: 'École A',
         isEnabled: false,
-        latitude: null,
-        longitude: null,
+        latitude: savedCoordinates.latitude,
+        longitude: savedCoordinates.longitude,
         geofenceRadiusMeters: 200,
         updatedAt: null,
       };
@@ -127,6 +164,7 @@ describe('TeacherControlView', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     window.history.replaceState(null, '', '/');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -682,17 +720,29 @@ describe('TeacherControlView', () => {
     configureTeacherApi();
     window.history.replaceState(null, '', '/teacher-control/teacher');
     const requestOrder: string[] = [];
-    const getCurrentPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
+    const sampleAccuracies = [200, 146, 90];
+    let sampleIndex = 0;
+    const watchPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
       requestOrder.push('geolocation');
+      if (sampleIndex === 0) {
+        success({
+          coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 1 },
+          timestamp: Date.now() - 11_000,
+        } as GeolocationPosition);
+      }
+      const accuracy = sampleAccuracies[sampleIndex];
+      sampleIndex += 1;
       success({
-        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 146 },
+        coords: { latitude: 6.1375, longitude: 1.2123, accuracy },
         timestamp: Date.now(),
       } as GeolocationPosition);
       expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 });
+      return sampleIndex;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     apiFetchMock.mockImplementation(async (url: string) => {
       requestOrder.push(url);
@@ -724,7 +774,7 @@ describe('TeacherControlView', () => {
 
     fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
 
     await waitFor(() => {
@@ -739,14 +789,15 @@ describe('TeacherControlView', () => {
       subjectId: 40,
       latitude: 6.1375,
       longitude: 1.2123,
-      accuracyMeters: 146,
+      accuracyMeters: 90,
       gpsChallenge: 'a'.repeat(43),
     });
     expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('timestamp');
     expect(requestOrder.indexOf('geolocation'))
       .toBeLessThan(requestOrder.indexOf('/api/teacher-control/gps-challenges'));
-    await waitFor(() => expect(getCurrentPosition).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('146');
+    await waitFor(() => expect(watchPosition).toHaveBeenCalledTimes(3));
+    expect(clearWatch).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('90');
     expect(await screen.findByRole('textbox', { name: 'Latitude de début' })).toHaveProperty('readOnly', true);
     expect(screen.getByRole('textbox', { name: 'Latitude de début' })).toHaveValue('6.1375');
     expect(screen.getByText('Heure du début')).toBeTruthy();
@@ -755,6 +806,74 @@ describe('TeacherControlView', () => {
     expect((screen.getByRole('textbox', { name: 'Heure du début' }) as HTMLInputElement).value).toBeTruthy();
     expect(screen.getByText(/Séance en cours :/)).toBeTruthy();
     expect(window.location.pathname).toBe('/teacher-control/teacher');
+  });
+
+  it('retries one contradictory GPS series and submits the most precise actual fix from the coherent series', async () => {
+    configureTeacherApi();
+    window.history.replaceState(null, '', '/teacher-control/teacher');
+    const fixes = [
+      { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
+      { latitude: 6.1395, longitude: 1.2123, accuracy: 20 },
+      { latitude: 6.1375, longitude: 1.2123, accuracy: 17 },
+      { latitude: 6.1375, longitude: 1.2123, accuracy: 40 },
+      { latitude: 6.1377, longitude: 1.2123, accuracy: 12 },
+      { latitude: 6.1378, longitude: 1.2123, accuracy: 25 },
+    ];
+    let acquisitionIndex = 0;
+    const requestOrder: string[] = [];
+    const watchPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
+      requestOrder.push('geolocation');
+      const fix = fixes[acquisitionIndex];
+      if (!fix) throw new Error('Unexpected extra teacher GPS acquisition.');
+      acquisitionIndex += 1;
+      success({ coords: fix, timestamp: Date.now() } as GeolocationPosition);
+      expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0 });
+      return acquisitionIndex;
+    });
+    const clearWatch = vi.fn();
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { watchPosition, clearWatch },
+    });
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      requestOrder.push(url);
+      if (url === '/api/teacher-control/gps-challenges') return { challenge: 'e'.repeat(43) };
+      if (url === '/api/teacher-control/sessions/start') return session;
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      if (url === '/api/teacher-control/regularizations') return [];
+      if (url === '/api/teacher-control/assignments') {
+        return [{ assignmentId: 9, classId: 30, className: '6e A', subjectId: 40, subjectName: 'Mathématiques' }];
+      }
+      return {};
+    });
+    render(<TeacherControlView {...defaultProps} />);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
+
+    expect(await screen.findByText(/Séance en cours :/)).toBeTruthy();
+    const startCall = apiFetchMock.mock.calls.find(([url]) => url === '/api/teacher-control/sessions/start');
+    expect(JSON.parse(startCall?.[1]?.body as string)).toMatchObject({
+      latitude: 6.1377,
+      longitude: 1.2123,
+      accuracyMeters: 12,
+    });
+    expect(JSON.parse(startCall?.[1]?.body as string).latitude)
+      .not.toBe((fixes[3].latitude + fixes[4].latitude + fixes[5].latitude) / 3);
+    expect(watchPosition).toHaveBeenCalledTimes(6);
+    expect(clearWatch).toHaveBeenCalledTimes(6);
+    expect(requestOrder.indexOf('/api/teacher-control/gps-challenges'))
+      .toBeGreaterThan(requestOrder.lastIndexOf('geolocation'));
   });
 
   it('distinguishes an empty pedagogical association list from a technical loading error', async () => {
@@ -817,12 +936,17 @@ describe('TeacherControlView', () => {
       { latitude: 6.1378, longitude: 1.2126, accuracy: 500 },
     ];
     let positionIndex = 0;
-    const getCurrentPosition = vi.fn((success: PositionCallback) => {
-      success({ coords: fixes[positionIndex++], timestamp: Date.now() } as GeolocationPosition);
+    const watchPosition = vi.fn((success: PositionCallback) => {
+      const fix = fixes[Math.floor(positionIndex / 3)];
+      if (!fix) throw new Error('Unexpected extra teacher GPS acquisition.');
+      positionIndex += 1;
+      success({ coords: fix, timestamp: Date.now() } as GeolocationPosition);
+      return positionIndex;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     let currentSession: typeof session | null = null;
     let challengeIndex = 0;
@@ -874,12 +998,12 @@ describe('TeacherControlView', () => {
     });
     render(<TeacherControlView {...defaultProps} />);
 
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
     fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
     await screen.findByText(/Séance en cours :/);
-    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    expect(watchPosition).toHaveBeenCalledTimes(3);
 
     fireEvent.click(screen.getByRole('button', { name: 'Fin', pressed: false }));
     expect(await screen.findByRole('radio', { name: /6e A · Mathématiques/ })).toBeTruthy();
@@ -915,7 +1039,8 @@ describe('TeacherControlView', () => {
       accuracyMeters: fixes[1].accuracy,
       gpsChallenge: '2'.repeat(43),
     });
-    expect(getCurrentPosition).toHaveBeenCalledTimes(2);
+    expect(watchPosition).toHaveBeenCalledTimes(6);
+    expect(clearWatch).toHaveBeenCalledTimes(6);
     expect(await screen.findByText(/Séance clôturée : 6e A · Mathématiques/)).toBeTruthy();
     expect(screen.getByText('Heure de fin')).toBeTruthy();
     expect(screen.queryByText('Heure de fin (Africa/Lome)')).toBeNull();
@@ -927,12 +1052,14 @@ describe('TeacherControlView', () => {
   it('shows a useful message when the teacher refuses location permission', async () => {
     configureTeacherApi();
     window.history.replaceState(null, '', '/teacher-control/teacher');
-    const getCurrentPosition = vi.fn((_success: PositionCallback, error: PositionErrorCallback) => {
+    const watchPosition = vi.fn((_success: PositionCallback, error: PositionErrorCallback) => {
       error({ code: 1, message: 'Permission denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+      return 1;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     render(<TeacherControlView {...defaultProps} />);
 
@@ -948,20 +1075,22 @@ describe('TeacherControlView', () => {
   it('retries GPS acquisition after a browser timeout and issues the challenge only after a fix', async () => {
     window.history.replaceState(null, '', '/teacher-control/teacher');
     let attempt = 0;
-    const getCurrentPosition = vi.fn((success: PositionCallback, error: PositionErrorCallback) => {
+    const watchPosition = vi.fn((success: PositionCallback, error: PositionErrorCallback) => {
       attempt += 1;
       if (attempt === 1) {
         error({ code: 3, message: 'Timeout', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
-        return;
+        return attempt;
       }
       success({
         coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
         timestamp: Date.now(),
       } as GeolocationPosition);
+      return attempt;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     apiFetchMock.mockImplementation(async (url: string) => {
       if (url === '/api/teacher-control/gps-challenges') return { challenge: 'b'.repeat(43) };
@@ -993,30 +1122,34 @@ describe('TeacherControlView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Réessayer' }));
     expect(await screen.findByText(/Séance en cours :/)).toBeTruthy();
-    expect(getCurrentPosition).toHaveBeenCalledTimes(2);
+    expect(watchPosition).toHaveBeenCalledTimes(4);
+    expect(clearWatch).toHaveBeenCalledTimes(4);
     expect(apiFetchMock.mock.calls.filter(([url]) => url === '/api/teacher-control/gps-challenges')).toHaveLength(1);
   });
 
-  it('rejects one imprecise reading and permits an explicit retry without changing the assignment', async () => {
+  it('rejects an imprecise reading and permits an explicit retry without changing the assignment', async () => {
     window.history.replaceState(null, '', '/');
     let attempt = 0;
-    const getCurrentPosition = vi.fn((success: PositionCallback) => {
+    const watchPosition = vi.fn((success: PositionCallback, error: PositionErrorCallback) => {
       attempt += 1;
       if (attempt === 1) {
         success({
           coords: { latitude: 6.1376, longitude: 1.2124, accuracy: 501 },
           timestamp: Date.now(),
         } as GeolocationPosition);
-        return;
+        error({ code: 3, message: 'Timeout', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+        return attempt;
       }
       success({
         coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 42 },
         timestamp: Date.now(),
       } as GeolocationPosition);
+      return attempt;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     apiFetchMock.mockImplementation(async (url: string) => {
       if (url === '/api/teacher-control/gps-challenges') return { challenge: 'c'.repeat(43) };
@@ -1043,8 +1176,7 @@ describe('TeacherControlView', () => {
     fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
-
-    expect(await screen.findByText('Position trop imprécise (501 m)')).toBeTruthy();
+    expect(await screen.findByText(/Position trop imprécise \(501 m\)/)).toBeTruthy();
     expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('501');
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
     expect(screen.getByRole('combobox', { name: 'Classe' })).toHaveValue('30');
@@ -1052,26 +1184,39 @@ describe('TeacherControlView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Réessayer' }));
     expect(await screen.findByText(/Séance en cours :/)).toBeTruthy();
-    expect(getCurrentPosition).toHaveBeenCalledTimes(2);
+    expect(watchPosition).toHaveBeenCalledTimes(4);
     const startCall = apiFetchMock.mock.calls.find(([url]) => url === '/api/teacher-control/sessions/start');
     expect(JSON.parse(startCall?.[1]?.body as string)).toMatchObject({ accuracyMeters: 42 });
   });
 
   it('shows an explicit outside-geofence validation error and keeps the selected assignment', async () => {
     window.history.replaceState(null, '', '/');
-    const getCurrentPosition = vi.fn((success: PositionCallback) => {
+    let watchCount = 0;
+    const watchPosition = vi.fn((success: PositionCallback) => {
+      watchCount += 1;
       success({
         coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 20 },
         timestamp: Date.now(),
       } as GeolocationPosition);
+      return watchCount;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     apiFetchMock.mockImplementation(async (url: string) => {
       if (url === '/api/teacher-control/gps-challenges') return { challenge: 'd'.repeat(43) };
-      if (url === '/api/teacher-control/sessions/start') throw new Error('GPS validation failed: outside_geofence');
+      if (url === '/api/teacher-control/sessions/start') {
+        throw Object.assign(new Error('GPS validation failed: outside_geofence'), {
+          gpsDiagnostic: {
+            reason: 'outside_geofence',
+            accuracyMeters: 20,
+            distanceMeters: 32_000,
+            geofenceRadiusMeters: 200,
+          },
+        });
+      }
       if (url.startsWith('/api/teacher-control/sessions')) return [];
       if (url.startsWith('/api/teacher-control/statistics')) {
         return {
@@ -1095,19 +1240,105 @@ describe('TeacherControlView', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
 
-    expect(await screen.findByText('Position hors du périmètre autorisé')).toBeTruthy();
+    expect(await screen.findByText('Position hors du périmètre autorisé.')).toBeTruthy();
     expect(screen.getByRole('alert')).toHaveTextContent('hors du périmètre autorisé de l’école');
     expect(screen.getByRole('textbox', { name: 'Précision GPS de début' })).toHaveValue('20');
+    expect(screen.getByText(/Distance approximative à l’établissement : 32000 m · rayon autorisé : 200 m/)).toBeTruthy();
     expect(screen.getByRole('combobox', { name: 'Classe' })).toHaveValue('30');
     expect(screen.getByRole('combobox', { name: 'Matière' })).toHaveValue('40');
+    expect(watchPosition).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses three fresh acquisitions for immediate GPS regularization completion', async () => {
+    const request = {
+      id: 73,
+      sessionId: null,
+      requestType: 'immediate_report',
+      schoolNameSnapshot: 'École A',
+      teacherNameSnapshot: 'Test actor',
+      classId: 30,
+      classNameSnapshot: '6e A',
+      subjectId: 40,
+      subjectNameSnapshot: 'Mathématiques',
+      referenceStartedAt: '2026-10-31T12:00:00.000Z',
+      declaredStartedAt: null,
+      proposedEndedAt: null,
+      reason: 'GPS indisponible au démarrage',
+      description: null,
+      incidentType: 'gps_unavailable',
+      technicalDetails: null,
+      gpsLatitude: null,
+      gpsLongitude: null,
+      gpsAccuracyMeters: null,
+      status: 'pending',
+      createdAt: '2026-10-31T12:00:00.000Z',
+    };
+    let acquisitionIndex = 0;
+    let completed = false;
+    const watchPosition = vi.fn((success: PositionCallback) => {
+      acquisitionIndex += 1;
+      success({
+        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
+        timestamp: Date.now(),
+      } as GeolocationPosition);
+      return acquisitionIndex;
+    });
+    const clearWatch = vi.fn();
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { watchPosition, clearWatch },
+    });
+    apiFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === '/api/teacher-control/gps-settings') return { maxGpsAccuracyMeters: 500 };
+      if (url === '/api/teacher-control/gps-challenges') return { challenge: 'f'.repeat(43) };
+      if (url === '/api/teacher-control/regularizations/73/complete') {
+        expect(options?.method).toBe('POST');
+        completed = true;
+        return {};
+      }
+      if (url === '/api/teacher-control/regularizations') return completed ? [] : [{ request, decisions: [] }];
+      if (url.startsWith('/api/teacher-control/sessions')) return [];
+      if (url.startsWith('/api/teacher-control/statistics')) {
+        return {
+          totalSessions: 0,
+          openSessions: 0,
+          completedSessions: 0,
+          pendingRegularizations: completed ? 0 : 1,
+          validatedDurationMilliseconds: 0,
+          estimatedCompensationXof: 0,
+        };
+      }
+      return {};
+    });
+    render(<TeacherControlView {...defaultProps} viewMode="regularizations" initialTab="requests" />);
+
+    fireEvent.change(await screen.findByLabelText('Motif obligatoire'), { target: { value: 'Fin de séance confirmée' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Terminer avec GPS' }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith(
+      '/api/teacher-control/regularizations/73/complete',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+
+    const completionCall = apiFetchMock.mock.calls.find(([url]) => url === '/api/teacher-control/regularizations/73/complete');
+    expect(JSON.parse(completionCall?.[1]?.body as string)).toMatchObject({
+      mode: 'gps',
+      reason: 'Fin de séance confirmée',
+      latitude: 6.1375,
+      longitude: 1.2123,
+      accuracyMeters: 18,
+      gpsChallenge: 'f'.repeat(43),
+    });
+    expect(watchPosition).toHaveBeenCalledTimes(3);
+    expect(clearWatch).toHaveBeenCalledTimes(3);
   });
 
   it('prevents concurrent GPS acquisition from rapid repeated clicks', async () => {
     window.history.replaceState(null, '', '/teacher-control/teacher');
-    const getCurrentPosition = vi.fn();
+    const watchPosition = vi.fn(() => 1);
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     configureTeacherApi();
     render(<TeacherControlView {...defaultProps} />);
@@ -1118,7 +1349,57 @@ describe('TeacherControlView', () => {
     fireEvent.click(locateButton);
     fireEvent.click(locateButton);
 
-    await waitFor(() => expect(getCurrentPosition).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(watchPosition).toHaveBeenCalledTimes(1));
+    expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Annuler la recherche GPS' }));
+    expect(await screen.findByText('Recherche GPS annulée. Vous pouvez réessayer.')).toBeTruthy();
+    expect(clearWatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the temporary GPS watch when the teacher view unmounts', async () => {
+    configureTeacherApi();
+    const watchPosition = vi.fn(() => 6);
+    const clearWatch = vi.fn();
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { watchPosition, clearWatch },
+    });
+    const { unmount } = render(<TeacherControlView {...defaultProps} />);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
+    await waitFor(() => expect(watchPosition).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(clearWatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends an unanswered GPS watch at the 45-second global limit', async () => {
+    configureTeacherApi();
+    const watchPosition = vi.fn(() => 5);
+    const clearWatch = vi.fn();
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { watchPosition, clearWatch },
+    });
+    render(<TeacherControlView {...defaultProps} />);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Classe' }), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Matière' }), { target: { value: '40' } });
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position' }));
+      for (let index = 0; index < 5; index += 1) await Promise.resolve();
+    });
+    expect(watchPosition).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Délai de localisation dépassé');
+    expect(screen.getByRole('alert')).toHaveTextContent('n’a pas été obtenue à temps');
+    expect(clearWatch).toHaveBeenCalledTimes(1);
     expect(apiFetchMock.mock.calls.some(([url]) => url === '/api/teacher-control/gps-challenges')).toBe(false);
   });
 
@@ -1580,16 +1861,26 @@ describe('TeacherControlView', () => {
 
   it('lets a super administrator capture school coordinates and edit them before saving', async () => {
     configureAdminGpsApi();
-    const getCurrentPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
-      success({
-        coords: { latitude: 6.1375, longitude: 1.2123, accuracy: 18 },
-        timestamp: Date.now(),
-      } as GeolocationPosition);
-      expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 });
+    const now = Date.now();
+    const positions = [0, 1, 2].map((index) => ({
+      coords: { latitude: 6.1375 + index / 1_000_000, longitude: 1.2123, accuracy: 18 },
+      timestamp: now - (3 - index) * 1_000,
+    } as GeolocationPosition));
+    let nextPositionIndex = 0;
+    const watchPosition = vi.fn((success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => {
+      expect(options).toMatchObject({ enableHighAccuracy: true, maximumAge: 0 });
+      expect(options?.timeout).toBeGreaterThan(0);
+      expect(options?.timeout).toBeLessThanOrEqual(45_000);
+      const position = positions[nextPositionIndex];
+      if (!position) throw new Error('Unexpected extra GPS sample request.');
+      nextPositionIndex += 1;
+      window.setTimeout(() => success(position), 0);
+      return nextPositionIndex;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     render(
       <TeacherControlView
@@ -1600,15 +1891,54 @@ describe('TeacherControlView', () => {
       />,
     );
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position automatiquement' }));
-    expect(await screen.findByRole('status')).toHaveTextContent(/précision indiquée par l’appareil : 18 m/);
-    expect(screen.getByLabelText('Latitude de l’établissement')).toHaveValue(6.1375);
-    expect(screen.getByLabelText('Longitude de l’établissement')).toHaveValue(1.2123);
-    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Trois mesures cohérentes obtenues/)).toBeTruthy();
+    expect(screen.getByLabelText('Latitude de l’emplacement à enregistrer')).toHaveValue(6.137501);
+    expect(screen.getByLabelText('Longitude de l’emplacement à enregistrer')).toHaveValue(1.2123);
+    const googleMapsLink = screen.getByRole('link', { name: 'Vérifier dans Google Maps' });
+    expect(googleMapsLink).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=6.137501%2C1.2123',
+    );
+    expect(googleMapsLink).toHaveAttribute('target', '_blank');
+    expect(googleMapsLink).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(watchPosition).toHaveBeenCalledTimes(3);
 
-    fireEvent.change(screen.getByLabelText('Latitude de l’établissement'), { target: { value: '6.1400' } });
-    fireEvent.change(screen.getByLabelText('Longitude de l’établissement'), { target: { value: '1.2150' } });
+    fireEvent.change(screen.getByLabelText('Latitude de l’emplacement à enregistrer'), { target: { value: '-6.1400' } });
+    fireEvent.change(screen.getByLabelText('Longitude de l’emplacement à enregistrer'), { target: { value: '-1.2150' } });
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=-6.14%2C-1.215',
+    );
+    fireEvent.change(screen.getByLabelText('Latitude de l’emplacement à enregistrer'), { target: { value: '91' } });
+    expect(screen.queryByRole('link', { name: 'Vérifier dans Google Maps' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Latitude de l’emplacement à enregistrer'), { target: { value: '6.1400' } });
+    fireEvent.change(screen.getByLabelText('Longitude de l’emplacement à enregistrer'), { target: { value: '1.2150' } });
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=6.14%2C1.215',
+    );
+    const confirmation = screen.getByRole('checkbox', {
+      name: 'Je confirme explicitement que le point affiché correspond à l’emplacement de cet établissement.',
+    });
+    expect(confirmation).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
+    expect(apiFetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler une erreur de carte' }));
+    expect(confirmation).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler une carte chargée' }));
+    await waitFor(() => expect(confirmation).toBeEnabled());
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler un déplacement du marqueur' }));
+    expect(confirmation).not.toBeChecked();
+    expect(screen.getByText('Latitude : 6.141000 · Longitude : 1.216000')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=6.141%2C1.216',
+    );
+    fireEvent.click(confirmation);
     fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
 
     await waitFor(() => {
@@ -1621,9 +1951,146 @@ describe('TeacherControlView', () => {
     expect(JSON.parse(settingsCall?.[1]?.body as string)).toMatchObject({
       schoolId: 8,
       isEnabled: false,
-      latitude: 6.14,
-      longitude: 1.215,
+      latitude: 6.141,
+      longitude: 1.216,
+      locationConfirmed: true,
       geofenceRadiusMeters: 200,
+    });
+  });
+
+  it('imports explicit coordinates and Google Maps links without saving before confirmation', async () => {
+    configureAdminGpsApi({ latitude: 6.111, longitude: 1.111 });
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    const importInput = screen.getByRole('textbox', { name: 'Coordonnées ou lien Google Maps' });
+    const usePosition = screen.getByRole('button', { name: 'Utiliser cette position' });
+
+    fireEvent.change(importInput, { target: { value: '6.123456 1.234567' } });
+    fireEvent.click(usePosition);
+    expect(await screen.findByRole('heading', { name: 'Position candidate importée depuis Google Maps' })).toBeTruthy();
+    expect(screen.getByLabelText('Latitude de l’emplacement à enregistrer')).toHaveValue(6.123456);
+    expect(screen.getByLabelText('Longitude de l’emplacement à enregistrer')).toHaveValue(1.234567);
+    expect(screen.getByLabelText('Mock map preview 6.123456, 1.234567')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=6.123456%2C1.234567',
+    );
+    expect(screen.getByText('Latitude : 6.111 · Longitude : 1.111')).toBeTruthy();
+    expect(apiFetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/search/?q=-6.123456%2C1.234567' } });
+    fireEvent.click(usePosition);
+    expect(await screen.findByText('Latitude : -6.123456 · Longitude : 1.234567')).toBeTruthy();
+    expect(screen.getByLabelText('Mock map preview -6.123456, 1.234567')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=-6.123456%2C1.234567',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler une carte chargée' }));
+    const confirmation = screen.getByRole('checkbox', {
+      name: 'Je confirme explicitement que le point affiché correspond à l’emplacement de cet établissement.',
+    });
+    await waitFor(() => expect(confirmation).toBeEnabled());
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler un déplacement du marqueur' }));
+    expect(confirmation).not.toBeChecked();
+    expect(screen.getByText('Latitude : 6.141000 · Longitude : 1.216000')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=6.141%2C1.216',
+    );
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/@-6.223456,1.334567,17z' } });
+    fireEvent.click(usePosition);
+    expect(await screen.findByText('Latitude : -6.223456 · Longitude : 1.334567')).toBeTruthy();
+    expect(confirmation).not.toBeChecked();
+    expect(screen.getByLabelText('Mock map preview -6.223456, 1.334567')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vérifier dans Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=-6.223456%2C1.334567',
+    );
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/place/École/data=!3d6.323456!4d-1.434567' } });
+    fireEvent.click(usePosition);
+    expect(await screen.findByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/search/?query=6.323456%2C-1.434567' } });
+    fireEvent.click(usePosition);
+    expect(await screen.findByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'École A, Lomé' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Format invalide'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://example.com/maps/?query=1%2C2' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Format invalide'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://maps.app.goo.gl/example' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ne sont pas résolus automatiquement'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://goo.gl/maps/example' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ne sont pas résolus automatiquement'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/search/?query=91%2C1' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('dépassent les limites géographiques'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/place/École+A,+Lomé' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Format invalide'));
+    expect(screen.getByText('Latitude : 6.323456 · Longitude : -1.434567')).toBeTruthy();
+
+    fireEvent.change(importInput, { target: { value: 'https://www.google.com/maps/search/?query=6%2C1&query=7%2C2' } });
+    fireEvent.click(usePosition);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('plusieurs positions différentes'));
+    expect(apiFetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Simuler une carte chargée' }));
+    await waitFor(() => expect(confirmation).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
+    expect(apiFetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
+    await waitFor(() => {
+      const saveCall = apiFetchMock.mock.calls.find(([url, options]) => url === '/api/teacher-control/gps-settings' && options?.method === 'PUT');
+      expect(JSON.parse(saveCall?.[1]?.body as string)).toMatchObject({
+        latitude: 6.323456,
+        longitude: -1.434567,
+        locationConfirmed: true,
+      });
+    });
+  });
+
+  it('does not require renewed location confirmation when imported coordinates match the saved location', async () => {
+    configureAdminGpsApi({ latitude: 6.5, longitude: 1.5 });
+    render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Coordonnées ou lien Google Maps' }), {
+      target: { value: '6.5, 1.5' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Utiliser cette position' }));
+
+    expect(await screen.findByText('Latitude : 6.5 · Longitude : 1.5')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', {
+      name: 'Je confirme explicitement que le point affiché correspond à l’emplacement de cet établissement.',
+    })).toBeNull();
+    expect(screen.getByText('Cette candidate correspond aux coordonnées enregistrées; elle ne bloque pas la modification des autres paramètres GPS.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer les coordonnées GPS' }));
+    await waitFor(() => {
+      const saveCall = apiFetchMock.mock.calls.find(([url, options]) => url === '/api/teacher-control/gps-settings' && options?.method === 'PUT');
+      expect(JSON.parse(saveCall?.[1]?.body as string)).toMatchObject({
+        latitude: 6.5,
+        longitude: 1.5,
+        locationConfirmed: false,
+      });
     });
   });
 
@@ -1782,27 +2249,29 @@ describe('TeacherControlView', () => {
       configurable: true,
       value: { allowsFeature: () => true },
     });
-    const getCurrentPosition = vi.fn((_success: PositionCallback, error: PositionErrorCallback) => {
-      error({
-        code,
-        message: 'Geolocation error',
-        PERMISSION_DENIED: 1,
-        POSITION_UNAVAILABLE: 2,
-        TIMEOUT: 3,
-      });
+    const watchPosition = vi.fn((_success: PositionCallback, error: PositionErrorCallback) => {
+      window.setTimeout(() => error({
+          code,
+          message: 'Geolocation error',
+          PERMISSION_DENIED: 1,
+          POSITION_UNAVAILABLE: 2,
+          TIMEOUT: 3,
+        }), 0);
+      return 7;
     });
+    const clearWatch = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch },
     });
     render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position automatiquement' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(expectedMessage);
-    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    expect(watchPosition).toHaveBeenCalledTimes(1);
   });
 
   it('explains when automatic location is blocked by the current document policy without requesting a position', async () => {
@@ -1811,19 +2280,19 @@ describe('TeacherControlView', () => {
       configurable: true,
       value: { allowsFeature: vi.fn(() => false) },
     });
-    const getCurrentPosition = vi.fn();
+    const watchPosition = vi.fn();
     Object.defineProperty(navigator, 'geolocation', {
       configurable: true,
-      value: { getCurrentPosition },
+      value: { watchPosition, clearWatch: vi.fn() },
     });
     render(<TeacherControlView {...defaultProps} userRole="school_admin" />);
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration GPS' }));
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Obtenir ma position automatiquement' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent('bloquée par la politique de sécurité');
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(watchPosition).not.toHaveBeenCalled();
   });
 
     it('shows global super-admin aggregates, including schools without sessions', async () => {

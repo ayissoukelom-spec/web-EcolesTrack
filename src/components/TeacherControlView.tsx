@@ -17,10 +17,12 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api.ts';
 import {
+  calculateDistanceMeters,
   MAX_CONFIGURABLE_GPS_ACCURACY_METERS,
   MAX_GEOFENCE_RADIUS_METERS,
   MAX_GPS_ACCURACY_METERS,
 } from '../lib/teacherControl/domain.ts';
+import TeacherControlGpsMapPreview from './TeacherControlGpsMapPreview.tsx';
 import {
   buildTeacherHoursReport,
   createTeacherHoursExcel,
@@ -39,18 +41,27 @@ type Assignment = {
 type GpsStatus =
   | 'idle'
   | 'locating'
+  | 'improving'
   | 'obtained'
   | 'verifying'
   | 'validated'
   | 'imprecise'
+  | 'inconsistent'
   | 'outside'
   | 'permissionDenied'
   | 'unavailable'
   | 'timeout'
+  | 'cancelled'
   | 'serverError';
 type TeacherAction = 'start' | 'end';
 type UnrecordedRequestType = 'immediate_report' | 'late_declaration';
 type IncidentType = 'gps_unavailable' | 'gps_accuracy' | 'permission_denied' | 'network' | 'application' | 'other';
+type TeacherGpsDiagnostic = {
+  reason: string;
+  accuracyMeters?: number;
+  distanceMeters?: number;
+  geofenceRadiusMeters?: number;
+};
 
 type GpsFix = {
   latitude: number;
@@ -186,9 +197,231 @@ type GpsSettings = {
   updatedAt: string | null;
 };
 
+type GpsAcquisitionSample = {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  timestamp: number;
+};
+
+type GpsDebugFix = {
+  latitude: string;
+  longitude: string;
+  accuracyMeters: string;
+  timestamp: string;
+};
+
+type GpsDebugReading = GpsDebugFix & {
+  acquisitionNumber: number;
+  readingNumber: number;
+  batchNumber: number;
+  receivedAt: string;
+  ageMilliseconds: string;
+  decision: string;
+};
+
+type GpsDebugSnapshot = {
+  runId: number;
+  pathway: 'school-admin' | 'teacher';
+  action: string;
+  readings: GpsDebugReading[];
+  selected: GpsDebugFix | null;
+  used: { endpoint: string; fix: GpsDebugFix } | null;
+};
+
+type GpsCoordinateCandidate = {
+  mapKey: number;
+  source: 'automatic' | 'manual' | 'google_maps';
+  latitude: string;
+  longitude: string;
+  confirmed: boolean;
+  samples: GpsAcquisitionSample[];
+  maxSpreadMeters: number | null;
+};
+
+type GpsMapAvailability = 'loading' | 'ready' | 'error';
+
+type ActiveGpsAcquisition = {
+  generation: number;
+  batchNumber: number;
+  samples: GpsAcquisitionSample[];
+  watchId: number | null;
+  timeoutId: number | null;
+};
+
 type BrowserGeolocationPolicy = {
   allowsFeature?: (feature: string) => boolean;
 };
+
+const GPS_ADMIN_SAMPLE_COUNT = 3;
+const GPS_ADMIN_MAX_SAMPLE_AGE_MS = 10_000;
+const GPS_ADMIN_MAX_SPREAD_METERS = 100;
+const GPS_ADMIN_BATCH_TIMEOUT_MS = 45_000;
+const GPS_ADMIN_MAX_BATCHES = 2;
+const TEACHER_GPS_MAX_ACQUISITION_MS = 45_000;
+const TEACHER_GPS_MAX_SAMPLE_AGE_MS = 10_000;
+const TEACHER_GPS_SAMPLE_COUNT = 3;
+const TEACHER_GPS_MAX_SPREAD_METERS = 100;
+const TEACHER_GPS_MAX_BATCHES = 2;
+const GPS_DIAGNOSTICS_ENABLED = import.meta.env.DEV;
+
+function parseGpsCoordinatePair(latitudeText: string, longitudeText: string) {
+  if (!latitudeText.trim() || !longitudeText.trim()) return null;
+  const latitude = Number(latitudeText);
+  const longitude = Number(longitudeText);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+    || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return null;
+  }
+  return { latitude, longitude };
+}
+
+type ParsedCoordinatePair = {
+  latitude: number;
+  longitude: number;
+};
+
+type GoogleMapsCoordinateParseResult =
+  | { coordinates: ParsedCoordinatePair; error: null }
+  | { coordinates: null; error: string };
+
+function parseCoordinatePairText(value: string): ParsedCoordinatePair | null {
+  const match = value.trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*,\s*|\s+)([+-]?(?:\d+(?:\.\d*)?|\.\d+))$/);
+  if (!match) return null;
+  const latitude = Number(match[1]);
+  const longitude = Number(match[2]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
+
+function validateImportedCoordinates(coordinates: ParsedCoordinatePair): string | null {
+  if (coordinates.latitude < -90 || coordinates.latitude > 90
+    || coordinates.longitude < -180 || coordinates.longitude > 180) {
+    return 'Latitude entre -90 et 90 et longitude entre -180 et 180 sont requises.';
+  }
+  return null;
+}
+
+function parseGoogleMapsCoordinateInput(value: string): GoogleMapsCoordinateParseResult {
+  const input = value.trim();
+  const formatError = 'Format invalide ou non reconnu. Saisissez latitude, longitude ou un lien Google Maps contenant des coordonnées explicites.';
+  if (!input) return { coordinates: null, error: formatError };
+
+  const directCoordinates = parseCoordinatePairText(input);
+  if (directCoordinates) {
+    const boundsError = validateImportedCoordinates(directCoordinates);
+    return boundsError
+      ? { coordinates: null, error: boundsError }
+      : { coordinates: directCoordinates, error: null };
+  }
+
+  if (!/^https?:\/\//i.test(input)) return { coordinates: null, error: formatError };
+
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return { coordinates: null, error: formatError };
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === 'maps.app.goo.gl' || (hostname === 'goo.gl' && /^\/maps(?:\/|$)/i.test(url.pathname))) {
+    return {
+      coordinates: null,
+      error: 'Les liens Google Maps raccourcis ne sont pas résolus automatiquement. Ouvrez le lien, puis copiez les coordonnées exactes depuis Google Maps.',
+    };
+  }
+
+  const isMapsHost = hostname === 'maps.google.com';
+  const isGoogleMapsPath = (hostname === 'google.com' || hostname === 'www.google.com')
+    && /^\/maps(?:\/|$)/i.test(url.pathname);
+  if (url.protocol !== 'https:' || url.username || url.password
+    || (url.port && url.port !== '443')
+    || (!isMapsHost && !isGoogleMapsPath)) {
+    return { coordinates: null, error: formatError };
+  }
+
+  const candidates: ParsedCoordinatePair[] = [];
+  const invalidCoordinates: ParsedCoordinatePair[] = [];
+  const addCandidate = (coordinates: ParsedCoordinatePair | null) => {
+    if (!coordinates) return;
+    if (validateImportedCoordinates(coordinates)) invalidCoordinates.push(coordinates);
+    else candidates.push(coordinates);
+  };
+
+  for (const parameter of ['q', 'query']) {
+    for (const parameterValue of url.searchParams.getAll(parameter)) {
+      addCandidate(parseCoordinatePairText(parameterValue));
+    }
+  }
+
+  const atCoordinates = url.pathname.match(/@([+-]?(?:\d+(?:\.\d*)?|\.\d+)),([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:,[^/]+)?/);
+  if (atCoordinates) {
+    addCandidate({ latitude: Number(atCoordinates[1]), longitude: Number(atCoordinates[2]) });
+  }
+
+  const labeledLatitudeLongitude = url.href.match(/!3d([+-]?(?:\d+(?:\.\d*)?|\.\d+))!4d([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+  if (labeledLatitudeLongitude) {
+    addCandidate({ latitude: Number(labeledLatitudeLongitude[1]), longitude: Number(labeledLatitudeLongitude[2]) });
+  }
+  const labeledLongitudeLatitude = url.href.match(/!2d([+-]?(?:\d+(?:\.\d*)?|\.\d+))!3d([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+  if (labeledLongitudeLatitude) {
+    addCandidate({ latitude: Number(labeledLongitudeLatitude[2]), longitude: Number(labeledLongitudeLatitude[1]) });
+  }
+
+  if (invalidCoordinates.length > 0) {
+    return { coordinates: null, error: 'Les coordonnées du lien dépassent les limites géographiques autorisées.' };
+  }
+  if (candidates.length === 0) return { coordinates: null, error: formatError };
+  const firstCandidate = candidates[0];
+  if (candidates.some((coordinates) => coordinates.latitude !== firstCandidate.latitude
+    || coordinates.longitude !== firstCandidate.longitude)) {
+    return { coordinates: null, error: 'Le lien contient plusieurs positions différentes; copiez un lien ou une paire de coordonnées non ambigus.' };
+  }
+  return { coordinates: firstCandidate, error: null };
+}
+
+function normalizeGpsCoordinate(value: string | number | null | undefined): number | null | undefined {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? Number(coordinate.toFixed(6)) : undefined;
+}
+
+function gpsCoordinatesMatch(
+  firstLatitude: string | number | null | undefined,
+  firstLongitude: string | number | null | undefined,
+  secondLatitude: string | number | null | undefined,
+  secondLongitude: string | number | null | undefined,
+): boolean {
+  const normalized = [
+    normalizeGpsCoordinate(firstLatitude),
+    normalizeGpsCoordinate(firstLongitude),
+    normalizeGpsCoordinate(secondLatitude),
+    normalizeGpsCoordinate(secondLongitude),
+  ];
+  if (normalized.some((coordinate) => coordinate === undefined)) return false;
+  return normalized[0] === normalized[2] && normalized[1] === normalized[3];
+}
+
+function maximumGpsSampleSpreadMeters(samples: GpsAcquisitionSample[]): number {
+  let maximumDistance = 0;
+  for (let firstIndex = 0; firstIndex < samples.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < samples.length; secondIndex += 1) {
+      maximumDistance = Math.max(
+        maximumDistance,
+        calculateDistanceMeters(samples[firstIndex], samples[secondIndex]),
+      );
+    }
+  }
+  return Math.ceil(maximumDistance);
+}
+
+function clearGpsAcquisitionResources(acquisition: ActiveGpsAcquisition): void {
+  if (acquisition.watchId != null) navigator.geolocation?.clearWatch(acquisition.watchId);
+  if (acquisition.timeoutId != null) window.clearTimeout(acquisition.timeoutId);
+  acquisition.watchId = null;
+  acquisition.timeoutId = null;
+}
 
 type ViewTab = 'sessions' | 'requests' | 'gps' | 'rates';
 type SessionFilterOption = { id: number; name: string };
@@ -339,7 +572,7 @@ function incidentTypeLabel(incidentType: string | null): string {
 class GeolocationRequestError extends Error {
   constructor(
     message: string,
-    readonly category: 'permissionDenied' | 'unavailable' | 'timeout' | 'imprecise',
+    readonly category: 'permissionDenied' | 'unavailable' | 'timeout' | 'imprecise' | 'inconsistent' | 'cancelled',
     readonly accuracyMeters?: number,
   ) {
     super(message);
@@ -349,64 +582,235 @@ class GeolocationRequestError extends Error {
 function requestPosition(
   onReading: (fix: GpsFix) => void,
   maxGpsAccuracyMeters = MAX_GPS_ACCURACY_METERS,
+  signal?: AbortSignal,
+  onProgress: (message: string) => void = () => undefined,
+  onDiagnosticReading?: (reading: GpsDebugReading) => void,
+  onDiagnosticSelected?: (sample: GpsAcquisitionSample) => void,
 ): Promise<GpsFix> {
-  if (!navigator.geolocation?.getCurrentPosition) {
+  const geolocation = navigator.geolocation;
+  if (!geolocation?.watchPosition) {
     return Promise.reject(new GeolocationRequestError(
       'La géolocalisation n’est pas disponible sur cet appareil.',
       'unavailable',
     ));
   }
   return new Promise((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition((position) => {
-      const fix = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracyMeters: position.coords.accuracy,
-      };
-      if (!Number.isFinite(fix.accuracyMeters) || fix.accuracyMeters < 0) {
-        reject(new GeolocationRequestError(
-          'La position obtenue ne contient pas une précision GPS valide. Réessayez.',
-          'unavailable',
-        ));
+    type ActiveRequest = { watchId: number | null; active: boolean };
+    let activeRequest: ActiveRequest | null = null;
+    let acquisitionTimeoutId: number | null = null;
+    let settled = false;
+    let batchNumber = 0;
+    let sampleRequestSequence = 0;
+    let readingSequence = 0;
+    let sawInsufficientAccuracy = false;
+    let latestAccuracyMeters: number | undefined;
+    let samples: GpsAcquisitionSample[] = [];
+    const acquisitionStartedAt = Date.now();
+    const clearTimer = () => {
+      if (acquisitionTimeoutId != null) window.clearTimeout(acquisitionTimeoutId);
+      acquisitionTimeoutId = null;
+    };
+    const stopRequest = (request: ActiveRequest) => {
+      if (!request.active) return;
+      request.active = false;
+      if (request.watchId != null) geolocation.clearWatch(request.watchId);
+      request.watchId = null;
+      if (activeRequest === request) activeRequest = null;
+    };
+    const stopActiveRequest = () => {
+      if (activeRequest) stopRequest(activeRequest);
+    };
+    const onAbort = () => {
+      finishWithError(new GeolocationRequestError(
+        'Acquisition annulée. Vous pouvez réessayer.',
+        'cancelled',
+      ));
+    };
+    const cleanup = () => {
+      clearTimer();
+      stopActiveRequest();
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const finishWithTimeout = () => {
+      const message = sawInsufficientAccuracy
+        ? 'Impossible d’obtenir une position suffisamment précise dans le délai. Activez la localisation précise de l’appareil ou du navigateur, puis réessayez.'
+        : 'Aucune position GPS fraîche n’a été obtenue dans le délai imparti. Vérifiez la localisation de l’appareil puis réessayez.';
+      finish(() => reject(new GeolocationRequestError(
+        message,
+        sawInsufficientAccuracy ? 'imprecise' : 'timeout',
+        latestAccuracyMeters,
+      )));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    acquisitionTimeoutId = window.setTimeout(
+      finishWithTimeout,
+      TEACHER_GPS_MAX_ACQUISITION_MS,
+    );
+
+    const requestNextSample = () => {
+      if (settled || signal?.aborted) return;
+      const timeoutRemaining = TEACHER_GPS_MAX_ACQUISITION_MS - (Date.now() - acquisitionStartedAt);
+      if (timeoutRemaining <= 0) {
+        finishWithTimeout();
         return;
       }
-      onReading(fix);
-      if (fix.accuracyMeters > maxGpsAccuracyMeters) {
-        reject(new GeolocationRequestError(
-          `Précision GPS insuffisante : ${Math.ceil(fix.accuracyMeters)} m (maximum autorisé : ${maxGpsAccuracyMeters} m). Restez immobile et réessayez.`,
-          'imprecise',
-          fix.accuracyMeters,
-        ));
-      } else {
-        resolve(fix);
-      }
-    }, (error) => {
-      if (error.code === error.PERMISSION_DENIED) {
-        reject(new GeolocationRequestError(
-          'Autorisez la géolocalisation dans votre navigateur pour continuer.',
-          'permissionDenied',
-        ));
-      } else if (error.code === error.TIMEOUT) {
-        reject(new GeolocationRequestError(
-          'La position GPS n’a pas été obtenue à temps. Réessayez.',
-          'timeout',
-        ));
-      } else {
-        reject(new GeolocationRequestError(
-          'Position GPS indisponible. Vérifiez que le GPS de votre appareil est activé.',
+
+      const request: ActiveRequest = { watchId: null, active: true };
+      activeRequest = request;
+      const requestSequence = ++sampleRequestSequence;
+      onProgress(batchNumber === 0
+        ? `Série 1/${TEACHER_GPS_MAX_BATCHES} · mesure ${samples.length + 1}/${TEACHER_GPS_SAMPLE_COUNT}…`
+        : `Nouvelle série · mesure ${samples.length + 1}/${TEACHER_GPS_SAMPLE_COUNT}…`);
+      try {
+        const watchId = geolocation.watchPosition((position) => {
+          if (settled || !request.active || activeRequest !== request || requestSequence !== sampleRequestSequence) return;
+          const { latitude, longitude, accuracy: accuracyMeters } = position.coords;
+          const timestamp = position.timestamp;
+          const ageMilliseconds = Date.now() - timestamp;
+          const debugBase = onDiagnosticReading ? {
+            acquisitionNumber: requestSequence,
+            readingNumber: ++readingSequence,
+            batchNumber: batchNumber + 1,
+            receivedAt: new Date().toISOString(),
+            latitude: String(latitude),
+            longitude: String(longitude),
+            accuracyMeters: String(accuracyMeters),
+            timestamp: String(timestamp),
+            ageMilliseconds: String(ageMilliseconds),
+          } : null;
+          const recordDiagnostic = (decision: string) => {
+            if (debugBase) onDiagnosticReading?.({ ...debugBase, decision });
+          };
+          if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+            || !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+            || !Number.isFinite(accuracyMeters) || accuracyMeters < 0
+            || !Number.isFinite(timestamp) || ageMilliseconds < 0 || ageMilliseconds > TEACHER_GPS_MAX_SAMPLE_AGE_MS) {
+            recordDiagnostic('Rejeté : coordonnées, précision ou horodatage invalide/périmé.');
+            onProgress('Mesure GPS ignorée : coordonnées invalides ou horodatage de plus de 10 secondes.');
+            return;
+          }
+
+          latestAccuracyMeters = accuracyMeters;
+          const fix = { latitude, longitude, accuracyMeters };
+          onReading(fix);
+          if (accuracyMeters > maxGpsAccuracyMeters) {
+            recordDiagnostic(`Rejeté : précision supérieure au seuil configuré de ${maxGpsAccuracyMeters} m.`);
+            sawInsufficientAccuracy = true;
+            onProgress(`Précision reçue ${Math.ceil(accuracyMeters)} m; seuil configuré ${maxGpsAccuracyMeters} m. Recherche d’une mesure admissible…`);
+            return;
+          }
+
+          stopRequest(request);
+          samples.push({ ...fix, timestamp });
+          recordDiagnostic(`Admissible dans la série ${batchNumber + 1}; cohérence à vérifier.`);
+          onProgress(`Mesure ${samples.length}/${TEACHER_GPS_SAMPLE_COUNT} reçue · précision ${Math.ceil(accuracyMeters)} m.`);
+          if (samples.length < TEACHER_GPS_SAMPLE_COUNT) {
+            void Promise.resolve().then(requestNextSample);
+            return;
+          }
+
+          const now = Date.now();
+          if (samples.some((sample) => {
+            const sampleAgeMilliseconds = now - sample.timestamp;
+            return sampleAgeMilliseconds < 0 || sampleAgeMilliseconds > TEACHER_GPS_MAX_SAMPLE_AGE_MS;
+          })) {
+            finishWithError(new GeolocationRequestError(
+              'Une mesure GPS a dépassé la limite de fraîcheur de 10 secondes. Aucune position n’a été retenue; réessayez.',
+              'timeout',
+              latestAccuracyMeters,
+            ));
+            return;
+          }
+
+          const maxSpreadMeters = maximumGpsSampleSpreadMeters(samples);
+          if (maxSpreadMeters > TEACHER_GPS_MAX_SPREAD_METERS) {
+            if (batchNumber + 1 < TEACHER_GPS_MAX_BATCHES) {
+              batchNumber += 1;
+              samples = [];
+              onProgress(`Mesures contradictoires : écart ${maxSpreadMeters} m (maximum ${TEACHER_GPS_MAX_SPREAD_METERS} m). Nouvelle tentative courte…`);
+              void Promise.resolve().then(requestNextSample);
+              return;
+            }
+            finishWithError(new GeolocationRequestError(
+              `Les mesures GPS restent contradictoires après une nouvelle tentative (écart ${maxSpreadMeters} m, maximum ${TEACHER_GPS_MAX_SPREAD_METERS} m). Aucune position n’a été retenue.`,
+              'inconsistent',
+              latestAccuracyMeters,
+            ));
+            return;
+          }
+
+          const bestSample = samples.reduce((best, sample) => (
+            sample.accuracyMeters < best.accuracyMeters ? sample : best
+          ));
+          onDiagnosticSelected?.(bestSample);
+          onProgress(`Trois mesures cohérentes (écart maximal ${maxSpreadMeters} m). Vérification du périmètre par le serveur…`);
+          finish(() => resolve({
+            latitude: bestSample.latitude,
+            longitude: bestSample.longitude,
+            accuracyMeters: bestSample.accuracyMeters,
+          }));
+        }, (error) => {
+          if (settled || !request.active || activeRequest !== request || requestSequence !== sampleRequestSequence) return;
+          const failure = error.code === error.PERMISSION_DENIED
+            ? new GeolocationRequestError(
+              'Autorisez la géolocalisation dans votre navigateur pour continuer.',
+              'permissionDenied',
+              latestAccuracyMeters,
+            )
+            : error.code === error.POSITION_UNAVAILABLE
+              ? new GeolocationRequestError(
+                'Position GPS indisponible. Vérifiez que la localisation de l’appareil est activée.',
+                'unavailable',
+                latestAccuracyMeters,
+              )
+              : new GeolocationRequestError(
+                'La position GPS n’a pas été obtenue à temps. Activez la localisation précise de l’appareil ou du navigateur, puis réessayez.',
+                'timeout',
+                latestAccuracyMeters,
+              );
+          finishWithError(failure);
+        }, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: timeoutRemaining,
+        });
+        request.watchId = watchId;
+        if (settled || !request.active) {
+          geolocation.clearWatch(watchId);
+          request.watchId = null;
+        }
+      } catch (error) {
+        finishWithError(new GeolocationRequestError(
+          error instanceof Error
+            ? `Impossible de démarrer l’acquisition GPS : ${error.message}`
+            : 'Impossible de démarrer l’acquisition GPS. Réessayez.',
           'unavailable',
+          latestAccuracyMeters,
         ));
       }
-    }, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 45_000,
-    });
+    };
+
+    requestNextSample();
+
+    function finishWithError(error: GeolocationRequestError) {
+      finish(() => reject(error));
+    }
   });
 }
 
-async function getTeacherGpsAccuracyThreshold(): Promise<number> {
-  const settings = await apiFetch('/api/teacher-control/gps-settings') as {
+async function getTeacherGpsAccuracyThreshold(signal?: AbortSignal): Promise<number> {
+  const settings = await apiFetch('/api/teacher-control/gps-settings', signal ? { signal } : undefined) as {
     maxGpsAccuracyMeters?: number;
   };
   const maxGpsAccuracyMeters = settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS;
@@ -418,49 +822,106 @@ async function getTeacherGpsAccuracyThreshold(): Promise<number> {
   return maxGpsAccuracyMeters;
 }
 
-function gpsFailureMessage(error: unknown): { message: string; status: GpsStatus } {
-  if (!(error instanceof Error)) return { message: 'La vérification GPS a échoué. Réessayez.', status: 'serverError' };
-  if (error instanceof GeolocationRequestError) return { message: error.message, status: error.category };
-  const reason = error.message.match(/^GPS validation failed: (.+)$/)?.[1];
-  if (reason === 'outside_geofence') {
-    return { message: 'Position refusée : vous êtes hors du périmètre autorisé de l’école.', status: 'outside' };
-  }
-  if (reason === 'accuracy_too_low' || reason === 'invalid_accuracy') {
-    return { message: 'La précision GPS est insuffisante. Restez immobile et réessayez.', status: 'imprecise' };
-  }
-  if (reason === 'invalid_position') {
-    return { message: 'La position obtenue est invalide. Vérifiez les réglages de localisation puis réessayez.', status: 'unavailable' };
-  }
-  if (reason === 'invalid_geofence') {
-    return { message: 'Le périmètre GPS de l’école n’est pas correctement configuré.', status: 'serverError' };
-  }
-  if (error.message.includes('GPS challenge is invalid, expired or already used')) {
-    return { message: 'La validation GPS a expiré ou a déjà été utilisée. Obtenez une nouvelle position.', status: 'serverError' };
-  }
-  return { message: error.message, status: 'serverError' };
+function getTeacherGpsDiagnostic(error: unknown): TeacherGpsDiagnostic | null {
+  if (!(error instanceof Error)) return null;
+  const diagnostic = (error as Error & { gpsDiagnostic?: unknown }).gpsDiagnostic;
+  if (diagnostic == null || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) return null;
+  const fields = diagnostic as Record<string, unknown>;
+  if (typeof fields.reason !== 'string') return null;
+  return {
+    reason: fields.reason,
+    ...(typeof fields.accuracyMeters === 'number' && Number.isFinite(fields.accuracyMeters)
+      ? { accuracyMeters: fields.accuracyMeters }
+      : {}),
+    ...(typeof fields.distanceMeters === 'number' && Number.isFinite(fields.distanceMeters)
+      ? { distanceMeters: fields.distanceMeters }
+      : {}),
+    ...(typeof fields.geofenceRadiusMeters === 'number' && Number.isFinite(fields.geofenceRadiusMeters)
+      ? { geofenceRadiusMeters: fields.geofenceRadiusMeters }
+      : {}),
+  };
 }
 
-function gpsStatusLabel(status: GpsStatus, reading: GpsFix | null): string {
-  if (status === 'locating') {
-    return reading
-      ? `Position reçue : précision ${Math.ceil(reading.accuracyMeters)} m — recherche d’une meilleure mesure…`
-      : 'Acquisition de votre position GPS…';
+function gpsFailureMessage(error: unknown): {
+  message: string;
+  status: GpsStatus;
+  diagnostic: TeacherGpsDiagnostic | null;
+} {
+  if (!(error instanceof Error)) {
+    return { message: 'La vérification GPS a échoué. Réessayez.', status: 'serverError', diagnostic: null };
   }
+  const diagnostic = getTeacherGpsDiagnostic(error)
+    ?? (error instanceof GeolocationRequestError && error.accuracyMeters != null
+      ? { reason: error.category, accuracyMeters: Math.ceil(error.accuracyMeters) }
+      : null);
+  if (error instanceof GeolocationRequestError) {
+    return { message: error.message, status: error.category, diagnostic };
+  }
+  const reason = error.message.match(/^GPS validation failed: (.+)$/)?.[1];
+  if (reason === 'outside_geofence') {
+    return { message: 'Position refusée : vous êtes hors du périmètre autorisé de l’école.', status: 'outside', diagnostic };
+  }
+  if (reason === 'accuracy_too_low' || reason === 'invalid_accuracy') {
+    return { message: 'La précision GPS est insuffisante. Activez la localisation précise de l’appareil ou du navigateur, puis réessayez.', status: 'imprecise', diagnostic };
+  }
+  if (reason === 'invalid_position') {
+    return { message: 'La position obtenue est invalide. Vérifiez les réglages de localisation puis réessayez.', status: 'unavailable', diagnostic };
+  }
+  if (reason === 'invalid_geofence') {
+    return { message: 'Le périmètre GPS de l’école n’est pas correctement configuré.', status: 'serverError', diagnostic };
+  }
+  if (error.message.includes('GPS challenge is invalid, expired or already used')) {
+    return { message: 'La validation GPS a expiré ou a déjà été utilisée. Obtenez une nouvelle position.', status: 'serverError', diagnostic };
+  }
+  return { message: error.message, status: 'serverError', diagnostic };
+}
+
+function gpsStatusLabel(status: GpsStatus, reading: GpsFix | null, detail = ''): string {
+  if (status === 'locating') return detail || 'Recherche de votre position GPS…';
+  if (status === 'improving') return detail || 'Amélioration de la précision GPS…';
   if (status === 'obtained') return `Position obtenue · précision ${Math.ceil(reading?.accuracyMeters ?? 0)} m`;
   if (status === 'verifying') return 'Position obtenue · validation par le serveur…';
   if (status === 'validated') return 'Position validée par le serveur';
-  if (status === 'imprecise') return `Position trop imprécise${reading ? ` (${Math.ceil(reading.accuracyMeters)} m)` : ''}`;
-  if (status === 'outside') return 'Position hors du périmètre autorisé';
+  if (status === 'imprecise') return `Position trop imprécise${reading ? ` (${Math.ceil(reading.accuracyMeters)} m)` : ''}. Nouvelle tentative possible.`;
+  if (status === 'inconsistent') return 'Mesures GPS contradictoires. Aucune position n’a été retenue.';
+  if (status === 'outside') return 'Position hors du périmètre autorisé.';
   if (status === 'permissionDenied') return 'Permission de localisation refusée';
   if (status === 'unavailable') return 'GPS indisponible';
   if (status === 'timeout') return 'Délai de localisation dépassé';
+  if (status === 'cancelled') return 'Recherche GPS annulée. Vous pouvez réessayer.';
   if (status === 'serverError') return 'Erreur de validation ou du serveur';
   return 'En attente de votre position';
 }
 
+function teacherGpsDiagnosticLabel(
+  diagnostic: TeacherGpsDiagnostic,
+  fix: GpsFix | null,
+): string {
+  const reason = diagnostic.reason === 'outside_geofence'
+    ? 'hors du périmètre autorisé'
+    : diagnostic.reason === 'accuracy_too_low' || diagnostic.reason === 'imprecise'
+      ? 'précision supérieure au seuil configuré'
+      : diagnostic.reason === 'inconsistent'
+        ? 'mesures contradictoires'
+        : diagnostic.reason === 'invalid_position'
+          ? 'coordonnées invalides'
+          : diagnostic.reason === 'invalid_accuracy'
+            ? 'précision GPS invalide'
+            : diagnostic.reason;
+  const accuracyMeters = diagnostic.accuracyMeters
+    ?? (fix ? Math.ceil(fix.accuracyMeters) : null);
+  const accuracy = accuracyMeters == null ? 'Précision reçue indisponible' : `Précision reçue : ${accuracyMeters} m`;
+  const distance = diagnostic.distanceMeters == null
+    ? 'Distance approximative à l’établissement indisponible (la mesure n’a pas été transmise au serveur).'
+    : `Distance approximative à l’établissement : ${diagnostic.distanceMeters} m${diagnostic.geofenceRadiusMeters == null
+      ? ''
+      : ` · rayon autorisé : ${diagnostic.geofenceRadiusMeters} m`}`;
+  return `${accuracy} · ${distance} · Motif du refus : ${reason}.`;
+}
+
 function gpsStatusClass(status: GpsStatus): string {
   if (status === 'validated') return 'text-emerald-700';
-  if (status === 'outside' || status === 'imprecise' || status === 'permissionDenied'
+  if (status === 'outside' || status === 'imprecise' || status === 'inconsistent' || status === 'permissionDenied'
     || status === 'unavailable' || status === 'timeout' || status === 'serverError') return 'text-rose-700';
   return 'text-slate-600';
 }
@@ -469,8 +930,10 @@ function isGpsRetryStatus(status: GpsStatus): boolean {
   return status === 'imprecise'
     || status === 'outside'
     || status === 'permissionDenied'
+    || status === 'inconsistent'
     || status === 'unavailable'
     || status === 'timeout'
+    || status === 'cancelled'
     || status === 'serverError';
 }
 
@@ -628,11 +1091,30 @@ export default function TeacherControlView({
   const [gpsHistory, setGpsHistory] = useState<Array<Record<string, unknown>>>([]);
   const [gpsLocationLoading, setGpsLocationLoading] = useState(false);
   const [gpsLocationMessage, setGpsLocationMessage] = useState('');
+  const [gpsCoordinateCandidate, setGpsCoordinateCandidate] = useState<GpsCoordinateCandidate | null>(null);
+  const [gpsCoordinateImportInput, setGpsCoordinateImportInput] = useState('');
+  const [gpsCoordinateImportError, setGpsCoordinateImportError] = useState('');
+  const [gpsMapAvailability, setGpsMapAvailability] = useState<{
+    candidateKey: number | null;
+    status: GpsMapAvailability;
+  }>({ candidateKey: null, status: 'loading' });
+  const gpsAcquisitionRef = useRef<ActiveGpsAcquisition | null>(null);
+  const gpsAcquisitionGenerationRef = useRef(0);
+  const gpsDebugRunSequenceRef = useRef(0);
+  const gpsAdminDebugRunIdRef = useRef<number | null>(null);
+  const teacherGpsAbortControllerRef = useRef<AbortController | null>(null);
+  const gpsLocationScopeRef = useRef(viewScopeKey);
+  const gpsMapCandidateKeyRef = useRef<number | null>(null);
+  const gpsMapCandidateKeySequenceRef = useRef(0);
+  const gpsCandidateBlockRef = useRef<HTMLDivElement>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
   const [gpsStatus, setGpsStatus] = useState<GpsStatus>('idle');
+  const [gpsStatusDetail, setGpsStatusDetail] = useState('');
+  const [gpsDiagnostic, setGpsDiagnostic] = useState<TeacherGpsDiagnostic | null>(null);
   const [teacherAction, setTeacherAction] = useState<TeacherAction | null>(initialTeacherAction);
+  const [gpsDebugSnapshot, setGpsDebugSnapshot] = useState<GpsDebugSnapshot | null>(null);
   const [selectedOpenSessionId, setSelectedOpenSessionId] = useState<number | null>(null);
   const [gpsReading, setGpsReading] = useState<GpsFix | null>(null);
   const [validatedGps, setValidatedGps] = useState<{ fix: GpsFix; timestamp: string } | null>(null);
@@ -676,9 +1158,71 @@ export default function TeacherControlView({
   const [unrecordedEndedAt, setUnrecordedEndedAt] = useState('');
   const [unrecordedCompletionDescription, setUnrecordedCompletionDescription] = useState<Record<number, string>>({});
   const [closeReasons, setCloseReasons] = useState<Record<number, string>>({});
-  const [gpsForm, setGpsForm] = useState({ isEnabled: false, latitude: '', longitude: '' });
+  const [gpsForm, setGpsForm] = useState({ isEnabled: false });
   const [gpsRadius, setGpsRadius] = useState('200');
   const [gpsAccuracyThreshold, setGpsAccuracyThreshold] = useState(String(MAX_GPS_ACCURACY_METERS));
+
+  const beginGpsDebugRun = (
+    pathway: GpsDebugSnapshot['pathway'],
+    action: string,
+  ): number | null => {
+    if (!GPS_DIAGNOSTICS_ENABLED) return null;
+    const runId = gpsDebugRunSequenceRef.current + 1;
+    gpsDebugRunSequenceRef.current = runId;
+    setGpsDebugSnapshot({ runId, pathway, action, readings: [], selected: null, used: null });
+    return runId;
+  };
+  const appendGpsDebugReading = (runId: number | null, reading: GpsDebugReading) => {
+    if (runId == null || !GPS_DIAGNOSTICS_ENABLED) return;
+    setGpsDebugSnapshot((current) => current?.runId === runId
+      ? { ...current, readings: [...current.readings, reading] }
+      : current);
+  };
+  const selectGpsDebugFix = (runId: number | null, fix: GpsDebugFix) => {
+    if (runId == null || !GPS_DIAGNOSTICS_ENABLED) return;
+    setGpsDebugSnapshot((current) => current?.runId === runId ? { ...current, selected: fix } : current);
+  };
+  const markGpsDebugFixUsed = (runId: number | null, endpoint: string, fix: GpsDebugFix) => {
+    if (runId == null || !GPS_DIAGNOSTICS_ENABLED) return;
+    setGpsDebugSnapshot((current) => current?.runId === runId
+      ? { ...current, used: { endpoint, fix } }
+      : current);
+  };
+
+  useEffect(() => {
+    if (gpsLocationScopeRef.current === viewScopeKey) return;
+    gpsLocationScopeRef.current = viewScopeKey;
+    gpsAcquisitionGenerationRef.current += 1;
+    teacherGpsAbortControllerRef.current?.abort();
+    teacherGpsAbortControllerRef.current = null;
+    const activeAcquisition = gpsAcquisitionRef.current;
+    if (activeAcquisition) {
+      clearGpsAcquisitionResources(activeAcquisition);
+      gpsAcquisitionRef.current = null;
+    }
+    setGpsLocationLoading(false);
+    setGpsLocationMessage('');
+    setGpsCoordinateCandidate(null);
+    setGpsCoordinateImportInput('');
+    setGpsCoordinateImportError('');
+    setGpsStatus('idle');
+    setGpsStatusDetail('');
+    setGpsDiagnostic(null);
+    setError(null);
+    gpsMapCandidateKeyRef.current = null;
+    setGpsMapAvailability({ candidateKey: null, status: 'loading' });
+  }, [viewScopeKey]);
+
+  useEffect(() => () => {
+    gpsAcquisitionGenerationRef.current += 1;
+    teacherGpsAbortControllerRef.current?.abort();
+    teacherGpsAbortControllerRef.current = null;
+    const activeAcquisition = gpsAcquisitionRef.current;
+    if (activeAcquisition) {
+      clearGpsAcquisitionResources(activeAcquisition);
+      gpsAcquisitionRef.current = null;
+    }
+  }, []);
 
   const reportTeacherOptions = useMemo<ReportTeacherOption[]>(() => {
     const options = new Map<string, ReportTeacherOption>();
@@ -716,6 +1260,36 @@ export default function TeacherControlView({
     return [...options.values()].sort((left, right) => left.schoolName.localeCompare(right.schoolName, 'fr')
       || left.teacherName.localeCompare(right.teacherName, 'fr'));
   }, [activeSchoolId, schoolId, schoolsList, selectedSchool?.name, sessionFilterOptions?.teachers, teachersList]);
+
+  const savedGpsLatitude = gpsSettings?.latitude == null ? '' : String(gpsSettings.latitude);
+  const savedGpsLongitude = gpsSettings?.longitude == null ? '' : String(gpsSettings.longitude);
+  const gpsCandidateLatitude = gpsCoordinateCandidate?.latitude ?? savedGpsLatitude;
+  const gpsCandidateLongitude = gpsCoordinateCandidate?.longitude ?? savedGpsLongitude;
+  const gpsCandidateCoordinates = gpsCoordinateCandidate
+    ? parseGpsCoordinatePair(gpsCoordinateCandidate.latitude, gpsCoordinateCandidate.longitude)
+    : null;
+  const googleMapsCandidateUrl = gpsCandidateCoordinates
+    ? `https://www.google.com/maps/search/?${new URLSearchParams({
+      api: '1',
+      query: `${gpsCandidateCoordinates.latitude},${gpsCandidateCoordinates.longitude}`,
+    }).toString()}`
+    : null;
+  const gpsCandidateChangesLocation = gpsCoordinateCandidate != null && !gpsCoordinatesMatch(
+    gpsCoordinateCandidate.latitude,
+    gpsCoordinateCandidate.longitude,
+    gpsSettings?.latitude,
+    gpsSettings?.longitude,
+  );
+  const gpsCandidateMapReady = gpsCoordinateCandidate != null
+    && gpsMapAvailability.candidateKey === gpsCoordinateCandidate.mapKey
+    && gpsMapAvailability.status === 'ready';
+
+  useEffect(() => {
+    if (!gpsCoordinateCandidate || gpsCoordinateCandidate.source === 'manual') return;
+    const candidateBlock = gpsCandidateBlockRef.current;
+    if (typeof candidateBlock?.scrollIntoView !== 'function') return;
+    candidateBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [gpsCoordinateCandidate?.mapKey, gpsCoordinateCandidate?.source]);
 
   const currentCursor = sessionCursors[sessionCursors.length - 1] ?? null;
   const makeFilterParams = useCallback((includeSchool: boolean, selectedFilters = filtersRef.current) => {
@@ -830,8 +1404,6 @@ export default function TeacherControlView({
         setGpsHistory(Array.isArray(history) ? history : []);
         setGpsForm({
           isEnabled: settings.isEnabled,
-          latitude: settings.latitude == null ? '' : String(settings.latitude),
-          longitude: settings.longitude == null ? '' : String(settings.longitude),
         });
         setGpsRadius(String(settings.geofenceRadiusMeters ?? 200));
         setGpsAccuracyThreshold(String(settings.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS));
@@ -1063,6 +1635,10 @@ export default function TeacherControlView({
     setSuccess(null);
   };
 
+  const cancelTeacherGpsAcquisition = () => {
+    teacherGpsAbortControllerRef.current?.abort();
+  };
+
   const refreshAfterAction = async (message: string) => {
     setSuccess(message);
     setError(null);
@@ -1074,6 +1650,8 @@ export default function TeacherControlView({
     setPendingEndValidation(null);
     setGpsReading(null);
     setGpsStatus('idle');
+    setGpsStatusDetail('');
+    setGpsDiagnostic(null);
     setError(null);
     setSuccess(null);
   };
@@ -1103,14 +1681,35 @@ export default function TeacherControlView({
     setStartedSession(null);
     setValidatedGps(null);
     setGpsReading(null);
+    setGpsDiagnostic(null);
+    setGpsStatusDetail('');
     setGpsStatus('locating');
+    const acquisitionController = new AbortController();
+    teacherGpsAbortControllerRef.current = acquisitionController;
+    const gpsDebugRunId = beginGpsDebugRun('teacher', 'Démarrage de séance');
     try {
-      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
-      const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
+      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold(acquisitionController.signal);
+      const fix = await requestPosition((reading) => {
+        setGpsReading(reading);
+        setGpsStatus('improving');
+      }, maxGpsAccuracyMeters, acquisitionController.signal, setGpsStatusDetail,
+      GPS_DIAGNOSTICS_ENABLED ? (reading) => appendGpsDebugReading(gpsDebugRunId, reading) : undefined,
+      GPS_DIAGNOSTICS_ENABLED ? (sample) => selectGpsDebugFix(gpsDebugRunId, {
+        latitude: String(sample.latitude),
+        longitude: String(sample.longitude),
+        accuracyMeters: String(sample.accuracyMeters),
+        timestamp: String(sample.timestamp),
+      }) : undefined);
       setGpsReading(fix);
       setGpsStatus('obtained');
       const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', { action: 'start_session' });
       setGpsStatus('verifying');
+      markGpsDebugFixUsed(gpsDebugRunId, '/api/teacher-control/sessions/start', {
+        latitude: String(fix.latitude),
+        longitude: String(fix.longitude),
+        accuracyMeters: String(fix.accuracyMeters),
+        timestamp: 'non transmis à l’API',
+      });
       const started = await postJson<Session>('/api/teacher-control/sessions/start', {
         classId: selectedAssignment.classId,
         subjectId: selectedAssignment.subjectId,
@@ -1125,10 +1724,19 @@ export default function TeacherControlView({
       setGpsStatus('validated');
       await refreshAfterAction('La séance a été démarrée et le contrôle GPS a été validé.');
     } catch (actionError) {
-      const failure = gpsFailureMessage(actionError);
+      if (gpsLocationScopeRef.current !== viewScopeKey
+        || teacherGpsAbortControllerRef.current !== acquisitionController) return;
+      const reportedError = acquisitionController.signal.aborted
+        ? new GeolocationRequestError('Acquisition annulée. Vous pouvez réessayer.', 'cancelled')
+        : actionError;
+      const failure = gpsFailureMessage(reportedError);
       setGpsStatus(failure.status);
+      setGpsDiagnostic(failure.diagnostic);
       showError(new Error(failure.message), 'Erreur de communication ou de vérification du serveur.');
     } finally {
+      if (teacherGpsAbortControllerRef.current === acquisitionController) {
+        teacherGpsAbortControllerRef.current = null;
+      }
       actionInFlight.current = false;
       setBusyAction(null);
     }
@@ -1148,10 +1756,25 @@ export default function TeacherControlView({
     setPendingEndValidation(null);
     setValidatedGps(null);
     setGpsReading(null);
+    setGpsDiagnostic(null);
+    setGpsStatusDetail('');
     setGpsStatus('locating');
+    const acquisitionController = new AbortController();
+    teacherGpsAbortControllerRef.current = acquisitionController;
+    const gpsDebugRunId = beginGpsDebugRun('teacher', 'Validation GPS de clôture');
     try {
-      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
-      const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
+      const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold(acquisitionController.signal);
+      const fix = await requestPosition((reading) => {
+        setGpsReading(reading);
+        setGpsStatus('improving');
+      }, maxGpsAccuracyMeters, acquisitionController.signal, setGpsStatusDetail,
+      GPS_DIAGNOSTICS_ENABLED ? (reading) => appendGpsDebugReading(gpsDebugRunId, reading) : undefined,
+      GPS_DIAGNOSTICS_ENABLED ? (sample) => selectGpsDebugFix(gpsDebugRunId, {
+        latitude: String(sample.latitude),
+        longitude: String(sample.longitude),
+        accuracyMeters: String(sample.accuracyMeters),
+        timestamp: String(sample.timestamp),
+      }) : undefined);
       setGpsReading(fix);
       setGpsStatus('obtained');
       const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', {
@@ -1159,6 +1782,12 @@ export default function TeacherControlView({
         sessionId: session.id,
       });
       setGpsStatus('verifying');
+      markGpsDebugFixUsed(gpsDebugRunId, `/api/teacher-control/sessions/${session.id}/validate-end`, {
+        latitude: String(fix.latitude),
+        longitude: String(fix.longitude),
+        accuracyMeters: String(fix.accuracyMeters),
+        timestamp: 'non transmis à l’API',
+      });
       const validation = await postJson<{ sessionId: number; latitude: number; longitude: number; validatedAt: string }>(
         `/api/teacher-control/sessions/${session.id}/validate-end`,
         {
@@ -1183,12 +1812,21 @@ export default function TeacherControlView({
       setValidatedGps({ fix, timestamp: validation.validatedAt });
       setGpsStatus('validated');
     } catch (actionError) {
+      if (gpsLocationScopeRef.current !== viewScopeKey
+        || teacherGpsAbortControllerRef.current !== acquisitionController) return;
       setPendingEndValidation(null);
       setValidatedGps(null);
-      const failure = gpsFailureMessage(actionError);
+      const reportedError = acquisitionController.signal.aborted
+        ? new GeolocationRequestError('Acquisition annulée. Vous pouvez réessayer.', 'cancelled')
+        : actionError;
+      const failure = gpsFailureMessage(reportedError);
       setGpsStatus(failure.status);
+      setGpsDiagnostic(failure.diagnostic);
       showError(new Error(failure.message), 'Erreur de communication ou de vérification du serveur.');
     } finally {
+      if (teacherGpsAbortControllerRef.current === acquisitionController) {
+        teacherGpsAbortControllerRef.current = null;
+      }
       actionInFlight.current = false;
       setBusyAction(null);
     }
@@ -1234,6 +1872,7 @@ export default function TeacherControlView({
       setGpsReading(pending);
       const failure = gpsFailureMessage(actionError);
       setGpsStatus(failure.status);
+      setGpsDiagnostic(failure.diagnostic);
       showError(new Error(failure.message), 'Erreur de communication ou de vérification du serveur.');
     } finally {
       actionInFlight.current = false;
@@ -1339,12 +1978,31 @@ export default function TeacherControlView({
     actionInFlight.current = true;
     setBusyAction(`complete-report-${request.id}`);
     setError(null);
+    const acquisitionController = mode === 'gps' ? new AbortController() : null;
+    if (acquisitionController) teacherGpsAbortControllerRef.current = acquisitionController;
+    const gpsDebugRunId = mode === 'gps'
+      ? beginGpsDebugRun('teacher', 'Régularisation GPS immédiate')
+      : null;
+    if (mode === 'gps') {
+      setGpsDiagnostic(null);
+      setGpsStatusDetail('');
+    }
     try {
       let gpsPayload: Record<string, unknown> = {};
       if (mode === 'gps') {
         setGpsStatus('locating');
-        const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold();
-        const fix = await requestPosition((reading) => setGpsReading(reading), maxGpsAccuracyMeters);
+        const maxGpsAccuracyMeters = await getTeacherGpsAccuracyThreshold(acquisitionController?.signal);
+        const fix = await requestPosition((reading) => {
+          setGpsReading(reading);
+          setGpsStatus('improving');
+        }, maxGpsAccuracyMeters, acquisitionController?.signal, setGpsStatusDetail,
+        GPS_DIAGNOSTICS_ENABLED ? (reading) => appendGpsDebugReading(gpsDebugRunId, reading) : undefined,
+        GPS_DIAGNOSTICS_ENABLED ? (sample) => selectGpsDebugFix(gpsDebugRunId, {
+          latitude: String(sample.latitude),
+          longitude: String(sample.longitude),
+          accuracyMeters: String(sample.accuracyMeters),
+          timestamp: String(sample.timestamp),
+        }) : undefined);
         setGpsReading(fix);
         setGpsStatus('obtained');
         const { challenge } = await postJson<{ challenge: string }>('/api/teacher-control/gps-challenges', {
@@ -1353,6 +2011,12 @@ export default function TeacherControlView({
         });
         setGpsStatus('verifying');
         gpsPayload = { ...fix, gpsChallenge: challenge };
+        markGpsDebugFixUsed(gpsDebugRunId, `/api/teacher-control/regularizations/${request.id}/complete`, {
+          latitude: String(fix.latitude),
+          longitude: String(fix.longitude),
+          accuracyMeters: String(fix.accuracyMeters),
+          timestamp: 'non transmis à l’API',
+        });
       }
       await postJson(`/api/teacher-control/regularizations/${request.id}/complete`, {
         mode,
@@ -1367,10 +2031,21 @@ export default function TeacherControlView({
       setCompletionReasons((current) => ({ ...current, [request.id]: '' }));
       setUnrecordedCompletionDescription((current) => ({ ...current, [request.id]: '' }));
     } catch (requestError) {
-      const failure = gpsFailureMessage(requestError);
-      if (mode === 'gps') setGpsStatus(failure.status);
-      showError(requestError, 'Impossible de compléter le signalement.');
+      if (gpsLocationScopeRef.current !== viewScopeKey
+        || (acquisitionController && teacherGpsAbortControllerRef.current !== acquisitionController)) return;
+      const reportedError = acquisitionController?.signal.aborted
+        ? new GeolocationRequestError('Acquisition annulée. Vous pouvez réessayer.', 'cancelled')
+        : requestError;
+      const failure = gpsFailureMessage(reportedError);
+      if (mode === 'gps') {
+        setGpsStatus(failure.status);
+        setGpsDiagnostic(failure.diagnostic);
+      }
+      showError(reportedError, 'Impossible de compléter le signalement.');
     } finally {
+      if (teacherGpsAbortControllerRef.current === acquisitionController) {
+        teacherGpsAbortControllerRef.current = null;
+      }
       actionInFlight.current = false;
       setBusyAction(null);
     }
@@ -1467,8 +2142,35 @@ export default function TeacherControlView({
 
   const saveGpsSettings = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const latitude = gpsForm.latitude.trim() ? Number(gpsForm.latitude) : null;
-    const longitude = gpsForm.longitude.trim() ? Number(gpsForm.longitude) : null;
+    if (gpsLocationLoading) {
+      setError('Attendez la fin ou annulez l’acquisition GPS avant d’enregistrer.');
+      return;
+    }
+    const savedLatitude = gpsSettings?.latitude == null ? null : Number(gpsSettings.latitude);
+    const savedLongitude = gpsSettings?.longitude == null ? null : Number(gpsSettings.longitude);
+    const candidateCoordinates = gpsCoordinateCandidate
+      ? parseGpsCoordinatePair(gpsCoordinateCandidate.latitude, gpsCoordinateCandidate.longitude)
+      : null;
+    const locationChanged = gpsCoordinateCandidate != null && !gpsCoordinatesMatch(
+      gpsCoordinateCandidate.latitude,
+      gpsCoordinateCandidate.longitude,
+      gpsSettings?.latitude,
+      gpsSettings?.longitude,
+    );
+    if (locationChanged && !candidateCoordinates) {
+      setError('La position candidate doit contenir une latitude et une longitude valides.');
+      return;
+    }
+    if (locationChanged && !gpsCoordinateCandidate?.confirmed) {
+      setError('Confirmez explicitement le nouvel emplacement avant de l’enregistrer.');
+      return;
+    }
+    if (locationChanged && !gpsCandidateMapReady) {
+      setError('La carte doit être chargée avant de confirmer le nouvel emplacement.');
+      return;
+    }
+    const latitude = locationChanged ? candidateCoordinates?.latitude ?? null : savedLatitude;
+    const longitude = locationChanged ? candidateCoordinates?.longitude ?? null : savedLongitude;
     if (gpsForm.isEnabled && (latitude == null || longitude == null)) {
       setError('Renseignez les coordonnées de l’établissement avant d’activer le contrôle GPS.');
       return;
@@ -1476,14 +2178,25 @@ export default function TeacherControlView({
     setBusyAction('gps-settings');
     setError(null);
     try {
+      markGpsDebugFixUsed(gpsAdminDebugRunIdRef.current, '/api/teacher-control/gps-settings', {
+        latitude: latitude == null ? 'null' : String(latitude),
+        longitude: longitude == null ? 'null' : String(longitude),
+        accuracyMeters: 'non transmis à l’API',
+        timestamp: 'non transmis à l’API',
+      });
       await putJson('/api/teacher-control/gps-settings', {
         ...(isSuperAdmin ? { schoolId } : {}),
         isEnabled: gpsForm.isEnabled,
         latitude,
         longitude,
+        locationConfirmed: locationChanged && gpsCoordinateCandidate?.confirmed === true,
         geofenceRadiusMeters: gpsSettings?.geofenceRadiusMeters ?? 200,
         maxGpsAccuracyMeters: gpsSettings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS,
       });
+      setGpsCoordinateCandidate(null);
+      gpsMapCandidateKeyRef.current = null;
+      setGpsMapAvailability({ candidateKey: null, status: 'loading' });
+      setGpsLocationMessage('');
       await refreshAfterAction('La configuration GPS a été mise à jour et auditée.');
     } catch (actionError) {
       showError(actionError, 'Impossible d’enregistrer la configuration GPS.');
@@ -1561,8 +2274,97 @@ export default function TeacherControlView({
     }
   };
 
+  const cancelGpsAcquisition = (message: string) => {
+    gpsAcquisitionGenerationRef.current += 1;
+    const activeAcquisition = gpsAcquisitionRef.current;
+    if (activeAcquisition) clearGpsAcquisitionResources(activeAcquisition);
+    gpsAcquisitionRef.current = null;
+    setGpsLocationLoading(false);
+    setGpsLocationMessage(message);
+  };
+
+  const updateManualGpsCoordinate = (coordinate: 'latitude' | 'longitude', value: string) => {
+    if (gpsLocationLoading) {
+      cancelGpsAcquisition('Acquisition annulée; la coordonnée a été modifiée manuellement.');
+    }
+    const savedLatitude = gpsSettings?.latitude == null ? '' : String(gpsSettings.latitude);
+    const savedLongitude = gpsSettings?.longitude == null ? '' : String(gpsSettings.longitude);
+    const mapKey = gpsMapCandidateKeySequenceRef.current + 1;
+    gpsMapCandidateKeySequenceRef.current = mapKey;
+    gpsMapCandidateKeyRef.current = mapKey;
+    setGpsMapAvailability({ candidateKey: mapKey, status: 'loading' });
+    setGpsCoordinateCandidate((current) => ({
+      mapKey,
+      source: 'manual',
+      latitude: coordinate === 'latitude' ? value : current?.latitude ?? savedLatitude,
+      longitude: coordinate === 'longitude' ? value : current?.longitude ?? savedLongitude,
+      confirmed: false,
+      samples: [],
+      maxSpreadMeters: null,
+    }));
+    setGpsLocationMessage('Coordonnée modifiée manuellement; le nouvel emplacement devra être confirmé.');
+  };
+
+  const discardGpsCoordinateCandidate = () => {
+    setGpsCoordinateCandidate(null);
+    gpsMapCandidateKeyRef.current = null;
+    setGpsMapAvailability({ candidateKey: null, status: 'loading' });
+    setGpsLocationMessage('Position candidate abandonnée; les coordonnées enregistrées sont conservées.');
+  };
+
+  const handleGpsMapAvailabilityChange = (candidateKey: number, status: GpsMapAvailability) => {
+    if (gpsMapCandidateKeyRef.current !== candidateKey) return;
+    setGpsMapAvailability({ candidateKey, status });
+  };
+
+  const handleGpsMapPositionChange = (candidateKey: number, latitude: number, longitude: number) => {
+    if (gpsMapCandidateKeyRef.current !== candidateKey) return;
+    setGpsCoordinateCandidate((current) => current?.mapKey === candidateKey
+      ? {
+        ...current,
+        source: 'manual',
+        latitude: latitude.toFixed(6),
+        longitude: longitude.toFixed(6),
+        confirmed: false,
+      }
+      : current);
+    setGpsLocationMessage('Position corrigée sur la carte; vérifiez les nouvelles coordonnées et confirmez à nouveau avant l’enregistrement.');
+  };
+
+  const importGpsCoordinate = () => {
+    const result = parseGoogleMapsCoordinateInput(gpsCoordinateImportInput);
+    if (!result.coordinates) {
+      setGpsCoordinateImportError(result.error);
+      return;
+    }
+
+    if (gpsLocationLoading) {
+      cancelGpsAcquisition('Acquisition annulée au profit de la position importée.');
+    }
+    const mapKey = gpsMapCandidateKeySequenceRef.current + 1;
+    gpsMapCandidateKeySequenceRef.current = mapKey;
+    gpsMapCandidateKeyRef.current = mapKey;
+    setGpsMapAvailability({ candidateKey: mapKey, status: 'loading' });
+    setGpsCoordinateCandidate({
+      mapKey,
+      source: 'google_maps',
+      latitude: result.coordinates.latitude.toString(),
+      longitude: result.coordinates.longitude.toString(),
+      confirmed: false,
+      samples: [],
+      maxSpreadMeters: null,
+    });
+    setGpsCoordinateImportInput('');
+    setGpsCoordinateImportError('');
+    setGpsLocationMessage('Position importée depuis Google Maps. Vérifiez le point et confirmez explicitement avant toute sauvegarde.');
+  };
+
   const getSchoolLocation = () => {
     if (!canManageGps || gpsLocationLoading) return;
+    if (gpsCoordinateCandidate) {
+      setGpsLocationMessage('Abandonnez la position candidate avant de lancer une nouvelle acquisition.');
+      return;
+    }
     if (window.isSecureContext === false) {
       setGpsLocationMessage('La géolocalisation nécessite une connexion sécurisée (HTTPS ou localhost).');
       return;
@@ -1571,39 +2373,194 @@ export default function TeacherControlView({
       setGpsLocationMessage('La géolocalisation est bloquée par la politique de sécurité de cette page. Ouvrez EcoleTrack depuis sa page principale sur la même origine.');
       return;
     }
-    if (!navigator.geolocation?.getCurrentPosition) {
+    if (!navigator.geolocation?.watchPosition) {
       setGpsLocationMessage('La géolocalisation n’est pas disponible sur cet appareil.');
       return;
     }
 
+    const gpsDebugRunId = beginGpsDebugRun('school-admin', 'Acquisition automatique pour configuration');
+    gpsAdminDebugRunIdRef.current = gpsDebugRunId;
+    const generation = gpsAcquisitionGenerationRef.current + 1;
+    gpsAcquisitionGenerationRef.current = generation;
+    const acquisition: ActiveGpsAcquisition = {
+      generation,
+      batchNumber: 0,
+      samples: [],
+      watchId: null,
+      timeoutId: null,
+    };
+    let debugReadingSequence = 0;
+    gpsAcquisitionRef.current = acquisition;
     setGpsLocationLoading(true);
-    setGpsLocationMessage('');
-    navigator.geolocation.getCurrentPosition((position) => {
-      setGpsForm((current) => ({
-        ...current,
-        latitude: String(position.coords.latitude),
-        longitude: String(position.coords.longitude),
-      }));
-      setGpsLocationMessage(`Position obtenue (précision indiquée par l’appareil : ${Math.ceil(position.coords.accuracy)} m). Vérifiez les coordonnées avant l’enregistrement.`);
+    setGpsLocationMessage('Acquisition de trois mesures GPS fraîches…');
+
+    const finish = (message: string) => {
+      if (gpsAcquisitionRef.current !== acquisition || generation !== gpsAcquisitionGenerationRef.current) return;
+      clearGpsAcquisitionResources(acquisition);
+      gpsAcquisitionRef.current = null;
       setGpsLocationLoading(false);
-    }, (geoError) => {
-      if (geoError.code === geoError.PERMISSION_DENIED) {
-        setGpsLocationMessage(currentDocumentAllowsGeolocation() === false
-          ? 'La géolocalisation a été bloquée par la politique de sécurité de cette page.'
-          : 'Le navigateur a refusé la géolocalisation. Vérifiez l’autorisation du site dans les paramètres du navigateur puis réessayez.');
-      } else if (geoError.code === geoError.POSITION_UNAVAILABLE) {
-        setGpsLocationMessage('Position indisponible. Vérifiez que la localisation de l’appareil est activée puis réessayez.');
-      } else if (geoError.code === geoError.TIMEOUT) {
-        setGpsLocationMessage('Délai dépassé lors de la récupération de la position. Réessayez.');
-      } else {
-        setGpsLocationMessage('Erreur inattendue lors de la récupération de la position. Réessayez.');
-      }
-      setGpsLocationLoading(false);
-    }, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 45_000,
-    });
+      setGpsLocationMessage(message);
+    };
+
+    const beginBatch = (batchNumber: number) => {
+      if (gpsAcquisitionRef.current !== acquisition || generation !== gpsAcquisitionGenerationRef.current) return;
+      acquisition.batchNumber = batchNumber;
+      acquisition.samples = [];
+      setGpsLocationMessage(batchNumber === 0
+        ? 'Acquisition de trois mesures GPS fraîches…'
+        : 'Mesures contradictoires; nouvelle série bornée de trois mesures…');
+      const batchStartedAt = Date.now();
+      acquisition.timeoutId = window.setTimeout(() => {
+        finish('Délai dépassé avant d’obtenir trois mesures GPS valides. Aucune nouvelle position n’a été sélectionnée; la position enregistrée est conservée. Réessayez ou saisissez la position manuellement.');
+      }, GPS_ADMIN_BATCH_TIMEOUT_MS);
+
+      let sampleRequestSequence = 0;
+      const requestNextSample = () => {
+        if (gpsAcquisitionRef.current !== acquisition
+          || generation !== gpsAcquisitionGenerationRef.current
+          || acquisition.batchNumber !== batchNumber) return;
+
+        const requestSequence = ++sampleRequestSequence;
+        const timeoutRemaining = Math.max(1, GPS_ADMIN_BATCH_TIMEOUT_MS - (Date.now() - batchStartedAt));
+        try {
+          acquisition.watchId = navigator.geolocation.watchPosition((position) => {
+            if (gpsAcquisitionRef.current !== acquisition
+              || generation !== gpsAcquisitionGenerationRef.current
+              || acquisition.batchNumber !== batchNumber
+              || requestSequence !== sampleRequestSequence) return;
+
+            const { latitude: measuredLatitude, longitude: measuredLongitude, accuracy: accuracyMeters } = position.coords;
+            const timestamp = position.timestamp;
+            const ageMilliseconds = Date.now() - timestamp;
+            const debugBase = gpsDebugRunId == null ? null : {
+              acquisitionNumber: batchNumber * GPS_ADMIN_SAMPLE_COUNT + requestSequence,
+              readingNumber: ++debugReadingSequence,
+              batchNumber: batchNumber + 1,
+              receivedAt: new Date().toISOString(),
+              latitude: String(measuredLatitude),
+              longitude: String(measuredLongitude),
+              accuracyMeters: String(accuracyMeters),
+              timestamp: String(timestamp),
+              ageMilliseconds: String(ageMilliseconds),
+            };
+            const recordDiagnostic = (decision: string) => {
+              if (debugBase) appendGpsDebugReading(gpsDebugRunId, { ...debugBase, decision });
+            };
+            if (!Number.isFinite(measuredLatitude) || measuredLatitude < -90 || measuredLatitude > 90
+              || !Number.isFinite(measuredLongitude) || measuredLongitude < -180 || measuredLongitude > 180
+              || !Number.isFinite(accuracyMeters) || accuracyMeters < 0
+              || !Number.isFinite(timestamp) || ageMilliseconds < 0 || ageMilliseconds > GPS_ADMIN_MAX_SAMPLE_AGE_MS) {
+              recordDiagnostic('Rejeté : coordonnées, précision ou horodatage invalide/périmé.');
+              setGpsLocationMessage('Mesure rejetée : coordonnées, précision ou horodatage invalides ou trop anciens.');
+              return;
+            }
+
+            const maxGpsAccuracyMeters = gpsSettings?.maxGpsAccuracyMeters ?? MAX_GPS_ACCURACY_METERS;
+            if (!Number.isSafeInteger(maxGpsAccuracyMeters)
+              || maxGpsAccuracyMeters < 1
+              || maxGpsAccuracyMeters > MAX_CONFIGURABLE_GPS_ACCURACY_METERS) {
+              finish('Le seuil de précision GPS configuré est invalide. Aucune position candidate n’a été sélectionnée.');
+              return;
+            }
+            if (accuracyMeters > maxGpsAccuracyMeters) {
+              recordDiagnostic(`Rejeté : précision supérieure au seuil configuré de ${maxGpsAccuracyMeters} m.`);
+              setGpsLocationMessage(`Mesure rejetée : précision ${Math.ceil(accuracyMeters)} m, supérieure au seuil configuré de ${maxGpsAccuracyMeters} m.`);
+              return;
+            }
+
+            const previousSample = acquisition.samples[acquisition.samples.length - 1];
+            if (previousSample && timestamp <= previousSample.timestamp) {
+              recordDiagnostic('Rejeté : l’horodatage ne progresse pas par rapport au relevé précédent.');
+              return;
+            }
+            acquisition.samples.push({
+              latitude: measuredLatitude,
+              longitude: measuredLongitude,
+              accuracyMeters,
+              timestamp,
+            });
+            recordDiagnostic(`Admissible dans la série ${batchNumber + 1}; cohérence à vérifier.`);
+            setGpsLocationMessage(`Mesure ${acquisition.samples.length}/${GPS_ADMIN_SAMPLE_COUNT} reçue; précision annoncée ${Math.ceil(accuracyMeters)} m.`);
+            if (acquisition.samples.length < GPS_ADMIN_SAMPLE_COUNT) {
+              if (acquisition.watchId != null) navigator.geolocation.clearWatch(acquisition.watchId);
+              acquisition.watchId = null;
+              requestNextSample();
+              return;
+            }
+
+            const samples = [...acquisition.samples];
+            if (samples.some((sample) => {
+              const sampleAgeMilliseconds = Date.now() - sample.timestamp;
+              return sampleAgeMilliseconds < 0 || sampleAgeMilliseconds > GPS_ADMIN_MAX_SAMPLE_AGE_MS;
+            })) {
+              finish('Une mesure est devenue trop ancienne pendant la série. Aucune position candidate n’a été sélectionnée; relancez l’acquisition.');
+              return;
+            }
+            const maxSpreadMeters = maximumGpsSampleSpreadMeters(samples);
+            if (maxSpreadMeters <= GPS_ADMIN_MAX_SPREAD_METERS) {
+              const latitude = samples.reduce((sum, sample) => sum + sample.latitude, 0) / samples.length;
+              const longitude = samples.reduce((sum, sample) => sum + sample.longitude, 0) / samples.length;
+              const mapKey = gpsMapCandidateKeySequenceRef.current + 1;
+              gpsMapCandidateKeySequenceRef.current = mapKey;
+              gpsMapCandidateKeyRef.current = mapKey;
+              setGpsMapAvailability({ candidateKey: mapKey, status: 'loading' });
+              setGpsCoordinateCandidate({
+                mapKey,
+                source: 'automatic',
+                latitude: latitude.toFixed(6),
+                longitude: longitude.toFixed(6),
+                confirmed: false,
+                samples,
+                maxSpreadMeters,
+              });
+              selectGpsDebugFix(gpsDebugRunId, {
+                latitude: latitude.toFixed(6),
+                longitude: longitude.toFixed(6),
+                accuracyMeters: 'moyenne de trois relevés; voir les précisions brutes',
+                timestamp: 'coordonnées moyennées; voir les timestamps bruts',
+              });
+              finish(`Trois mesures cohérentes obtenues; écart maximal ${maxSpreadMeters} m. Vérifiez la carte et confirmez l’emplacement avant l’enregistrement.`);
+              return;
+            }
+
+            clearGpsAcquisitionResources(acquisition);
+            if (batchNumber + 1 < GPS_ADMIN_MAX_BATCHES) {
+              setGpsLocationMessage(`Écart maximal de ${maxSpreadMeters} m (limite ${GPS_ADMIN_MAX_SPREAD_METERS} m); une seule nouvelle série est tentée.`);
+              beginBatch(batchNumber + 1);
+              return;
+            }
+            finish(`Les mesures restent contradictoires (écart maximal ${maxSpreadMeters} m). Aucune position n’a été sélectionnée; vérifiez manuellement l’emplacement.`);
+          }, (geoError) => {
+            if (gpsAcquisitionRef.current !== acquisition
+              || generation !== gpsAcquisitionGenerationRef.current
+              || acquisition.batchNumber !== batchNumber
+              || requestSequence !== sampleRequestSequence) return;
+            const message = geoError.code === geoError.PERMISSION_DENIED
+              ? currentDocumentAllowsGeolocation() === false
+                ? 'La géolocalisation est bloquée par la politique de sécurité de cette page.'
+                : 'Le navigateur a refusé la géolocalisation. Aucune nouvelle position n’a été sélectionnée; la position enregistrée est conservée. Vérifiez l’autorisation du site puis réessayez.'
+              : geoError.code === geoError.POSITION_UNAVAILABLE
+                ? 'Position indisponible. Aucune nouvelle position n’a été sélectionnée; la position enregistrée est conservée. Vérifiez que la localisation de l’appareil est activée puis réessayez.'
+                : geoError.code === geoError.TIMEOUT
+                  ? 'Délai dépassé lors de l’acquisition GPS. Aucune nouvelle position n’a été sélectionnée; la position enregistrée est conservée. Réessayez.'
+                  : 'Erreur inattendue lors de l’acquisition GPS. Aucune nouvelle position n’a été sélectionnée; la position enregistrée est conservée. Réessayez.';
+            finish(message);
+          }, {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: timeoutRemaining,
+          });
+        } catch (acquisitionError) {
+          finish(acquisitionError instanceof Error
+            ? `Impossible de démarrer l’acquisition GPS : ${acquisitionError.message}`
+            : 'Impossible de démarrer l’acquisition GPS. Réessayez.');
+        }
+      };
+
+      requestNextSample();
+    };
+
+    beginBatch(0);
   };
 
   const saveRate = async (event: FormEvent<HTMLFormElement>) => {
@@ -1872,6 +2829,9 @@ export default function TeacherControlView({
 
         {error && <ErrorNotice message={error} />}
         {success && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{success}</p>}
+        {GPS_DIAGNOSTICS_ENABLED && gpsDebugSnapshot?.pathway === 'teacher' && (
+          <GpsDiagnosticsPanel snapshot={gpsDebugSnapshot} />
+        )}
         {loading && <p role="status" className="text-sm text-slate-500">Chargement des régularisations…</p>}
         {!loading && visibleRegularizations.length === 0 && (
           <EmptyState>{isTeacher ? 'Vous n’avez aucune demande de régularisation.' : 'Aucune demande de régularisation à afficher.'}</EmptyState>
@@ -1936,6 +2896,14 @@ export default function TeacherControlView({
                   reason={completionReasons[entry.request.id] ?? ''}
                   description={unrecordedCompletionDescription[entry.request.id] ?? ''}
                   busy={busyAction != null}
+                  gpsAcquisitionMessage={busyAction === `complete-report-${entry.request.id}`
+                    && (gpsStatus === 'locating' || gpsStatus === 'improving')
+                    ? gpsStatusLabel(gpsStatus, gpsReading, gpsStatusDetail)
+                    : null}
+                  gpsDiagnosticMessage={gpsDiagnostic
+                    ? teacherGpsDiagnosticLabel(gpsDiagnostic, gpsReading)
+                    : null}
+                  onCancelGps={cancelTeacherGpsAcquisition}
                   onReasonChange={(value) => setCompletionReasons((current) => ({ ...current, [entry.request.id]: value }))}
                   onDescriptionChange={(value) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: value }))}
                   onSubmit={(mode) => void completeImmediateRegularization(entry.request, mode)}
@@ -2183,6 +3151,10 @@ export default function TeacherControlView({
         ))}
       </div>
 
+      {GPS_DIAGNOSTICS_ENABLED && gpsDebugSnapshot && (
+        <GpsDiagnosticsPanel snapshot={gpsDebugSnapshot} />
+      )}
+
       {activeTab === 'sessions' && (
         <div className="space-y-5">
           {isTeacher && (
@@ -2291,8 +3263,18 @@ export default function TeacherControlView({
                     </label>
                   </div>
                   <p role="status" aria-live="polite" className={`text-sm ${gpsStatusClass(gpsStatus)}`}>
-                    {gpsStatusLabel(gpsStatus, gpsReading)}
+                    {gpsStatusLabel(gpsStatus, gpsReading, gpsStatusDetail)}
                   </p>
+                  {gpsDiagnostic && (
+                    <p role="status" aria-live="polite" className="text-sm text-rose-700">
+                      {teacherGpsDiagnosticLabel(gpsDiagnostic, gpsReading)}
+                    </p>
+                  )}
+                  {(gpsStatus === 'locating' || gpsStatus === 'improving') && busyAction === 'start' && (
+                    <button type="button" className={secondaryButtonClass} onClick={cancelTeacherGpsAcquisition}>
+                      Annuler la recherche GPS
+                    </button>
+                  )}
                   {!startedSession && teacherOpenSessions.length === 0 && assignments?.length !== 0 && (
                     <button type="button" className={buttonClass} onClick={() => void startSession()} disabled={!selectedAssignment || busyAction != null}>
                       {busyAction === 'start' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
@@ -2377,7 +3359,18 @@ export default function TeacherControlView({
                           </div>
                           <p role="status" aria-live="polite" className={`text-sm ${
                             gpsStatusClass(gpsStatus)
-                          }`}>{gpsStatusLabel(gpsStatus, gpsReading)}</p>
+                          }`}>{gpsStatusLabel(gpsStatus, gpsReading, gpsStatusDetail)}</p>
+                          {gpsDiagnostic && (
+                            <p role="status" aria-live="polite" className="text-sm text-rose-700">
+                              {teacherGpsDiagnosticLabel(gpsDiagnostic, gpsReading)}
+                            </p>
+                          )}
+                          {(gpsStatus === 'locating' || gpsStatus === 'improving')
+                            && busyAction === `end-${selectedOpenSession.id}` && (
+                            <button type="button" className={secondaryButtonClass} onClick={cancelTeacherGpsAcquisition}>
+                              Annuler la recherche GPS
+                            </button>
+                          )}
                           {pendingEndValidation ? (
                             <button type="button" className={buttonClass} onClick={() => void completeEndSession()} disabled={busyAction != null}>
                               {busyAction === `end-${selectedOpenSession.id}` ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -2703,6 +3696,14 @@ export default function TeacherControlView({
                       reason={completionReasons[entry.request.id] ?? ''}
                       description={unrecordedCompletionDescription[entry.request.id] ?? ''}
                       busy={busyAction != null}
+                      gpsAcquisitionMessage={busyAction === `complete-report-${entry.request.id}`
+                        && (gpsStatus === 'locating' || gpsStatus === 'improving')
+                        ? gpsStatusLabel(gpsStatus, gpsReading, gpsStatusDetail)
+                        : null}
+                      gpsDiagnosticMessage={gpsDiagnostic
+                        ? teacherGpsDiagnosticLabel(gpsDiagnostic, gpsReading)
+                        : null}
+                      onCancelGps={cancelTeacherGpsAcquisition}
                       onReasonChange={(value) => setCompletionReasons((current) => ({ ...current, [entry.request.id]: value }))}
                       onDescriptionChange={(value) => setUnrecordedCompletionDescription((current) => ({ ...current, [entry.request.id]: value }))}
                       onSubmit={(mode) => void completeImmediateRegularization(entry.request, mode)}
@@ -2835,27 +3836,192 @@ export default function TeacherControlView({
                 <input type="checkbox" checked={gpsForm.isEnabled} onChange={(event) => setGpsForm({ ...gpsForm, isEnabled: event.target.checked })} disabled={!canManageGps} />
                 Contrôle GPS activé
               </label>
-              <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Latitude de l’établissement
-                <input className={`${inputClass} mt-1`} type="number" step="any" min="-90" max="90" value={gpsForm.latitude} onChange={(event) => setGpsForm({ ...gpsForm, latitude: event.target.value })} disabled={!canManageGps} />
+              <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 sm:col-span-2">
+                <h3 className="font-semibold">Emplacement actuellement enregistré</h3>
+                <p className="mt-1 break-words">
+                  Latitude : {gpsSettings.latitude ?? 'Non définie'} · Longitude : {gpsSettings.longitude ?? 'Non définie'}
+                </p>
+              </div>
+              <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Latitude de l’emplacement à enregistrer
+                <input
+                  className={`${inputClass} mt-1`}
+                  type="number"
+                  step="any"
+                  min="-90"
+                  max="90"
+                  value={gpsCandidateLatitude}
+                  onChange={(event) => updateManualGpsCoordinate('latitude', event.target.value)}
+                  disabled={!canManageGps || busyAction != null}
+                />
               </label>
-              <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Longitude de l’établissement
-                <input className={`${inputClass} mt-1`} type="number" step="any" min="-180" max="180" value={gpsForm.longitude} onChange={(event) => setGpsForm({ ...gpsForm, longitude: event.target.value })} disabled={!canManageGps} />
+              <label className="flex min-w-0 flex-col text-sm font-semibold text-slate-700">Longitude de l’emplacement à enregistrer
+                <input
+                  className={`${inputClass} mt-1`}
+                  type="number"
+                  step="any"
+                  min="-180"
+                  max="180"
+                  value={gpsCandidateLongitude}
+                  onChange={(event) => updateManualGpsCoordinate('longitude', event.target.value)}
+                  disabled={!canManageGps || busyAction != null}
+                />
               </label>
               {canManageGps && (
                 <div className="space-y-2 sm:col-span-2">
-                  <button className={secondaryButtonClass} type="button" onClick={getSchoolLocation} disabled={gpsLocationLoading || busyAction != null}>
+                  <p className="text-xs text-slate-500">
+                    {gpsCoordinateCandidate
+                      ? 'Nouvelle position candidate affichée; l’emplacement enregistré ne change qu’après confirmation et sauvegarde.'
+                      : 'Position enregistrée : les champs affichent les coordonnées déjà sauvegardées. Aucune nouvelle position n’est retenue avant trois mesures GPS valides et cohérentes.'}
+                  </p>
+                  <button className={secondaryButtonClass} type="button" onClick={getSchoolLocation} disabled={gpsLocationLoading || busyAction != null || gpsCoordinateCandidate != null}>
                     {gpsLocationLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
-                    {gpsLocationLoading ? 'Récupération de la position…' : 'Obtenir ma position automatiquement'}
+                    {gpsLocationLoading
+                      ? 'Acquisition de mesures GPS…'
+                      : gpsCoordinateCandidate
+                        ? 'Abandonnez la candidate pour acquérir à nouveau'
+                        : 'Obtenir ma position automatiquement'}
                   </button>
+                  {gpsLocationLoading && (
+                    <button
+                      className={secondaryButtonClass}
+                      type="button"
+                      onClick={() => cancelGpsAcquisition('Acquisition annulée; les coordonnées enregistrées sont conservées.')}
+                    >
+                      Annuler l’acquisition
+                    </button>
+                  )}
                   {gpsLocationMessage && (
                     <p role="status" aria-live="polite" className="text-sm text-slate-600">{gpsLocationMessage}</p>
                   )}
                   <p className="text-xs text-slate-500">Effectuez cette action depuis l’établissement, puis vérifiez ou corrigez les coordonnées avant de les enregistrer.</p>
                 </div>
               )}
+              {(gpsCoordinateCandidate || canManageGps) && (
+                <div ref={gpsCandidateBlockRef} className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 sm:col-span-2">
+                  {gpsCoordinateCandidate ? (
+                    <>
+                      <h3 className="font-semibold text-slate-900">
+                        {gpsCoordinateCandidate.source === 'automatic'
+                          ? 'Position GPS proposée'
+                          : gpsCoordinateCandidate.source === 'google_maps'
+                            ? 'Position candidate importée depuis Google Maps'
+                            : 'Position candidate corrigée manuellement'}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-700">
+                        Latitude : {gpsCoordinateCandidate.latitude} · Longitude : {gpsCoordinateCandidate.longitude}
+                      </p>
+                      {googleMapsCandidateUrl && (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-sm text-slate-700">
+                            Ouvrez Google Maps pour reconnaître les routes, commerces et bâtiments autour du point proposé. Revenez ensuite dans EcoleTrack pour confirmer ou corriger l’emplacement.
+                          </p>
+                          <a
+                            className={secondaryButtonClass}
+                            href={googleMapsCandidateUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <MapPin className="h-4 w-4" />
+                            Vérifier dans Google Maps
+                          </a>
+                          <p className="text-xs text-slate-500">
+                            À l’ouverture, seules les coordonnées candidates sont transmises à Google; aucune donnée personnelle ni aucun jeton EcoleTrack ne sont ajoutés au lien.
+                          </p>
+                        </div>
+                      )}
+                      <p className="mt-1 text-sm text-slate-700">
+                        Repérez l’établissement à l’aide des rues, quartiers, bâtiments et points de repère visibles. Les détails dépendent des données cartographiques disponibles.
+                      </p>
+                      {gpsCoordinateCandidate.samples.length > 0 && (
+                        <p className="mt-1 text-sm text-slate-600">
+                          {gpsCoordinateCandidate.samples.length} mesures; écart maximal {gpsCoordinateCandidate.maxSpreadMeters} m; précision annoncée maximale {Math.ceil(Math.max(...gpsCoordinateCandidate.samples.map((sample) => sample.accuracyMeters)))} m.
+                          La précision ne garantit pas que le lieu corresponde à l’établissement.
+                        </p>
+                      )}
+                      {gpsCandidateChangesLocation && !gpsCandidateCoordinates && (
+                        <p role="alert" className="mt-1 text-sm text-rose-700">Renseignez une latitude et une longitude valides pour prévisualiser cette candidate.</p>
+                      )}
+                      {!gpsCandidateChangesLocation && (
+                        <p className="mt-1 text-sm text-slate-600">Cette candidate correspond aux coordonnées enregistrées; elle ne bloque pas la modification des autres paramètres GPS.</p>
+                      )}
+                      {gpsCandidateCoordinates && (
+                        <TeacherControlGpsMapPreview
+                          key={gpsCoordinateCandidate.mapKey}
+                          candidateKey={gpsCoordinateCandidate.mapKey}
+                          latitude={gpsCandidateCoordinates.latitude}
+                          longitude={gpsCandidateCoordinates.longitude}
+                          onAvailabilityChange={handleGpsMapAvailabilityChange}
+                          onPositionChange={handleGpsMapPositionChange}
+                        />
+                      )}
+                      {gpsCandidateChangesLocation && (
+                        <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={gpsCoordinateCandidate.confirmed}
+                            disabled={busyAction != null || !gpsCandidateMapReady}
+                            onChange={(event) => setGpsCoordinateCandidate((current) => current
+                              ? { ...current, confirmed: event.target.checked }
+                              : current)}
+                          />
+                          <span>Je confirme explicitement que le point affiché correspond à l’emplacement de cet établissement.</span>
+                        </label>
+                      )}
+                      <button className={secondaryButtonClass} type="button" onClick={discardGpsCoordinateCandidate} disabled={busyAction != null}>
+                        Abandonner la position candidate
+                      </button>
+                    </>
+                  ) : (
+                    <div>
+                      <h3 className="font-semibold text-slate-900">Importer une position sans acquisition GPS</h3>
+                      <p className="mt-1 text-sm text-slate-600">Aucune position candidate n’est active; les coordonnées enregistrées restent inchangées.</p>
+                    </div>
+                  )}
+                  {canManageGps && (
+                    <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                      <label className="flex flex-col text-sm font-semibold text-slate-700" htmlFor="gps-coordinate-import">
+                        Coordonnées ou lien Google Maps
+                        <input
+                          id="gps-coordinate-import"
+                          className={`${inputClass} mt-1`}
+                          type="text"
+                          autoComplete="off"
+                          value={gpsCoordinateImportInput}
+                          onChange={(event) => {
+                            setGpsCoordinateImportInput(event.target.value);
+                            setGpsCoordinateImportError('');
+                          }}
+                          disabled={busyAction != null}
+                        />
+                      </label>
+                      <p className="text-xs text-slate-600">
+                        Dans Google Maps, ouvrez l’établissement puis copiez ses coordonnées exactes (latitude, longitude) ou l’URL complète. Les liens raccourcis doivent être ouverts manuellement pour copier les coordonnées; ils ne sont pas résolus ici.
+                      </p>
+                      {gpsCoordinateImportError && (
+                        <p role="alert" className="text-sm text-rose-700">{gpsCoordinateImportError}</p>
+                      )}
+                      <button
+                        className={secondaryButtonClass}
+                        type="button"
+                        onClick={importGpsCoordinate}
+                        disabled={busyAction != null || !gpsCoordinateImportInput.trim()}
+                      >
+                        Utiliser cette position
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               {canManageGps && (
                 <div className="sm:col-span-2">
-                  <button className={buttonClass} type="submit" disabled={busyAction != null}>
+                  <button
+                    className={buttonClass}
+                    type="submit"
+                    disabled={busyAction != null
+                      || gpsLocationLoading
+                      || (gpsCandidateChangesLocation
+                        && (!gpsCoordinateCandidate?.confirmed || !gpsCandidateMapReady))}
+                  >
                     {busyAction === 'gps-settings' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                     Enregistrer les coordonnées GPS
                   </button>
@@ -3489,11 +4655,57 @@ function SessionTimeCorrectionForm({
   );
 }
 
+function GpsDiagnosticsPanel({ snapshot }: { snapshot: GpsDebugSnapshot }) {
+  const formatFix = (fix: GpsDebugFix) => (
+    `lat ${fix.latitude}, lon ${fix.longitude} · précision ${fix.accuracyMeters} · timestamp ${fix.timestamp}`
+  );
+  return (
+    <details open className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-slate-800">
+      <summary className="cursor-pointer font-bold">
+        Diagnostic GPS — développement uniquement · {snapshot.pathway === 'school-admin' ? 'School Admin' : 'Enseignant'} · {snapshot.action}
+      </summary>
+      <p className="mt-2">
+        Local au navigateur; le panneau ne transmet ni ne journalise les coordonnées. Les requêtes métier affichées sont celles déjà nécessaires au parcours.
+      </p>
+      <p className="mt-2">
+        Sélection après filtrage: {snapshot.selected ? formatFix(snapshot.selected) : 'aucune position sélectionnée'}
+      </p>
+      <p className="mt-1">
+        Coordonnées utilisées pour la requête: {snapshot.used
+          ? `${snapshot.used.endpoint} · ${formatFix(snapshot.used.fix)}`
+          : 'aucune requête de validation/configuration envoyée'}
+      </p>
+      {snapshot.readings.length === 0 ? (
+        <p className="mt-2">Aucun relevé reçu du navigateur pour cette acquisition.</p>
+      ) : (
+        <ol className="mt-3 space-y-2">
+          {snapshot.readings.map((reading) => (
+            <li
+              key={`${snapshot.runId}-${reading.readingNumber}`}
+              className="rounded-lg border border-amber-200 bg-white/80 p-2"
+            >
+              <p className="font-semibold">
+                Acquisition {reading.acquisitionNumber} · série {reading.batchNumber} · relevé {reading.readingNumber}
+              </p>
+              <p>Brut navigateur: lat {reading.latitude}, lon {reading.longitude} · précision {reading.accuracyMeters} m</p>
+              <p>Timestamp {reading.timestamp} · âge au traitement {reading.ageMilliseconds} ms · reçu à {reading.receivedAt}</p>
+              <p>Filtrage: {reading.decision}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
+  );
+}
+
 function TeacherImmediateReportCompletion({
     request,
     reason,
     description,
     busy,
+    gpsAcquisitionMessage,
+    gpsDiagnosticMessage,
+    onCancelGps,
     onReasonChange,
     onDescriptionChange,
     onSubmit,
@@ -3502,6 +4714,9 @@ function TeacherImmediateReportCompletion({
     reason: string;
     description: string;
     busy: boolean;
+    gpsAcquisitionMessage: string | null;
+    gpsDiagnosticMessage: string | null;
+    onCancelGps: () => void;
     onReasonChange: (value: string) => void;
     onDescriptionChange: (value: string) => void;
     onSubmit: (mode: 'gps' | 'regularization') => void;
@@ -3530,6 +4745,19 @@ function TeacherImmediateReportCompletion({
           />
         </label>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
+          {gpsAcquisitionMessage && (
+            <div className="flex w-full flex-wrap items-center gap-3">
+              <p role="status" aria-live="polite" className="text-sm text-slate-600">{gpsAcquisitionMessage}</p>
+              <button type="button" className={secondaryButtonClass} onClick={onCancelGps}>
+                Annuler la recherche GPS
+              </button>
+            </div>
+          )}
+          {gpsDiagnosticMessage && (
+            <p role="status" aria-live="polite" className="w-full text-sm text-rose-700">
+              {gpsDiagnosticMessage}
+            </p>
+          )}
           <button className={buttonClass} type="button" disabled={busy || !reason.trim()} onClick={() => onSubmit('gps')}>
             <MapPin className="h-4 w-4" /> Terminer avec GPS
           </button>

@@ -274,6 +274,12 @@ describe('teacher control document geolocation HTTP policy', () => {
     expect(rootResponse.headers['content-type']).toMatch(/^text\/html/);
     expect(rootResponse.headers['permissions-policy']).toBe(TEACHER_CONTROL_APP_PERMISSIONS_POLICY);
 
+    for (const path of ['/login', '/login?next=/']) {
+      const loginResponse = await request(server).get(path);
+      expect(loginResponse.headers['content-type']).toMatch(/^text\/html/);
+      expect(loginResponse.headers['permissions-policy']).toBe(TEACHER_CONTROL_APP_PERMISSIONS_POLICY);
+    }
+
     for (const path of [
       '/teacher-control/teacher/',
       '/teacher-control/Teacher',

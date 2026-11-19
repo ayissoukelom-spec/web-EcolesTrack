@@ -29,6 +29,7 @@ import {
   TEACHER_CONTROL_TEACHER_DOCUMENT_PATH,
 } from './security.ts';
 import {
+  calculateDistanceMeters,
   calculateTeacherControlCompensation,
   MAX_CONFIGURABLE_GPS_ACCURACY_METERS,
   MAX_GEOFENCE_RADIUS_METERS,
@@ -249,7 +250,16 @@ export interface TeacherControlApiDependencies {
 }
 
 class TeacherControlApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly gpsDiagnostic?: {
+      reason: string;
+      accuracyMeters?: number;
+      distanceMeters?: number;
+      geofenceRadiusMeters?: number;
+    },
+  ) {
     super(message);
   }
 }
@@ -475,7 +485,10 @@ function handleRoute(
       if (!response.headersSent && result !== undefined) response.json(result);
     } catch (error) {
       if (error instanceof TeacherControlApiError) {
-        response.status(error.status).json({ error: error.message });
+        response.status(error.status).json({
+          error: error.message,
+          ...(error.gpsDiagnostic ? { gpsDiagnostic: error.gpsDiagnostic } : {}),
+        });
         return;
       }
       if ((error as { code?: string })?.code === '23505') {
@@ -510,6 +523,30 @@ function gpsSiteFromSettings(settings: {
     geofenceRadiusMeters: settings.geofenceRadiusMeters,
     maxGpsAccuracyMeters,
   };
+}
+
+function gpsValidationError(
+  fix: ReturnType<typeof gpsCoordinates>,
+  settings: ReturnType<typeof gpsSiteFromSettings>,
+  reason: string,
+): TeacherControlApiError {
+  const gpsDiagnostic = {
+    reason,
+    ...(Number.isFinite(fix.accuracyMeters) && fix.accuracyMeters >= 0
+      ? { accuracyMeters: Math.ceil(fix.accuracyMeters) }
+      : {}),
+    ...(reason !== 'invalid_position'
+      ? { distanceMeters: Math.ceil(calculateDistanceMeters(fix, settings)) }
+      : {}),
+    ...(reason === 'outside_geofence'
+      ? { geofenceRadiusMeters: settings.geofenceRadiusMeters }
+      : {}),
+  };
+  return new TeacherControlApiError(
+    400,
+    `GPS validation failed: ${reason}`,
+    gpsDiagnostic,
+  );
 }
 
 async function getEnabledGpsSettings(schoolId: number) {
@@ -706,6 +743,12 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
       const [previous] = await tx.select().from(teacherControlGpsSettings)
         .where(eq(teacherControlGpsSettings.schoolId, access.schoolId))
         .limit(1);
+      const previousLatitude = previous?.latitude == null ? null : Number(previous.latitude);
+      const previousLongitude = previous?.longitude == null ? null : Number(previous.longitude);
+      const locationChanged = previousLatitude !== latitude || previousLongitude !== longitude;
+      if (locationChanged && body.locationConfirmed !== true) {
+        throw new TeacherControlApiError(400, 'location confirmation is required when coordinates change');
+      }
       const maxGpsAccuracyMeters = next.maxGpsAccuracyMeters
         ?? previous?.maxGpsAccuracyMeters
         ?? MAX_GPS_ACCURACY_METERS;
@@ -969,7 +1012,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         .limit(1);
       const settings = gpsSiteFromSettings(gpsSettings);
       const gps = validateTeacherControlGpsFix(fix, settings);
-      if (gps.accepted === false) throw new TeacherControlApiError(400, `GPS validation failed: ${gps.reason}`);
+      if (gps.accepted === false) throw gpsValidationError(fix, settings, gps.reason);
 
       const [pedagogicalPair] = await selectTeacherPedagogicalPairs(
         tx,
@@ -1070,7 +1113,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         .limit(1);
       const settings = gpsSiteFromSettings(gpsSettings);
       const gps = validateTeacherControlGpsFix(fix, settings);
-      if (gps.accepted === false) throw new TeacherControlApiError(400, `GPS validation failed: ${gps.reason}`);
+      if (gps.accepted === false) throw gpsValidationError(fix, settings, gps.reason);
       await assertGpsChallengeAvailable(tx, {
         token: body.gpsChallenge,
         actorUserId: actor.id,
@@ -1120,7 +1163,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         .limit(1);
       const settings = gpsSiteFromSettings(gpsSettings);
       const gps = validateTeacherControlGpsFix(fix, settings);
-      if (gps.accepted === false) throw new TeacherControlApiError(400, `GPS validation failed: ${gps.reason}`);
+      if (gps.accepted === false) throw gpsValidationError(fix, settings, gps.reason);
       await consumeGpsChallenge(tx, {
         token: body.gpsChallenge,
         actorUserId: actor.id as number,
@@ -1553,7 +1596,7 @@ export function registerTeacherControlApi(app: Express, dependencies: TeacherCon
         gpsSettings = gpsSiteFromSettings(settings);
         const gpsValidation = validateTeacherControlGpsFix(gpsFix, gpsSettings);
         if (gpsValidation.accepted === false) {
-          throw new TeacherControlApiError(400, `GPS validation failed: ${gpsValidation.reason}`);
+          throw gpsValidationError(gpsFix, gpsSettings, gpsValidation.reason);
         }
         endGpsEvidence = {
           distanceMeters: gpsValidation.distanceMeters,

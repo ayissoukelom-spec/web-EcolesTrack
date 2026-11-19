@@ -490,6 +490,11 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     (error as any).status = response.status;
     if (typeof errBody.code === 'string') (error as any).code = errBody.code;
     if (typeof errBody.schoolId === 'number') (error as any).schoolId = errBody.schoolId;
+    if (errBody.gpsDiagnostic
+      && typeof errBody.gpsDiagnostic === 'object'
+      && !Array.isArray(errBody.gpsDiagnostic)) {
+      (error as Error & { gpsDiagnostic?: Record<string, unknown> }).gpsDiagnostic = errBody.gpsDiagnostic;
+    }
     if (errBody.code === 'SCHOOL_SUSPENDED' && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('schoolSuspended', { detail: { schoolId: errBody.schoolId } }));
     }

@@ -12,6 +12,7 @@ export function buildContentSecurityPolicy(isDevelopment: boolean): string {
     'https://*.firebaseio.com',
     'https://*.googleapis.com',
     'https://*.googleusercontent.com',
+    'https://tile.openstreetmap.org',
     ...(isDevelopment ? ['ws://localhost:24678'] : []),
   ];
 
@@ -19,7 +20,7 @@ export function buildContentSecurityPolicy(isDevelopment: boolean): string {
     "default-src 'self'",
     scriptSource,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https://flagcdn.com https://*.flagcdn.com",
+    "img-src 'self' data: blob: https://flagcdn.com https://*.flagcdn",
     "font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com",
     `connect-src ${connectSources.join(' ')}`,
     "frame-src 'none'",

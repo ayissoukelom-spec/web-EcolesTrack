@@ -2729,12 +2729,25 @@ describe('teacher control API authorization and input validation', () => {
 
     expect(forgedResponse.status).toBe(403);
     expect(mockDatabaseState.gpsSettings[0].isEnabled).toBe(false);
+    const unconfirmedResponse = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({
+        isEnabled: true,
+        latitude: 6.1375,
+        longitude: 1.2123,
+        geofenceRadiusMeters: 250,
+      });
+
+    expect(unconfirmedResponse.status).toBe(400);
+    expect(mockDatabaseState.gpsSettings[0].latitude).toBeNull();
+    expect(mockDatabaseState.auditEvents).toHaveLength(0);
     const response = await request(app)
       .put('/api/teacher-control/gps-settings')
       .send({
         isEnabled: true,
         latitude: 6.1375,
         longitude: 1.2123,
+        locationConfirmed: true,
         geofenceRadiusMeters: 250,
       });
 
@@ -2757,6 +2770,12 @@ describe('teacher control API authorization and input validation', () => {
     expect(persistedSettings.headers['cache-control']).toBe('no-store');
     expect(persistedSettings.body.geofenceRadiusMeters).toBe(250);
     expect(persistedSettings.body.maxGpsAccuracyMeters).toBe(500);
+
+    const unconfirmedClear = await request(app)
+      .put('/api/teacher-control/gps-settings')
+      .send({ isEnabled: false, latitude: null, longitude: null, geofenceRadiusMeters: 250 });
+    expect(unconfirmedClear.status).toBe(400);
+    expect(mockDatabaseState.gpsSettings[0].latitude).toBe('6.1375');
 
     const maximumRadiusUpdate = await request(app)
       .put('/api/teacher-control/gps-settings')
@@ -2920,6 +2939,14 @@ describe('teacher control API authorization and input validation', () => {
       .post('/api/teacher-control/sessions/start')
       .send(startBody);
     expect(impreciseStartResponse.status).toBe(400);
+    expect(impreciseStartResponse.body.gpsDiagnostic).toMatchObject({
+      reason: 'accuracy_too_low',
+      accuracyMeters: 501,
+    });
+    expect(impreciseStartResponse.body.gpsDiagnostic.distanceMeters).toBeGreaterThan(200);
+    expect(impreciseStartResponse.body.gpsDiagnostic.distanceMeters).toBeLessThan(250);
+    expect(impreciseStartResponse.body.gpsDiagnostic).not.toHaveProperty('latitude');
+    expect(impreciseStartResponse.body.gpsDiagnostic).not.toHaveProperty('longitude');
 
     startBody.accuracyMeters = 146;
     const requestStartedAt = Date.now();
@@ -3256,6 +3283,14 @@ describe('teacher control API authorization and input validation', () => {
         gpsChallenge: endChallenge.body.challenge,
       });
     expect(outsideGeofenceValidation.status).toBe(400);
+    expect(outsideGeofenceValidation.body.gpsDiagnostic).toMatchObject({
+      reason: 'outside_geofence',
+      accuracyMeters: 20,
+      geofenceRadiusMeters: 200,
+    });
+    expect(outsideGeofenceValidation.body.gpsDiagnostic.distanceMeters).toBeGreaterThan(100_000);
+    expect(outsideGeofenceValidation.body.gpsDiagnostic).not.toHaveProperty('latitude');
+    expect(outsideGeofenceValidation.body.gpsDiagnostic).not.toHaveProperty('longitude');
     expect(mockDatabaseState.sessions[0].status).toBe('open');
     expect(mockDatabaseState.challenges[1].consumedAt).toBeUndefined();
 

@@ -2775,7 +2775,7 @@ export async function createApp() {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Permissions-Policy',
-      req.method === 'GET' && req.path === '/'
+      req.method === 'GET' && (req.path === '/' || req.path === '/login')
         ? TEACHER_CONTROL_APP_PERMISSIONS_POLICY
         : TEACHER_CONTROL_DEFAULT_PERMISSIONS_POLICY,
     );

@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { buildContentSecurityPolicy } from './securityPolicy.ts';
 
 describe('content security policy', () => {
-  it('keeps the production policy unchanged', () => {
+  it('allows verified OpenStreetMap tile fetches without widening unrelated production directives', () => {
     expect(buildContentSecurityPolicy(false)).toBe([
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "img-src 'self' data: https://flagcdn.com https://*.flagcdn.com",
+      "img-src 'self' data: blob: https://flagcdn.com https://*.flagcdn",
       "font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com",
-      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com",
+      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com https://tile.openstreetmap.org",
       "frame-src 'none'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -25,9 +25,9 @@ describe('content security policy', () => {
       "default-src 'self'",
       "script-src 'self' 'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "img-src 'self' data: https://flagcdn.com https://*.flagcdn.com",
+      "img-src 'self' data: blob: https://flagcdn.com https://*.flagcdn",
       "font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com",
-      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com ws://localhost:24678",
+      "connect-src 'self' https://*.firebaseapp.com https://*.firebasestorage.app https://*.firebaseio.com https://*.googleapis.com https://*.googleusercontent.com https://tile.openstreetmap.org ws://localhost:24678",
       "frame-src 'none'",
       "object-src 'none'",
       "base-uri 'self'",
