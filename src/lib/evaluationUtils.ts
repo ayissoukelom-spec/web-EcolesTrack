@@ -45,19 +45,20 @@ export const parseDateValue = (value: string | Date | undefined | null): Date | 
 export const getDateOnlyMs = (date: Date): number => Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 
 export const isStudentEligibleForEvaluation = (student: Student, evaluation: Evaluation): boolean => {
-  if (!student.enrolledAt || (!evaluation.createdAt && !evaluation.date)) {
+  const isGroupedEvaluation = evaluation.teacherId === null;
+  const comparisonDate = isGroupedEvaluation ? evaluation.date : evaluation.createdAt || evaluation.date;
+  if (!student.enrolledAt || !comparisonDate) {
     console.log({
       student: student.firstName + ' ' + student.lastName,
       enrolledAt: student.enrolledAt,
       evaluationDate: evaluation.date,
       evaluationCreatedAt: evaluation.createdAt,
-      comparisonDate: evaluation.createdAt ?? evaluation.date,
+      comparisonDate,
       eligible: true,
     });
     return true;
   }
   const enrollmentDate = parseDateValue(student.enrolledAt);
-  const comparisonDate = evaluation.createdAt || evaluation.date;
   const evaluationTimestamp = parseDateValue(comparisonDate);
   if (!enrollmentDate || !evaluationTimestamp) {
     console.log({
@@ -70,7 +71,9 @@ export const isStudentEligibleForEvaluation = (student: Student, evaluation: Eva
     });
     return true;
   }
-  const eligible = enrollmentDate.getTime() <= evaluationTimestamp.getTime();
+  const eligible = isGroupedEvaluation
+    ? getDateOnlyMs(enrollmentDate) <= getDateOnlyMs(evaluationTimestamp)
+    : enrollmentDate.getTime() <= evaluationTimestamp.getTime();
   console.log({
     student: student.firstName + ' ' + student.lastName,
     enrolledAt: student.enrolledAt,

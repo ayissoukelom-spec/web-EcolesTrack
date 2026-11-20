@@ -225,7 +225,7 @@ export interface Evaluation {
   classId: number;
   schoolId?: number | null;
   className?: string;
-  teacherId: number;
+  teacherId: number | null;
   teacherName?: string;
   termId?: number | null;
   termName?: string;

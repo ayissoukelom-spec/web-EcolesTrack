@@ -49,6 +49,24 @@ describe('evaluation eligibility and grading rules', () => {
     expect(isStudentEligibleForEvaluation(students[2], evaluation)).toBe(false);
   });
 
+  it('uses the scheduled calendar date for grouped evaluations', () => {
+    const groupedEvaluation: Evaluation = {
+      ...evaluation,
+      teacherId: null,
+      date: '2026-06-26',
+      createdAt: '2026-06-27T09:00:00Z',
+    };
+
+    expect(isStudentEligibleForEvaluation({
+      ...students[2],
+      enrolledAt: '2026-06-26T20:00:00Z',
+    }, groupedEvaluation)).toBe(true);
+    expect(isStudentEligibleForEvaluation({
+      ...students[2],
+      enrolledAt: '2026-06-27T00:00:00Z',
+    }, groupedEvaluation)).toBe(false);
+  });
+
   it('compte uniquement les élèves éligibles pour Total copies saisies', () => {
     const eligibleStudents = getEligibleStudentsForEvaluation(evaluation, students);
     expect(eligibleStudents.map((st) => st.id)).toEqual([1]);

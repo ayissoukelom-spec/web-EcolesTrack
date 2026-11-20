@@ -38,6 +38,7 @@ import { canonicalizeUserPhone, handleLocalLogin } from './src/lib/localLogin.ts
 import { getNewPasswordPolicyError } from './src/lib/passwordPolicy.ts';
 import { createAccessSessionService, revokeAccessSessionToken } from './src/server/accessSessionRuntime.ts';
 import { calculateEvaluationScoreBounds, validateGradeScore } from './src/lib/gradeValidation.ts';
+import { getDateOnlyMs } from './src/lib/evaluationUtils.ts';
 import {
   filterCompletedGroupedPublicationNotifications,
   getCompletedGroupedPublicationIds,
@@ -19015,12 +19016,12 @@ if (uniqueParentIds.length > 0) {
       if (student.schoolId !== evaluation.schoolId) {
         return res.status(403).json({ error: 'Student and evaluation must belong to the same school' });
       }
-      // Validate that student was enrolled in the class before or at the evaluation timestamp.
-      // Prefer the evaluation.createdAt timestamp if available, otherwise fall back to evaluation.date.
+      // Grouped evaluations have a date-only schedule; individual evaluations use their creation timestamp.
       if (student.enrolledAt && (evaluation.createdAt || evaluation.date)) {
         const enrollmentDate = new Date(student.enrolledAt);
+        const isGroupedEvaluation = evaluation.teacherId === null;
         const evaluationTimestamp = new Date(
-          evaluation.teacherId == null
+          isGroupedEvaluation
             ? evaluation.date
             : evaluation.createdAt || evaluation.date,
         );
@@ -19028,9 +19029,12 @@ if (uniqueParentIds.length > 0) {
           return res.status(400).json({ error: 'Evaluation timestamp invalide' });
         }
 
-        if (enrollmentDate.getTime() > evaluationTimestamp.getTime()) {
+        const enrolledAfterEvaluation = isGroupedEvaluation
+          ? getDateOnlyMs(enrollmentDate) > getDateOnlyMs(evaluationTimestamp)
+          : enrollmentDate.getTime() > evaluationTimestamp.getTime();
+        if (enrolledAfterEvaluation) {
           return res.status(400).json({ 
-            error: `Impossible de créer une note pour ${student.lastName} ${student.firstName}: cet élève n'était pas encore inscrit au moment de référence du devoir (${evaluation.teacherId == null ? evaluation.date : evaluation.createdAt || evaluation.date})`
+            error: `Impossible de créer une note pour ${student.lastName} ${student.firstName}: cet élève n'était pas encore inscrit au moment de référence du devoir (${isGroupedEvaluation ? evaluation.date : evaluation.createdAt || evaluation.date})`
           });
         }
       }
