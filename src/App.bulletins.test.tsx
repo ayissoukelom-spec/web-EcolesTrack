@@ -700,7 +700,7 @@ describe('App navigation', () => {
     expect(screen.getByTestId('mock-grades')).toHaveTextContent('"evaluationMaximumScore":19');
   });
 
-  it('keeps the Bulletin menu visible but disabled for non-administration roles and does not navigate on click', async () => {
+  it('hides standalone Bulletin and Accounting menus for teachers and parents', async () => {
     for (const role of ['teacher', 'parent']) {
       mockGetSimulatedRole.mockReturnValue(role);
       mockGetSimulatedUser.mockReturnValue({ uid: `sim-${role}`, email: `${role}@example.com`, name: `Sim ${role}`, schoolId: role === 'parent' ? null : 1, role, id: 1 });
@@ -711,10 +711,13 @@ describe('App navigation', () => {
         </AuthProvider>,
       );
 
-      const bulletinButton = await screen.findByRole('button', { name: /^Bulletins$/i });
-      expect(bulletinButton).toBeDisabled();
-      fireEvent.click(bulletinButton);
-      expect(screen.queryByText('BulletinsView')).toBeNull();
+      if (role === 'teacher') {
+        expect(await screen.findByRole('button', { name: /Notes & Bulletins/i })).toBeVisible();
+      } else {
+        expect(await screen.findByRole('button', { name: /^Notes$/i })).toBeVisible();
+      }
+      expect(screen.queryByRole('button', { name: /^Bulletins$/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Comptabilité$/i })).toBeNull();
       unmount();
     }
   });
@@ -727,6 +730,7 @@ describe('App navigation', () => {
 
     expect(await screen.findByRole('button', { name: /Tableau de Bord/i })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /^Absences$/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Comptabilité$/i })).toBeNull();
     const absenceGroup = await screen.findByTestId('absences-navigation-group');
     expect(await within(absenceGroup).findByRole('button', { name: /Contrôles Néant/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Notes & Bulletins/i })).toBeNull();

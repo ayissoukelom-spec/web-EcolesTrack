@@ -1583,12 +1583,9 @@ export default function SimulatorHeader({
             className="h-10 w-auto object-contain rounded-md"
           />
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              <span className="text-emerald-400">Ecoles</span> Track <span className="text-xs bg-slate-800 border border-slate-700 text-indigo-400 px-2 py-0.5 rounded-full">v1.0-STABLE</span>
+            <h1 className="text-xl font-bold tracking-tight text-white">
+              <span className="text-emerald-400">Ecoles</span> Track
             </h1>
-            {currentRole === 'super_admin' && (
-              <p className="text-xs text-slate-400">Architecture REST, PostgreSQL, Firebase Messaging</p>
-            )}
           </div>
         </div>
 

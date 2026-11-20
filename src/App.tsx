@@ -2217,7 +2217,7 @@ export default function App() {
                 </SidebarNavigationGroup>
               )}
 
-              <button
+              {!['teacher', 'parent', 'surveillant'].includes(currentRole) && <button
                 disabled={!canAccessAccounting}
                 onClick={() => {
                   if (canAccessAccounting) setActiveTab('accounting');
@@ -2234,7 +2234,7 @@ export default function App() {
               >
                 <SidebarNavigationIcon><Wallet className="h-4.5 w-4.5" /></SidebarNavigationIcon>
                 <span className="text-left">Comptabilité</span>
-              </button>
+              </button>}
 
               {currentRole === 'teacher' && homeroomClassesList.length > 0 && (
                 <button
@@ -2398,7 +2398,7 @@ export default function App() {
                 </>
               )}
 
-              {currentRole !== 'surveillant' && <button
+              {currentRole !== 'surveillant' && !['teacher', 'parent'].includes(currentRole) && <button
                 type="button"
                 disabled={!['super_admin', 'school_admin', 'school_accountant'].includes(currentRole)}
                 onClick={() => {
@@ -2502,18 +2502,6 @@ export default function App() {
             </nav>
           </div>
 
-          {/* Quick info status connection footer */}
-          {currentRole === 'super_admin' && (
-            <div className="mt-8 pt-4 border-t border-slate-100 flex flex-col gap-2 p-1">
-              <div className="text-[10px] text-slate-400 space-y-1">
-                <span className="font-bold text-slate-500 block">BASE DE DONNÉES :</span>
-                <p className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full inline-block" />
-                  PostgreSQL Connecté (Cloud SQL)
-                </p>
-              </div>
-            </div>
-          )}
         </aside>
 
         {/* WORKSPACE CENTRAL BOARD */}
