@@ -1313,6 +1313,9 @@ export const registerBulletinGenerateRoute = (
         transaction: async <T>(run: (ctx: BulletinSnapshotContext) => Promise<T>) => {
           return db.transaction(async (tx) => {
             const ctx: BulletinSnapshotContext = {
+              async appendAuditEvent(event) {
+                await writeAuditEvent(tx, event);
+              },
               async getStudentById(studentId) {
                 const [row] = await tx.select({
                   id: students.id,
