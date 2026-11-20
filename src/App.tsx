@@ -218,6 +218,32 @@ type SuperAdminSchoolDataSnapshot = {
   approvedSubjects: any[];
 };
 
+type BulletinDataLoadStatus = 'loading' | 'ready' | 'error';
+
+type BulletinDataLoadState = {
+  scope: string;
+  students: BulletinDataLoadStatus;
+  studentError: string | null;
+  classes: BulletinDataLoadStatus;
+  classError: string | null;
+  evaluations: BulletinDataLoadStatus;
+  evaluationError: string | null;
+  grades: BulletinDataLoadStatus;
+  gradeError: string | null;
+};
+
+const initialBulletinDataLoadState: BulletinDataLoadState = {
+  scope: '',
+  students: 'loading',
+  studentError: null,
+  classes: 'loading',
+  classError: null,
+  evaluations: 'loading',
+  evaluationError: null,
+  grades: 'loading',
+  gradeError: null,
+};
+
 export default function App() {
   const { user: authenticatedUser, token, role, activeSchoolId } = useAuth();
   const { justifyAbsence, recordAbsenceControl } = useAbsences();
@@ -318,6 +344,7 @@ export default function App() {
   }, []);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadedDataScope, setLoadedDataScope] = useState('');
+  const [bulletinDataLoadState, setBulletinDataLoadState] = useState<BulletinDataLoadState>(initialBulletinDataLoadState);
   const [schoolDataCacheRevision, setSchoolDataCacheRevision] = useState(0);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
@@ -722,6 +749,25 @@ export default function App() {
       && requestScope === dataScopeRef.current;
     const absenceRefreshRequestId = absenceRefreshSequenceRef.current.begin();
     let cacheableResult = false;
+    if (currentRole === 'school_admin' && (showSpinner || bulletinDataLoadState.scope !== requestScope)) {
+      setBulletinDataLoadState({
+        scope: requestScope,
+        students: 'loading',
+        studentError: null,
+        classes: 'loading',
+        classError: null,
+        evaluations: 'loading',
+        evaluationError: null,
+        grades: 'loading',
+        gradeError: null,
+      });
+      if (loadedDataScope !== requestScope) {
+        setClassesList([]);
+        setStudentsList([]);
+        setEvaluationsList([]);
+        setGradesList([]);
+      }
+    }
     if (showSpinner) setIsSyncing(true);
     setErrorMsg(null);
     try {
@@ -836,9 +882,102 @@ export default function App() {
         ...(homeroomClassesEndpoint ? [{ key: homeroomClassesEndpoint, url: homeroomClassesEndpoint }] : []),
       ];
       const endpoints = endpointRoutes.map(({ key }) => key);
-      const promises = endpointRoutes.map(({ url }) =>
-        apiFetch(url).catch((err) => ({ __error: true, error: err })),
+      const updateBulletinLoadState = (
+        field: 'students' | 'classes' | 'evaluations' | 'grades',
+        status: BulletinDataLoadStatus,
+        error: string | null,
+      ) => {
+        setBulletinDataLoadState((previous) => {
+          if (previous.scope !== requestScope) return previous;
+          switch (field) {
+            case 'students':
+              return { ...previous, students: status, studentError: error };
+            case 'classes':
+              return { ...previous, classes: status, classError: error };
+            case 'evaluations':
+              return { ...previous, evaluations: status, evaluationError: error };
+            case 'grades':
+              return { ...previous, grades: status, gradeError: error };
+          }
+          return previous;
+        });
+      };
+      const studentsPayloadHasList = (payload: unknown): boolean => {
+        if (Array.isArray(payload)) return true;
+        if (!payload || typeof payload !== 'object') return false;
+        const record = payload as Record<string, unknown>;
+        if (Array.isArray(record.students) || Array.isArray(record.data)) return true;
+        return Boolean(
+          record.data
+          && typeof record.data === 'object'
+          && Array.isArray((record.data as Record<string, unknown>).students),
+        );
+      };
+      const isEndpointError = (result: unknown): result is { __error: true; error: unknown } => (
+        Boolean(
+          result
+          && typeof result === 'object'
+          && '__error' in result
+          && result.__error === true,
+        )
       );
+      const bulletinEndpointKeys = new Set([classesEndpoint, studentsEndpoint, '/api/evaluations', '/api/grades']);
+      const promises = endpointRoutes.map(({ key, url }) => {
+        const request: Promise<unknown> = apiFetch(url).catch((err: unknown) => ({ __error: true as const, error: err }));
+        if (currentRole === 'school_admin' && bulletinEndpointKeys.has(key)) {
+          void request.then((result) => {
+            if (!isCurrentRequest()) return;
+
+            if (key === studentsEndpoint) {
+              const error = isEndpointError(result)
+                ? getUiErrorMessage(result.error, 'Impossible de charger la liste des élèves.')
+                : !studentsPayloadHasList(result)
+                  ? 'La réponse des élèves est invalide.'
+                  : null;
+              if (!error) {
+                setStudentsList(normalizeStudentsPayload(result));
+                updateBulletinLoadState('students', 'ready', null);
+              } else {
+                setStudentsList([]);
+                updateBulletinLoadState('students', 'error', error);
+              }
+              return;
+            }
+
+            if (key === classesEndpoint) {
+              const classes = Array.isArray(result) ? result : null;
+              const error = isEndpointError(result)
+                ? getUiErrorMessage(result.error, 'Impossible de charger les classes.')
+                : !classes
+                  ? 'La réponse des classes est invalide.'
+                  : null;
+              setClassesList(error ? [] : classes);
+              updateBulletinLoadState('classes', error ? 'error' : 'ready', error);
+              return;
+            }
+
+            const field = key === '/api/evaluations' ? 'evaluations' : 'grades';
+            const fallback = field === 'evaluations'
+              ? 'Impossible de charger les évaluations.'
+              : 'Impossible de charger les notes.';
+            const data = Array.isArray(result) ? result : null;
+            const error = isEndpointError(result)
+              ? getUiErrorMessage(result.error, fallback)
+              : !data
+                ? `La réponse ${field === 'evaluations' ? 'des évaluations' : 'des notes'} est invalide.`
+                : null;
+            if (!error) {
+              if (field === 'evaluations') setEvaluationsList(data ?? []);
+              else setGradesList(data ?? []);
+            } else if (loadedDataScope !== requestScope) {
+              if (field === 'evaluations') setEvaluationsList([]);
+              else setGradesList([]);
+            }
+            updateBulletinLoadState(field, error ? 'error' : 'ready', error);
+          });
+        }
+        return request;
+      });
       const canLoadLateArrivalJustifications = ['parent', 'teacher', 'surveillant', 'school_admin', 'school_accountant', 'super_admin'].includes(currentRole);
       const [results, lateArrivalJustifications] = await Promise.all([
         Promise.all(promises),
@@ -862,17 +1001,20 @@ export default function App() {
       }
       if (Array.isArray(map['/api/schools'])) setSchoolsList(map['/api/schools']);
       if (Array.isArray(map['/api/academic-years'])) setYearsList(map['/api/academic-years']);
-      if (Array.isArray(map[classesEndpoint])) {
+      const returnedClasses = map[classesEndpoint];
+      if (currentRole !== 'school_admin' && Array.isArray(returnedClasses)) {
         setClassesList((previousClasses) =>
-          currentRole === 'teacher' && map[classesEndpoint].length === 0
+          currentRole === 'teacher' && returnedClasses.length === 0
             ? previousClasses
-            : map[classesEndpoint]
+            : returnedClasses
         );
       }
 
       const rawStudentsPayload = map[studentsEndpoint];
-      const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
-      setStudentsList(normalizedStudents);
+      if (currentRole !== 'school_admin') {
+        const normalizedStudents = normalizeStudentsPayload(rawStudentsPayload);
+        setStudentsList(normalizedStudents);
+      }
 
       if (Array.isArray(map['/api/parents'])) setParentsList(map['/api/parents']);
       if (Array.isArray(map['/api/absences']) && absenceRefreshSequenceRef.current.isLatest(absenceRefreshRequestId)) {
@@ -900,8 +1042,8 @@ export default function App() {
         ));
       }
       if (Array.isArray(map['/api/absence-controls'])) setAbsenceControlsList(map['/api/absence-controls']);
-      if (Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
-      if (Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
+      if (currentRole !== 'school_admin' && Array.isArray(map['/api/evaluations'])) setEvaluationsList(map['/api/evaluations']);
+      if (currentRole !== 'school_admin' && Array.isArray(map['/api/grades'])) setGradesList(map['/api/grades']);
       if (Array.isArray(map['/api/notifications'])) setNotificationsList(map['/api/notifications']);
       if (Array.isArray(map['/api/subjects'])) setSubjectsList(map['/api/subjects']);
       if (Array.isArray(map['/api/subjects?approvedOnly=true'])) setApprovedSubjectsList(map['/api/subjects?approvedOnly=true']);
@@ -1108,6 +1250,7 @@ export default function App() {
     setNotificationsList([]);
     setSubjectsList([]);
     setApprovedSubjectsList([]);
+    setBulletinDataLoadState(initialBulletinDataLoadState);
   };
 
   const refreshGrades = async () => {
@@ -2098,6 +2241,12 @@ export default function App() {
   const isSuperAdminSchoolScopeTransition = currentRole === 'super_admin'
     && loadedDataScope !== ''
     && loadedDataScope !== dataScopeRef.current;
+  const isShowingBulletinsDuringSync = isSyncing
+    && currentRole === 'school_admin'
+    && activeTab === 'bulletins'
+    && !isTeacherControlDestination
+    && bulletinDataLoadState.scope === dataScopeRef.current
+    && bulletinDataLoadState.students !== 'loading';
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800" id="main-application">
@@ -2547,7 +2696,8 @@ export default function App() {
           )}
 
           {/* LOADING SCREEN */}
-          {(isSyncing || (loadedDataScope !== dataScopeRef.current && !isSuperAdminSchoolScopeTransition)) && (
+          {!isShowingBulletinsDuringSync
+            && (isSyncing || (loadedDataScope !== dataScopeRef.current && !isSuperAdminSchoolScopeTransition)) && (
             <div className="bg-white/60 p-12 text-center rounded-2xl border border-slate-50 shadow-sm flex flex-col justify-center items-center gap-3 my-12">
               {isSyncing
                 ? <RefreshCw className="h-10 w-10 text-indigo-600 animate-spin" />
@@ -2559,7 +2709,9 @@ export default function App() {
           )}
 
           {/* DYNAMIC RENDERING PANEL BASED ON ACTIVE TABS */}
-          {!isSyncing && (loadedDataScope === dataScopeRef.current || isSuperAdminSchoolScopeTransition) && !isTeacherControlDestination && (
+          {(isShowingBulletinsDuringSync
+            || (!isSyncing && (loadedDataScope === dataScopeRef.current || isSuperAdminSchoolScopeTransition)))
+            && !isTeacherControlDestination && (
             <div className="bg-white p-6 border border-slate-100 rounded-2xl shadow-sm transition-all animate-fade-in" id="content-card">
               {currentRole === 'super_admin' && (
                 <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
@@ -2582,6 +2734,11 @@ export default function App() {
               {isSuperAdminSchoolScopeTransition && activeTab !== 'audit' && !errorMsg && (
                 <p className="mb-4 text-xs text-slate-500" role="status">
                   Actualisation des données de l’établissement…
+                </p>
+              )}
+              {isShowingBulletinsDuringSync && (
+                <p className="mb-4 text-xs text-slate-500" role="status">
+                  Les élèves sont disponibles. Chargement des évaluations et des notes…
                 </p>
               )}
               <div className={isSuperAdminSchoolScopeTransition && activeTab !== 'audit' ? 'hidden' : 'contents'}>
@@ -2774,6 +2931,14 @@ export default function App() {
                   evaluationsList={activeEvaluations}
                   gradesList={gradesList}
                   teacherClassIds={[]}
+                  studentsLoadState={currentRole === 'school_admin' ? bulletinDataLoadState.students : 'ready'}
+                  studentLoadError={currentRole === 'school_admin' ? bulletinDataLoadState.studentError : null}
+                  classesLoadState={currentRole === 'school_admin' ? bulletinDataLoadState.classes : 'ready'}
+                  classLoadError={currentRole === 'school_admin' ? bulletinDataLoadState.classError : null}
+                  evaluationsLoadState={currentRole === 'school_admin' ? bulletinDataLoadState.evaluations : 'ready'}
+                  evaluationLoadError={currentRole === 'school_admin' ? bulletinDataLoadState.evaluationError : null}
+                  gradesLoadState={currentRole === 'school_admin' ? bulletinDataLoadState.grades : 'ready'}
+                  gradeLoadError={currentRole === 'school_admin' ? bulletinDataLoadState.gradeError : null}
                 />
               )}
 

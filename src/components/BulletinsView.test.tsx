@@ -4,6 +4,8 @@ import BulletinsView from './BulletinsView';
 import ParentNotesView from './ParentNotesView';
 import { apiFetch } from '../lib/api.ts';
 
+const mockResetBulletinDetail = vi.hoisted(() => vi.fn());
+
 vi.mock('../contexts/AuthContext.tsx', () => ({
   useAuth: () => ({
     role: 'super_admin',
@@ -36,6 +38,7 @@ vi.mock('../hooks/useBulletinDetail.ts', () => ({
     error: null,
     setError: vi.fn(),
     loadDetail: vi.fn(),
+    reset: mockResetBulletinDetail,
   }),
 }));
 
@@ -103,6 +106,37 @@ describe('BulletinsView', () => {
     const schoolSelect = screen.getAllByRole('combobox')[0];
     expect(schoolSelect).toHaveTextContent('École A');
     expect(schoolSelect).toHaveTextContent('École sans classe');
+  });
+
+  it('distinguishes loading, empty, and failed student lookups without evaluations or grades', () => {
+    const props = {
+      schoolsList: [],
+      classesList: [],
+      studentsList: [],
+      evaluationsList: [],
+      gradesList: [],
+    };
+    const { rerender } = render(
+      <BulletinsView {...props} studentsLoadState="loading" />,
+    );
+
+    const studentSelect = screen.getAllByRole('combobox')[2];
+    expect(studentSelect).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Chargement des élèves…');
+
+    rerender(<BulletinsView {...props} studentsLoadState="ready" />);
+    expect(studentSelect).toBeEnabled();
+    expect(screen.getByText('Aucun élève correspondant aux filtres.')).toBeInTheDocument();
+
+    rerender(
+      <BulletinsView
+        {...props}
+        studentsLoadState="error"
+        studentLoadError="Échec du chargement des élèves."
+      />,
+    );
+    expect(studentSelect).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Échec du chargement des élèves.');
   });
 
   it('loads available school periods with the selected class academic year', async () => {

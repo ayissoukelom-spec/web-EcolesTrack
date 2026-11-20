@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Search } from 'lucide-react';
+import { FileText, LoaderCircle, Search } from 'lucide-react';
 import type { BulletinTermOption, Class, School, Student } from '../../types.ts';
 import RequiredLabel from '../RequiredLabel';
 
@@ -22,6 +22,12 @@ interface BulletinActionsProps {
   canGenerateClassBulk: boolean;
   generateClassStudentsCount: number;
   compositionValidationMessage: string | null;
+  studentsLoadState: 'loading' | 'ready' | 'error';
+  studentLoadError: string | null;
+  classesLoadState: 'loading' | 'ready' | 'error';
+  classLoadError: string | null;
+  generationDataLoadState: 'loading' | 'ready' | 'error';
+  generationDataLoadError: string | null;
   onGenerateSchoolChange: (value: string) => void;
   onGenerateClassChange: (value: string) => void;
   onGenerateStudentChange: (value: string) => void;
@@ -52,6 +58,12 @@ export default function BulletinActions({
   canGenerateClassBulk,
   generateClassStudentsCount,
   compositionValidationMessage,
+  studentsLoadState,
+  studentLoadError,
+  classesLoadState,
+  classLoadError,
+  generationDataLoadState,
+  generationDataLoadError,
   onGenerateSchoolChange,
   onGenerateClassChange,
   onGenerateStudentChange,
@@ -95,13 +107,22 @@ export default function BulletinActions({
               <select
                 value={generateClassId}
                 onChange={(e) => onGenerateClassChange(e.target.value)}
+                disabled={classesLoadState !== 'ready'}
+                aria-busy={classesLoadState === 'loading'}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
               >
-                <option value="">Toutes les classes</option>
+                <option value="">
+                  {classesLoadState === 'loading' ? 'Chargement des classes…' : 'Toutes les classes'}
+                </option>
                 {classesList.map((klass) => (
                   <option key={klass.id} value={klass.id}>{klass.name}</option>
                 ))}
               </select>
+              {classesLoadState === 'error' && (
+                <p className="mt-1 text-xs text-rose-600" role="alert">
+                  {classLoadError || 'Impossible de charger les classes.'}
+                </p>
+              )}
             </div>
 
             <div>
@@ -111,14 +132,38 @@ export default function BulletinActions({
               <select
                 value={generateStudentId}
                 onChange={(e) => onGenerateStudentChange(e.target.value)}
+                disabled={studentsLoadState !== 'ready'}
+                aria-busy={studentsLoadState === 'loading'}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
                 required
               >
-                <option value="">Eleve cible</option>
+                <option value="">
+                  {studentsLoadState === 'loading'
+                    ? 'Chargement des élèves…'
+                    : studentsLoadState === 'error'
+                      ? 'Liste des élèves indisponible'
+                      : 'Élève cible'}
+                </option>
                 {studentsList.map((s) => (
                   <option key={s.id} value={s.id}>{s.lastName} {s.firstName} - {s.className}</option>
                 ))}
               </select>
+              {studentsLoadState === 'loading' && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-slate-500" role="status">
+                  <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  Chargement des élèves…
+                </p>
+              )}
+              {studentsLoadState === 'error' && (
+                <p className="mt-1 text-xs text-rose-600" role="alert">
+                  {studentLoadError || 'Impossible de charger la liste des élèves.'}
+                </p>
+              )}
+              {studentsLoadState === 'ready' && studentsList.length === 0 && (
+                <p className="mt-1 text-xs text-slate-500" role="status">
+                  Aucun élève correspondant aux filtres.
+                </p>
+              )}
             </div>
 
             <div>
@@ -140,7 +185,7 @@ export default function BulletinActions({
 
             <button
               type="submit"
-              disabled={isGenerateLoading || !hasSelectedBulletinEvaluations || !!compositionValidationMessage}
+              disabled={isGenerateLoading || generationDataLoadState !== 'ready' || !hasSelectedBulletinEvaluations || !!compositionValidationMessage}
               className="rounded-xl px-4 py-2 bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 disabled:opacity-60"
             >
               {isGenerateLoading ? 'Generation...' : 'Generer le bulletin'}
@@ -148,7 +193,7 @@ export default function BulletinActions({
 
             <button
               type="button"
-              disabled={isGenerateLoading || !canGenerateClassBulk || !!compositionValidationMessage}
+              disabled={isGenerateLoading || generationDataLoadState !== 'ready' || !canGenerateClassBulk || !!compositionValidationMessage}
               onClick={onGenerateClassSubmit}
               className="rounded-xl px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 font-semibold text-sm hover:bg-emerald-100 disabled:opacity-60"
             >
@@ -156,6 +201,11 @@ export default function BulletinActions({
             </button>
           </div>
 
+          {generationDataLoadState === 'error' && (
+            <p className="text-xs text-rose-600" role="alert">
+              {generationDataLoadError || 'Impossible de charger les évaluations et les notes.'}
+            </p>
+          )}
           {compositionValidationMessage && <p role="alert" className="text-xs text-rose-600">{compositionValidationMessage}</p>}
           {generateError && <p className="text-xs text-rose-600">{generateError}</p>}
           {generateSuccess && <p className="text-xs text-emerald-600">{generateSuccess}</p>}
