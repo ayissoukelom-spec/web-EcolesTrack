@@ -4,9 +4,13 @@ import BulletinsView from './BulletinsView';
 import ParentNotesView from './ParentNotesView';
 import { apiFetch } from '../lib/api.ts';
 
+const mockRole = vi.hoisted(() => ({ value: 'super_admin' }));
+const mockResetBulletinDetail = vi.hoisted(() => vi.fn());
+
 vi.mock('../contexts/AuthContext.tsx', () => ({
   useAuth: () => ({
-    role: 'super_admin',
+    role: mockRole.value,
+    activeSchoolId: mockRole.value === 'school_admin' ? 1 : null,
     user: {
       uid: 'sim-super-admin',
       email: 'superadmin@example.com',
@@ -36,6 +40,7 @@ vi.mock('../hooks/useBulletinDetail.ts', () => ({
     error: null,
     setError: vi.fn(),
     loadDetail: vi.fn(),
+    reset: mockResetBulletinDetail,
   }),
 }));
 
@@ -72,6 +77,7 @@ describe('BulletinsView', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRole.value = 'super_admin';
     vi.mocked(apiFetch).mockReset().mockImplementation(async (endpoint: string) => {
       if (endpoint === '/api/school-terms') {
         return [{ id: 7, name: 'Trimestre 1', startDate: '2026-01-01', endDate: '2026-12-31' }] as any;
@@ -105,7 +111,35 @@ describe('BulletinsView', () => {
     expect(schoolSelect).toHaveTextContent('École sans classe');
   });
 
+  it('uses the loaded School Admin classes and students without resetting the school context', () => {
+    mockRole.value = 'school_admin';
+    const onSchoolFilterChange = vi.fn();
+    render(
+      <BulletinsView
+        schoolsList={[{ id: 1, name: 'École A' }]}
+        classesList={[{ id: 10, schoolId: 1, academicYearId: 1, name: '6A' }]}
+        studentsList={[{ id: 30, schoolId: 1, classId: 10, className: '6A', firstName: 'Alice', lastName: 'Dupont' }]}
+        evaluationsList={[]}
+        gradesList={[]}
+        onSchoolFilterChange={onSchoolFilterChange}
+      />,
+    );
+
+    const [schoolSelect, classSelect, studentSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(schoolSelect, { target: { value: '1' } });
+
+    expect(onSchoolFilterChange).not.toHaveBeenCalled();
+    expect(classSelect).toBeEnabled();
+    expect(classSelect).toHaveTextContent('6A');
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/classes?schoolId=1');
+
+    fireEvent.change(classSelect, { target: { value: '10' } });
+    expect(studentSelect).toBeEnabled();
+    expect(studentSelect).toHaveTextContent('Dupont Alice - 6A');
+  });
+
   it('loads available school periods with the selected class academic year', async () => {
+    const onSchoolFilterChange = vi.fn();
     vi.mocked(apiFetch).mockImplementation(async (endpoint: string) => {
       if (endpoint === '/api/school-terms') {
         return [{ id: 20, name: 'Trimestre global' }] as any;
@@ -131,10 +165,13 @@ describe('BulletinsView', () => {
         studentsList={[{ id: 30, schoolId: 1, classId: 10, className: '6A', firstName: 'Alice', lastName: 'Dupont' }]}
         evaluationsList={[]}
         gradesList={[]}
+        onSchoolFilterChange={onSchoolFilterChange}
       />,
     );
 
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    expect(onSchoolFilterChange).toHaveBeenCalledWith(1);
+    expect(apiFetch).toHaveBeenCalledWith('/api/classes?schoolId=1');
     await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('6A'));
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: '10' } });
 

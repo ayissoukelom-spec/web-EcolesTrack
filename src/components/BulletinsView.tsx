@@ -111,7 +111,9 @@ export default function BulletinsView({
     : localGenerateSchoolId;
   const updateGenerateSchoolId = (value: string) => {
     setLocalGenerateSchoolId(value);
-    onSchoolFilterChange?.(value ? Number(value) : null);
+    if (currentRole === 'super_admin') {
+      onSchoolFilterChange?.(value ? Number(value) : null);
+    }
   };
   const [generateClassId, setGenerateClassId] = useState<string>('');
   const [generateStudentId, setGenerateStudentId] = useState<string>('');
@@ -171,9 +173,12 @@ export default function BulletinsView({
   }, [activeSchoolId, classesList, currentRole, schoolsList]);
 
   const generateClasses = useMemo(() => {
+    if (currentRole === 'school_admin') {
+      return !generateSchoolId || Number(generateSchoolId) === activeSchoolId ? classesList : [];
+    }
     if (!generateSchoolId) return classesList;
     return schoolScopedClasses ?? [];
-  }, [classesList, generateSchoolId, schoolScopedClasses]);
+  }, [activeSchoolId, classesList, currentRole, generateSchoolId, schoolScopedClasses]);
 
   const generateStudents = useMemo(() => {
     const classId = generateClassId ? Number(generateClassId) : null;
@@ -192,7 +197,7 @@ export default function BulletinsView({
 
   useEffect(() => {
     const schoolId = Number(generateSchoolId);
-    if (!generateSchoolId || !Number.isInteger(schoolId) || schoolId <= 0) {
+    if (currentRole === 'school_admin' || !generateSchoolId || !Number.isInteger(schoolId) || schoolId <= 0) {
       schoolClassesRequestRef.current += 1;
       setSchoolScopedClasses(null);
       setSchoolScopedClassesLoading(false);
@@ -221,7 +226,7 @@ export default function BulletinsView({
           setSchoolScopedClassesLoading(false);
         }
       });
-  }, [generateSchoolId]);
+  }, [currentRole, generateSchoolId]);
 
   useEffect(() => {
     let cancelled = false;
