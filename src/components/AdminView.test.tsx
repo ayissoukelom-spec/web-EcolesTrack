@@ -3136,6 +3136,100 @@ describe('AdminView create-user teacher form', () => {
     expect(screen.getByText('parent — École du Lac, teacher — École du Nord')).toBeTruthy();
   });
 
+  it('searches teachers by normalized names, email, and phone', () => {
+    const teachers: Teacher[] = [
+      { id: 1, userId: 11, name: 'Alice Diallo', firstNames: 'Alice', lastName: 'Diallo', email: 'alice.diallo@example.test', phone: '+225 01 23 45 67', schoolId: 1 },
+      { id: 2, userId: 12, name: 'Bob Traoré', email: 'bob@example.test', schoolId: 1 },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={[]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={teachers}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={[]}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Enseignants/i }));
+    const search = screen.getByPlaceholderText('Rechercher par nom, téléphone ou e-mail…');
+
+    fireEvent.change(search, { target: { value: '  aLiCe   diALLo  ' } });
+    expect(screen.getByText('Diallo Alice')).toBeTruthy();
+    expect(screen.queryByText('Bob Traoré')).toBeNull();
+
+    fireEvent.change(search, { target: { value: '01 (23)-45' } });
+    expect(screen.getByText('Diallo Alice')).toBeTruthy();
+    expect(screen.queryByText('Bob Traoré')).toBeNull();
+
+    fireEvent.change(search, { target: { value: 'ALICE.DIALLO@EXAMPLE.TEST' } });
+    expect(screen.getByText('Diallo Alice')).toBeTruthy();
+    expect(screen.queryByText('Bob Traoré')).toBeNull();
+
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.getByText('Diallo Alice')).toBeTruthy();
+    expect(screen.getByText('Bob Traoré')).toBeTruthy();
+  });
+
+  it('searches accounts by phone and restores the list when cleared without removing other filters', () => {
+    const users: User[] = [
+      { id: 1, uid: 'u1', email: 'alice@example.test', name: 'Alice Diallo', firstNames: 'Alice', lastName: 'Diallo', role: 'teacher', phone: '+225 01-23-45.67' },
+      { id: 2, uid: 'u2', email: 'clara@example.test', name: 'Clara Mensah', firstNames: 'Clara', lastName: 'Mensah', role: 'teacher' },
+      { id: 3, uid: 'u3', email: 'bob@example.test', name: 'Bob Traoré', role: 'parent', phone: undefined },
+    ];
+
+    renderWithAuth(
+      <AdminView
+        userRole="super_admin"
+        schoolsList={[]}
+        yearsList={[]}
+        classesList={[]}
+        teachersList={[]}
+        studentsList={[]}
+        parentsList={[]}
+        usersList={users}
+        onAddSchool={async () => ({})}
+        onAddYear={() => undefined}
+        onAddClass={async () => undefined}
+        onAddTeacher={async () => ({})}
+        onAddParent={async () => ({})}
+        onAddStudent={() => undefined}
+        onDeleteClass={() => undefined}
+        onDeleteSchool={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Comptes/i }));
+    fireEvent.change(screen.getByLabelText('Filtrer par rôle'), { target: { value: 'teacher' } });
+    const search = screen.getByPlaceholderText('Rechercher par nom, téléphone ou e-mail…');
+
+    fireEvent.change(search, { target: { value: '01 (23)-45' } });
+    expect(screen.getByText('Alice Diallo')).toBeTruthy();
+    expect(screen.queryByText('Clara Mensah')).toBeNull();
+    expect(screen.queryByText('Bob Traoré')).toBeNull();
+
+    fireEvent.change(search, { target: { value: 'CLARA@EXAMPLE.TEST' } });
+    expect(screen.getByText('Clara Mensah')).toBeTruthy();
+    expect(screen.queryByText('Alice Diallo')).toBeNull();
+
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.getByText('Alice Diallo')).toBeTruthy();
+    expect(screen.getByText('Clara Mensah')).toBeTruthy();
+    expect(screen.queryByText('Bob Traoré')).toBeNull();
+  });
+
   it('shows the creation date column and filters accounts by creation date', () => {
     const currentYear = new Date().getFullYear();
     const schools: School[] = [{ id: 1, name: 'École du Lac', address: '', phone: '' }];

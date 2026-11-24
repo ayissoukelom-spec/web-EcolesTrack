@@ -1014,6 +1014,19 @@ export default function AdminView({
     if (!text) return true;
     return text.toLowerCase().includes(searchQuery.toLowerCase());
   };
+  const normalizeContactSearchText = (value: string | null | undefined) =>
+    (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const normalizeContactSearchPhone = (value: string | null | undefined) =>
+    (value ?? '').replace(/\D/g, '');
+  const matchesContactSearch = (text: string | null | undefined, phone?: string | null) => {
+    const normalizedQuery = normalizeContactSearchText(searchQuery);
+    if (!normalizedQuery) return true;
+    if (normalizeContactSearchText(text).includes(normalizedQuery)) return true;
+
+    const normalizedPhoneQuery = normalizeContactSearchPhone(searchQuery);
+    return normalizedPhoneQuery.length > 0
+      && normalizeContactSearchPhone(phone).includes(normalizedPhoneQuery);
+  };
 
   const parseUserDate = (value?: string | null) => {
     if (!value) return null;
@@ -1177,7 +1190,10 @@ export default function AdminView({
     return matchesSchool && matchesClassFilter && matchesTeacherScope;
   });
   const filteredTeachersList = sortTeachersAlphabetically(
-    teachersInCurrentScope.filter((teacher) => filterBySearch(teacher.name))
+    teachersInCurrentScope.filter((teacher) => matchesContactSearch(
+      `${teacher.name ?? ''} ${teacher.firstNames ?? ''} ${teacher.lastName ?? ''} ${teacher.email ?? ''}`,
+      teacher.phone,
+    ))
   );
 
   const currentParent = (() => {
@@ -1445,7 +1461,10 @@ export default function AdminView({
       return false;
     }
     const displayedFunctions = u.functions?.map((membership) => membership.role).join(' ') ?? u.role;
-    return filterBySearch(`${u.firstNames ?? ''} ${u.lastName ?? ''} ${u.name} ${u.email} ${displayedFunctions} ${schoolNamesForAccount(u).join(' ')}`);
+    return matchesContactSearch(
+      `${u.firstNames ?? ''} ${u.lastName ?? ''} ${u.name ?? ''} ${u.email ?? ''} ${displayedFunctions} ${schoolNamesForAccount(u).join(' ')}`,
+      u.phone,
+    );
   });
 
   const selectedStudentSchoolId = studentForm.schoolId ? parseInt(studentForm.schoolId) : undefined;
@@ -5064,15 +5083,17 @@ export default function AdminView({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Rechercher parmi les ${
-                activeTab === 'schools' ? 'écoles' :
-                activeTab === 'years' ? 'années scolaires' :
-                activeTab === 'classes' ? 'classes' :
-                activeTab === 'teachers' ? 'enseignants' :
-                activeTab === 'students' ? 'étudiants' :
-                activeTab === 'accounts' ? 'comptes' :
-                'éléments'
-              }...`}
+              placeholder={
+                activeTab === 'teachers' || activeTab === 'accounts'
+                  ? 'Rechercher par nom, téléphone ou e-mail…'
+                  : `Rechercher parmi les ${
+                    activeTab === 'schools' ? 'écoles' :
+                    activeTab === 'years' ? 'années scolaires' :
+                    activeTab === 'classes' ? 'classes' :
+                    activeTab === 'students' ? 'étudiants' :
+                    'éléments'
+                  }...`
+              }
               className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 text-xs sm:text-sm rounded-xl focus:ring-2 focus:ring-indigo-600 focus:outline-none placeholder-slate-400 text-slate-800"
               id="search-admin"
             />
