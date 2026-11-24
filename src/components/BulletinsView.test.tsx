@@ -111,7 +111,7 @@ describe('BulletinsView', () => {
     expect(schoolSelect).toHaveTextContent('École sans classe');
   });
 
-  it('uses the loaded School Admin classes and students without resetting the school context', () => {
+  it('uses loaded School Admin classes and students without resetting the context while bulletin data loads', () => {
     mockRole.value = 'school_admin';
     const onSchoolFilterChange = vi.fn();
     render(
@@ -121,6 +121,10 @@ describe('BulletinsView', () => {
         studentsList={[{ id: 30, schoolId: 1, classId: 10, className: '6A', firstName: 'Alice', lastName: 'Dupont' }]}
         evaluationsList={[]}
         gradesList={[]}
+        classesLoadState="ready"
+        studentsLoadState="ready"
+        evaluationsLoadState="loading"
+        gradesLoadState="loading"
         onSchoolFilterChange={onSchoolFilterChange}
       />,
     );
@@ -136,6 +140,40 @@ describe('BulletinsView', () => {
     fireEvent.change(classSelect, { target: { value: '10' } });
     expect(studentSelect).toBeEnabled();
     expect(studentSelect).toHaveTextContent('Dupont Alice - 6A');
+    expect(screen.getByText('Chargement des évaluations et des notes…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generer le bulletin' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Generer la classe (1)' })).toBeDisabled();
+  });
+
+  it('distinguishes loading, empty, and failed student lookups without evaluations or grades', () => {
+    const props = {
+      schoolsList: [],
+      classesList: [],
+      studentsList: [],
+      evaluationsList: [],
+      gradesList: [],
+    };
+    const { rerender } = render(
+      <BulletinsView {...props} studentsLoadState="loading" />,
+    );
+
+    const studentSelect = screen.getAllByRole('combobox')[2];
+    expect(studentSelect).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Chargement des élèves…');
+
+    rerender(<BulletinsView {...props} studentsLoadState="ready" />);
+    expect(studentSelect).toBeEnabled();
+    expect(screen.getByText('Aucun élève correspondant aux filtres.')).toBeInTheDocument();
+
+    rerender(
+      <BulletinsView
+        {...props}
+        studentsLoadState="error"
+        studentLoadError="Échec du chargement des élèves."
+      />,
+    );
+    expect(studentSelect).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Échec du chargement des élèves.');
   });
 
   it('loads available school periods with the selected class academic year', async () => {

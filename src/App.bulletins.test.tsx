@@ -204,7 +204,24 @@ vi.mock('./components/NotificationView.tsx', () => ({ default: () => <div>Notifi
 vi.mock('./components/AuditView.tsx', () => ({ default: () => <div>AuditView</div> }));
 vi.mock('./components/MobileParentView.tsx', () => ({ default: () => <div>MobileParentView</div> }));
 vi.mock('./components/ArchiveView.tsx', () => ({ default: () => <div>ArchiveView</div> }));
-vi.mock('./components/BulletinsView.tsx', () => ({ default: () => <div>BulletinsView</div> }));
+vi.mock('./components/BulletinsView.tsx', () => ({
+  default: ({ studentsList = [], studentsLoadState, evaluationsLoadState, gradesLoadState }: {
+    studentsList?: Array<{ id: number; firstName: string; lastName: string }>;
+    studentsLoadState?: string;
+    evaluationsLoadState?: string;
+    gradesLoadState?: string;
+  }) => (
+    <div>
+      <div>BulletinsView</div>
+      <div data-testid="bulletin-student-load-state">{studentsLoadState}</div>
+      <div data-testid="bulletin-evaluations-load-state">{evaluationsLoadState}</div>
+      <div data-testid="bulletin-grades-load-state">{gradesLoadState}</div>
+      {studentsList.map((student) => (
+        <div key={student.id}>{student.lastName} {student.firstName}</div>
+      ))}
+    </div>
+  ),
+}));
 vi.mock('./components/AccountingView.tsx', () => ({
   default: ({ userRole }: { userRole: string }) => <div data-testid="accounting-view">{userRole}</div>,
 }));
@@ -247,6 +264,55 @@ describe('App navigation', () => {
       if (url === '/api/notifications') return Promise.resolve([]);
       if (url === '/api/simulation/users') return Promise.resolve([]);
       return Promise.resolve([]);
+    });
+  });
+
+  it('shows bulletin target students before evaluations and grades finish loading', async () => {
+    let resolveStudents: ((value: unknown) => void) | undefined;
+    let resolveEvaluations: ((value: unknown) => void) | undefined;
+    let resolveGrades: ((value: unknown) => void) | undefined;
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/auth/register-or-login') return Promise.resolve({});
+      if (url === '/api/students?includeFormer=true') {
+        return new Promise((resolve) => { resolveStudents = resolve; });
+      }
+      if (url === '/api/evaluations') {
+        return new Promise((resolve) => { resolveEvaluations = resolve; });
+      }
+      if (url === '/api/grades') {
+        return new Promise((resolve) => { resolveGrades = resolve; });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<AuthProvider><App /></AuthProvider>);
+    await screen.findByText('Bulletins');
+    fireEvent.click(document.getElementById('sidebar-nav-bulletins') as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(resolveStudents).toBeTypeOf('function');
+      expect(resolveEvaluations).toBeTypeOf('function');
+      expect(resolveGrades).toBeTypeOf('function');
+    });
+    await act(async () => {
+      resolveStudents?.([{
+        id: 101,
+        schoolId: 1,
+        classId: 10,
+        className: '6ème A',
+        firstName: 'Alice',
+        lastName: 'Akakpo',
+      }]);
+    });
+
+    expect(await screen.findByText('Akakpo Alice')).toBeTruthy();
+    expect(screen.getByTestId('bulletin-student-load-state')).toHaveTextContent('ready');
+    expect(screen.getByTestId('bulletin-evaluations-load-state')).toHaveTextContent('loading');
+    expect(screen.getByTestId('bulletin-grades-load-state')).toHaveTextContent('loading');
+
+    await act(async () => {
+      resolveEvaluations?.([]);
+      resolveGrades?.([]);
     });
   });
 

@@ -39,6 +39,14 @@ interface BulletinsViewProps {
   evaluationsList: Evaluation[];
   gradesList: Grade[];
   teacherClassIds?: number[];
+  studentsLoadState?: 'loading' | 'ready' | 'error';
+  studentLoadError?: string | null;
+  classesLoadState?: 'loading' | 'ready' | 'error';
+  classLoadError?: string | null;
+  evaluationsLoadState?: 'loading' | 'ready' | 'error';
+  evaluationLoadError?: string | null;
+  gradesLoadState?: 'loading' | 'ready' | 'error';
+  gradeLoadError?: string | null;
 }
 
 const parentCacheKey = (uid: string) => `ecoletrack_parent_bulletin_ids_${uid}`;
@@ -79,6 +87,14 @@ export default function BulletinsView({
   evaluationsList: allEvaluationsList,
   gradesList: allGradesList,
   teacherClassIds = [],
+  studentsLoadState = 'ready',
+  studentLoadError = null,
+  classesLoadState = 'ready',
+  classLoadError = null,
+  evaluationsLoadState = 'ready',
+  evaluationLoadError = null,
+  gradesLoadState = 'ready',
+  gradeLoadError = null,
 }: BulletinsViewProps) {
   const { role, user: simulated, activeSchoolId } = useAuth();
   const currentRole: UserRole = role as UserRole;
@@ -356,6 +372,12 @@ export default function BulletinsView({
   const hasSelectedBulletinEvaluations = generateEvaluations.some((evaluation) => (
     isEvaluationValidated(evaluation) && normalizeEvaluationType(evaluation.type) != null
   ));
+  const generationDataLoadState = evaluationsLoadState === 'error' || gradesLoadState === 'error'
+    ? 'error'
+    : evaluationsLoadState === 'loading' || gradesLoadState === 'loading'
+      ? 'loading'
+      : 'ready';
+  const generationDataLoadError = evaluationLoadError || gradeLoadError;
   const targetStudent = studentsList.find((student) => String(student.id) === generateStudentId);
   const compositionValidationClassId = generateClassId ? Number(generateClassId) : targetStudent?.classId ?? null;
   const compositionValidationEvaluations = useMemo(() => {
@@ -784,6 +806,12 @@ export default function BulletinsView({
         canGenerateClassBulk={Boolean(generateClassId) && Boolean(generateTermId) && generateStudents.some((student) => String(student.classId) === generateClassId)}
         generateClassStudentsCount={generateStudents.filter((student) => String(student.classId) === generateClassId).length}
         compositionValidationMessage={compositionValidationMessage}
+        studentsLoadState={studentsLoadState}
+        studentLoadError={studentLoadError}
+        classesLoadState={classesLoadState}
+        classLoadError={classLoadError}
+        generationDataLoadState={generationDataLoadState}
+        generationDataLoadError={generationDataLoadError}
         onGenerateSchoolChange={(value) => {
           updateGenerateSchoolId(value);
           setGenerateClassId('');
@@ -803,7 +831,12 @@ export default function BulletinsView({
         onReloadParentKnown={loadParentCached}
       />
 
-      {canGenerate && generateEvaluations.length > 0 && (
+      {canGenerate && generationDataLoadState === 'loading' && (
+        <p className="text-xs text-slate-500" role="status">
+          Chargement des évaluations et des notes…
+        </p>
+      )}
+      {canGenerate && generationDataLoadState === 'ready' && generateEvaluations.length > 0 && (
         <section className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
